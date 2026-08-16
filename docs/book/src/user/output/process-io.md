@@ -29,4 +29,4 @@ wjsm run app.ts >program.out 2>diagnostics.log
 | `3` | CLI 参数用法错误 |
 | 其他 | `process.exit(n)` 请求的状态 |
 
-`--format native-executable` 当前属于编译侧 NotImplemented contract，返回 1，且不会创建或覆盖目标文件。
+`--format native-executable` 属于编译侧打包：成功写出同宿主 ELF/PE；失败返回 1，且不会创建或覆盖目标文件。

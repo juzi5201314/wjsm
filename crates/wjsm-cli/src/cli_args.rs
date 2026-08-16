@@ -311,7 +311,7 @@ pub(crate) enum Stage {
 pub(crate) enum BuildFormat {
     /// Portable semantic-IR artifact
     Wjsm,
-    /// Platform executable output（当前明确不支持）
+    /// Same-host ELF/PE packed from the wjsm-exec stub
     NativeExecutable,
 }
 

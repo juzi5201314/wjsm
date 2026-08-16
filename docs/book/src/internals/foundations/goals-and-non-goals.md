@@ -31,7 +31,7 @@
 
 **不是类型检查器。** TypeScript 语法参与解析和 lowering，类型不做检查。这是 `tsc` 的职责。
 
-**产物不是独立可执行文件。** `build` 输出的 portable `.wjsm` 依赖 wjsm 宿主 runtime；`--format native-executable` 返回稳定的 NotImplemented 错误。
+**`.wjsm` 不是独立可执行文件。** 默认 `build` 输出的 portable 制品依赖 wjsm 宿主 runtime。`--format native-executable` 在当前宿主上打包预链 stub 与预编译 object，得到可直接运行的 ELF/PE；它不是跨平台制品，也不调用系统 linker。
 
 **不引入完整 ICU。** locale 敏感方法不实现，`Intl` 只在全局名单占位。Unicode 归一化通过 `icu_normalizer` 单点提供。
 

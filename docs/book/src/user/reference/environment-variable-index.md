@@ -36,6 +36,7 @@ GC 选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。非法
 | --- | --- | --- |
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级（`none` / `speed_and_size` / `default`） | `default` |
 | `WJSM_DISABLE_LICM` | 关闭 IR 层循环不变量纯调用提升 | 启用（设为 `1` 关闭） |
+| `WJSM_EXEC_STUB` | `wjsm-exec` stub 路径，供 `--format native-executable` 打包 | 与 `wjsm` 同目录的 `wjsm-exec` |
 
 `WJSM_DISABLE_LICM` 读取 `0` / `false` / `off` / 空 / 未设置时保持启用。bench runner 设 `1` 来测真实循环开销。
 

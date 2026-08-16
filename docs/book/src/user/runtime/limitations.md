@@ -87,9 +87,9 @@ import { URL, URLSearchParams } from "node:url";
 
 `typeof globalThis.URL` 为 `undefined`。
 
-## --format native-executable 未实现
+## --format native-executable 只覆盖当前宿主
 
-`wjsm build --format native-executable` 当前返回稳定的未实现错误，退出码 1，不创建或覆盖输出文件。runtime 私有 native image 不是平台可执行文件，不能作为分发的二进制制品使用。
+`wjsm build --format native-executable` 在当前宿主上产出可直接运行的 ELF/PE：预链 `wjsm-exec` stub 加上 portable `.wjsm` 与预编译 `NativeObject`。Linux 上的 wjsm 出 ELF，Windows 上的 wjsm 出 PE。交叉编译、把 runtime-private object 改后缀冒充 executable，都不支持。打包失败不创建或覆盖输出文件。发行物需要同时带 `wjsm` 与 `wjsm-exec`。
 
 ## 深入了解
 

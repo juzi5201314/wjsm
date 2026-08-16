@@ -4044,6 +4044,7 @@ dependencies = [
  "proptest",
  "tokio",
  "wjsm-cli",
+ "wjsm-exec",
  "wjsm-runtime",
 ]
 
@@ -4129,6 +4130,7 @@ dependencies = [
  "walkdir",
  "wjsm-artifact-format",
  "wjsm-backend-native",
+ "wjsm-exec-format",
  "wjsm-gc",
  "wjsm-host-native",
  "wjsm-ir",
@@ -4136,6 +4138,22 @@ dependencies = [
  "wjsm-parser",
  "wjsm-runtime",
  "wjsm-semantic",
+]
+
+[[package]]
+name = "wjsm-exec"
+version = "0.1.0"
+dependencies = [
+ "wjsm-exec-format",
+ "wjsm-host-native",
+]
+
+[[package]]
+name = "wjsm-exec-format"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]
@@ -4213,6 +4231,7 @@ dependencies = [
  "wjsm-artifact-format",
  "wjsm-backend-native",
  "wjsm-builtins",
+ "wjsm-exec-format",
  "wjsm-gc",
  "wjsm-host",
  "wjsm-ir",

@@ -9,6 +9,8 @@ members = [
     "crates/wjsm-semantic",
     "crates/wjsm-ir",
     "crates/wjsm-artifact-format",
+    "crates/wjsm-exec-format",
+    "crates/wjsm-exec",
     "crates/wjsm-native-abi",
     "crates/wjsm-backend-native",
     "crates/wjsm-host-native",
@@ -87,6 +89,11 @@ gimli = { version = "=0.33.1", default-features = false, features = ["write"] }
 [dependencies]
 anyhow = { workspace = true }
 wjsm-cli = { path = "crates/wjsm-cli" }
+wjsm-exec = { path = "crates/wjsm-exec" }
+
+[[bin]]
+name = "wjsm-exec"
+path = "src/exec_main.rs"
 
 [features]
 default = []

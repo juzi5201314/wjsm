@@ -30,11 +30,16 @@ use wjsm_native_abi::{
 };
 mod dispatch;
 mod inspector;
+mod native_exec;
 mod side_tables;
 mod snapshot;
 mod specialization;
 
 pub use inspector::InspectorConfig;
+pub use native_exec::{
+    PrecompiledNativeImages, compile_native_exec_images, exec_payload_from_images,
+    images_from_exec_payload,
+};
 
 use dispatch::{
     native_host_operation, native_math_acos, native_math_acosh, native_math_asin,
@@ -58,8 +63,7 @@ pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERA
     | wjsm_ir::constants::FLAG_CONFIGURABLE as u32
     | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const BUILTIN_PROTOTYPE_PROPERTY_FLAGS: u32 =
-    wjsm_ir::constants::FLAG_CONFIGURABLE as u32
-        | wjsm_ir::constants::FLAG_WRITABLE as u32;
+    wjsm_ir::constants::FLAG_CONFIGURABLE as u32 | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_PROTOTYPE_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_METADATA_FLAGS: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 
@@ -159,7 +163,7 @@ fn function_slots_for_program(
         .collect()
 }
 
-fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
+pub(crate) fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
     native_variable_names(program)
         .into_iter()
         .enumerate()
@@ -4566,6 +4570,30 @@ impl NativeRuntime {
         module_root: &std::path::Path,
         working_directory: &std::path::Path,
     ) -> Result<NativeExecution, NativeRuntimeError> {
+        self.begin_execute(artifact, module_root, working_directory)?;
+        let (entry, image_id) = self.install_compiled_images(artifact, module_root)?;
+        self.finish_execute(artifact, entry, image_id)
+    }
+
+    /// 用打包期预编译 object 执行，跳过启动 codegen。
+    pub fn execute_precompiled(
+        &mut self,
+        artifact: &PortableArtifact,
+        images: &PrecompiledNativeImages,
+        module_root: &std::path::Path,
+        working_directory: &std::path::Path,
+    ) -> Result<NativeExecution, NativeRuntimeError> {
+        self.begin_execute(artifact, module_root, working_directory)?;
+        let (entry, image_id) = self.install_precompiled_images(artifact, module_root, images)?;
+        self.finish_execute(artifact, entry, image_id)
+    }
+
+    fn begin_execute(
+        &mut self,
+        artifact: &PortableArtifact,
+        module_root: &std::path::Path,
+        working_directory: &std::path::Path,
+    ) -> Result<(), NativeRuntimeError> {
         self.assert_owner_thread()?;
         self.state.output.borrow_mut().clear();
         self.state.stderr.borrow_mut().clear();
@@ -4589,7 +4617,15 @@ impl NativeRuntime {
         self.state.working_directory = working_directory
             .canonicalize()
             .unwrap_or_else(|_| working_directory.to_path_buf());
-        let (entry, image_id) = match artifact.program().split_builtin_segment() {
+        Ok(())
+    }
+
+    fn install_compiled_images(
+        &mut self,
+        artifact: &PortableArtifact,
+        module_root: &std::path::Path,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        match artifact.program().split_builtin_segment() {
             Some((builtin_program, user_program)) => {
                 let (builtin_slots, user_slots) =
                     native_variable_slots_for_segments(&builtin_program, &user_program);
@@ -4603,85 +4639,165 @@ impl NativeRuntime {
                     &user_slots,
                     &NativeHostRegistry,
                 )?;
-                self.state
-                    .install_shared_variables(&builtin_slots, &user_slots);
-                let builtin_image_id = builtin_image.image_id();
-                let user_image_id = user_image.image_id();
-                let shared_module_slots = builtin_slots
-                    .keys()
-                    .map(String::as_str)
-                    .filter(|name| is_module_scope_var(name))
-                    .collect::<HashSet<_>>();
-                self.state.install_program(
-                    builtin_image,
-                    &builtin_program,
-                    &builtin_slots,
-                    &shared_module_slots,
-                );
-                self.state.install_program(
-                    user_image.clone(),
-                    &user_program,
-                    &user_slots,
-                    &shared_module_slots,
-                );
-                self.state.builtin_image_id = Some(builtin_image_id);
-                self.state.user_image_id = Some(user_image_id);
-                self.state.user_function_count = u32::try_from(user_program.functions().len()).ok();
-                let entry_index = user_program
-                    .functions()
-                    .iter()
-                    .position(|function| is_module_entry_ir_function(function.name()))
-                    .unwrap_or(0);
-                let entry = user_image
-                    .entries()
-                    .get(entry_index)
-                    .ok_or_else(|| {
-                        NativeRuntimeError::Invariant("entry function is missing".into())
-                    })?
-                    .slow_entry;
-                dispatch::modules::configure(
-                    &mut self.state,
+                self.install_split_images(
+                    artifact,
                     module_root,
-                    user_image_id,
-                    artifact.manifest(),
+                    builtin_program,
+                    user_program,
+                    builtin_slots,
+                    user_slots,
+                    builtin_image,
+                    user_image,
                 )
-                .map_err(NativeRuntimeError::Invariant)?;
-                (entry, user_image_id)
             }
             None => {
                 let image = self
                     .state
                     .repository
                     .prepare(artifact, &NativeHostRegistry)?;
-                let slots = whole_program_slots(artifact.program());
-                self.state
-                    .install_whole_program_variables(artifact.program());
-                let entry_index = artifact
-                    .program()
-                    .functions()
-                    .iter()
-                    .position(|function| is_module_entry_ir_function(function.name()))
-                    .unwrap_or(0);
-                let entry = image
-                    .entries()
-                    .get(entry_index)
-                    .ok_or_else(|| {
-                        NativeRuntimeError::Invariant("entry function is missing".into())
-                    })?
-                    .slow_entry;
-                let image_id = image.image_id();
-                dispatch::modules::configure(
-                    &mut self.state,
-                    module_root,
-                    image_id,
-                    artifact.manifest(),
-                )
-                .map_err(NativeRuntimeError::Invariant)?;
-                self.state
-                    .install_program(image, artifact.program(), &slots, &HashSet::new());
-                (entry, image_id)
+                self.install_whole_image(artifact, module_root, image)
             }
-        };
+        }
+    }
+
+    fn install_precompiled_images(
+        &mut self,
+        artifact: &PortableArtifact,
+        module_root: &std::path::Path,
+        images: &PrecompiledNativeImages,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        native_exec::validate_images_match_program(artifact.program(), images)?;
+        match (artifact.program().split_builtin_segment(), images) {
+            (
+                Some((builtin_program, user_program)),
+                PrecompiledNativeImages::Split { builtin, user },
+            ) => {
+                let (builtin_slots, user_slots) =
+                    native_variable_slots_for_segments(&builtin_program, &user_program);
+                let builtin_image = self.state.repository.load_precompiled(
+                    &builtin_program,
+                    builtin,
+                    &NativeHostRegistry,
+                )?;
+                let user_image = self.state.repository.load_precompiled(
+                    &user_program,
+                    user,
+                    &NativeHostRegistry,
+                )?;
+                self.install_split_images(
+                    artifact,
+                    module_root,
+                    builtin_program,
+                    user_program,
+                    builtin_slots,
+                    user_slots,
+                    builtin_image,
+                    user_image,
+                )
+            }
+            (None, PrecompiledNativeImages::Whole(object)) => {
+                let image = self.state.repository.load_precompiled(
+                    artifact.program(),
+                    object,
+                    &NativeHostRegistry,
+                )?;
+                self.install_whole_image(artifact, module_root, image)
+            }
+            _ => Err(NativeRuntimeError::Invariant(
+                "precompiled images do not match program layout".into(),
+            )),
+        }
+    }
+
+    fn install_split_images(
+        &mut self,
+        artifact: &PortableArtifact,
+        module_root: &std::path::Path,
+        builtin_program: wjsm_ir::Program,
+        user_program: wjsm_ir::Program,
+        builtin_slots: HashMap<String, u32>,
+        user_slots: HashMap<String, u32>,
+        builtin_image: Arc<CompiledImage>,
+        user_image: Arc<CompiledImage>,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        self.state
+            .install_shared_variables(&builtin_slots, &user_slots);
+        let builtin_image_id = builtin_image.image_id();
+        let user_image_id = user_image.image_id();
+        let shared_module_slots = builtin_slots
+            .keys()
+            .map(String::as_str)
+            .filter(|name| is_module_scope_var(name))
+            .collect::<HashSet<_>>();
+        self.state.install_program(
+            builtin_image,
+            &builtin_program,
+            &builtin_slots,
+            &shared_module_slots,
+        );
+        self.state.install_program(
+            user_image.clone(),
+            &user_program,
+            &user_slots,
+            &shared_module_slots,
+        );
+        self.state.builtin_image_id = Some(builtin_image_id);
+        self.state.user_image_id = Some(user_image_id);
+        self.state.user_function_count = u32::try_from(user_program.functions().len()).ok();
+        let entry_index = user_program
+            .functions()
+            .iter()
+            .position(|function| is_module_entry_ir_function(function.name()))
+            .unwrap_or(0);
+        let entry = user_image
+            .entries()
+            .get(entry_index)
+            .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+            .slow_entry;
+        dispatch::modules::configure(
+            &mut self.state,
+            module_root,
+            user_image_id,
+            artifact.manifest(),
+        )
+        .map_err(NativeRuntimeError::Invariant)?;
+        Ok((entry, user_image_id))
+    }
+
+    fn install_whole_image(
+        &mut self,
+        artifact: &PortableArtifact,
+        module_root: &std::path::Path,
+        image: Arc<CompiledImage>,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        let slots = whole_program_slots(artifact.program());
+        self.state
+            .install_whole_program_variables(artifact.program());
+        let entry_index = artifact
+            .program()
+            .functions()
+            .iter()
+            .position(|function| is_module_entry_ir_function(function.name()))
+            .unwrap_or(0);
+        let entry = image
+            .entries()
+            .get(entry_index)
+            .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+            .slow_entry;
+        let image_id = image.image_id();
+        dispatch::modules::configure(&mut self.state, module_root, image_id, artifact.manifest())
+            .map_err(NativeRuntimeError::Invariant)?;
+        self.state
+            .install_program(image, artifact.program(), &slots, &HashSet::new());
+        Ok((entry, image_id))
+    }
+
+    fn finish_execute(
+        &mut self,
+        artifact: &PortableArtifact,
+        entry: NativeSlowEntry,
+        image_id: u64,
+    ) -> Result<NativeExecution, NativeRuntimeError> {
         if let Some(inspector) = self.state.inspector.as_mut() {
             inspector.register_script(artifact);
         }
@@ -4892,6 +5008,27 @@ mod tests {
     }
 
     #[test]
+    fn execute_precompiled_matches_compile_path() {
+        let artifact = artifact("console.log(1 + 2)");
+        let images =
+            compile_native_exec_images(&artifact).expect("precompiled images should compile");
+        let mut runtime = NativeRuntime::new_with_config(
+            NativeRuntimeConfig::default().with_specialization_enabled(false),
+        )
+        .expect("native runtime should initialize");
+        let execution = runtime
+            .execute_precompiled(
+                &artifact,
+                &images,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("precompiled source should execute");
+        assert_eq!(execution.stdout, b"3\n");
+        assert_eq!(execution.exit_code, 0);
+    }
+
+    #[test]
     fn large_array_churn_collects_before_cooperative_poll() {
         let artifact = artifact(
             r#"
@@ -5013,8 +5150,7 @@ second true RangeError JavaScript heap out of memory true\n";
                 panic!("{algorithm:?} should rebuild the OOM error after reset: {error:?}")
             });
         assert_eq!(
-            lifecycle_execution.stdout,
-            b"true RangeError JavaScript heap out of memory\n",
+            lifecycle_execution.stdout, b"true RangeError JavaScript heap out of memory\n",
             "{algorithm:?} reset lifecycle",
         );
         let oom_error = runtime

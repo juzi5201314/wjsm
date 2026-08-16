@@ -29,6 +29,7 @@ mod cli_install;
 mod cli_lint;
 mod cli_scripts;
 mod ir_output;
+mod native_exec;
 
 use cli_args::*;
 use cli_config::parse_cli;
@@ -315,7 +316,19 @@ fn cmd_build(
 ) -> Result<ExitCode> {
     let stage = stage.unwrap_or(Stage::Compile);
     if format == BuildFormat::NativeExecutable {
-        bail!("native executable output is not implemented");
+        if !matches!(stage, Stage::Compile) {
+            bail!("`--format native-executable` only supports `--stage compile`");
+        }
+        if path_is_stdout(output) {
+            bail!("refusing to write a native executable to stdout; use `-o <path>`");
+        }
+        wjsm_exec_format::locate_exec_stub().context("failed to locate wjsm-exec stub")?;
+        let artifact_bytes = compile_cli_artifact(cli, input, eval, root, script)?;
+        native_exec::write_native_executable(&artifact_bytes, output)?;
+        if cli.verbose_enabled(1) {
+            eprintln!("Wrote native executable to {}", output.display());
+        }
+        return Ok(ExitCode::from(EXIT_SUCCESS));
     }
 
     if matches!(stage, Stage::Parse | Stage::Lower) && output != Path::new("out.wjsm") {
@@ -2390,11 +2403,17 @@ mod tests {
     }
 
     #[test]
-    fn native_executable_rejection_preserves_existing_target() {
+    fn native_executable_failure_preserves_existing_target() {
         let root = TestProject::new("native_executable_rejection");
         let output = root.join("output");
         fs::write(&output, b"sentinel").expect("target should be writable");
         let output_path = output.to_str().expect("output path should be UTF-8");
+        let missing_stub = root.join("missing-wjsm-exec");
+        let previous = std::env::var_os("WJSM_EXEC_STUB");
+        // SAFETY: 本测试独占该环境变量，结束时恢复。
+        unsafe {
+            std::env::set_var("WJSM_EXEC_STUB", &missing_stub);
+        }
         let cli = parse_cli_for_test(&[
             "wjsm",
             "build",
@@ -2405,11 +2424,20 @@ mod tests {
             "-o",
             output_path,
         ]);
+        let result = execute(cli);
+        match previous {
+            Some(value) => unsafe { std::env::set_var("WJSM_EXEC_STUB", value) },
+            None => unsafe { std::env::remove_var("WJSM_EXEC_STUB") },
+        }
         let message = format!(
             "{:#}",
-            execute(cli).expect_err("native executable output should be rejected")
+            result.expect_err("native executable output should fail without a stub")
         );
-        assert_eq!(message, "native executable output is not implemented");
+        assert!(
+            message.contains("failed to locate wjsm-exec stub")
+                || message.contains("WJSM_EXEC_STUB"),
+            "{message}"
+        );
         assert_eq!(
             fs::read(output).expect("target should remain readable"),
             b"sentinel"

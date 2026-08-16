@@ -32,6 +32,6 @@ PortableArtifact
 - native side table 只保存 handle/generation，不保存跨 safepoint raw address。
 - may-GC call 通过 root frame 和 ManagedHeap protocol；不能新增无 epoch 的地址缓存或第二 handle table。
 - codegen changes 必须配 CLIF、image lifecycle、relocation/unwind/W^X 与 observable fixture evidence。
-- `--format native-executable` 是明确的 NotImplemented contract；runtime-private image 不伪装成用户 executable。
+- `--format native-executable` 是同宿主 stub+overlay（ADR 0016）；runtime-private image 不伪装成用户 executable。
 
 完整 owner、artifact 与安全边界见 [后端实现指南](../../../../backend-implementation-guide.md) 与 [ADR 0014](../../../../adr/0014-direct-cranelift-portable-artifact.md)。

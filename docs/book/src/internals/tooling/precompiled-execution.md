@@ -26,6 +26,10 @@ fixture 走 `run_file_in_process`，与 CLI 共用 `NativeRuntime`。测试进�
 
 `--watch` 是父进程监听、子进程整段重跑，不是预编译 handoff。
 
+## 同宿主 native executable
+
+`wjsm build --format native-executable` 把预链 `wjsm-exec` 与预编译 `NativeObject` 打进真实 ELF/PE。启动走 `CompiledImage::load`，跳过主程序 codegen。这不是磁盘 cache，也不是把 `.wnat` 改后缀。详见 [ADR 0016](../../../../adr/0016-native-executable-stub-overlay.md)。
+
 ## 深入了解
 
 - [源码输入与编译编排](source-input.md)

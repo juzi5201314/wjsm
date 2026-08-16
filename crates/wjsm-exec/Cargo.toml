@@ -1,0 +1,8 @@
+[package]
+name = "wjsm-exec"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wjsm-exec-format = { path = "../wjsm-exec-format" }
+wjsm-host-native = { path = "../wjsm-host-native" }

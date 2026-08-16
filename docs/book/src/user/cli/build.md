@@ -5,6 +5,7 @@
 ```bash
 wjsm build app.ts -o /tmp/app.wjsm
 wjsm build -e 'console.log(1)' -o /tmp/one.wjsm
+wjsm build app.ts --format native-executable -o /tmp/app
 ```
 
 `-o/--output` 默认是 `out.wjsm`，`-o -` 把二进制 artifact 写到非终端 stdout。多文件入口使用 `--root` 设置 module resolution root；`--script` 按 script 而非 module 解析。
@@ -22,7 +23,7 @@ wjsm build -e 'console.log(1)' -o /tmp/one.wjsm
 
 ## 输出格式
 
-`--format wjsm` 是默认且唯一已实现的用户制品格式。`--format native-executable` 当前返回稳定的未实现错误、退出码 1，并且不创建或覆盖输出文件。runtime 私有 native object/image 不是平台 executable。
+`--format wjsm` 是默认且可跨平台携带的制品格式。`--format native-executable` 在当前宿主上打包预链 `wjsm-exec` stub 与预编译 native object，得到可直接运行的 ELF/PE。只支持 `--stage compile`；失败时不创建或覆盖输出文件。runtime 私有 object 本身不是 executable。
 
 ## 验证
 

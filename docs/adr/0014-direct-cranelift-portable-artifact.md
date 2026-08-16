@@ -57,9 +57,9 @@ GC 可在 Mark-Sweep、G1、ZGC 中启动时选择；root frame、host roots、w
 
 交叉编译或 object emission 不等于真实平台执行证据。缺少实际 runner、AVX-512、大内存或多 NUMA 时，相关验证报告必须标记 `needs-capability-runner`，不能 skip-as-pass。
 
-### 6. Platform native executable AOT 不在当前范围
+### 6. Platform native executable 是同宿主 stub + overlay
 
-`wjsm build --format native-executable` 返回稳定的 `native executable output is not implemented` 错误、退出码 1，并且不创建或覆盖输出文件。runtime 私有 relocatable object/native image 不构成用户可分发 executable。
+`wjsm build --format native-executable` 把预链 `wjsm-exec` stub、canonical `.wjsm` 与当前宿主编译的 `NativeObject` 打成真实 ELF/PE。合同见 [ADR 0016](0016-native-executable-stub-overlay.md)。runtime 私有 relocatable object/native image 本身仍不构成用户可分发 executable，不得改后缀冒充。
 
 ### 7. 安全边界
 
@@ -73,7 +73,7 @@ Direct native code 不具备 Wasm memory/control-flow sandbox。artifact verifie
 - portable artifact 与 native image 生命周期分离：前者可分发，后者可丢弃重建。
 - `wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 继续保持后端无关；Cranelift/object/platform 依赖只进入 native backend/host。
 - 新执行后端不再是当前 public extension contract。若未来重新引入，必须通过新的 ADR 定义 artifact、runtime owner、CLI 与完整语义证据，不能复活旧 fallback。
-- 当前唯一明确未实现的用户能力是 platform native executable AOT。
+- platform native executable 由 ADR 0016 定义为同宿主 stub+overlay，不再是未实现合同。
 
 ## Verification
 
@@ -89,4 +89,5 @@ Direct native code 不具备 Wasm memory/control-flow sandbox。artifact verifie
 - ADR 0011 — Runtime 按后端无关性拆分（历史）
 - ADR 0012 — Host builtins 后端解耦（历史）
 - ADR 0013 — 多后端完全支撑契约（历史）
+- ADR 0016 — 同宿主 native executable 为 stub + overlay
 - `docs/backend-implementation-guide.md`
