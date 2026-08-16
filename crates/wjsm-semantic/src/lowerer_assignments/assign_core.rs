@@ -70,7 +70,7 @@ impl Lowerer {
             return Ok(dest);
         }
 
-        let (scope_id, _kind) = match self.scopes.lookup(&name) {
+        let (scope_id, _kind) = match self.lookup_binding_for_read(&name) {
             Ok(found) => found,
             Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
                 // 变量查找失败 → 从全局对象按名读取属性
@@ -349,7 +349,7 @@ impl Lowerer {
 
         // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
         // 避免 check_mutable and lookup 各自遍历 scope chain 的冗余。
-        let (scope_id, kind) = match self.scopes.lookup_for_assign(&name) {
+        let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
             Ok(found) => found,
             Err(msg)
                 if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>

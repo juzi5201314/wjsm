@@ -52,23 +52,26 @@ const R = Response                      // undefined
 
 ## TDZ 静态判定
 
-`let` / `const` 的 Temporal Dead Zone 在 lowering 期静态判定。函数体内的前向引用会被拒绝——即使是合法的「延迟到声明后调用」模式：
+`let` / `const` 的 Temporal Dead Zone 在 lowering 期静态判定。当前简单 declarator 的
+initializer 本身是对象字面量时（允许括号及不改变求值时机的 TypeScript 类型包装），其
+method/getter/setter 延迟执行体可以引用同一 binding；在初始化完成后调用这些方法时，
+读取、`let` 写入及更新都会访问真实 binding。
 
 ```js
-function f() {
-  g();          // 合法调用，声明在前
-  function g() {}
-}
-f();             // 上面这种没问题
-
-function f() {
-  g();           // 编译期拒绝：在 let 声明前访问
-  let x = 1;
-  function g() { return x }
-}
+const set = {
+  forEach(action) {
+    action(set); // 支持：调用发生在 set 初始化完成之后
+  },
+};
+set.forEach((value) => console.log(typeof value)); // "object"
 ```
 
-类名引用在方法体内可用（延迟成员），但在静态字段初始值和 `extends` 等类定义期求值的位置仍报 TDZ。
+边界仍然精确：紧接对象字面量的 member 读取、方法调用或 getter 访问属于立即求值，
+不会开启逃逸；property value、computed key、spread，以及以调用、`new`、条件表达式、
+数组等包裹对象字面量的非直接 initializer 也继续静态拒绝。任意后声明 binding 和
+箭头/普通函数等其他函数形态仍由 [#372](https://github.com/juzi5201314/wjsm/issues/372)
+及既有限制处理。这不是完整的运行时 TDZ 支持；类名仍使用独立的延迟方法体规则，
+类定义期求值位置保持严格 TDZ。
 
 ## Intl 未实现
 

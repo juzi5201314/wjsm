@@ -109,6 +109,102 @@ fn tdz_access_reports_diagnostic() {
 }
 
 #[test]
+fn object_method_declarator_tdz_escape_stays_narrow() {
+    let rejected = [
+        (
+            "const set = { value: set };",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "const set = { [set]: 1 };",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "const set = { ...set };",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "const set = console.log(set);",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "let x = { m() { return x; } }.m();",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "let x = { m() { return x; } }.m;",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "let x = { get self() { return x; } }.self;",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "let x = true ? { m() { return x; } } : {};",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "let x = [{ m() { return x; } }];",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "function use(value) { return value; } let x = use({ m() { return x; } });",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "function Box(value) { return value; } let x = new Box({ m() { return x; } });",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "const set = () => set;",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "const set = function () { return set; };",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "const o = { m() { return x; } }; let x = 1;",
+            "cannot access `x` before initialisation",
+        ),
+        (
+            "const set = { m() { return set; let set; } };",
+            "cannot access `set` before initialisation",
+        ),
+        (
+            "const set = { m() { set = set; } };",
+            "cannot reassign a const-declared variable `set`",
+        ),
+        (
+            "const set = { m() { set++; } };",
+            "cannot reassign a const-declared variable `set`",
+        ),
+    ];
+
+    for (source, expected_message) in rejected {
+        let error = lower_module(parse_module(source).expect("parse should succeed"), false)
+            .expect_err("narrow TDZ guards should reject this source");
+        match error {
+            LoweringError::Diagnostic(diagnostic) => {
+                assert!(
+                    diagnostic.message.contains(expected_message),
+                    "source {source:?} produced unexpected diagnostic: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
+
+    let wrapped_source =
+        "const wrapped = ((({ m() { return wrapped; } } as const) as object) satisfies object)!;";
+    lower_module(
+        parse_module(wrapped_source).expect("wrapped object literal should parse"),
+        false,
+    )
+    .expect("syntax-only wrappers should preserve the direct object initializer escape");
+}
+
+#[test]
 fn let_redeclare_reports_diagnostic() {
     let source = "let x = 1; let x = 2;\n";
     let error = lower_module(parse_module(source).expect("parse should succeed"), false)
@@ -701,6 +797,11 @@ fn method_closure_live_bindings_fixture_matches_ir_snapshot() {
 #[test]
 fn class_private_closure_identity_fixture_matches_ir_snapshot() {
     assert_snapshot("class_private_closure_identity");
+}
+
+#[test]
+fn issue384_object_method_self_reference_fixture_matches_ir_snapshot() {
+    assert_snapshot("issue384_object_method_self_reference");
 }
 
 fn assert_snapshot(name: &str) {

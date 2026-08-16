@@ -667,8 +667,7 @@ impl Lowerer {
             swc_ast::Expr::Ident(ident) => {
                 let name = ident.sym.to_string();
                 let (scope_id, kind) = self
-                    .scopes
-                    .lookup_for_assign(&name)
+                    .lookup_binding_for_assign(&name)
                     .map_err(|msg| self.error(update.span(), msg))?;
 
                 let binding = CapturedBinding::new(name.clone(), scope_id);

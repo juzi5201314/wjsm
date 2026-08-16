@@ -70,6 +70,11 @@ pub(crate) struct Lowerer {
     /// 降级（此时记录已存在）才折叠——函数值只能在其 create_closure（声明语句
     /// 处）之后被调用，故读取必在初始化之后，无 TDZ 风险。
     pub(crate) module_const_literals: std::collections::HashMap<String, wjsm_ir::Constant>,
+    /// 正在降级 initializer 的 let/const 简单绑定，按 `(scope_id, name)` 嵌套保存。
+    /// 仅对象字面量 method/getter/setter 的延迟体可临时解析这些未初始化绑定。
+    pub(crate) declarator_tdz_escape_stack: Vec<(usize, String)>,
+    /// 当前对象字面量 method/getter/setter 延迟执行体的嵌套深度。
+    pub(crate) object_method_deferred_body_depth: u32,
     /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合 + 最后写入的 block + 是否 dominate 全部后续 block）。
     pub(crate) shared_env_stack: Vec<Option<SharedEnvFrame>>,
     // ── 模块系统相关 ────────────────────────────────────────────────────────

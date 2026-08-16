@@ -1,5 +1,21 @@
 use super::*;
 
+fn is_direct_object_literal_initializer(mut expr: &swc_ast::Expr) -> bool {
+    loop {
+        expr = match expr {
+            swc_ast::Expr::Object(_) => return true,
+            swc_ast::Expr::Paren(wrapper) => &wrapper.expr,
+            swc_ast::Expr::TsAs(wrapper) => &wrapper.expr,
+            swc_ast::Expr::TsNonNull(wrapper) => &wrapper.expr,
+            swc_ast::Expr::TsTypeAssertion(wrapper) => &wrapper.expr,
+            swc_ast::Expr::TsConstAssertion(wrapper) => &wrapper.expr,
+            swc_ast::Expr::TsSatisfies(wrapper) => &wrapper.expr,
+            swc_ast::Expr::TsInstantiation(wrapper) => &wrapper.expr,
+            _ => return false,
+        };
+    }
+}
+
 impl Lowerer {
     pub(crate) fn lower_debugger(&mut self, flow: StmtFlow) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
@@ -42,7 +58,27 @@ impl Lowerer {
 
         for declarator in &var_decl.decls {
             if let Some(init) = &declarator.init {
-                let value = self.lower_expr(init, block)?;
+                let has_tdz_escape = if is_direct_object_literal_initializer(init)
+                    && matches!(kind, VarKind::Let | VarKind::Const)
+                    && let swc_ast::Pat::Ident(binding) = &declarator.name
+                {
+                    let name = binding.id.sym.to_string();
+                    let scope_id = self
+                        .scopes
+                        .resolve_scope_id(&name)
+                        .map_err(|msg| self.error(binding.id.span, msg))?;
+                    self.declarator_tdz_escape_stack.push((scope_id, name));
+                    true
+                } else {
+                    false
+                };
+                let value = self.lower_expr(init, block);
+                if has_tdz_escape {
+                    self.declarator_tdz_escape_stack
+                        .pop()
+                        .expect("declarator TDZ escape stack underflow");
+                }
+                let value = value?;
                 block = self.resolve_store_block(block);
                 // 初始化器位于声明语句的顶层表达式位置：若它可能返回 TAG_EXCEPTION
                 // （调用 / 成员读取 / new / `in` 等），插入异常检查分叉，使

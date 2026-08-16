@@ -146,6 +146,8 @@ impl Lowerer {
             map_bindings: std::collections::HashSet::new(),
             set_bindings: std::collections::HashSet::new(),
             module_const_literals: std::collections::HashMap::new(),
+            declarator_tdz_escape_stack: Vec::new(),
+            object_method_deferred_body_depth: 0,
             eval_continue_block: None,
             new_expr_continue_block: None,
             await_continue_block: None,
@@ -168,6 +170,60 @@ impl Lowerer {
         let _ = lowerer.scopes.declare("NaN", VarKind::Var, true);
         let _ = lowerer.scopes.declare("Infinity", VarKind::Var, true);
         lowerer
+    }
+
+    /// 标识符读取使用的窄 TDZ 逃逸边界。
+    ///
+    /// ScopeTree 始终维持严格 TDZ；只有当前对象字面量方法的延迟体，且解析出的
+    /// `(scope_id, name)` 与正在初始化的 declarator 完全一致时，才返回该绑定。
+    pub(crate) fn lookup_binding_for_read(
+        &self,
+        name: &str,
+    ) -> Result<(usize, VarKind), String> {
+        if self.eval_scope_bridge_active() {
+            return self.scopes.lookup(name);
+        }
+        self.scopes
+            .lookup(name)
+            .or_else(|error| self.deferred_declarator_binding(name).ok_or(error))
+    }
+
+    /// 赋值使用同一窄边界；const 仍由严格 lookup 返回不可重赋值错误。
+    pub(crate) fn lookup_binding_for_assign(
+        &self,
+        name: &str,
+    ) -> Result<(usize, VarKind), String> {
+        if self.eval_scope_bridge_active() {
+            return self.scopes.lookup_for_assign(name);
+        }
+        match self.scopes.lookup_for_assign(name) {
+            Ok(binding) => Ok(binding),
+            Err(error) => match self.deferred_declarator_binding(name) {
+                Some((scope_id, VarKind::Let)) => Ok((scope_id, VarKind::Let)),
+                _ => Err(error),
+            },
+        }
+    }
+
+    fn deferred_declarator_binding(&self, name: &str) -> Option<(usize, VarKind)> {
+        if self.object_method_deferred_body_depth == 0 {
+            return None;
+        }
+
+        let scope_id = self.scopes.resolve_scope_id(name).ok()?;
+        let is_current_declarator = self
+            .declarator_tdz_escape_stack
+            .iter()
+            .rev()
+            .any(|(declarator_scope_id, declarator_name)| {
+                *declarator_scope_id == scope_id && declarator_name == name
+            });
+        if !is_current_declarator {
+            return None;
+        }
+
+        let info = self.scopes.arenas.get(scope_id)?.variables.get(name)?;
+        (!info.initialised).then_some((scope_id, info.kind))
     }
 
     /// 将 builtin 段的 Program 与布局元数据预装进本 lowerer（hydration 种子）：
