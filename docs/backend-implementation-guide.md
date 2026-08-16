@@ -156,7 +156,7 @@ collection 后按 retired handle 清理 weak/side-table state。cooperative poll
 
 ## 8. Native executable 与安全边界
 
-`wjsm build --format native-executable` 把预链 `wjsm-exec` stub、canonical `.wjsm`、预编译 `NativeObject` 与制品内源码快照打成真实 ELF/PE。打包失败不创建或覆盖目标文件。runtime 私有 relocatable object/image 不得单独包装成伪 executable。合同见 ADR 0016 与 ADR 0017。
+`wjsm build --format native-executable` 把预链 `wjsm-exec` stub、canonical `.wjsm`、预编译 `NativeObject` 与制品内源码快照打成真实 ELF/PE。overlay 正文整层 zstd（ADR 0018）。打包失败不创建或覆盖目标文件。runtime 私有 relocatable object/image 不得单独包装成伪 executable。合同见 ADR 0016、ADR 0017 与 ADR 0018。
 
 Direct native code 不提供 Wasm sandbox。artifact verifier、checked lowering、strict relocation、symbol allowlist 与 W^X 是编译/加载 TCB，不是同进程不受信任代码隔离。运行不受信任程序必须使用独立 OS process、权限与资源限制。
 

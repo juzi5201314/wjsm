@@ -73,4 +73,5 @@ payload 同时携带 canonical `.wjsm`、预编译 `NativeObject` 与制品内�
 - ADR 0014 — Direct Cranelift 与 portable `.wjsm` 终态
 - ADR 0015 — Builtin 段 native 镜像复用
 - ADR 0017 — native-executable 以制品内源码快照为运行时源码 owner
+- ADR 0018 — overlay payload 整层 zstd
 - `docs/backend-implementation-guide.md`

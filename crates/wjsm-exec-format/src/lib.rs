@@ -1,7 +1,7 @@
 //! 同宿主 native executable 的 overlay payload 与 footer。
 //!
 //! 不依赖 Cranelift。stub 是 rustc 预链的 ELF/PE；本 crate 只负责在其后
-//! 追加 payload，并用固定 footer 定位。
+//! 追加 zstd 压缩的 payload，并用固定 footer 定位。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,9 @@ use thiserror::Error;
 /// footer 固定 64 字节，始终位于文件末尾。
 pub const FOOTER_LEN: usize = 64;
 pub const FOOTER_MAGIC: &[u8; 8] = b"WJSMEXEC";
-pub const PAYLOAD_SCHEMA: u32 = 3;
+pub const PAYLOAD_SCHEMA: u32 = 4;
+/// 内层字节的 zstd 压缩级别；级别 3 是速度/体积的默认点。
+const ZSTD_LEVEL: i32 = 3;
 pub const FORMAT_VERSION: u16 = 1;
 
 const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -254,13 +256,29 @@ fn encode_footer(footer: &ExecFooter) -> [u8; FOOTER_LEN] {
 }
 
 fn encode_payload(payload: &ExecPayload) -> Result<Vec<u8>, ExecFormatError> {
+    let inner = encode_inner(payload)?;
+    let raw_len = u64::try_from(inner.len()).map_err(|_| ExecFormatError::LengthOverflow)?;
+    if raw_len == 0 || raw_len > MAX_PAYLOAD_BYTES {
+        return Err(ExecFormatError::Invalid(
+            "payload exceeds byte limit".into(),
+        ));
+    }
+    let compressed = zstd::encode_all(inner.as_slice(), ZSTD_LEVEL)
+        .map_err(|error| ExecFormatError::Invalid(format!("zstd compress failed: {error}")))?;
+    let mut bytes = Vec::with_capacity(12 + compressed.len());
+    bytes.extend_from_slice(&PAYLOAD_SCHEMA.to_le_bytes());
+    bytes.extend_from_slice(&raw_len.to_le_bytes());
+    bytes.extend_from_slice(&compressed);
+    Ok(bytes)
+}
+
+fn encode_inner(payload: &ExecPayload) -> Result<Vec<u8>, ExecFormatError> {
     if payload.objects.is_empty() || payload.objects.len() > MAX_OBJECTS as usize {
         return Err(ExecFormatError::Invalid(
             "native executable must embed 1 or 2 objects".into(),
         ));
     }
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&PAYLOAD_SCHEMA.to_le_bytes());
     bytes.extend_from_slice(&payload.native_abi_hash);
     bytes.extend_from_slice(&payload.codegen_hash);
     encode_string(&mut bytes, &payload.target)?;
@@ -302,6 +320,31 @@ fn decode_payload(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
     if decoder.u32()? != PAYLOAD_SCHEMA {
         return Err(ExecFormatError::Invalid("payload schema mismatch".into()));
     }
+    let raw_len = decoder.u64()?;
+    if raw_len == 0 || raw_len > MAX_PAYLOAD_BYTES {
+        return Err(ExecFormatError::Invalid(
+            "payload exceeds byte limit".into(),
+        ));
+    }
+    let inner = decompress_zstd(decoder.remaining(), raw_len)?;
+    decode_inner(&inner)
+}
+
+fn decompress_zstd(compressed: &[u8], raw_len: u64) -> Result<Vec<u8>, ExecFormatError> {
+    let raw_len = usize::try_from(raw_len).map_err(|_| ExecFormatError::LengthOverflow)?;
+    let inner = zstd::bulk::Decompressor::new()
+        .and_then(|mut decompressor| decompressor.decompress(compressed, raw_len))
+        .map_err(|error| ExecFormatError::Invalid(format!("zstd decompress failed: {error}")))?;
+    if inner.len() != raw_len {
+        return Err(ExecFormatError::Invalid(
+            "zstd output length mismatch".into(),
+        ));
+    }
+    Ok(inner)
+}
+
+fn decode_inner(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
+    let mut decoder = Decoder::new(bytes);
     let native_abi_hash = decoder.hash()?;
     let codegen_hash = decoder.hash()?;
     let target = decoder.string()?;
@@ -494,6 +537,10 @@ impl<'a> Decoder<'a> {
         Ok(self.take(len)?.to_vec())
     }
 
+    fn remaining(&self) -> &'a [u8] {
+        self.bytes.get(self.cursor..).unwrap_or(&[])
+    }
+
     fn finish(self) -> Result<(), ExecFormatError> {
         if self.cursor == self.bytes.len() {
             Ok(())
@@ -545,6 +592,50 @@ mod tests {
         assert!(matches!(
             decode_payload(&bytes),
             Err(ExecFormatError::Invalid(message)) if message.contains("schema")
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_schema_3() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&16_u64.to_le_bytes());
+        assert!(matches!(
+            decode_payload(&bytes),
+            Err(ExecFormatError::Invalid(message)) if message.contains("schema")
+        ));
+    }
+
+    #[test]
+    fn pack_zstd_shrinks_compressible_payload() {
+        let mut payload = sample_payload();
+        payload.files.insert(
+            "repeat.js".into(),
+            "export const x = 1;\n".repeat(4096).into_bytes(),
+        );
+        let packed = pack(b"stub", &payload).expect("pack");
+        let footer = read_footer(&packed).expect("footer");
+        let inner_len = encode_inner(&payload).expect("inner").len() as u64;
+        assert!(
+            footer.payload_len < inner_len,
+            "compressed payload {} should be smaller than inner {inner_len}",
+            footer.payload_len
+        );
+        assert_eq!(unpack(&packed).expect("unpack"), payload);
+    }
+
+    #[test]
+    fn decode_rejects_corrupt_zstd() {
+        let inner = encode_inner(&sample_payload()).expect("inner");
+        let mut compressed = zstd::encode_all(inner.as_slice(), ZSTD_LEVEL).expect("compress");
+        compressed[0] ^= 0xff;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&PAYLOAD_SCHEMA.to_le_bytes());
+        bytes.extend_from_slice(&(inner.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&compressed);
+        assert!(matches!(
+            decode_payload(&bytes),
+            Err(ExecFormatError::Invalid(message)) if message.contains("zstd")
         ));
     }
 
