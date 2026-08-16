@@ -240,12 +240,23 @@ export function fork(modulePath, args, options) {
   const execPath = typeof process.execPath === 'string' && process.execPath
     ? process.execPath
     : 'wjsm';
-  // 固定 `run` 子命令：避免 process.execArgv / 选项数组在宿主侧被误读成数字 handle。
-  const commandArgs = ['run', String(modulePath)];
-  if (Array.isArray(args)) {
-    for (var j = 0; j < args.length; j = j + 1) {
-      if (args[j] !== undefined && args[j] !== null) {
-        commandArgs.push(String(args[j]));
+  const commandArgs = [];
+  if (process.__wjsm_packed) {
+    if (Array.isArray(args)) {
+      for (var j = 0; j < args.length; j = j + 1) {
+        if (args[j] !== undefined && args[j] !== null) {
+          commandArgs.push(String(args[j]));
+        }
+      }
+    }
+  } else {
+    // 固定 `run` 子命令：避免 process.execArgv / 选项数组在宿主侧被误读成数字 handle。
+    commandArgs.push('run', String(modulePath));
+    if (Array.isArray(args)) {
+      for (var k = 0; k < args.length; k = k + 1) {
+        if (args[k] !== undefined && args[k] !== null) {
+          commandArgs.push(String(args[k]));
+        }
       }
     }
   }
@@ -260,6 +271,17 @@ export function fork(modulePath, args, options) {
     stdio: options.stdio || ['pipe', 'pipe', 'pipe', 'ipc'],
     ipc: true,
   };
+  if (process.__wjsm_packed) {
+    const env = {};
+    if (options.env && typeof options.env === 'object') {
+      const keys = Object.keys(options.env);
+      for (var ei = 0; ei < keys.length; ei = ei + 1) {
+        env[keys[ei]] = options.env[keys[ei]];
+      }
+    }
+    env.WJSM_EXEC_ENTRY = String(modulePath);
+    spawnOpts.env = env;
+  }
   return spawn(execPath, commandArgs, spawnOpts);
 }
 

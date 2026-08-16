@@ -28,6 +28,7 @@ pub(crate) mod node_child_process;
 pub(crate) mod node_crypto;
 pub(crate) mod node_dgram;
 pub(crate) mod node_fs;
+mod node_fs_snapshot;
 pub(crate) mod node_net;
 pub(crate) mod node_os;
 pub(crate) mod node_perf_hooks;

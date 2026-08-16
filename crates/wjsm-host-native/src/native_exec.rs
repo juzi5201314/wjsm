@@ -1,4 +1,10 @@
 //! 同宿主 native executable 的预编译 object 编译与编解码。
+//!
+//! 非目标（禁止实现）：
+//! - 把 guest `.text` 合进 stub `PT_LOAD`
+//! - stub 自解压 / UPX
+//! - `libwjsm.so` 或任何旁路共享库
+//! - 从 stub 拿掉 Cranelift / 从 overlay 拿掉 `.wjsm`
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -88,11 +94,13 @@ pub fn exec_payload_from_images(
 pub fn images_from_exec_payload(
     payload: &ExecPayload,
 ) -> Result<(Arc<PortableArtifact>, PrecompiledNativeImages), NativeRuntimeError> {
+    let compiler = NativeCompiler::new()?;
     payload
         .verify_stub_identity(
             wjsm_native_abi::native_abi_hash(),
             NATIVE_CODEGEN_HASH,
             CRANELIFT_VERSION,
+            compiler.settings_key(),
         )
         .map_err(|error| NativeRuntimeError::Invariant(error.to_string()))?;
     let artifact = PortableArtifact::decode(
@@ -103,6 +111,37 @@ pub fn images_from_exec_payload(
     let images = PrecompiledNativeImages::from_encoded(payload.objects.clone())?;
     validate_images_match_program(artifact.program(), &images)?;
     Ok((Arc::new(artifact), images))
+}
+
+/// 从快照入口 lowering 出 portable artifact；inspect 时打 DebugCheck。
+pub fn compile_snapshot_entry(
+    store: &wjsm_module::ModuleSourceStore,
+    entry: &str,
+    debug_codegen: bool,
+) -> Result<PortableArtifact, NativeRuntimeError> {
+    let path = store.resolve_entry(std::path::Path::new(entry));
+    let path = if store.is_file(&path) {
+        path
+    } else {
+        let trimmed = entry
+            .trim_start_matches("./")
+            .trim_start_matches("/wjsm-exec/");
+        store.resolve_entry(std::path::Path::new(trimmed))
+    };
+    if !store.is_file(&path) {
+        return Err(NativeRuntimeError::Invariant(format!(
+            "packed entry '{entry}' is not in the module source store"
+        )));
+    }
+    let input = wjsm_module::lower_artifact_input_with_store(
+        &path,
+        store.clone(),
+        wjsm_module::ResolutionOptions::default(),
+        debug_codegen,
+    )
+    .map_err(|error| NativeRuntimeError::SourceCompile(error.to_string()))?;
+    PortableArtifact::from_input(&input)
+        .map_err(|error| NativeRuntimeError::SourceCompile(error.to_string()))
 }
 
 pub(crate) fn validate_images_match_program(

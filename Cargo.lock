@@ -4063,6 +4063,7 @@ dependencies = [
  "tokio",
  "wjsm-cli",
  "wjsm-exec",
+ "wjsm-exec-format",
  "wjsm-runtime",
 ]
 

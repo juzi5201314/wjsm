@@ -40,6 +40,8 @@ GC 选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。
 | --- | --- | --- |
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级（`none`/`speed_and_size`/`default`） | `default` |
 | `WJSM_DISABLE_LICM` | 关闭 IR 层循环不变量纯调用提升（`0`/`false`/`off`/空/未设置保持启用） | 启用 |
+| `WJSM_DISABLE_SPECIALIZATION` | 关闭运行时类型反馈与热函数特化（设为 `1`） | 启用 |
+| `WJSM_INSPECT` / `WJSM_INSPECT_BRK` | packed exe 启用 CDP inspector（可带 `HOST:PORT`） | 关闭 |
 
 `WJSM_DISABLE_LICM` 主要用于 benchmark：避免循环内纯 `work()` 被提升出循环，测不到真实开销。
 

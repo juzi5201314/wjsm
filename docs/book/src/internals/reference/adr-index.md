@@ -12,12 +12,13 @@
 | 0016 | 同宿主 native executable 为 stub + overlay | Accepted；修正 0014 §6 |
 | 0017 | native-executable 以制品内源码快照为运行时源码 owner | Accepted；修正 0016 §2 |
 | 0018 | native-executable overlay payload 整层 zstd | Accepted；修正 0016 §1 |
+| 0019 | native-executable 的 packed 应用合同 | Accepted；修正 0016 §5 与 0017 |
 
 ## 当前基线
 
 Direct production chain 是 verified semantic IR → canonical portable `.wjsm` → direct IR→CLIF → current-host native image → `NativeRuntime`。`.wjsm` 是唯一跨平台用户制品；native cache、snapshot 与 image 是可重建的 runtime-private 派生数据。
 
-`wjsm build --format native-executable` 产出同宿主 stub+overlay ELF/PE（ADR 0016），运行时源码 owner 是制品内快照（ADR 0017），overlay 正文整层 zstd（ADR 0018）。不支持的平台 fail-closed，不切换到 Wasm/JIT/解释器。
+`wjsm build --format native-executable` 产出同宿主 stub+overlay ELF/PE（ADR 0016），运行时源码 owner 是制品内快照（ADR 0017），overlay 正文整层 zstd（ADR 0018），packed 应用合同见 ADR 0019。不支持的平台 fail-closed，不切换到 Wasm/JIT/解释器。
 
 ## 参考
 

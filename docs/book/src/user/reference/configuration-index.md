@@ -42,6 +42,8 @@
 | `WJSM_STARTUP_SNAPSHOT_DEBUG` | 快照调试诊断 | 关闭 |
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级 | `default` |
 | `WJSM_DISABLE_LICM` | 关闭循环不变量提升 | 启用 |
+| `WJSM_DISABLE_SPECIALIZATION` | 关闭热函数特化 | 启用 |
+| `WJSM_INSPECT` / `WJSM_INSPECT_BRK` | packed exe 启用 CDP | 关闭 |
 | `WJSM_CHILD_PROCESS_ALLOW` | child_process 命令白名单 | 禁用 |
 | `WJSM_WORKER_THREADS_MAX` | worker_threads 上限 | `32` |
 | `WJSM_UPDATE_FIXTURES` | 更新 fixture 期望输出 | 未设置 |

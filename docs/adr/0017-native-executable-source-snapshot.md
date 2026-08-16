@@ -18,7 +18,9 @@ ADR 0016 把打包期 `module_root` 写成主机绝对路径。静态已打进 `
 
 `wjsm build --format native-executable` 把源文件打进 payload。启动后解析、加载、worker 编译只读这份快照。禁止回退 `cwd`、exe 旁目录或残留主机路径。
 
-快照 = 打包期 store 实际读过的文件（模块、JSON、`package.json`）加上 `--include` 显式补入的文件。不默认打包整个 `--root`。`--include` 只属于 native-executable；越界或缺文件则打包失败且不写输出。
+快照 = 打包期 store 实际读过的文件（模块、JSON、`package.json`）、静态可解析的 `new Worker('./x')` / `child_process.fork('./x')` / `cluster.setupMaster({ exec: './x' })` 相对路径，加上 `--include` 显式补入的文件。不默认打包整个 `--root`。`--include` 只属于 native-executable；越界或缺文件则打包失败且不写输出。
+
+`/wjsm-exec/...` 与 `file:///wjsm-exec/...` 的 `node:fs` 读只走快照；写虚拟路径返回 EROFS。`cwd` 与其它主机路径仍走真盘。合同见 [ADR 0019](0019-native-executable-application-contract.md)。
 
 ### 2. 虚拟身份，不是构建机 `file://`
 
@@ -55,3 +57,4 @@ file:///wjsm-exec/<logical_url>
 
 - ADR 0016 — 同宿主 native executable 为 stub + overlay
 - ADR 0006 — Runtime module loading boundary
+- ADR 0019 — packed 应用合同

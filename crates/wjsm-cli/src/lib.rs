@@ -626,6 +626,7 @@ fn include_root(root: Option<&Path>, fallback: Option<&Path>) -> Result<PathBuf>
 fn snapshot_includes(root: PathBuf, include: &[PathBuf]) -> Result<BTreeMap<String, Vec<u8>>> {
     let store = wjsm_module::ModuleSourceStore::recording(&root);
     apply_snapshot_includes(&store, include)?;
+    wjsm_module::include_static_runtime_entries(&store)?;
     Ok(store.recorded_files())
 }
 
@@ -672,6 +673,7 @@ fn compile_native_executable_from_file(
                 )
             })?;
             apply_snapshot_includes(&store, include)?;
+            wjsm_module::include_static_runtime_entries(&store)?;
             let bytes = PortableArtifact::from_input(&input)
                 .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))?
                 .bytes()
@@ -698,6 +700,7 @@ fn compile_native_executable_from_file(
                 debug_codegen,
             )?;
             apply_snapshot_includes(&store, include)?;
+            wjsm_module::include_static_runtime_entries(&store)?;
             Ok((bytes, store.recorded_files()))
         }
     }
@@ -790,7 +793,8 @@ fn create_native_runtime(cli: &Cli) -> Result<wjsm_host_native::NativeRuntime> {
     let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
     let mut runtime_config = wjsm_host_native::NativeRuntimeConfig::from_environment(cache_dir)
         .map_err(anyhow::Error::msg)?
-        .with_max_heap_size(cli.max_heap_size);
+        .with_max_heap_size(cli.max_heap_size)
+        .with_output_mode(wjsm_host_native::OutputMode::Inherit);
     if let Some(gc_algorithm) = cli.gc {
         runtime_config.gc_algorithm = gc_algorithm;
     }
@@ -838,8 +842,6 @@ fn run_portable_artifact(
     let execution = native
         .execute(&artifact, &module_root, &working_directory)
         .context("portable artifact execution failed")?;
-    io::stdout().write_all(&execution.stdout)?;
-    io::stderr().write_all(&execution.stderr)?;
     if cli.stats {
         print_native_cache_stats(&execution);
     }
@@ -1851,15 +1853,11 @@ fn run_compile_then_execute_with_args(
             return Ok(ExitCode::from(EXIT_COMPILE_ERROR));
         }
         Err(error) => {
-            io::stdout().write_all(&native.take_output())?;
-            io::stderr().write_all(&native.take_stderr())?;
             eprintln!("Runtime error: {error:#}");
             return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
         }
     };
     result.timings.execute_us = start.elapsed().as_micros() as u64;
-    io::stdout().write_all(&execution.stdout)?;
-    io::stderr().write_all(&execution.stderr)?;
     if cli.stats {
         print_native_cache_stats(&execution);
     }

@@ -16,24 +16,25 @@ pub(super) fn dispatch_console(
     Some(render_to_output(state, builtin, args))
 }
 
-/// 按 builtin 前缀 + 空格分隔参数 + 换行写入输出缓冲。
+/// 按 builtin 前缀 + 空格分隔参数 + 换行写入输出。
 fn render_to_output(state: &mut NativeAgentState, builtin: Builtin, args: &[i64]) -> i64 {
-    let mut output = state.output.borrow_mut();
+    let mut line = Vec::new();
     match builtin {
-        Builtin::ConsoleInfo => output.extend_from_slice(b"[info] "),
-        Builtin::ConsoleDebug => output.extend_from_slice(b"[debug] "),
-        Builtin::ConsoleWarn => output.extend_from_slice(b"[warn] "),
-        Builtin::ConsoleError => output.extend_from_slice(b"[error] "),
-        Builtin::ConsoleTrace => output.extend_from_slice(b"[trace] "),
+        Builtin::ConsoleInfo => line.extend_from_slice(b"[info] "),
+        Builtin::ConsoleDebug => line.extend_from_slice(b"[debug] "),
+        Builtin::ConsoleWarn => line.extend_from_slice(b"[warn] "),
+        Builtin::ConsoleError => line.extend_from_slice(b"[error] "),
+        Builtin::ConsoleTrace => line.extend_from_slice(b"[trace] "),
         Builtin::ConsoleLog => {}
         _ => unreachable!("console builtin match is exhaustive"),
     }
     for (index, argument) in args.iter().enumerate() {
         if index != 0 {
-            output.push(b' ');
+            line.push(b' ');
         }
-        output.extend_from_slice(render_value(state, *argument).as_bytes());
+        line.extend_from_slice(render_value(state, *argument).as_bytes());
     }
-    output.push(b'\n');
+    line.push(b'\n');
+    state.emit_output(&line, false);
     value::encode_undefined()
 }

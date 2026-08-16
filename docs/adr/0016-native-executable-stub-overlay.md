@@ -38,9 +38,9 @@ payload 同时携带 canonical `.wjsm`、预编译 `NativeObject` 与制品内�
 
 `NativeCompiler` 仍只编当前宿主 ISA。Linux 上的 wjsm 出 ELF，Windows 上的 wjsm 出 PE。交叉编译不是本决策范围。payload 的 native ABI hash、codegen hash、target 与 Cranelift 版本必须与 stub 一致，否则拒绝执行。打包失败不创建或覆盖输出文件。
 
-### 5. 第一刀关闭特化 overlay
+### 5. 特化默认开启
 
-`wjsm-exec` 以 `specialization_enabled = false` 启动，与 `WJSM_DISABLE_SPECIALIZATION=1` 同语义。generic AOT、IC 与 eval 路径保持完整；eval 仍可走 stub 内的 compiler。
+`wjsm-exec` 与 `wjsm run` 一样默认开启特化，并用 `WJSM_DISABLE_SPECIALIZATION=1` 关闭。packed 应用合同（argv、fork/cluster、快照 fs、直出 I/O、inspect）见 [ADR 0019](0019-native-executable-application-contract.md)。
 
 ### 6. Owner
 
@@ -74,4 +74,5 @@ payload 同时携带 canonical `.wjsm`、预编译 `NativeObject` 与制品内�
 - ADR 0015 — Builtin 段 native 镜像复用
 - ADR 0017 — native-executable 以制品内源码快照为运行时源码 owner
 - ADR 0018 — overlay payload 整层 zstd
+- ADR 0019 — packed 应用合同
 - `docs/backend-implementation-guide.md`

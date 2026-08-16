@@ -15,6 +15,7 @@ mod resolver;
 mod runtime_resolution;
 mod semantic;
 mod source_store;
+mod static_runtime_entries;
 use swc_core::ecma::ast;
 
 pub use bundler::{ModuleBundler, RuntimeEntryBundle, logical_url_from_path, logical_url_path};
@@ -28,9 +29,10 @@ pub use runtime_resolution::{
 };
 pub use semantic::{ModuleLinkResult, analyze_module_links};
 pub use source_store::{
-    ModuleSourceStore, SNAPSHOT_FILE_URL_PREFIX, SNAPSHOT_VIRTUAL_ROOT, snapshot_file_url,
-    snapshot_virtual_path, snapshot_virtual_root,
+    ModuleSourceStore, SNAPSHOT_FILE_URL_PREFIX, SNAPSHOT_VIRTUAL_ROOT, is_snapshot_fs_path,
+    snapshot_file_url, snapshot_virtual_path, snapshot_virtual_root,
 };
+pub use static_runtime_entries::include_static_runtime_entries;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -126,7 +128,19 @@ pub fn lower_bundle_cached_with_store(
     store: ModuleSourceStore,
     options: ResolutionOptions,
 ) -> Result<wjsm_ir::Program> {
-    ModuleBundler::with_store(store, options)?.lower_bundle_cached(entry)
+    lower_bundle_cached_with_store_and_debug(entry, store, options, false)
+}
+
+/// 同 [`lower_bundle_cached_with_store`]，可开启语句级 debug 插桩。
+pub fn lower_bundle_cached_with_store_and_debug(
+    entry: &Path,
+    store: ModuleSourceStore,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<wjsm_ir::Program> {
+    ModuleBundler::with_store(store, options)?
+        .with_emit_debug_checks(emit_debug_checks)
+        .lower_bundle_cached(entry)
 }
 
 /// Lowers a runtime-loaded entry module and creates a namespace for that entry.

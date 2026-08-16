@@ -2,6 +2,12 @@
 //!
 //! 不依赖 Cranelift。stub 是 rustc 预链的 ELF/PE；本 crate 只负责在其后
 //! 追加 zstd 压缩的 payload，并用固定 footer 定位。
+//!
+//! 非目标（禁止实现）：
+//! - 把 guest `.text` 合进 stub `PT_LOAD`
+//! - stub 自解压 / UPX
+//! - `libwjsm.so` 或任何旁路共享库
+//! - 从 stub 拿掉 Cranelift / 从 overlay 拿掉 `.wjsm`
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -90,6 +96,7 @@ impl ExecPayload {
         native_abi_hash: [u8; 32],
         codegen_hash: [u8; 32],
         cranelift_version: &str,
+        settings: &str,
     ) -> Result<(), ExecFormatError> {
         if self.native_abi_hash != native_abi_hash {
             return Err(ExecFormatError::Invalid(
@@ -111,6 +118,11 @@ impl ExecPayload {
         if self.cranelift_version != cranelift_version {
             return Err(ExecFormatError::Invalid(
                 "Cranelift version does not match this stub".into(),
+            ));
+        }
+        if self.settings != settings {
+            return Err(ExecFormatError::Invalid(
+                "native codegen settings do not match this stub".into(),
             ));
         }
         Ok(())
@@ -215,6 +227,36 @@ pub fn unpack(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
         return Err(ExecFormatError::DigestMismatch);
     }
     decode_payload(payload)
+}
+
+/// 只读文件尾 footer 与 overlay payload，不把 stub 再读进内存。
+pub fn unpack_from_path(path: &Path) -> Result<ExecPayload, ExecFormatError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len < FOOTER_LEN as u64 {
+        return Err(ExecFormatError::MissingFooter);
+    }
+    file.seek(SeekFrom::End(-(FOOTER_LEN as i64)))?;
+    let mut footer_bytes = [0_u8; FOOTER_LEN];
+    file.read_exact(&mut footer_bytes)?;
+    let footer = read_footer(&footer_bytes)?;
+    let expected_end = footer
+        .payload_offset
+        .checked_add(footer.payload_len)
+        .and_then(|end| end.checked_add(FOOTER_LEN as u64))
+        .ok_or(ExecFormatError::LengthOverflow)?;
+    if expected_end != file_len {
+        return Err(ExecFormatError::Truncated);
+    }
+    let len = usize::try_from(footer.payload_len).map_err(|_| ExecFormatError::LengthOverflow)?;
+    file.seek(SeekFrom::Start(footer.payload_offset))?;
+    let mut payload = vec![0_u8; len];
+    file.read_exact(&mut payload)?;
+    if sha256(&payload) != footer.digest {
+        return Err(ExecFormatError::DigestMismatch);
+    }
+    decode_payload(&payload)
 }
 
 pub fn read_footer(bytes: &[u8]) -> Result<ExecFooter, ExecFormatError> {
@@ -683,13 +725,43 @@ mod tests {
     fn verify_stub_identity_checks_hashes_and_target() {
         let payload = sample_payload();
         payload
-            .verify_stub_identity([1; 32], [2; 32], "0.134.3")
+            .verify_stub_identity([1; 32], [2; 32], "0.134.3", "opt=speed")
             .expect("identity should match");
         assert!(
             payload
-                .verify_stub_identity([9; 32], [2; 32], "0.134.3")
+                .verify_stub_identity([9; 32], [2; 32], "0.134.3", "opt=speed")
                 .is_err()
         );
+        assert!(
+            payload
+                .verify_stub_identity([1; 32], [2; 32], "0.134.3", "opt=size")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn unpack_from_path_reads_only_payload() {
+        let packed = pack(b"MZ-pe-stub", &sample_payload()).expect("pack");
+        let path = std::env::temp_dir().join(format!(
+            "wjsm-exec-format-{}-{}.bin",
+            std::process::id(),
+            "overlay"
+        ));
+        std::fs::write(&path, &packed).expect("write");
+        let unpacked = unpack_from_path(&path).expect("unpack path");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(unpacked, sample_payload());
+    }
+
+    #[test]
+    fn pack_appends_overlay_without_rewriting_pe_header() {
+        let mut stub = vec![0_u8; 128];
+        stub[0] = b'M';
+        stub[1] = b'Z';
+        stub[60] = 64;
+        let packed = pack(&stub, &sample_payload()).expect("pack");
+        assert_eq!(&packed[..stub.len()], stub.as_slice());
+        assert_eq!(unpack(&packed).expect("unpack"), sample_payload());
     }
 
     #[test]

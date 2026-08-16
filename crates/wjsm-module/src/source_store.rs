@@ -131,6 +131,10 @@ impl ModuleSourceStore {
         !matches!(self, Self::Disk(_))
     }
 
+    pub fn is_snapshot(&self) -> bool {
+        matches!(self, Self::Snapshot(_))
+    }
+
     pub fn recorded_files(&self) -> BTreeMap<String, Vec<u8>> {
         match self {
             Self::Recording(store) => store.recorded_files(),
@@ -209,6 +213,36 @@ impl ModuleSourceStore {
         }
     }
 
+    pub fn read_bytes(&self, path: &Path) -> Result<Vec<u8>> {
+        match self {
+            Self::Disk(_) => {
+                std::fs::read(path).with_context(|| format!("read {}", path.display()))
+            }
+            Self::Recording(store) => {
+                let bytes =
+                    std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+                store.record(path, &bytes);
+                Ok(bytes)
+            }
+            Self::Snapshot(store) => {
+                let logical = snapshot_logical(path)?;
+                store
+                    .files
+                    .get(&logical)
+                    .cloned()
+                    .ok_or_else(|| anyhow!("snapshot does not contain '{}'", path.display()))
+            }
+        }
+    }
+
+    /// 列出虚拟目录的直接子名；磁盘 store 返回 `None`，由调用方走 `std::fs`。
+    pub fn read_dir_names(&self, path: &Path) -> Result<Option<Vec<String>>> {
+        match self {
+            Self::Disk(_) | Self::Recording(_) => Ok(None),
+            Self::Snapshot(store) => snapshot_read_dir(store, path).map(Some),
+        }
+    }
+
     pub fn file_url(&self, path: &Path) -> Result<String> {
         if self.uses_virtual_identity() {
             let logical = self.logical_url(path)?;
@@ -277,6 +311,19 @@ pub fn snapshot_file_url(logical_url: &str) -> String {
 
 pub fn snapshot_virtual_path(logical_url: &str) -> Result<PathBuf> {
     logical_url_path(&snapshot_virtual_root(), logical_url)
+}
+
+/// 判断路径是否属于 packed 虚拟根（含 `file:///wjsm-exec/`）。
+pub fn is_snapshot_fs_path(path: &Path) -> bool {
+    if let Some(text) = path.to_str()
+        && logical_from_snapshot_file_url(text).is_some()
+    {
+        return true;
+    }
+    let normalized = normalize_path(path);
+    normalized == Path::new(SNAPSHOT_VIRTUAL_ROOT)
+        || normalized == snapshot_virtual_root()
+        || snapshot_logical(&normalized).is_ok()
 }
 
 fn validate_snapshot_logical_url(logical_url: &str) -> Result<()> {
@@ -352,6 +399,40 @@ fn snapshot_is_dir(store: &SnapshotSourceStore, path: &Path) -> bool {
         .files
         .keys()
         .any(|logical| logical.starts_with(&dir_prefix))
+}
+
+fn snapshot_read_dir(store: &SnapshotSourceStore, path: &Path) -> Result<Vec<String>> {
+    let normalized = normalize_path(path);
+    let prefix = if normalized == Path::new(SNAPSHOT_VIRTUAL_ROOT)
+        || normalized == snapshot_virtual_root()
+    {
+        String::new()
+    } else {
+        let logical = snapshot_logical(&normalized)?;
+        format!("{logical}/")
+    };
+    let mut names = BTreeMap::new();
+    for key in store.files.keys() {
+        let remainder = if prefix.is_empty() {
+            key.as_str()
+        } else {
+            match key.strip_prefix(&prefix) {
+                Some(rest) => rest,
+                None => continue,
+            }
+        };
+        if remainder.is_empty() {
+            continue;
+        }
+        let name = remainder
+            .split_once('/')
+            .map_or(remainder, |(name, _)| name);
+        names.insert(name.to_string(), ());
+    }
+    if names.is_empty() && !snapshot_is_dir(store, &normalized) {
+        bail!("snapshot does not contain directory '{}'", path.display());
+    }
+    Ok(names.into_keys().collect())
 }
 
 fn snapshot_canonicalize(store: &SnapshotSourceStore, path: &Path) -> Result<PathBuf> {

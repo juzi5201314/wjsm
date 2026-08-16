@@ -1,4 +1,10 @@
 //! `wjsm build --format native-executable`：复制 stub、缝 overlay、原子写出。
+//!
+//! 非目标（禁止实现）：
+//! - 把 guest `.text` 合进 stub `PT_LOAD`
+//! - stub 自解压 / UPX
+//! - `libwjsm.so` 或任何旁路共享库
+//! - 从 stub 拿掉 Cranelift / 从 overlay 拿掉 `.wjsm`
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
