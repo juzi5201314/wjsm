@@ -52,6 +52,7 @@ const FIRST_USER_SYMBOL_HANDLE: u32 = wjsm_ir::wk_symbol::UNSCOPABLES + 1;
 const DEFAULT_MAX_HEAP_BYTES: u64 = 64 * 1024 * 1024;
 const MIN_GC_ALLOCATION_THRESHOLD: u64 = 256 * 1024;
 const MAX_GC_ALLOCATION_THRESHOLD: u64 = 8 * 1024 * 1024;
+const OUT_OF_MEMORY_MESSAGE: &str = "JavaScript heap out of memory";
 const MAX_JS_CALL_DEPTH: u32 = 1024;
 pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32
     | wjsm_ir::constants::FLAG_CONFIGURABLE as u32
@@ -952,6 +953,8 @@ struct NativeAgentState {
     cancelled_timers: HashSet<u32>,
     exceptions: Vec<Option<i64>>,
     exception_free: Vec<u32>,
+    out_of_memory_error: Option<i64>,
+    out_of_memory_exception: Option<i64>,
     fatal_exception: Option<i64>,
     callable_prototypes: HashMap<i64, i64>,
     private_slots: HashMap<(i64, u32), NativePrivateSlot>,
@@ -1127,6 +1130,8 @@ impl NativeAgentState {
             bound_free: Vec::new(),
             exceptions: Vec::new(),
             exception_free: Vec::new(),
+            out_of_memory_error: None,
+            out_of_memory_exception: None,
             fatal_exception: None,
             callable_properties: HashMap::new(),
             callable_prototypes: HashMap::new(),
@@ -1355,6 +1360,8 @@ impl NativeAgentState {
         self.bound_free.clear();
         self.exceptions.clear();
         self.exception_free.clear();
+        self.out_of_memory_error = None;
+        self.out_of_memory_exception = None;
         self.fatal_exception = None;
         self.object_prototype = None;
         self.array_prototype = None;
@@ -3617,6 +3624,27 @@ impl NativeAgentState {
         }
     }
 
+    fn prepare_out_of_memory_error(&mut self) -> Result<(), NativeRuntimeError> {
+        let error = dispatch::modules::frozen_named_error_object(
+            self,
+            "RangeError",
+            OUT_OF_MEMORY_MESSAGE.into(),
+        )
+        .ok_or_else(|| {
+            NativeRuntimeError::Invariant("failed to prepare heap exhaustion error".into())
+        })?;
+        let exception = self.create_exception(error).ok_or_else(|| {
+            NativeRuntimeError::Invariant("failed to prepare heap exhaustion exception".into())
+        })?;
+        self.out_of_memory_error = Some(error);
+        self.out_of_memory_exception = Some(exception);
+        Ok(())
+    }
+
+    fn out_of_memory_exception(&self) -> Option<i64> {
+        self.out_of_memory_exception
+    }
+
     fn create_exception(&mut self, value: i64) -> Option<i64> {
         let index = match self.exception_free.pop() {
             Some(index) => index,
@@ -3699,9 +3727,33 @@ impl NativeAgentState {
         } else {
             self.object_prototype
         }
-        .map(value::decode_handle)
-        .unwrap_or(PROTO_NULL_SENTINEL);
+        .map_or(PROTO_NULL_SENTINEL, value::decode_handle);
         self.allocate_object_with_prototype(capacity, array, prototype)
+    }
+
+    fn allocate_object_with_gc_retry(
+        &mut self,
+        ctx: &NativeVmContext,
+        capacity: u32,
+        array: bool,
+    ) -> Result<i64, NativeRuntimeError> {
+        let prototype = if array {
+            self.array_prototype
+        } else {
+            self.object_prototype
+        }
+        .map_or(PROTO_NULL_SENTINEL, value::decode_handle);
+
+        self.collect_garbage_if_needed(ctx)?;
+        match self.allocate_object_with_prototype(capacity, array, prototype) {
+            Ok(value) => Ok(value),
+            Err(HeapAccessV2Error::HeapExhausted { .. }) => {
+                self.collect_garbage(ctx)?;
+                self.allocate_object_with_prototype(capacity, array, prototype)
+                    .map_err(NativeRuntimeError::from)
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn allocate_object_with_prototype(
@@ -3710,11 +3762,9 @@ impl NativeAgentState {
         array: bool,
         prototype: u32,
     ) -> Result<i64, HeapAccessV2Error> {
-        let handle = self.heap.allocate_handle()?;
         let bytes = object_payload_bytes(capacity)?;
-        self.allocated_bytes_since_gc
-            .set(self.allocated_bytes_since_gc.get().saturating_add(bytes));
         let address = self.reserve_object_space(bytes)?;
+        let handle = self.heap.allocate_handle()?;
         if array {
             self.heap
                 .publish_array(handle, address, u32::MAX, capacity)?;
@@ -3723,6 +3773,8 @@ impl NativeAgentState {
                 .publish_object(handle, address, u32::MAX, capacity)?;
         }
         self.heap.set_prototype(handle, prototype)?;
+        self.allocated_bytes_since_gc
+            .set(self.allocated_bytes_since_gc.get().saturating_add(bytes));
         Ok(value::encode_handle(
             if array {
                 value::TAG_ARRAY
@@ -4837,6 +4889,163 @@ mod tests {
                 std::path::Path::new("."),
             )
             .expect("source should execute")
+    }
+
+    #[test]
+    fn large_array_churn_collects_before_cooperative_poll() {
+        let artifact = artifact(
+            r#"
+                let holder;
+                let sink = 0;
+                for (let i = 0; i < 12; i++) {
+                    const tmp = new Array(1 << 16);
+                    tmp[0] = i;
+                    holder = tmp;
+                    sink = holder[0];
+                }
+                console.log("done", sink, holder.length);
+            "#,
+        );
+        for algorithm in [
+            GcAlgorithmKind::MarkSweep,
+            GcAlgorithmKind::G1,
+            GcAlgorithmKind::Zgc,
+        ] {
+            let config = NativeRuntimeConfig::default()
+                .with_gc_algorithm(algorithm)
+                .with_max_heap_size(16 * 1024 * 1024);
+            let mut runtime = NativeRuntime::new_with_config(config)
+                .unwrap_or_else(|error| panic!("{algorithm:?} runtime should initialize: {error}"));
+            let execution = runtime
+                .execute(
+                    &artifact,
+                    std::path::Path::new("."),
+                    std::path::Path::new("."),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{algorithm:?} bounded live set should complete: {error:?}")
+                });
+
+            assert_eq!(execution.stdout, b"done 11 65536\n", "{algorithm:?}");
+            assert!(
+                runtime.gc_telemetry().cycles > 0,
+                "{algorithm:?} should collect before the 128-backedge poll budget"
+            );
+        }
+    }
+
+    fn assert_live_set_exhaustion_is_observable_range_error(algorithm: GcAlgorithmKind) {
+        let oom_artifact = artifact(
+            r#"
+                const retained = new Array(1 << 20);
+                function exhaust(label, mutate) {
+                    try {
+                        const impossible = new Array(1 << 20);
+                        console.log("unexpected", impossible.length);
+                    } catch (e) {
+                        console.log(
+                            label,
+                            e instanceof RangeError,
+                            e.name,
+                            e.message,
+                            Object.isFrozen(e),
+                        );
+                        if (mutate) {
+                            Reflect.set(e, "name", "Error");
+                            Reflect.set(e, "message", "polluted");
+                            Reflect.deleteProperty(e, "message");
+                            Reflect.setPrototypeOf(e, null);
+                        }
+                    }
+                }
+                exhaust("first", true);
+                exhaust("second", false);
+            "#,
+        );
+        let lifecycle_artifact = artifact(
+            r#"
+                try {
+                    new Array(1 << 22);
+                } catch (e) {
+                    console.log(e instanceof RangeError, e.name, e.message);
+                }
+            "#,
+        );
+        let expected = b"first true RangeError JavaScript heap out of memory true\n\
+second true RangeError JavaScript heap out of memory true\n";
+        let config = NativeRuntimeConfig::default()
+            .with_gc_algorithm(algorithm)
+            .with_max_heap_size(16 * 1024 * 1024);
+        let mut runtime = NativeRuntime::new_with_config(config)
+            .unwrap_or_else(|error| panic!("{algorithm:?} runtime should initialize: {error}"));
+        let execution = runtime
+            .execute(
+                &oom_artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .unwrap_or_else(|error| {
+                panic!("{algorithm:?} should catch OOM as RangeError: {error:?}")
+            });
+        let oom_error = runtime
+            .state
+            .out_of_memory_error
+            .expect("OOM error should stay rooted");
+        assert_eq!(
+            runtime
+                .state
+                .exceptions
+                .iter()
+                .filter(|entry| **entry == Some(oom_error))
+                .count(),
+            1,
+            "{algorithm:?} should keep one entry for the dedicated OOM error",
+        );
+        assert_eq!(execution.stdout, expected, "{algorithm:?}");
+
+        let lifecycle_execution = runtime
+            .execute(
+                &lifecycle_artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .unwrap_or_else(|error| {
+                panic!("{algorithm:?} should rebuild the OOM error after reset: {error:?}")
+            });
+        assert_eq!(
+            lifecycle_execution.stdout,
+            b"true RangeError JavaScript heap out of memory\n",
+            "{algorithm:?} reset lifecycle",
+        );
+        let oom_error = runtime
+            .state
+            .out_of_memory_error
+            .expect("reset should rebuild the OOM error");
+        assert_eq!(
+            runtime
+                .state
+                .exceptions
+                .iter()
+                .filter(|entry| **entry == Some(oom_error))
+                .count(),
+            1,
+            "{algorithm:?} reset should rebuild one entry for the OOM error",
+        );
+    }
+
+    #[test]
+    fn live_set_exhaustion_is_observable_range_error_mark_sweep() {
+        assert_live_set_exhaustion_is_observable_range_error(GcAlgorithmKind::MarkSweep);
+    }
+
+    #[test]
+    fn live_set_exhaustion_is_observable_range_error_g1() {
+        assert_live_set_exhaustion_is_observable_range_error(GcAlgorithmKind::G1);
+    }
+
+    #[test]
+    fn live_set_exhaustion_is_observable_range_error_zgc() {
+        assert_live_set_exhaustion_is_observable_range_error(GcAlgorithmKind::Zgc);
     }
 
     fn execute_source_with_specialization(source: &str, enabled: bool) -> NativeExecution {

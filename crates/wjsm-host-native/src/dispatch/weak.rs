@@ -538,6 +538,8 @@ fn strong_reachable(
     queue.extend(state.async_generator_prototype);
     queue.extend(state.async_iterator_prototype);
     queue.extend(state.error_prototypes.values().copied());
+    queue.extend(state.out_of_memory_error);
+    queue.extend(state.out_of_memory_exception);
     queue.extend(state.callable_properties.values().copied());
     queue.extend(
         state

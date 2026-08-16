@@ -49,6 +49,8 @@ JS/TS source
 
 GC 可在 Mark-Sweep、G1、ZGC 中启动时选择；root frame、host roots、weak/ephemeron closure、allocation-pressure safepoint 与 telemetry 由同一 native owner 接合。Shape/IC epoch 或 prototype generation 变化会使对应 overlay 退出选择表，当前调用继续 generic；`WJSM_DISABLE_SPECIALIZATION=1` 只关闭反馈与 overlay，不改变 generic AOT、IC 或语义路径。
 
+`NewObject`、`NewArray` 与 `new Array(length)` 的 native object allocation 在 root frame 已发布时按堆水位主动收集；遇到 `HeapExhausted` 时完整收集并重试一次。runtime 在执行开始前预建并显式钉扎冻结的 `RangeError` 对象及专用 exception side-table entry；仍不可恢复时直接返回该 entry，因此三种 collector 都抛出可捕获的 `RangeError("JavaScript heap out of memory")`，不会在满堆上再次分配错误对象或增长 exception 表。该保证只覆盖这些 native object allocation 路径，不表示 array growth、`allocate_array_values`、rest 参数或字符串 intern 已迁移到同一入口。
+
 ### 5. 平台能力 fail-closed
 
 当前 production capability 只承诺 64-bit x86_64 Linux 与 x86_64 Windows。`NativeCompiler::new` 使用当前宿主 ISA，并在不支持的 target、缺 W^X/unwind/虚拟内存等必要能力时返回结构化 capability error。

@@ -1,12 +1,15 @@
 use num_bigint::BigInt;
 use num_traits::{FromPrimitive, Zero};
+use wjsm_gc::{HeapAccessV2Error, RuntimeCollectorError};
 use wjsm_ir::{constants, value};
 use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
 };
 
 use crate::specialization::ValidatedFeedbackSlot;
-use crate::{ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeConstantMaterializeError};
+use crate::{
+    ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeConstantMaterializeError, NativeRuntimeError,
+};
 
 pub(super) fn dispatch_runtime(
     ctx: &mut NativeVmContext,
@@ -126,9 +129,12 @@ pub(super) fn dispatch_runtime(
             let Ok(capacity) = u32::try_from(*capacity) else {
                 return fail_dispatch(ctx);
             };
-            state
-                .allocate_object(capacity, operation == NativeRuntimeOp::NewArray)
-                .unwrap_or_else(|_| fail_dispatch(ctx))
+            allocate_object_or_out_of_memory(
+                ctx,
+                state,
+                capacity,
+                operation == NativeRuntimeOp::NewArray,
+            )
         }
         NativeRuntimeOp::GetProp => {
             let [object, key] = args else {
@@ -1976,6 +1982,24 @@ pub(super) fn range_error(
     message: &str,
 ) -> i64 {
     named_error(ctx, state, "RangeError", message)
+}
+
+pub(super) fn allocate_object_or_out_of_memory(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    capacity: u32,
+    array: bool,
+) -> i64 {
+    match state.allocate_object_with_gc_retry(ctx, capacity, array) {
+        Ok(value) => value,
+        Err(NativeRuntimeError::Heap(HeapAccessV2Error::HeapExhausted { .. }))
+        | Err(NativeRuntimeError::Gc(RuntimeCollectorError::Heap(
+            HeapAccessV2Error::HeapExhausted { .. },
+        ))) => state
+            .out_of_memory_exception()
+            .unwrap_or_else(|| fail_dispatch(ctx)),
+        Err(_) => fail_dispatch(ctx),
+    }
 }
 
 pub(super) fn array_index(state: &NativeAgentState, encoded: i64) -> Option<u32> {

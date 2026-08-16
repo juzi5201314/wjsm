@@ -74,6 +74,7 @@ impl NativeAgentState {
             .map(|(index, callable)| (callable, index as u32))
             .collect();
         self.ensure_intrinsic_prototypes()?;
+        self.prepare_out_of_memory_error()?;
         let object_prototype = self
             .object_prototype
             .map(wjsm_ir::value::decode_handle)

@@ -3,8 +3,8 @@ use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
-    array_index, fail_dispatch, get_property, has_property, is_truthy, iterator_done,
-    iterator_value, strict_equal, to_number, to_string_coerced,
+    allocate_object_or_out_of_memory, array_index, fail_dispatch, get_property, has_property,
+    is_truthy, iterator_done, iterator_value, strict_equal, to_number, to_string_coerced,
 };
 use crate::NativeAgentState;
 
@@ -67,9 +67,10 @@ pub(crate) fn construct(
             return super::runtime::range_error(ctx, state, "Invalid array length");
         }
         let length = length as u32;
-        let Ok(array) = state.allocate_object(length, true) else {
-            return fail_dispatch(ctx);
-        };
+        let array = allocate_object_or_out_of_memory(ctx, state, length, true);
+        if value::is_exception(array) {
+            return array;
+        }
         let handle = value::decode_handle(array);
         for index in 0..length {
             if state

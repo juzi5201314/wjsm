@@ -128,7 +128,7 @@ Generated code 在 may-GC edge 发布 live boxed roots。runtime collector 的 s
 - object side-table internal slots；
 - WeakMap ephemeron fixed point。
 
-collection 后按 retired handle 清理 weak/side-table state。allocation pressure 只在 cooperative safepoint、root frame 已发布且 raw access region 为空时触发。collector 选择在 runtime 初始化后不可切换。
+collection 后按 retired handle 清理 weak/side-table state。cooperative poll 与 `NewObject`、`NewArray`、`new Array(length)` 的 native object allocation 都只在 root frame 已发布且 raw access region 为空时触发 allocation-pressure collection；后三条路径在 `HeapExhausted` 时完整收集并重试一次。runtime 在执行开始前预建、冻结并显式作为 host root 的 OOM `RangeError` 及专用 exception side-table entry；仍不可恢复时直接返回该 entry，稳定抛出可捕获的 `RangeError("JavaScript heap out of memory")`，不从已满 managed heap 分配 error/prototype/message，也不随重复 OOM 增长 exception 表。这是 #337 受控堆上限契约在上述 object allocation 路径上的 native 终态；array growth、`allocate_array_values`、rest 参数与字符串 intern 不在本保证内。collector 选择在 runtime 初始化后不可切换。
 
 ## 6. 添加或修改运行时语义
 

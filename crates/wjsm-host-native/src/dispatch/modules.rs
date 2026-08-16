@@ -1152,6 +1152,29 @@ pub(crate) fn named_error_object(
     initialize_error_object(state, error, name, message)
 }
 
+pub(crate) fn frozen_named_error_object(
+    state: &mut NativeAgentState,
+    name: &str,
+    message: String,
+) -> Option<i64> {
+    let error = named_error_object(state, name, message)?;
+    let handle = value::decode_handle(error);
+    for property in ["name", "message", "stack"] {
+        let key = state.intern_text(property.into(), value::TAG_STRING)?;
+        let stored = state
+            .heap
+            .get_property_slot(handle, value::decode_handle(key))
+            .ok()??
+            .value;
+        state
+            .heap
+            .define_data_property(handle, value::decode_handle(key), stored, 0)
+            .ok()?;
+    }
+    state.non_extensible_objects.insert(handle);
+    Some(error)
+}
+
 pub(crate) fn initialize_error_object(
     state: &mut NativeAgentState,
     error: i64,
