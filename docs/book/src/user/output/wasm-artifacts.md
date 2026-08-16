@@ -50,7 +50,7 @@ wjsm run /tmp/app.wjsm
 
 ## 同宿主可执行文件
 
-`--format native-executable` 把预链 `wjsm-exec` stub、`.wjsm` 与预编译 `NativeObject` 打成当前宿主的 ELF/PE。它不是 portable 制品，也不能把 runtime-private object 改后缀冒充。打包失败不创建或覆盖输出文件。
+`--format native-executable` 把预链 `wjsm-exec` stub、`.wjsm`、预编译 `NativeObject` 与制品内源码快照打成当前宿主的 ELF/PE。它不是 portable 制品，也不能把 runtime-private object 改后缀冒充。打包失败不创建或覆盖输出文件。拷走 exe 后只读快照，不依赖构建机源码树。
 
 ## 深入了解
 

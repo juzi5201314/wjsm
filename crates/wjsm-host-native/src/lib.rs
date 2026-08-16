@@ -40,6 +40,7 @@ pub use native_exec::{
     PrecompiledNativeImages, compile_native_exec_images, exec_payload_from_images,
     images_from_exec_payload,
 };
+pub use wjsm_module::ModuleSourceStore;
 
 use dispatch::{
     native_host_operation, native_math_acos, native_math_acosh, native_math_asin,
@@ -4570,8 +4571,21 @@ impl NativeRuntime {
         module_root: &std::path::Path,
         working_directory: &std::path::Path,
     ) -> Result<NativeExecution, NativeRuntimeError> {
-        self.begin_execute(artifact, module_root, working_directory)?;
-        let (entry, image_id) = self.install_compiled_images(artifact, module_root)?;
+        self.execute_with_store(
+            artifact,
+            ModuleSourceStore::disk(module_root),
+            working_directory,
+        )
+    }
+
+    pub fn execute_with_store(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: ModuleSourceStore,
+        working_directory: &std::path::Path,
+    ) -> Result<NativeExecution, NativeRuntimeError> {
+        self.begin_execute(artifact, &store, working_directory)?;
+        let (entry, image_id) = self.install_compiled_images(artifact, &store)?;
         self.finish_execute(artifact, entry, image_id)
     }
 
@@ -4580,18 +4594,18 @@ impl NativeRuntime {
         &mut self,
         artifact: &PortableArtifact,
         images: &PrecompiledNativeImages,
-        module_root: &std::path::Path,
+        store: ModuleSourceStore,
         working_directory: &std::path::Path,
     ) -> Result<NativeExecution, NativeRuntimeError> {
-        self.begin_execute(artifact, module_root, working_directory)?;
-        let (entry, image_id) = self.install_precompiled_images(artifact, module_root, images)?;
+        self.begin_execute(artifact, &store, working_directory)?;
+        let (entry, image_id) = self.install_precompiled_images(artifact, &store, images)?;
         self.finish_execute(artifact, entry, image_id)
     }
 
     fn begin_execute(
         &mut self,
         artifact: &PortableArtifact,
-        module_root: &std::path::Path,
+        store: &ModuleSourceStore,
         working_directory: &std::path::Path,
     ) -> Result<(), NativeRuntimeError> {
         self.assert_owner_thread()?;
@@ -4605,7 +4619,7 @@ impl NativeRuntime {
             .iter()
             .find(|module| module.id == artifact.manifest().entry)
             .filter(|module| !module.logical_url.starts_with("node:"))
-            .map(|module| wjsm_module::logical_url_path(module_root, &module.logical_url))
+            .map(|module| wjsm_module::logical_url_path(&store.root(), &module.logical_url))
             .transpose()
             .map_err(|error| NativeRuntimeError::Invariant(error.to_string()))?
             .map(|path| path.to_string_lossy().into_owned());
@@ -4623,7 +4637,7 @@ impl NativeRuntime {
     fn install_compiled_images(
         &mut self,
         artifact: &PortableArtifact,
-        module_root: &std::path::Path,
+        store: &ModuleSourceStore,
     ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
         match artifact.program().split_builtin_segment() {
             Some((builtin_program, user_program)) => {
@@ -4641,7 +4655,7 @@ impl NativeRuntime {
                 )?;
                 self.install_split_images(
                     artifact,
-                    module_root,
+                    store,
                     builtin_program,
                     user_program,
                     builtin_slots,
@@ -4655,7 +4669,7 @@ impl NativeRuntime {
                     .state
                     .repository
                     .prepare(artifact, &NativeHostRegistry)?;
-                self.install_whole_image(artifact, module_root, image)
+                self.install_whole_image(artifact, store, image)
             }
         }
     }
@@ -4663,7 +4677,7 @@ impl NativeRuntime {
     fn install_precompiled_images(
         &mut self,
         artifact: &PortableArtifact,
-        module_root: &std::path::Path,
+        store: &ModuleSourceStore,
         images: &PrecompiledNativeImages,
     ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
         native_exec::validate_images_match_program(artifact.program(), images)?;
@@ -4686,7 +4700,7 @@ impl NativeRuntime {
                 )?;
                 self.install_split_images(
                     artifact,
-                    module_root,
+                    store,
                     builtin_program,
                     user_program,
                     builtin_slots,
@@ -4701,7 +4715,7 @@ impl NativeRuntime {
                     object,
                     &NativeHostRegistry,
                 )?;
-                self.install_whole_image(artifact, module_root, image)
+                self.install_whole_image(artifact, store, image)
             }
             _ => Err(NativeRuntimeError::Invariant(
                 "precompiled images do not match program layout".into(),
@@ -4712,7 +4726,7 @@ impl NativeRuntime {
     fn install_split_images(
         &mut self,
         artifact: &PortableArtifact,
-        module_root: &std::path::Path,
+        store: &ModuleSourceStore,
         builtin_program: wjsm_ir::Program,
         user_program: wjsm_ir::Program,
         builtin_slots: HashMap<String, u32>,
@@ -4756,7 +4770,7 @@ impl NativeRuntime {
             .slow_entry;
         dispatch::modules::configure(
             &mut self.state,
-            module_root,
+            store.clone(),
             user_image_id,
             artifact.manifest(),
         )
@@ -4767,7 +4781,7 @@ impl NativeRuntime {
     fn install_whole_image(
         &mut self,
         artifact: &PortableArtifact,
-        module_root: &std::path::Path,
+        store: &ModuleSourceStore,
         image: Arc<CompiledImage>,
     ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
         let slots = whole_program_slots(artifact.program());
@@ -4785,8 +4799,13 @@ impl NativeRuntime {
             .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
             .slow_entry;
         let image_id = image.image_id();
-        dispatch::modules::configure(&mut self.state, module_root, image_id, artifact.manifest())
-            .map_err(NativeRuntimeError::Invariant)?;
+        dispatch::modules::configure(
+            &mut self.state,
+            store.clone(),
+            image_id,
+            artifact.manifest(),
+        )
+        .map_err(NativeRuntimeError::Invariant)?;
         self.state
             .install_program(image, artifact.program(), &slots, &HashSet::new());
         Ok((entry, image_id))
@@ -5020,7 +5039,7 @@ mod tests {
             .execute_precompiled(
                 &artifact,
                 &images,
-                std::path::Path::new("."),
+                ModuleSourceStore::disk(std::path::Path::new(".")),
                 std::path::Path::new("."),
             )
             .expect("precompiled source should execute");

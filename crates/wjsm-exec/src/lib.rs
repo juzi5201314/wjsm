@@ -5,7 +5,8 @@ use std::process::ExitCode;
 
 use wjsm_exec_format::{ExecFormatError, unpack};
 use wjsm_host_native::{
-    NativeRuntime, NativeRuntimeConfig, NativeRuntimeError, images_from_exec_payload,
+    ModuleSourceStore, NativeRuntime, NativeRuntimeConfig, NativeRuntimeError,
+    images_from_exec_payload,
 };
 
 /// stub 与打包后可执行文件共用的进程入口。
@@ -33,9 +34,9 @@ fn run() -> Result<ExitCode, RunError> {
     runtime.configure_environment(true, std::iter::empty::<(String, String)>())?;
     runtime.configure_process_arguments(std::env::args())?;
     let working_directory = std::env::current_dir().unwrap_or_else(|_| exe.clone());
-    let module_root = std::path::Path::new(&payload.module_root);
-    let execution =
-        runtime.execute_precompiled(&artifact, &images, module_root, &working_directory)?;
+    let store = ModuleSourceStore::snapshot(payload.files)
+        .map_err(|error| NativeRuntimeError::Invariant(error.to_string()))?;
+    let execution = runtime.execute_precompiled(&artifact, &images, store, &working_directory)?;
     io::stdout().write_all(&execution.stdout)?;
     io::stderr().write_all(&execution.stderr)?;
     let code = u8::try_from(execution.exit_code.rem_euclid(256)).unwrap_or(1);

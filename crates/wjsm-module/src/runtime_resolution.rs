@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow, bail};
-use url::Url;
+use anyhow::{Result, bail};
 
 use crate::builtin_modules::{self, BuiltinLookup};
 use crate::module_format::{ModuleFormat, detect_module_format};
 use crate::resolution_options::{ResolutionKind, ResolutionOptions};
 use crate::resolver::{ModuleResolver, ResolvedSpecifier};
+use crate::source_store::ModuleSourceStore;
 
 /// 运行时解析入口类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -65,11 +65,27 @@ pub fn resolve_runtime_specifier(
     options: &ResolutionOptions,
     kind: RuntimeResolveKind,
 ) -> Result<RuntimeResolvedModule> {
-    let root = canonical_root(root_path);
-    let resolver = ModuleResolver::with_options(&root, options.clone());
+    resolve_runtime_specifier_with_store(
+        specifier,
+        referrer_path,
+        &ModuleSourceStore::disk(root_path),
+        options,
+        kind,
+    )
+}
+
+/// 用显式 store 解析运行时 specifier。
+pub fn resolve_runtime_specifier_with_store(
+    specifier: &str,
+    referrer_path: &Path,
+    store: &ModuleSourceStore,
+    options: &ResolutionOptions,
+    kind: RuntimeResolveKind,
+) -> Result<RuntimeResolvedModule> {
+    let resolver = ModuleResolver::with_store(store.clone(), options.clone());
     match resolver.resolve_specifier_with_kind(specifier, referrer_path, kind.into())? {
         ResolvedSpecifier::Builtin(module) => Ok(resolve_builtin_module(module.canonical)),
-        ResolvedSpecifier::Path(path) => resolve_file_module(&resolver, specifier, &root, path),
+        ResolvedSpecifier::Path(path) => resolve_file_module(&resolver, specifier, path),
     }
 }
 
@@ -79,25 +95,32 @@ pub fn resolve_runtime_paths(
     referrer_path: &Path,
     root_path: &Path,
 ) -> RuntimeResolvePaths {
+    resolve_runtime_paths_with_store(
+        specifier,
+        referrer_path,
+        &ModuleSourceStore::disk(root_path),
+    )
+}
+
+/// 用显式 store 计算 `require.resolve.paths()`。
+pub fn resolve_runtime_paths_with_store(
+    specifier: &str,
+    referrer_path: &Path,
+    store: &ModuleSourceStore,
+) -> RuntimeResolvePaths {
     if !uses_node_modules_search_paths(specifier) {
         return RuntimeResolvePaths::Null;
     }
 
-    let root = canonical_root(root_path);
-    let mut dir = referrer_path
-        .parent()
-        .unwrap_or(referrer_path)
-        .canonicalize()
-        .unwrap_or_else(|_| {
-            referrer_path
-                .parent()
-                .unwrap_or(referrer_path)
-                .to_path_buf()
-        });
+    let root = store.root();
+    let start = referrer_path.parent().unwrap_or(referrer_path);
+    let mut dir = store
+        .canonicalize(start)
+        .unwrap_or_else(|_| start.to_path_buf());
     let mut paths = Vec::new();
 
     loop {
-        if !dir.starts_with(&root) {
+        if !store.is_under_root(&dir) {
             break;
         }
         paths.push(dir.join("node_modules"));
@@ -122,7 +145,6 @@ fn resolve_builtin_module(canonical: &str) -> RuntimeResolvedModule {
 fn resolve_file_module(
     resolver: &ModuleResolver,
     specifier: &str,
-    root: &Path,
     path: PathBuf,
 ) -> Result<RuntimeResolvedModule> {
     if matches!(
@@ -134,11 +156,11 @@ fn resolve_file_module(
             path.display()
         );
     }
-    if !path.starts_with(root) {
+    if !resolver.store().is_under_root(&path) {
         bail!(
             "Module '{}' resolves outside root '{}': {}",
             specifier,
-            root.display(),
+            resolver.store().root().display(),
             path.display()
         );
     }
@@ -154,7 +176,7 @@ fn resolve_file_module(
 
     Ok(RuntimeResolvedModule {
         key,
-        url: file_url(&path)?,
+        url: resolver.store().file_url(&path)?,
         path: Some(path),
         format,
     })
@@ -170,7 +192,7 @@ fn runtime_module_format(resolver: &ModuleResolver, path: &Path) -> Result<Runti
     let ast_is_cjs = if matches!(extension, Some("mjs" | "cjs")) || package.is_some() {
         false
     } else {
-        let source = std::fs::read_to_string(path)?;
+        let source = resolver.store().read_to_string(path)?;
         let ast = wjsm_parser::parse_module_with_path(&source, path)?;
         crate::is_commonjs_module(&ast)
     };
@@ -180,18 +202,6 @@ fn runtime_module_format(resolver: &ModuleResolver, path: &Path) -> Result<Runti
             ModuleFormat::CommonJs => RuntimeModuleFormat::CommonJs,
         },
     )
-}
-
-fn file_url(path: &Path) -> Result<String> {
-    Url::from_file_path(path)
-        .map(|url| url.to_string())
-        .map_err(|()| anyhow!("cannot build file URL for {}", path.display()))
-}
-
-fn canonical_root(root_path: &Path) -> PathBuf {
-    root_path
-        .canonicalize()
-        .unwrap_or_else(|_| root_path.to_path_buf())
 }
 
 fn uses_node_modules_search_paths(specifier: &str) -> bool {

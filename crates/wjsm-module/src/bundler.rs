@@ -14,6 +14,7 @@ use super::builtin_modules;
 use super::graph::ModuleGraph;
 use super::resolution_options::ResolutionOptions;
 use super::semantic::analyze_module_links;
+use super::source_store::ModuleSourceStore;
 use wjsm_ir::{ModuleId, Program};
 
 pub struct RuntimeEntryBundle {
@@ -25,7 +26,7 @@ pub struct RuntimeEntryBundle {
 
 /// 模块 Bundler
 pub struct ModuleBundler {
-    root_path: std::path::PathBuf,
+    store: ModuleSourceStore,
     options: ResolutionOptions,
     /// inspect 路径：在语句入口发射 DebugCheck。
     emit_debug_checks: bool,
@@ -38,11 +39,24 @@ impl ModuleBundler {
 
     /// Creates a module bundler with explicit package resolution options.
     pub fn with_resolution_options(root_path: &Path, options: ResolutionOptions) -> Result<Self> {
+        Self::with_store(ModuleSourceStore::disk(root_path), options)
+    }
+
+    /// 用显式 store 构造 bundler（打包期 Recording / packed Snapshot）。
+    pub fn with_store(store: ModuleSourceStore, options: ResolutionOptions) -> Result<Self> {
         Ok(Self {
-            root_path: root_path.to_path_buf(),
+            store,
             options,
             emit_debug_checks: false,
         })
+    }
+
+    pub fn store(&self) -> &ModuleSourceStore {
+        &self.store
+    }
+
+    fn root_path(&self) -> PathBuf {
+        self.store.root()
     }
 
     /// 启用语句级 debug 插桩（`--inspect`）。
@@ -71,7 +85,7 @@ impl ModuleBundler {
         }
 
         // 1) 全图构建（现状），用于分片。
-        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
+        let graph = ModuleGraph::build_with_store(entry, self.store.clone(), self.options.clone())
             .with_context(|| "Failed to build module graph")?;
 
         // 2) builtin canonical frontier：用户模块直接引用（import/重导出/动态 import）的 builtin。
@@ -128,7 +142,7 @@ impl ModuleBundler {
                     None => {
                         let segment = crate::builtin_cache::build_builtin_segment(
                             &frontier,
-                            &self.root_path,
+                            &self.root_path(),
                             &self.options,
                             self.emit_debug_checks,
                         )
@@ -141,7 +155,7 @@ impl ModuleBundler {
                 None => {
                     let segment = crate::builtin_cache::build_builtin_segment(
                         &frontier,
-                        &self.root_path,
+                        &self.root_path(),
                         &self.options,
                         self.emit_debug_checks,
                     )
@@ -153,12 +167,15 @@ impl ModuleBundler {
         };
 
         // 5) 重建 canonical 闭包图（确定性纯解析，id 布局与段一致），共享节点进用户图。
-        let closure =
-            ModuleGraph::build_builtin_closure(&frontier, &self.root_path, self.options.clone())
-                .with_context(|| "Failed to rebuild builtin closure graph")?;
-        let user_graph = ModuleGraph::build_user_with_builtin_closure(
+        let closure = ModuleGraph::build_builtin_closure_with_store(
+            &frontier,
+            self.store.clone(),
+            self.options.clone(),
+        )
+        .with_context(|| "Failed to rebuild builtin closure graph")?;
+        let user_graph = ModuleGraph::build_user_with_builtin_closure_store(
             entry,
-            &self.root_path,
+            self.store.clone(),
             self.options.clone(),
             &closure,
         )
@@ -182,7 +199,7 @@ impl ModuleBundler {
             modules.push(ModuleLoweringInput {
                 id: node.id,
                 ast: node.ast.clone(),
-                metadata: module_metadata_for_node(node)?,
+                metadata: module_metadata_for_node(node, &self.store)?,
                 source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
             });
         }
@@ -202,18 +219,18 @@ impl ModuleBundler {
 
     /// 将入口模块及其依赖 lower 为 IR（不执行 codegen）
     pub fn lower_bundle(&self, entry: &Path) -> Result<wjsm_ir::Program> {
-        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
+        let graph = ModuleGraph::build_with_store(entry, self.store.clone(), self.options.clone())
             .with_context(|| "Failed to build module graph")?;
 
-        lower_graph(&graph, self.emit_debug_checks)
+        lower_graph(&graph, &self.store, self.emit_debug_checks)
     }
 
     /// 将入口模块及其依赖 lower 为 portable artifact 的完整 target-independent 输入。
     pub fn lower_artifact_input(&self, entry: &Path) -> Result<ArtifactBuildInput> {
         let program = self.lower_bundle_cached(entry)?;
-        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
+        let graph = ModuleGraph::build_with_store(entry, self.store.clone(), self.options.clone())
             .with_context(|| "Failed to build module graph")?;
-        let manifest = manifest_for_graph(&graph, &self.root_path, &self.options)?;
+        let manifest = manifest_for_graph(&graph, &self.store, &self.options)?;
         let mut input = ArtifactBuildInput::new(
             program,
             manifest,
@@ -233,35 +250,25 @@ impl ModuleBundler {
     /// 将运行时加载的入口模块 lower 为可实例化 IR，并为入口 ESM 创建命名空间对象。
     pub fn lower_runtime_entry_bundle(&self, entry: &Path) -> Result<RuntimeEntryBundle> {
         let graph =
-            ModuleGraph::build_runtime_with_options(entry, &self.root_path, self.options.clone())
+            ModuleGraph::build_runtime_with_store(entry, self.store.clone(), self.options.clone())
                 .with_context(|| "Failed to build runtime module graph")?;
-        lower_runtime_graph(
-            &graph,
-            &self.root_path,
-            &self.options,
-            self.emit_debug_checks,
-        )
+        lower_runtime_graph(&graph, &self.store, &self.options, self.emit_debug_checks)
     }
 
     /// 将 Node 内置模块 lower 为运行时可实例化 ESM bundle。
     pub fn lower_runtime_builtin_bundle(&self, specifier: &str) -> Result<RuntimeEntryBundle> {
-        let graph = ModuleGraph::build_builtin_with_options(
+        let graph = ModuleGraph::build_builtin_with_store(
             specifier,
-            &self.root_path,
+            self.store.clone(),
             self.options.clone(),
         )
         .with_context(|| "Failed to build built-in module graph")?;
-        lower_runtime_graph(
-            &graph,
-            &self.root_path,
-            &self.options,
-            self.emit_debug_checks,
-        )
+        lower_runtime_graph(&graph, &self.store, &self.options, self.emit_debug_checks)
     }
 
     /// 解析入口模块 AST（含依赖图构建，用于 dump-ast 等）
     pub fn parse_entry_ast(&self, entry: &Path) -> Result<swc_core::ecma::ast::Module> {
-        let graph = ModuleGraph::build_with_options(entry, &self.root_path, self.options.clone())
+        let graph = ModuleGraph::build_with_store(entry, self.store.clone(), self.options.clone())
             .with_context(|| "Failed to build module graph")?;
         let entry_id = graph.entry_id();
         let node = graph
@@ -277,7 +284,11 @@ impl ModuleBundler {
     }
 }
 
-fn lower_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<Program> {
+fn lower_graph(
+    graph: &ModuleGraph,
+    store: &ModuleSourceStore,
+    emit_debug_checks: bool,
+) -> Result<Program> {
     let (order, cycles) = graph
         .topological_order()
         .with_context(|| "Failed to compute topological order")?;
@@ -290,7 +301,7 @@ fn lower_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<Program> 
         modules.push(ModuleLoweringInput {
             id: node.id,
             ast: node.ast.clone(),
-            metadata: module_metadata_for_node(node)?,
+            metadata: module_metadata_for_node(node, store)?,
             source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
         });
     }
@@ -308,12 +319,10 @@ fn lower_graph(graph: &ModuleGraph, emit_debug_checks: bool) -> Result<Program> 
 
 fn manifest_for_graph(
     graph: &ModuleGraph,
-    root_path: &Path,
+    store: &ModuleSourceStore,
     options: &ResolutionOptions,
 ) -> Result<ModuleManifest> {
-    let canonical_root = root_path
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize module root {}", root_path.display()))?;
+    let canonical_root = store.root();
     let mut modules = Vec::new();
     for id in graph.all_module_ids() {
         let node = graph.get_module(id).expect("graph node is present");
@@ -469,7 +478,7 @@ fn logical_component_os_string(bytes: Vec<u8>) -> Result<OsString> {
 
 fn lower_runtime_graph(
     graph: &ModuleGraph,
-    root_path: &Path,
+    store: &ModuleSourceStore,
     options: &ResolutionOptions,
     emit_debug_checks: bool,
 ) -> Result<RuntimeEntryBundle> {
@@ -493,7 +502,7 @@ fn lower_runtime_graph(
         modules.push(ModuleLoweringInput {
             id: node.id,
             ast: node.ast.clone(),
-            metadata: module_metadata_for_node(node)?,
+            metadata: module_metadata_for_node(node, store)?,
             source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
         });
     }
@@ -510,7 +519,7 @@ fn lower_runtime_graph(
     .with_context(|| "Failed to lower modules")?;
 
     Ok(RuntimeEntryBundle {
-        manifest: manifest_for_graph(graph, root_path, options)?,
+        manifest: manifest_for_graph(graph, store, options)?,
         program,
         entry_module_id,
         module_id_span,
@@ -524,17 +533,43 @@ fn module_id_span(order: &[ModuleId]) -> Result<u32> {
         .ok_or_else(|| anyhow!("runtime module id span overflows u32"))
 }
 
-pub(crate) fn module_metadata_for_node(node: &super::graph::GraphNode) -> Result<ModuleMetadata> {
+pub(crate) fn module_metadata_for_node(
+    node: &super::graph::GraphNode,
+    store: &ModuleSourceStore,
+) -> Result<ModuleMetadata> {
     let kind = if node.is_cjs {
         ModuleKind::CommonJs
     } else {
         ModuleKind::Esm
     };
+    if builtin_modules::is_builtin_virtual_path(&node.path) {
+        return builtin_module_metadata(node, kind);
+    }
+    match store.module_identity(&node.path) {
+        Ok((filename, dirname, url)) => Ok(ModuleMetadata {
+            filename,
+            dirname,
+            url,
+            kind,
+        }),
+        Err(error) if kind == ModuleKind::CommonJs => Err(error),
+        Err(_) => Ok(ModuleMetadata {
+            filename: String::new(),
+            dirname: String::new(),
+            url: String::new(),
+            kind,
+        }),
+    }
+}
+
+fn builtin_module_metadata(
+    node: &super::graph::GraphNode,
+    kind: ModuleKind,
+) -> Result<ModuleMetadata> {
     let dirname_path = node
         .path
         .parent()
         .ok_or_else(|| anyhow!("module path has no parent: {}", node.path.display()))?;
-
     let (filename, dirname, url) = match (path_to_utf8(&node.path), path_to_utf8(dirname_path)) {
         (Ok(filename), Ok(dirname)) => {
             let url = url::Url::from_file_path(&node.path)
@@ -550,7 +585,6 @@ pub(crate) fn module_metadata_for_node(node: &super::graph::GraphNode) -> Result
         (Err(error), _) | (_, Err(error)) if kind == ModuleKind::CommonJs => return Err(error),
         _ => (String::new(), String::new(), String::new()),
     };
-
     Ok(ModuleMetadata {
         filename,
         dirname,

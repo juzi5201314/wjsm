@@ -6,10 +6,10 @@ use wjsm_artifact_format::{
 };
 use wjsm_ir::{Builtin, ModuleId, is_module_entry_ir_function, value};
 use wjsm_module::{
-    ResolutionOptions, RuntimeModuleFormat, RuntimeModuleKey, RuntimeResolveKind,
-    RuntimeResolvePaths, RuntimeResolvedModule, logical_url_path,
-    lower_runtime_builtin_bundle_with_options, lower_runtime_entry_bundle_with_options,
-    resolve_runtime_paths, resolve_runtime_specifier,
+    ModuleSourceStore, ResolutionOptions, RuntimeModuleFormat, RuntimeModuleKey,
+    RuntimeResolveKind, RuntimeResolvePaths, RuntimeResolvedModule, logical_url_path,
+    lower_runtime_builtin_bundle_with_store, lower_runtime_entry_bundle_with_store,
+    resolve_runtime_paths_with_store, resolve_runtime_specifier_with_store,
 };
 use wjsm_native_abi::{NativeVmContext, PendingExceptionKind};
 
@@ -61,7 +61,7 @@ pub(crate) enum ScopeBindingWrite {
 }
 
 pub(crate) struct NativeModuleState {
-    root_path: PathBuf,
+    pub(crate) store: ModuleSourceStore,
     options: ResolutionOptions,
     module_keys: HashMap<(u64, ModuleId), RuntimeModuleKey>,
     namespaces: HashMap<RuntimeModuleKey, i64>,
@@ -268,7 +268,7 @@ fn object_handle(value: i64) -> Option<u32> {
 impl Default for NativeModuleState {
     fn default() -> Self {
         Self {
-            root_path: PathBuf::from("."),
+            store: ModuleSourceStore::disk(Path::new(".")),
             options: ResolutionOptions::default(),
             module_keys: HashMap::new(),
             namespaces: HashMap::new(),
@@ -293,15 +293,13 @@ impl NativeModuleState {
 
 pub(crate) fn configure(
     state: &mut NativeAgentState,
-    root_path: &Path,
+    store: ModuleSourceStore,
     image_id: u64,
     manifest: &ModuleManifest,
 ) -> Result<(), String> {
-    let root = root_path
-        .canonicalize()
-        .unwrap_or_else(|_| root_path.to_path_buf());
+    let root = store.root();
     let keys = manifest_entries(&root, image_id, manifest)?;
-    state.runtime_modules.root_path = root;
+    state.runtime_modules.store = store;
     state.runtime_modules.options =
         ResolutionOptions::new().with_conditions(manifest.resolution_conditions.iter().cloned());
     state.runtime_modules.module_keys.extend(keys);
@@ -674,8 +672,7 @@ fn resolve_paths_for_require(
     let Some(referrer) = referrer_path(state, referrer) else {
         return fail_dispatch(ctx);
     };
-    let root = state.runtime_modules.root_path.clone();
-    match resolve_runtime_paths(&specifier, &referrer, &root) {
+    match resolve_runtime_paths_with_store(&specifier, &referrer, &state.runtime_modules.store) {
         RuntimeResolvePaths::Null => value::encode_null(),
         RuntimeResolvePaths::Search(paths) => {
             let Ok(array) =
@@ -711,10 +708,10 @@ fn resolve_module(
     referrer: &Path,
     kind: RuntimeResolveKind,
 ) -> Result<RuntimeResolvedModule, ModuleLoadFailure> {
-    resolve_runtime_specifier(
+    resolve_runtime_specifier_with_store(
         specifier,
         referrer,
-        &state.runtime_modules.root_path,
+        &state.runtime_modules.store,
         &state.runtime_modules.options,
         kind,
     )
@@ -749,13 +746,13 @@ fn execute_module_bundle(
     state: &mut NativeAgentState,
     resolved: &RuntimeResolvedModule,
 ) -> Result<(), ModuleLoadFailure> {
-    let root = state.runtime_modules.root_path.clone();
+    let store = state.runtime_modules.store.clone();
     let options = state.runtime_modules.options.clone();
     let bundle = match (&resolved.format, &resolved.key, resolved.path.as_deref()) {
         (RuntimeModuleFormat::Builtin, RuntimeModuleKey::Builtin(specifier), _) => {
-            lower_runtime_builtin_bundle_with_options(specifier, &root, options)
+            lower_runtime_builtin_bundle_with_store(specifier, store, options, false)
         }
-        (_, _, Some(path)) => lower_runtime_entry_bundle_with_options(path, &root, options),
+        (_, _, Some(path)) => lower_runtime_entry_bundle_with_store(path, store, options, false),
         _ => {
             return Err(ModuleLoadFailure::Message(format!(
                 "runtime module '{}' has no loadable source",
@@ -854,12 +851,16 @@ fn load_json_module(
     let path = resolved.path.as_deref().ok_or_else(|| {
         ModuleLoadFailure::Message(format!("JSON module '{}' has no path", resolved.url))
     })?;
-    let text = std::fs::read_to_string(path).map_err(|error| {
-        ModuleLoadFailure::Message(format!(
-            "failed to read JSON module '{}': {error}",
-            path.display()
-        ))
-    })?;
+    let text = state
+        .runtime_modules
+        .store
+        .read_to_string(path)
+        .map_err(|error| {
+            ModuleLoadFailure::Message(format!(
+                "failed to read JSON module '{}': {error}",
+                path.display()
+            ))
+        })?;
     let encoded = state
         .intern_text(text, value::TAG_STRING)
         .ok_or_else(|| ModuleLoadFailure::Message("JSON source string table overflow".into()))?;
@@ -1070,7 +1071,7 @@ fn register_manifest(
     image_id: u64,
     manifest: &ModuleManifest,
 ) -> Result<(), String> {
-    let keys = manifest_entries(&state.runtime_modules.root_path, image_id, manifest)?;
+    let keys = manifest_entries(&state.runtime_modules.store.root(), image_id, manifest)?;
     state.runtime_modules.module_keys.extend(keys);
     Ok(())
 }
@@ -1099,12 +1100,9 @@ fn manifest_key(root: &Path, module: &ManifestModule) -> Result<RuntimeModuleKey
 }
 
 fn normalize_referrer(state: &NativeAgentState, path: &Path) -> PathBuf {
-    let path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        state.runtime_modules.root_path.join(path)
-    };
-    path.canonicalize().unwrap_or(path)
+    let store = &state.runtime_modules.store;
+    let resolved = store.resolve_entry(path);
+    store.canonicalize(&resolved).unwrap_or(resolved)
 }
 
 fn intern_referrer(state: &mut NativeAgentState, path: PathBuf) -> Option<u32> {

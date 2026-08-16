@@ -28,7 +28,7 @@ fixture 走 `run_file_in_process`，与 CLI 共用 `NativeRuntime`。测试进�
 
 ## 同宿主 native executable
 
-`wjsm build --format native-executable` 把预链 `wjsm-exec` 与预编译 `NativeObject` 打进真实 ELF/PE。启动走 `CompiledImage::load`，跳过主程序 codegen。这不是磁盘 cache，也不是把 `.wnat` 改后缀。详见 [ADR 0016](../../../../adr/0016-native-executable-stub-overlay.md)。
+`wjsm build --format native-executable` 把预链 `wjsm-exec`、预编译 `NativeObject` 与制品内源码快照打进真实 ELF/PE。启动走 `CompiledImage::load`，跳过主程序 codegen；运行时解析只读快照。这不是磁盘 cache，也不是把 `.wnat` 改后缀。详见 [ADR 0016](../../../../adr/0016-native-executable-stub-overlay.md) 与 [ADR 0017](../../../../adr/0017-native-executable-source-snapshot.md)。
 
 ## 深入了解
 

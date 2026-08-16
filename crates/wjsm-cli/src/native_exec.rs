@@ -1,5 +1,6 @@
 //! `wjsm build --format native-executable`：复制 stub、缝 overlay、原子写出。
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -12,17 +13,20 @@ use wjsm_host_native::{compile_native_exec_images, exec_payload_from_images};
 /// 打包失败时不创建或覆盖 `output`。
 pub(crate) fn write_native_executable(
     artifact_bytes: &[u8],
-    module_root: &Path,
+    files: BTreeMap<String, Vec<u8>>,
     output: &Path,
 ) -> Result<()> {
     if output.as_os_str() == "-" {
         bail!("refusing to write a native executable to stdout; use `-o <path>`");
     }
-    let packed = pack_native_executable(artifact_bytes, module_root)?;
+    let packed = pack_native_executable(artifact_bytes, files)?;
     write_atomically(output, &packed)
 }
 
-fn pack_native_executable(artifact_bytes: &[u8], module_root: &Path) -> Result<Vec<u8>> {
+fn pack_native_executable(
+    artifact_bytes: &[u8],
+    files: BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<u8>> {
     let artifact =
         PortableArtifact::decode(artifact_bytes.to_vec().into(), &ArtifactLimits::default())
             .map_err(|error| anyhow::anyhow!("invalid portable artifact: {error}"))?;
@@ -31,7 +35,7 @@ fn pack_native_executable(artifact_bytes: &[u8], module_root: &Path) -> Result<V
         .with_context(|| format!("failed to read wjsm-exec stub '{}'", stub_path.display()))?;
     let images = compile_native_exec_images(&artifact)
         .context("failed to compile native executable images")?;
-    let payload = exec_payload_from_images(&artifact, &images, module_root)
+    let payload = exec_payload_from_images(&artifact, &images, files)
         .context("failed to encode native executable payload")?;
     pack(&stub, &payload).context("failed to pack native executable")
 }

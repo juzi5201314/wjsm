@@ -355,6 +355,10 @@ pub(crate) enum Commands {
         /// Evaluate inline code string instead of a file
         #[arg(short, long = "eval")]
         eval: Option<String>,
+
+        /// Extra files to embed in a native-executable snapshot
+        #[arg(long = "include", value_name = "PATH")]
+        include: Vec<PathBuf>,
     },
 
     /// Run a JS/TS file directly

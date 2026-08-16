@@ -52,6 +52,13 @@ filter = 'test(/happy__node_builtin_perf_hooks_/)'
 threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }
 
+# native-executable 集成测试每次都打包 stub+payload，再冷启动 packed exe；
+# worker 用例还会在子线程二次编译。3s 报慢，连续三个周期才终止。
+[[profile.default.overrides]]
+filter = 'binary(native_executable)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
 # host_table_reclaim：4MB 小堆 + ZGC + 20000 次闭包分配，本质是 GC 回收
 # 压力测试。单独执行约 2.7s，调度抖动会越过默认 3s，因此独占 CPU 且采用
 # 三周期门禁：3s 报慢、9s 才终止，仍能捕获卡死或资源未释放。

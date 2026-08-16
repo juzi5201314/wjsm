@@ -58,7 +58,7 @@ Hello, wjsm: 3
 ./target/release/wjsm run app.wjsm
 ```
 
-`app.wjsm` 只包含经过验证的 semantic IR、模块清单及可选 source metadata，能够跨平台携带；Cranelift object、relocation、可执行 image 和 native cache 都是当前宿主私有派生数据。`--format native-executable` 在当前宿主上把预链 `wjsm-exec` stub 与预编译 `NativeObject` 打成可直接运行的 ELF/PE；失败时不创建或覆盖输出文件。交叉编译不在范围内。
+`app.wjsm` 只包含经过验证的 semantic IR、模块清单及可选 source metadata，能够跨平台携带；Cranelift object、relocation、可执行 image 和 native cache 都是当前宿主私有派生数据。`--format native-executable` 在当前宿主上把预链 `wjsm-exec` stub、预编译 `NativeObject` 与制品内源码快照打成可直接运行的 ELF/PE；失败时不创建或覆盖输出文件。拷走 exe 后只读快照。交叉编译不在范围内。
 
 ## 常用命令
 

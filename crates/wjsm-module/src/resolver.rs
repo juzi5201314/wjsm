@@ -12,6 +12,7 @@ use crate::exports::{resolve_package_exports, resolve_package_imports};
 use crate::module_format::{ModuleFormat, detect_module_format};
 use crate::package_json::{self, BrowserField, PackageInfo};
 use crate::resolution_options::{ResolutionKind, ResolutionOptions};
+use crate::source_store::ModuleSourceStore;
 /// 尝试作为模块入口解析的路径扩展名（顺序优先）
 const MODULE_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "jsx", "tsx"];
 
@@ -68,6 +69,7 @@ pub enum ExportEntry {
 
 /// 模块解析器
 pub struct ModuleResolver {
+    store: ModuleSourceStore,
     root_path: PathBuf,
     options: ResolutionOptions,
     package_cache: RefCell<HashMap<PathBuf, Option<PackageInfo>>>,
@@ -88,16 +90,25 @@ impl ModuleResolver {
     }
 
     pub(crate) fn with_options(root_path: &Path, options: ResolutionOptions) -> Self {
-        Self::with_options_and_id_base(root_path, options, 0)
+        Self::with_store(ModuleSourceStore::disk(root_path), options)
     }
-    pub(crate) fn with_runtime_entry_options(
-        root_path: &Path,
+
+    pub(crate) fn with_store(store: ModuleSourceStore, options: ResolutionOptions) -> Self {
+        Self::with_store_and_id_base(store, options, 0)
+    }
+
+    pub(crate) fn with_runtime_entry_store(
+        store: ModuleSourceStore,
         options: ResolutionOptions,
         entry: &Path,
     ) -> Self {
-        let mut resolver = Self::with_options_and_id_base(root_path, options, 0);
-        resolver.runtime_commonjs_entry =
-            Some(entry.canonicalize().unwrap_or_else(|_| entry.to_path_buf()));
+        let mut resolver = Self::with_store_and_id_base(store, options, 0);
+        resolver.runtime_commonjs_entry = Some(
+            resolver
+                .store
+                .canonicalize(entry)
+                .unwrap_or_else(|_| entry.to_path_buf()),
+        );
         resolver
     }
 
@@ -105,15 +116,14 @@ impl ModuleResolver {
     ///
     /// 用于 builtin 段缓存（issue #344）：builtin 闭包已用 canonical 图 lower 成独立段
     /// （ModuleId 0..B），用户图重建时从 B 起分配，保证两段 ID 不重叠。
-    pub(crate) fn with_options_and_id_base(
-        root_path: &Path,
+    pub(crate) fn with_store_and_id_base(
+        store: ModuleSourceStore,
         options: ResolutionOptions,
         base: u32,
     ) -> Self {
-        let root_path = root_path
-            .canonicalize()
-            .unwrap_or_else(|_| root_path.to_path_buf());
+        let root_path = store.root();
         Self {
+            store,
             root_path,
             options,
             package_cache: RefCell::new(HashMap::new()),
@@ -122,6 +132,10 @@ impl ModuleResolver {
             modules: HashMap::new(),
             runtime_commonjs_entry: None,
         }
+    }
+
+    pub(crate) fn store(&self) -> &ModuleSourceStore {
+        &self.store
     }
 
     /// 预置 builtin canonical 模块的虚拟路径 → canonical ModuleId 映射。
@@ -278,7 +292,7 @@ impl ModuleResolver {
                 )
             })?;
         let target_path = package.root.join(target.relative_path);
-        Self::resolve_package_target_path(&target_path, specifier, parent)
+        self.resolve_package_target_path(&target_path, specifier, parent)
     }
 
     fn resolve_bare_specifier(
@@ -363,7 +377,7 @@ impl ModuleResolver {
             )
         })?;
         let target_path = package.root.join(target.relative_path);
-        Self::resolve_package_target_path(&target_path, specifier, parent)
+        self.resolve_package_target_path(&target_path, specifier, parent)
     }
 
     /// 从 `from_dir` 起向上遍历，查找 `node_modules/<package_name>` 目录。
@@ -372,19 +386,24 @@ impl ModuleResolver {
         package_name: &str,
         from_dir: &Path,
     ) -> Result<Option<PathBuf>> {
-        let mut dir = from_dir
-            .canonicalize()
+        let mut dir = self
+            .store
+            .canonicalize(from_dir)
             .unwrap_or_else(|_| from_dir.to_path_buf());
         loop {
-            if !dir.starts_with(&self.root_path) {
+            if !self.store.is_under_root(&dir) {
                 return Ok(None);
             }
 
             let candidate = dir.join("node_modules").join(package_name);
-            if candidate.is_dir() {
-                return candidate.canonicalize().map(Some).with_context(|| {
-                    format!("canonicalize package directory {}", candidate.display())
-                });
+            if self.store.is_dir(&candidate) {
+                return self
+                    .store
+                    .canonicalize(&candidate)
+                    .map(Some)
+                    .with_context(|| {
+                        format!("canonicalize package directory {}", candidate.display())
+                    });
             }
             if dir == self.root_path || !dir.pop() {
                 return Ok(None);
@@ -393,17 +412,17 @@ impl ModuleResolver {
     }
 
     pub(crate) fn find_nearest_package(&self, start: &Path) -> Result<Option<PackageInfo>> {
-        let start_dir = if start.is_dir() {
+        let start_dir = if self.store.is_dir(start) {
             start
         } else {
             start.parent().unwrap_or(start)
         };
-        let mut current = start_dir.canonicalize().with_context(|| {
+        let mut current = self.store.canonicalize(start_dir).with_context(|| {
             format!("canonicalize package search start {}", start_dir.display())
         })?;
 
         loop {
-            if !current.starts_with(&self.root_path) {
+            if !self.store.is_under_root(&current) {
                 return Ok(None);
             }
 
@@ -418,14 +437,15 @@ impl ModuleResolver {
     }
 
     fn read_package_info(&self, package_dir: &Path) -> Result<Option<PackageInfo>> {
-        let canonical_dir = package_dir
-            .canonicalize()
+        let canonical_dir = self
+            .store
+            .canonicalize(package_dir)
             .with_context(|| format!("canonicalize package directory {}", package_dir.display()))?;
         if let Some(package) = self.package_cache.borrow().get(&canonical_dir) {
             return Ok(package.clone());
         }
 
-        let package = package_json::read_package_info(&canonical_dir)?;
+        let package = package_json::read_package_info(&self.store, &canonical_dir)?;
         self.package_cache
             .borrow_mut()
             .insert(canonical_dir, package.clone());
@@ -482,7 +502,7 @@ impl ModuleResolver {
             }
         }
 
-        Self::resolve_directory_index(package_dir, specifier, parent)
+        self.resolve_directory_index(package_dir, specifier, parent)
     }
 
     /// 将路径解析为具体模块文件：扩展名补全、目录 index、package.json main/module
@@ -492,10 +512,10 @@ impl ModuleResolver {
         specifier: &str,
         parent: &Path,
     ) -> Result<PathBuf> {
-        if resolved.is_file() {
-            return Ok(resolved.canonicalize()?);
+        if self.store.is_file(resolved) {
+            return self.store.canonicalize(resolved);
         }
-        if resolved.is_dir() {
+        if self.store.is_dir(resolved) {
             let package_info = self.read_package_info(resolved)?;
             return self.resolve_legacy_package_entry(
                 resolved,
@@ -507,13 +527,13 @@ impl ModuleResolver {
 
         let file_candidates = Self::file_candidates(resolved);
         for candidate in &file_candidates {
-            if candidate.is_file() {
-                return Ok(candidate.canonicalize()?);
+            if self.store.is_file(candidate) {
+                return self.store.canonicalize(candidate);
             }
         }
 
         for candidate in &file_candidates {
-            if candidate.is_dir() {
+            if self.store.is_dir(candidate) {
                 let package_info = self.read_package_info(candidate)?;
                 return self.resolve_legacy_package_entry(
                     candidate,
@@ -586,7 +606,8 @@ impl ModuleResolver {
         match replacement {
             Some(replacement) => {
                 let target_path = Self::join_package_relative(&package.root, replacement);
-                Self::resolve_package_target_path(&target_path, specifier, parent).map(Some)
+                self.resolve_package_target_path(&target_path, specifier, parent)
+                    .map(Some)
             }
             None => bail!(
                 "ERR_PACKAGE_PATH_DISABLED_BY_BROWSER: package path `{key}` is disabled by browser field in {}",
@@ -631,30 +652,35 @@ impl ModuleResolver {
         specifier: &str,
         parent: &Path,
     ) -> Result<PathBuf> {
-        if path.is_file() {
-            return Ok(path.canonicalize()?);
+        if self.store.is_file(path) {
+            return self.store.canonicalize(path);
         }
         self.resolve_file_or_directory(path, specifier, parent)
     }
 
-    fn resolve_package_target_path(path: &Path, specifier: &str, parent: &Path) -> Result<PathBuf> {
-        if path.is_file() {
-            return Ok(path.canonicalize()?);
+    fn resolve_package_target_path(
+        &self,
+        path: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<PathBuf> {
+        if self.store.is_file(path) {
+            return self.store.canonicalize(path);
         }
-        if path.is_dir() {
-            return Self::resolve_directory_index(path, specifier, parent);
+        if self.store.is_dir(path) {
+            return self.resolve_directory_index(path, specifier, parent);
         }
 
         let file_candidates = Self::file_candidates(path);
         for candidate in &file_candidates {
-            if candidate.is_file() {
-                return Ok(candidate.canonicalize()?);
+            if self.store.is_file(candidate) {
+                return self.store.canonicalize(candidate);
             }
         }
 
         for candidate in &file_candidates {
-            if candidate.is_dir() {
-                return Self::resolve_directory_index(candidate, specifier, parent);
+            if self.store.is_dir(candidate) {
+                return self.resolve_directory_index(candidate, specifier, parent);
             }
         }
 
@@ -666,11 +692,16 @@ impl ModuleResolver {
         );
     }
 
-    fn resolve_directory_index(dir: &Path, specifier: &str, parent: &Path) -> Result<PathBuf> {
+    fn resolve_directory_index(
+        &self,
+        dir: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<PathBuf> {
         for ext in MODULE_EXTENSIONS {
             let index = dir.join(format!("index.{ext}"));
-            if index.is_file() {
-                return Ok(index.canonicalize()?);
+            if self.store.is_file(&index) {
+                return self.store.canonicalize(&index);
             }
         }
         bail!(
@@ -696,17 +727,18 @@ impl ModuleResolver {
 
     /// 解析入口文件路径（如果已解析过则返回缓存的 ID）。
     pub fn resolve_entry_path(&mut self, entry: &Path) -> Result<ModuleId> {
-        let path = Self::canonical_entry_path(entry)
+        let path = self
+            .canonical_entry_path(entry)
             .with_context(|| format!("Failed to resolve input file: {}", entry.display()))?;
         self.load_resolved_module(&entry.display().to_string(), path)
     }
 
-    fn canonical_entry_path(entry: &Path) -> Result<PathBuf> {
-        if !entry.is_file() {
+    fn canonical_entry_path(&self, entry: &Path) -> Result<PathBuf> {
+        if !self.store.is_file(entry) {
             bail!("Input file '{}' does not exist", entry.display());
         }
-        entry
-            .canonicalize()
+        self.store
+            .canonicalize(entry)
             .with_context(|| format!("Failed to canonicalize input file: {}", entry.display()))
     }
 
@@ -785,7 +817,7 @@ impl ModuleResolver {
     }
 
     fn load_resolved_module(&mut self, specifier: &str, path: PathBuf) -> Result<ModuleId> {
-        if !path.starts_with(&self.root_path) {
+        if !self.store.is_under_root(&path) {
             bail!(
                 "Module '{}' resolves outside root '{}': {}",
                 specifier,
@@ -803,7 +835,9 @@ impl ModuleResolver {
         let package = self.find_nearest_package(&path)?;
 
         // 读取文件
-        let source = std::fs::read_to_string(&path)
+        let source = self
+            .store
+            .read_to_string(&path)
             .with_context(|| format!("Failed to read module: {}", path.display()))?;
 
         // 解析 AST

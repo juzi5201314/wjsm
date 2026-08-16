@@ -1,6 +1,6 @@
 //! 同宿主 native executable 的预编译 object 编译与编解码。
 
-use std::path::Path;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use wjsm_artifact_format::PortableArtifact;
@@ -70,29 +70,16 @@ pub fn compile_native_exec_images(
 pub fn exec_payload_from_images(
     artifact: &PortableArtifact,
     images: &PrecompiledNativeImages,
-    module_root: &Path,
+    files: BTreeMap<String, Vec<u8>>,
 ) -> Result<ExecPayload, NativeRuntimeError> {
     let compiler = NativeCompiler::new()?;
-    let module_root = module_root
-        .to_str()
-        .ok_or_else(|| {
-            NativeRuntimeError::Invariant(
-                "native executable module root is not valid Unicode".into(),
-            )
-        })?
-        .to_owned();
-    if module_root.is_empty() {
-        return Err(NativeRuntimeError::Invariant(
-            "native executable module root is empty".into(),
-        ));
-    }
     Ok(ExecPayload {
         native_abi_hash: wjsm_native_abi::native_abi_hash(),
         codegen_hash: NATIVE_CODEGEN_HASH,
         target: ExecPayload::host_target(),
         cranelift_version: CRANELIFT_VERSION.to_owned(),
         settings: compiler.settings_key().to_owned(),
-        module_root,
+        files,
         artifact: artifact.bytes().to_vec(),
         objects: images.encoded(),
     })

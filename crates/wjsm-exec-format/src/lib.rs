@@ -3,6 +3,7 @@
 //! 不依赖 Cranelift。stub 是 rustc 预链的 ELF/PE；本 crate 只负责在其后
 //! 追加 payload，并用固定 footer 定位。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -11,7 +12,7 @@ use thiserror::Error;
 /// footer 固定 64 字节，始终位于文件末尾。
 pub const FOOTER_LEN: usize = 64;
 pub const FOOTER_MAGIC: &[u8; 8] = b"WJSMEXEC";
-pub const PAYLOAD_SCHEMA: u32 = 2;
+pub const PAYLOAD_SCHEMA: u32 = 3;
 pub const FORMAT_VERSION: u16 = 1;
 
 const MAX_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -20,6 +21,8 @@ const MAX_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_OBJECTS: u32 = 2;
 const MAX_FUNCTIONS: u32 = 4_000_000;
 const MAX_STRING_BYTES: u32 = 4096;
+const MAX_SNAPSHOT_FILES: u32 = 100_000;
+const MAX_SNAPSHOT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 预编译 native object 的可移植编码，不含 Cranelift 类型。
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,8 +42,8 @@ pub struct ExecPayload {
     pub target: String,
     pub cranelift_version: String,
     pub settings: String,
-    /// 打包期 module root，与 CLI `--root` / 源码树一致。
-    pub module_root: String,
+    /// 打包期读过的源文件与 `--include`，按 logical URL 索引。
+    pub files: BTreeMap<String, Vec<u8>>,
     pub artifact: Vec<u8>,
     pub objects: Vec<EncodedNativeObject>,
 }
@@ -263,10 +266,7 @@ fn encode_payload(payload: &ExecPayload) -> Result<Vec<u8>, ExecFormatError> {
     encode_string(&mut bytes, &payload.target)?;
     encode_string(&mut bytes, &payload.cranelift_version)?;
     encode_string(&mut bytes, &payload.settings)?;
-    if payload.module_root.is_empty() {
-        return Err(ExecFormatError::Invalid("module root is empty".into()));
-    }
-    encode_string(&mut bytes, &payload.module_root)?;
+    encode_snapshot_files(&mut bytes, &payload.files)?;
     encode_blob(&mut bytes, &payload.artifact, MAX_ARTIFACT_BYTES)?;
     let object_count =
         u32::try_from(payload.objects.len()).map_err(|_| ExecFormatError::LengthOverflow)?;
@@ -307,10 +307,7 @@ fn decode_payload(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
     let target = decoder.string()?;
     let cranelift_version = decoder.string()?;
     let settings = decoder.string()?;
-    let module_root = decoder.string()?;
-    if module_root.is_empty() {
-        return Err(ExecFormatError::Invalid("module root is empty".into()));
-    }
+    let files = decode_snapshot_files(&mut decoder)?;
     let artifact = decoder.blob(MAX_ARTIFACT_BYTES)?;
     let object_count = decoder.u32()?;
     if object_count == 0 || object_count > MAX_OBJECTS {
@@ -329,10 +326,60 @@ fn decode_payload(bytes: &[u8]) -> Result<ExecPayload, ExecFormatError> {
         target,
         cranelift_version,
         settings,
-        module_root,
+        files,
         artifact,
         objects,
     })
+}
+
+fn encode_snapshot_files(
+    bytes: &mut Vec<u8>,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), ExecFormatError> {
+    let count = u32::try_from(files.len()).map_err(|_| ExecFormatError::LengthOverflow)?;
+    if count > MAX_SNAPSHOT_FILES {
+        return Err(ExecFormatError::Invalid(
+            "snapshot file count exceeds limit".into(),
+        ));
+    }
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for (logical_url, content) in files {
+        if logical_url.is_empty() {
+            return Err(ExecFormatError::Invalid(
+                "snapshot logical URL is empty".into(),
+            ));
+        }
+        encode_string(bytes, logical_url)?;
+        encode_blob(bytes, content, MAX_SNAPSHOT_FILE_BYTES)?;
+    }
+    Ok(())
+}
+
+fn decode_snapshot_files(
+    decoder: &mut Decoder<'_>,
+) -> Result<BTreeMap<String, Vec<u8>>, ExecFormatError> {
+    let count = decoder.u32()?;
+    if count > MAX_SNAPSHOT_FILES {
+        return Err(ExecFormatError::Invalid(
+            "snapshot file count exceeds limit".into(),
+        ));
+    }
+    let mut files = BTreeMap::new();
+    for _ in 0..count {
+        let logical_url = decoder.string()?;
+        if logical_url.is_empty() {
+            return Err(ExecFormatError::Invalid(
+                "snapshot logical URL is empty".into(),
+            ));
+        }
+        let content = decoder.blob(MAX_SNAPSHOT_FILE_BYTES)?;
+        if files.insert(logical_url.clone(), content).is_some() {
+            return Err(ExecFormatError::Invalid(format!(
+                "duplicate snapshot logical URL {logical_url}"
+            )));
+        }
+    }
+    Ok(files)
 }
 
 fn decode_object(decoder: &mut Decoder<'_>) -> Result<EncodedNativeObject, ExecFormatError> {
@@ -469,7 +516,7 @@ mod tests {
             target: ExecPayload::host_target(),
             cranelift_version: "0.134.3".into(),
             settings: "opt=speed".into(),
-            module_root: "/project".into(),
+            files: BTreeMap::from([("main.js".into(), b"export {};\n".to_vec())]),
             artifact: b"WJSMART artifact".to_vec(),
             objects: vec![EncodedNativeObject {
                 bytes: b"object-bytes".to_vec(),
@@ -482,12 +529,22 @@ mod tests {
     }
 
     #[test]
-    fn pack_rejects_empty_module_root() {
+    fn pack_rejects_empty_snapshot_logical_url() {
         let mut payload = sample_payload();
-        payload.module_root.clear();
+        payload.files.insert(String::new(), b"x".to_vec());
         assert!(matches!(
             pack(b"stub", &payload),
-            Err(ExecFormatError::Invalid(message)) if message.contains("module root")
+            Err(ExecFormatError::Invalid(message)) if message.contains("logical URL")
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_schema_2() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        assert!(matches!(
+            decode_payload(&bytes),
+            Err(ExecFormatError::Invalid(message)) if message.contains("schema")
         ));
     }
 

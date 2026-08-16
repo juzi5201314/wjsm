@@ -8,6 +8,7 @@ use super::builtin_modules;
 use super::resolution_options::{ResolutionKind, ResolutionOptions};
 pub use super::resolver::ModuleId;
 use super::resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
+use super::source_store::ModuleSourceStore;
 
 /// 模块依赖图
 pub struct ModuleGraph {
@@ -42,38 +43,38 @@ impl ModuleGraph {
         root: &Path,
         options: ResolutionOptions,
     ) -> Result<Self> {
-        let mut resolver = ModuleResolver::with_options(root, options);
+        Self::build_with_store(entry, ModuleSourceStore::disk(root), options)
+    }
+
+    pub(crate) fn build_with_store(
+        entry: &Path,
+        store: ModuleSourceStore,
+        options: ResolutionOptions,
+    ) -> Result<Self> {
+        let entry_path = store.resolve_entry(entry);
+        let mut resolver = ModuleResolver::with_store(store, options);
 
         // 入口模块来自 CLI/公共 API 的真实路径，不能经由 UTF-8 specifier 重新拼接。
-        let entry_path = if entry.is_absolute() {
-            entry.to_path_buf()
-        } else {
-            root.join(entry)
-        };
         let entry_id = resolver.resolve_entry_path(&entry_path)?;
         Self::build_from_resolver(resolver, entry_id)
     }
-    pub(crate) fn build_runtime_with_options(
+    pub(crate) fn build_runtime_with_store(
         entry: &Path,
-        root: &Path,
+        store: ModuleSourceStore,
         options: ResolutionOptions,
     ) -> Result<Self> {
-        let entry_path = if entry.is_absolute() {
-            entry.to_path_buf()
-        } else {
-            root.join(entry)
-        };
-        let mut resolver = ModuleResolver::with_runtime_entry_options(root, options, &entry_path);
+        let entry_path = store.resolve_entry(entry);
+        let mut resolver = ModuleResolver::with_runtime_entry_store(store, options, &entry_path);
         let entry_id = resolver.resolve_entry_path(&entry_path)?;
         Self::build_from_resolver(resolver, entry_id)
     }
 
-    pub(crate) fn build_builtin_with_options(
+    pub(crate) fn build_builtin_with_store(
         specifier: &str,
-        root: &Path,
+        store: ModuleSourceStore,
         options: ResolutionOptions,
     ) -> Result<Self> {
-        let mut resolver = ModuleResolver::with_options(root, options);
+        let mut resolver = ModuleResolver::with_store(store, options);
         let entry_id = resolver.resolve_builtin_entry(specifier)?;
         Self::build_from_resolver(resolver, entry_id)
     }
@@ -89,8 +90,16 @@ impl ModuleGraph {
         root: &Path,
         options: ResolutionOptions,
     ) -> Result<Self> {
+        Self::build_builtin_closure_with_store(frontier, ModuleSourceStore::disk(root), options)
+    }
+
+    pub(crate) fn build_builtin_closure_with_store(
+        frontier: &BTreeSet<String>,
+        store: ModuleSourceStore,
+        options: ResolutionOptions,
+    ) -> Result<Self> {
         anyhow::ensure!(!frontier.is_empty(), "builtin 闭包 frontier 不能为空");
-        let mut resolver = ModuleResolver::with_options(root, options);
+        let mut resolver = ModuleResolver::with_store(store, options);
         let mut roots = Vec::with_capacity(frontier.len());
         for specifier in frontier {
             let id = resolver
@@ -107,18 +116,19 @@ impl ModuleGraph {
     /// canonical id 预置进 `visited`，canonical 图节点数据（source/ast/imports/exports）
     /// 克隆进 `modules`——用户模块 import builtin 时命中 canonical id，图构建与
     /// `analyze_module_links` 直接复用 canonical 节点，builtin 与用户模块 id 不重叠。
-    pub(crate) fn build_user_with_builtin_closure(
+    pub(crate) fn build_user_with_builtin_closure_store(
         entry: &Path,
-        root: &Path,
+        store: ModuleSourceStore,
         options: ResolutionOptions,
         closure: &ModuleGraph,
     ) -> Result<Self> {
+        let entry_path = store.resolve_entry(entry);
         let base = closure
             .all_module_ids()
             .map(|id| id.0)
             .max()
             .map_or(0, |max| max + 1);
-        let mut resolver = ModuleResolver::with_options_and_id_base(root, options, base);
+        let mut resolver = ModuleResolver::with_store_and_id_base(store, options, base);
 
         let mut visited = HashMap::new();
         let mut shared = Vec::new();
@@ -150,11 +160,6 @@ impl ModuleGraph {
         resolver.seed_builtin_ids(visited);
         resolver.seed_shared_modules(shared);
 
-        let entry_path = if entry.is_absolute() {
-            entry.to_path_buf()
-        } else {
-            root.join(entry)
-        };
         let entry_id = resolver.resolve_entry_path(&entry_path)?;
         Self::build_from_resolver(resolver, entry_id)
     }

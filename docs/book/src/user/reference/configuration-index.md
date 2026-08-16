@@ -24,6 +24,7 @@
 | `--watch` | 监听文件改动重新执行 | 关闭 |
 | `--stage <parse\|lower\|compile\|execute>` | build 流水线阶段 | `compile` |
 | `--format <wjsm\|native-executable>` | 制品格式 | `wjsm` |
+| `--include <PATH>` | 补入 native-executable 快照的文件 | 无 |
 | `-o/--output <PATH>` | build 输出路径 | `out.wjsm` |
 
 `--gc` 不能写入配置文件，只接受命令行或环境变量。

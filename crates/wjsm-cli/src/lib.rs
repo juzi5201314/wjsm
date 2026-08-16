@@ -8,6 +8,7 @@
 use anyhow::{Context, Result, bail};
 use clap::CommandFactory;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -150,6 +151,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             stage,
             ref root,
             script,
+            ref include,
         } => cmd_build(
             &cli,
             input,
@@ -159,6 +161,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             stage,
             root.as_deref(),
             script,
+            include,
         ),
 
         Commands::Run {
@@ -313,8 +316,12 @@ fn cmd_build(
     stage: Option<Stage>,
     root: Option<&Path>,
     script: bool,
+    include: &[PathBuf],
 ) -> Result<ExitCode> {
     let stage = stage.unwrap_or(Stage::Compile);
+    if format != BuildFormat::NativeExecutable && !include.is_empty() {
+        bail!("`--include` is only valid with `--format native-executable`");
+    }
     if format == BuildFormat::NativeExecutable {
         if !matches!(stage, Stage::Compile) {
             bail!("`--format native-executable` only supports `--stage compile`");
@@ -323,9 +330,9 @@ fn cmd_build(
             bail!("refusing to write a native executable to stdout; use `-o <path>`");
         }
         wjsm_exec_format::locate_exec_stub().context("failed to locate wjsm-exec stub")?;
-        let (artifact_bytes, module_root) =
-            compile_cli_artifact_with_root(cli, input, eval, root, script)?;
-        native_exec::write_native_executable(&artifact_bytes, &module_root, output)?;
+        let (artifact_bytes, files) =
+            compile_native_executable_artifact(cli, input, eval, root, script, include)?;
+        native_exec::write_native_executable(&artifact_bytes, files, output)?;
         if cli.verbose_enabled(1) {
             eprintln!("Wrote native executable to {}", output.display());
         }
@@ -544,6 +551,156 @@ fn compile_cli_artifact_with_root(
 
 fn resolved_module_root(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
+}
+
+fn compile_native_executable_artifact(
+    cli: &Cli,
+    input: &Option<PathBuf>,
+    eval: &Option<String>,
+    root: Option<&Path>,
+    script: bool,
+    include: &[PathBuf],
+) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>)> {
+    let options = module_resolution_options(cli);
+    let verify_ir = cli.should_verify_ir();
+    let debug_codegen = cli.wants_debug_codegen();
+    match resolve_input(input, eval)? {
+        InputSource::Inline(code) => {
+            let bytes = compile_source_with_identity(
+                &code,
+                Some("/wjsm-exec/eval.js"),
+                "eval.js",
+                PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
+                script,
+                verify_ir,
+                debug_codegen,
+            )?;
+            let files = snapshot_includes(include_root(root, None)?, include)?;
+            Ok((bytes, files))
+        }
+        InputSource::File(path) => {
+            if path.extension().and_then(|extension| extension.to_str()) == Some("wjsm") {
+                let bytes = fs::read(&path).with_context(|| {
+                    format!("failed to read portable artifact '{}'", path.display())
+                })?;
+                let files = snapshot_includes(include_root(root, path.parent())?, include)?;
+                Ok((bytes, files))
+            } else if path_is_stdin(&path) {
+                let (source, _) = read_input_for_parse(&path)?;
+                let bytes = compile_source_with_identity(
+                    &source,
+                    Some("/wjsm-exec/eval.js"),
+                    "eval.js",
+                    PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
+                    script,
+                    verify_ir,
+                    debug_codegen,
+                )?;
+                let files = snapshot_includes(include_root(root, None)?, include)?;
+                Ok((bytes, files))
+            } else {
+                compile_native_executable_from_file(
+                    &path,
+                    root,
+                    script,
+                    verify_ir,
+                    debug_codegen,
+                    &options,
+                    include,
+                )
+            }
+        }
+    }
+}
+
+fn include_root(root: Option<&Path>, fallback: Option<&Path>) -> Result<PathBuf> {
+    if let Some(root) = root {
+        return Ok(resolved_module_root(root.to_path_buf()));
+    }
+    if let Some(fallback) = fallback {
+        return Ok(resolved_module_root(fallback.to_path_buf()));
+    }
+    std::env::current_dir().context("failed to determine include root")
+}
+
+fn snapshot_includes(root: PathBuf, include: &[PathBuf]) -> Result<BTreeMap<String, Vec<u8>>> {
+    let store = wjsm_module::ModuleSourceStore::recording(&root);
+    apply_snapshot_includes(&store, include)?;
+    Ok(store.recorded_files())
+}
+
+fn apply_snapshot_includes(
+    store: &wjsm_module::ModuleSourceStore,
+    include: &[PathBuf],
+) -> Result<()> {
+    for path in include {
+        store.include_file(path).with_context(|| {
+            format!(
+                "failed to include '{}' under module root '{}'",
+                path.display(),
+                store.root().display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn compile_native_executable_from_file(
+    input: &Path,
+    root: Option<&Path>,
+    script: bool,
+    verify_ir: bool,
+    debug_codegen: bool,
+    resolution_options: &wjsm_module::ResolutionOptions,
+    include: &[PathBuf],
+) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>)> {
+    let plan = build_compile_plan(input, root)?;
+    match plan {
+        CompilePlan::Bundle { entry, root } => {
+            let store = wjsm_module::ModuleSourceStore::recording(&root);
+            let input = wjsm_module::lower_artifact_input_with_store(
+                &entry,
+                store.clone(),
+                resolution_options.clone(),
+                debug_codegen,
+            )
+            .with_context(|| {
+                format!(
+                    "bundle entry {} from root {}",
+                    entry.display(),
+                    root.display()
+                )
+            })?;
+            apply_snapshot_includes(&store, include)?;
+            let bytes = PortableArtifact::from_input(&input)
+                .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))?
+                .bytes()
+                .to_vec();
+            Ok((bytes, store.recorded_files()))
+        }
+        CompilePlan::SingleSource {
+            source,
+            source_path,
+            module_root,
+            ..
+        } => {
+            let store = wjsm_module::ModuleSourceStore::recording(&module_root);
+            let _ = store.read_to_string(&source_path)?;
+            let (filename, _, _) = store.module_identity(&source_path)?;
+            let logical_url = store.logical_url(&source_path)?;
+            let bytes = compile_source_with_identity(
+                &source,
+                Some(filename.as_str()),
+                &logical_url,
+                PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
+                script,
+                verify_ir,
+                debug_codegen,
+            )?;
+            apply_snapshot_includes(&store, include)?;
+            Ok((bytes, store.recorded_files()))
+        }
+    }
 }
 
 fn decode_artifact(path: &Path) -> Result<PortableArtifact> {
@@ -2467,6 +2624,59 @@ mod tests {
         assert!(
             message.contains("failed to locate wjsm-exec stub")
                 || message.contains("WJSM_EXEC_STUB"),
+            "{message}"
+        );
+        assert_eq!(
+            fs::read(output).expect("target should remain readable"),
+            b"sentinel"
+        );
+    }
+
+    #[test]
+    fn native_executable_include_outside_root_preserves_target() {
+        let root = TestProject::new("native_executable_include");
+        write_file(&root, "main.js", "console.log(1);\n");
+        let outside = std::env::temp_dir()
+            .join("wjsm-test-cache")
+            .join("native-exec-include-outside")
+            .join(format!("{}", std::process::id()));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).expect("outside dir");
+        fs::write(outside.join("secret.js"), "export {};\n").expect("outside file");
+        let output = root.join("output");
+        fs::write(&output, b"sentinel").expect("target should be writable");
+        let stub = root.join("wjsm-exec");
+        fs::write(&stub, b"stub").expect("stub");
+        let previous = std::env::var_os("WJSM_EXEC_STUB");
+        // SAFETY: 本测试独占该环境变量，结束时恢复。
+        unsafe {
+            std::env::set_var("WJSM_EXEC_STUB", &stub);
+        }
+        let cli = parse_cli_for_test(&[
+            "wjsm",
+            "build",
+            "--format",
+            "native-executable",
+            "--root",
+            root.to_str().expect("root"),
+            "--include",
+            outside.join("secret.js").to_str().expect("include"),
+            "-o",
+            output.to_str().expect("output"),
+            root.join("main.js").to_str().expect("input"),
+        ]);
+        let result = execute(cli);
+        match previous {
+            Some(value) => unsafe { std::env::set_var("WJSM_EXEC_STUB", value) },
+            None => unsafe { std::env::remove_var("WJSM_EXEC_STUB") },
+        }
+        let message = format!(
+            "{:#}",
+            result.expect_err("include outside root should fail")
+        );
+        let _ = fs::remove_dir_all(&outside);
+        assert!(
+            message.contains("outside module root") || message.contains("failed to include"),
             "{message}"
         );
         assert_eq!(
