@@ -116,7 +116,8 @@ fn object_proto_to_string(
         "RegExp"
     } else if value::is_js_object(tag_input)
         && state
-            .heap
+            .gc
+            .heap()
             .object_type(value::decode_handle(tag_input))
             .is_ok_and(|kind| kind == u32::from(HEAP_TYPE_ARGUMENTS))
     {
@@ -194,7 +195,8 @@ fn has_own(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         return fail_dispatch(ctx);
     };
     state
-        .heap
+        .gc
+        .heap()
         .get_property(object, key)
         .map(|property| value::encode_bool(property.is_some()))
         .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -297,7 +299,7 @@ pub(crate) fn own_keys(
         return Some(vec![(key, callable)]);
     }
     if value::is_array(encoded) {
-        let length = state.heap.array_length(handle).ok()?;
+        let length = state.gc.heap().array_length(handle).ok()?;
         let named = state
             .array_property_order
             .get(&handle)
@@ -306,7 +308,7 @@ pub(crate) fn own_keys(
         let mut properties =
             Vec::with_capacity(length as usize + named.len() + usize::from(!enumerable_only));
         for index in 0..length {
-            let element = state.heap.get_element(handle, index).ok().flatten()? as i64;
+            let element = state.gc.heap().get_element(handle, index).ok().flatten()? as i64;
             if value::is_array_hole(element) {
                 continue;
             }
@@ -345,13 +347,18 @@ pub(crate) fn own_keys(
         }
         return Some(properties);
     }
-    let slots = state.heap.own_property_slots(handle).ok()?;
+    let slots = state.gc.heap().own_property_slots(handle).ok()?;
     let mut properties = Vec::with_capacity(slots.len());
     for (key, flags) in slots {
         if enumerable_only && flags & ENUMERABLE == 0 {
             continue;
         }
-        let property = state.heap.get_property_slot(handle, key).ok().flatten()?;
+        let property = state
+            .gc
+            .heap()
+            .get_property_slot(handle, key)
+            .ok()
+            .flatten()?;
         properties.push((
             super::runtime::encoded_property_key(key),
             property.value as i64,
@@ -478,7 +485,8 @@ fn from_entries(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(value::decode_handle(result), key, stored as u64)
             .is_err()
         {
@@ -505,7 +513,8 @@ fn group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
         return fail_dispatch(ctx);
     };
     if state
-        .heap
+        .gc
+        .heap()
         .set_prototype(value::decode_handle(result), PROTO_NULL_SENTINEL)
         .is_err()
     {
@@ -539,14 +548,15 @@ fn group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
             return fail_dispatch(ctx);
         };
         let result_handle = value::decode_handle(result);
-        let group = match state.heap.get_property(result_handle, key) {
+        let group = match state.gc.heap().get_property(result_handle, key) {
             Ok(Some(group)) => group as i64,
             Ok(None) => {
                 let Ok(group) = state.allocate_array_values(&[]) else {
                     return fail_dispatch(ctx);
                 };
                 if state
-                    .heap
+                    .gc
+                    .heap()
                     .set_property(result_handle, key, group as u64)
                     .is_err()
                 {
@@ -557,7 +567,8 @@ fn group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
             Err(_) => return fail_dispatch(ctx),
         };
         if state
-            .heap
+            .gc
+            .heap()
             .push_element(value::decode_handle(group), stored as u64)
             .is_err()
         {
@@ -578,12 +589,12 @@ fn object_rest(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         return fail_dispatch(ctx);
     }
     let excluded_handle = value::decode_handle(*excluded);
-    let Ok(excluded_len) = state.heap.array_length(excluded_handle) else {
+    let Ok(excluded_len) = state.gc.heap().array_length(excluded_handle) else {
         return fail_dispatch(ctx);
     };
     let mut excluded_keys = Vec::with_capacity(excluded_len as usize);
     for index in 0..excluded_len {
-        let Ok(Some(stored)) = state.heap.get_element(excluded_handle, index) else {
+        let Ok(Some(stored)) = state.gc.heap().get_element(excluded_handle, index) else {
             return fail_dispatch(ctx);
         };
         let stored = stored as i64;
@@ -626,7 +637,8 @@ pub(crate) fn copy_data_properties(
             return Err(fail_dispatch(ctx));
         };
         state
-            .heap
+            .gc
+            .heap()
             .set_property(destination_handle, key, stored as u64)
             .map_err(|_| fail_dispatch(ctx))?;
     }
@@ -720,7 +732,8 @@ fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
         return fail_dispatch(ctx);
     };
     if state
-        .heap
+        .gc
+        .heap()
         .set_prototype(value::decode_handle(object), prototype)
         .is_err()
     {
@@ -754,13 +767,13 @@ fn get_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
-    match state.heap.prototype(handle) {
+    match state.gc.heap().prototype(handle) {
         Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
         Ok(prototype) if prototype & 0x8000_0000 != 0 => {
             value::encode_proxy_handle(prototype & 0x7FFF_FFFF)
         }
         Ok(prototype)
-            if state.heap.object_type(prototype).ok()
+            if state.gc.heap().object_type(prototype).ok()
                 == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) =>
         {
             value::encode_handle(value::TAG_ARRAY, prototype)
@@ -800,7 +813,7 @@ fn set_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
             .copied()
             .unwrap_or_else(value::encode_null)
     } else if let Some(handle) = handle {
-        match state.heap.prototype(handle) {
+        match state.gc.heap().prototype(handle) {
             Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
             Ok(prototype) => value::encode_object_handle(prototype),
             Err(_) => return fail_dispatch(ctx),
@@ -833,7 +846,8 @@ fn set_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
         value::decode_handle(*prototype)
     };
     state
-        .heap
+        .gc
+        .heap()
         .set_prototype(
             handle.expect("ordinary object handle was checked"),
             prototype,
@@ -876,7 +890,7 @@ pub(crate) fn get_own_property_descriptor(
     if value::is_array(*object) {
         let handle = value::decode_handle(*object);
         let property = if state.text_matches(encoded_key, "length") {
-            let Ok(length) = state.heap.array_length(handle) else {
+            let Ok(length) = state.gc.heap().array_length(handle) else {
                 return fail_dispatch(ctx);
             };
             Some(wjsm_gc::HeapAccessV2Property {
@@ -959,7 +973,7 @@ pub(crate) fn get_own_property_descriptor(
             "Object.getOwnPropertyDescriptor called on non-object",
         );
     };
-    let Ok(Some(property)) = state.heap.get_property_slot(handle, key) else {
+    let Ok(Some(property)) = state.gc.heap().get_property_slot(handle, key) else {
         return value::encode_undefined();
     };
     descriptor_object(ctx, state, property)
@@ -999,7 +1013,8 @@ fn descriptor_object(
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(handle, value::decode_handle(key), stored as u64)
             .is_err()
         {
@@ -1012,7 +1027,8 @@ fn descriptor_object(
 fn descriptor_field(state: &mut NativeAgentState, descriptor: u32, name: &str) -> Option<i64> {
     let key = state.intern_text(name.into(), value::TAG_STRING)?;
     state
-        .heap
+        .gc
+        .heap()
         .get_property(descriptor, value::decode_handle(key))
         .ok()
         .flatten()
@@ -1180,7 +1196,7 @@ fn define_ordinary_property(
         Ok(descriptor) => descriptor,
         Err(exception) => return exception,
     };
-    let current = match state.heap.get_property_slot(handle, key) {
+    let current = match state.gc.heap().get_property_slot(handle, key) {
         Ok(current) => current,
         Err(_) => return fail_dispatch(ctx),
     };
@@ -1253,7 +1269,8 @@ fn define_ordinary_property(
                 .map_or_else(value::encode_undefined, |current| current.setter as i64)
         });
         state
-            .heap
+            .gc
+            .heap()
             .define_accessor_property_with_flags(handle, key, getter as u64, setter as u64, flags)
             .map(|()| object)
             .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -1265,7 +1282,8 @@ fn define_ordinary_property(
                 .map_or_else(value::encode_undefined, |current| current.value as i64)
         });
         state
-            .heap
+            .gc
+            .heap()
             .define_data_property(handle, key, stored as u64, flags)
             .map(|()| object)
             .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -1332,28 +1350,52 @@ pub(crate) fn define_property(
     }
 
     if value::is_callable(*object) {
-        let getter = getter;
-        let setter = setter;
+        let callable = value::strip_gc_color(*object);
         if getter.is_some() || setter.is_some() {
-            let existing = state.callable_accessors.get(&(*object, key)).copied();
-            state.callable_properties.remove(&(*object, key));
-            state.callable_accessors.insert(
-                (*object, key),
-                (
-                    getter
-                        .or_else(|| existing.map(|(getter, _)| getter))
-                        .unwrap_or_else(value::encode_undefined),
-                    setter
-                        .or_else(|| existing.map(|(_, setter)| setter))
-                        .unwrap_or_else(value::encode_undefined),
-                ),
-            );
+            let existing = state.callable_accessors.remove(&(callable, key));
+            let old_property = state.callable_properties.remove(&(callable, key));
+            let next_getter = getter
+                .or_else(|| existing.map(|(getter, _)| getter))
+                .unwrap_or_else(value::encode_undefined);
+            let next_setter = setter
+                .or_else(|| existing.map(|(_, setter)| setter))
+                .unwrap_or_else(value::encode_undefined);
+            state
+                .callable_accessors
+                .insert((callable, key), (next_getter, next_setter));
+            state.gc.record_host_write(callable, old_property, None);
+            if let Some((old_getter, old_setter)) = existing {
+                state
+                    .gc
+                    .record_host_write(callable, Some(old_getter), Some(next_getter));
+                state
+                    .gc
+                    .record_host_write(callable, Some(old_setter), Some(next_setter));
+            } else {
+                state
+                    .gc
+                    .record_host_write(callable, None, Some(next_getter));
+                state
+                    .gc
+                    .record_host_write(callable, None, Some(next_setter));
+            }
         } else if let Some(stored) = descriptor_field(state, descriptor, "value") {
-            state.callable_accessors.remove(&(*object, key));
-            state.callable_properties.insert((*object, key), stored);
+            let existing = state.callable_accessors.remove(&(callable, key));
+            let old_property = state.callable_properties.insert((callable, key), stored);
+            if let Some((old_getter, old_setter)) = existing {
+                state
+                    .gc
+                    .record_host_write(callable, Some(old_getter), Some(stored));
+                state
+                    .gc
+                    .record_host_write(callable, Some(old_setter), Some(stored));
+            }
+            state
+                .gc
+                .record_host_write(callable, old_property, Some(stored));
         }
-        state.callable_property_flags.insert((*object, key), flags);
-        return *object;
+        state.callable_property_flags.insert((callable, key), flags);
+        return callable;
     }
     let Some(handle) = object_handle(*object) else {
         return fail_dispatch(ctx);
@@ -1363,7 +1405,8 @@ pub(crate) fn define_property(
     if value::is_array(*object) {
         if super::runtime::array_index(state, encoded_key).is_some()
             && state
-                .heap
+                .gc
+                .heap()
                 .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
                 .is_err()
         {
@@ -1418,7 +1461,8 @@ fn get_own_property_descriptors(
         };
         if value::is_exception(descriptor)
             || state
-                .heap
+                .gc
+                .heap()
                 .set_property(result_handle, property_key, descriptor as u64)
                 .is_err()
         {
@@ -1498,13 +1542,14 @@ fn seal_or_freeze(
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
-    let Ok(properties) = state.heap.own_property_slots(handle) else {
+    let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
     };
     for (key, flags) in properties {
         let flags = flags & !CONFIGURABLE & if freeze { !WRITABLE } else { u32::MAX };
         if state
-            .heap
+            .gc
+            .heap()
             .update_property_flags(handle, key, flags)
             .is_err()
         {
@@ -1527,7 +1572,7 @@ fn is_sealed_or_frozen(
     if !state.non_extensible_objects.contains(&handle) {
         return value::encode_bool(false);
     }
-    let Ok(properties) = state.heap.own_property_slots(handle) else {
+    let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
     };
     value::encode_bool(properties.into_iter().all(|(_, flags)| {

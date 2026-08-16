@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use wjsm_ir::value;
 
 use super::collector_context::CollectorContext;
 use super::mutator::MutatorContext;
@@ -62,26 +63,74 @@ impl GcRuntimeV2 {
     }
 }
 
-/// collector 只能消费不可变、handle-only 的 root snapshot，不能回持 mutator 状态。
+/// collector 消费的 immutable encoded-value 图；worker 不持有 mutator/host 状态。
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct GcEdge {
+    pub owner: i64,
+    pub target: i64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct GcEphemeron {
+    pub owner: i64,
+    pub key: i64,
+    pub value: i64,
+}
+
 #[derive(Clone)]
 pub struct RootSnapshot {
     epoch: u64,
-    handles: Arc<[u32]>,
+    roots: Arc<[i64]>,
+    strong_edges: Arc<[GcEdge]>,
+    ephemerons: Arc<[GcEphemeron]>,
 }
 
 impl RootSnapshot {
-    pub fn new(epoch: u64, handles: Vec<u32>) -> Self {
+    pub fn new(
+        epoch: u64,
+        roots: Vec<i64>,
+        mut strong_edges: Vec<GcEdge>,
+        mut ephemerons: Vec<GcEphemeron>,
+    ) -> Self {
+        strong_edges.sort_unstable();
+        ephemerons.sort_unstable();
         Self {
             epoch,
-            handles: handles.into(),
+            roots: roots.into(),
+            strong_edges: strong_edges.into(),
+            ephemerons: ephemerons.into(),
         }
     }
 
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
+    pub fn with_epoch(&self, epoch: u64) -> Self {
+        Self {
+            epoch,
+            roots: Arc::clone(&self.roots),
+            strong_edges: Arc::clone(&self.strong_edges),
+            ephemerons: Arc::clone(&self.ephemerons),
+        }
+    }
 
-    pub fn handles(&self) -> &[u32] {
-        &self.handles
+    pub fn roots(&self) -> &[i64] {
+        &self.roots
+    }
+
+    pub fn root_handles(&self) -> impl Iterator<Item = u32> + '_ {
+        self.roots
+            .iter()
+            .copied()
+            .filter(|encoded| value::is_handle_backed_reference(*encoded))
+            .map(value::decode_handle)
+    }
+
+    pub fn strong_edges(&self) -> &[GcEdge] {
+        &self.strong_edges
+    }
+
+    pub fn ephemerons(&self) -> &[GcEphemeron] {
+        &self.ephemerons
     }
 }

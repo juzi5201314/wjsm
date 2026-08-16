@@ -2,32 +2,26 @@
 
 use std::error::Error;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::heap::{
-    GrowableHeapMemory, HandleGeneration, HandleId, HandleTableError, HandleTableV2, HeapAddress,
-    HeapMemoryError, ManagedHeapLayout, RestoredHandleEntry,
+    Allocation, AllocatorError, GrowableHeapMemory, HandleGeneration, HandleId, HandleTableError,
+    HandleTableV2, HeapAddress, HeapMemoryError, ManagedHeap, ManagedHeapLayout, Nlab, ObjectRef,
+    PageId, PageStats, RestoredHandleEntry,
 };
 use crate::shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot};
+use crate::zgc::{
+    BarrierRecord, HeaderLayout, HeapBarrier, LoadBarrierOutcome, RelocationDescriptor,
+    color_stored_value, load_barrier,
+};
 use wjsm_ir::{constants, value};
-
-/// 相邻两次惰性合并之间允许新增的空闲区间数量。
-/// GC 清扫逐对象释放时，每次 `release_region` 只 push，累计达到该值才排序归并一次；
-/// 单次排序成本 O((baseline + BATCH) log)，清扫总成本 O(n log BATCH) 而非 O(n² log n)。
-const FREE_REGION_MERGE_BATCH: usize = 1024;
 
 /// V2 dynamic heap 的唯一 host access owner；所有地址均为 memory64 byte offset。
 pub struct HeapAccessV2<M: GrowableHeapMemory> {
-    memory: M,
+    heap: Arc<ManagedHeap<M>>,
     layout: Arc<ManagedHeapLayout>,
     handles: Arc<HandleTableV2>,
-    next_object: AtomicU64,
-    free_regions: Mutex<Vec<(u64, u64)>>,
-    /// 上次惰性合并时的空闲区数量（排序基线）。`free_regions` 长度超过
-    /// `baseline + FREE_REGION_MERGE_BATCH` 时才重新排序合并，把 GC 清扫批量
-    /// 释放的每次 `release_region` 摊还为 O(1)。
-    merged_free_region_count: AtomicU64,
+    barrier: HeapBarrier<M>,
     /// 属性元数据（name_id / flags / 值槽下标）的唯一 owner；堆内只留紧凑值数组。
     shapes: ShapeTable,
 }
@@ -46,11 +40,12 @@ pub struct CollectorHeapCapability<'a, M: GrowableHeapMemory> {
 }
 
 impl<M: GrowableHeapMemory> HeapAccessV2<M> {
-    /// 构造唯一 heap access owner；memory 与 handle table 必须共享完全相同的 layout。
+    /// 构造唯一 heap access owner；memory、allocator 与 handle table 共享同一 layout。
     pub fn with_handles(
         memory: M,
         layout: Arc<ManagedHeapLayout>,
         handles: Arc<HandleTableV2>,
+        barrier: HeapBarrier<M>,
     ) -> Result<Self, HeapAccessV2Error> {
         if handles.layout() != layout.as_ref()
             || memory.logical_base() != layout.object_heap_base()
@@ -63,14 +58,20 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 object_heap_end: layout.object_heap_end(),
             });
         }
-        let next_object = layout.object_heap_base();
+        if let HeapBarrier::Zgc(zgc) = &barrier
+            && !std::ptr::eq(zgc.handles(), handles.as_ref())
+        {
+            return Err(HeapAccessV2Error::BarrierHandleTableMismatch);
+        }
+        let heap = Arc::new(
+            ManagedHeap::with_epoch(memory, layout.as_ref().clone(), handles.epoch())
+                .map_err(HeapAccessV2Error::Allocator)?,
+        );
         Ok(Self {
-            memory,
+            heap,
             layout,
             handles,
-            next_object: AtomicU64::new(next_object),
-            free_regions: Mutex::new(Vec::new()),
-            merged_free_region_count: AtomicU64::new(0),
+            barrier,
             shapes: ShapeTable::new(),
         })
     }
@@ -79,125 +80,54 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         CollectorHeapCapability { heap: self }
     }
 
-    pub fn reserve_nlab(&self, minimum_bytes: u64) -> Result<(u64, u64), HeapAccessV2Error> {
-        let minimum_bytes = align_reservation(minimum_bytes)?;
-        self.reserve_region(minimum_bytes, minimum_bytes.max(64 * 1024))
+    pub const fn barrier(&self) -> &HeapBarrier<M> {
+        &self.barrier
+    }
+
+    pub fn epoch(&self) -> Arc<crate::heap::HeapEpoch> {
+        self.heap.allocator().epoch()
+    }
+
+    /// 从 mutator 私有 NLAB 分配；命中快链不获取 allocator lock。
+    pub fn allocate(&self, nlab: &mut Nlab, bytes: u64) -> Result<Allocation, HeapAccessV2Error> {
+        let allocation = self.heap.allocate(nlab, bytes).map_err(|error| {
+            if matches!(error, AllocatorError::OutOfPages { .. }) {
+                HeapAccessV2Error::HeapExhausted {
+                    requested: bytes,
+                    heap_limit: self.layout.object_heap_end(),
+                }
+            } else {
+                HeapAccessV2Error::Allocator(error)
+            }
+        })?;
+        let end = allocation
+            .object()
+            .offset()
+            .checked_add(allocation.bytes())
+            .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        self.heap
+            .memory()
+            .grow_to(end)
+            .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
+        Ok(allocation)
     }
 
     fn reserve_exact(&self, bytes: u64) -> Result<u64, HeapAccessV2Error> {
-        let bytes = align_reservation(bytes)?;
-        self.reserve_region(bytes, bytes).map(|(start, _)| start)
-    }
-
-    fn reserve_region(
-        &self,
-        minimum_bytes: u64,
-        preferred_bytes: u64,
-    ) -> Result<(u64, u64), HeapAccessV2Error> {
-        if let Some(region) = self.take_free_region(minimum_bytes) {
-            return Ok(region);
-        }
-        loop {
-            let start = self.next_object.load(Ordering::Acquire);
-            let remaining = self.layout.object_heap_end().saturating_sub(start);
-            if minimum_bytes > remaining {
-                return Err(HeapAccessV2Error::HeapExhausted {
-                    requested: minimum_bytes,
-                    heap_limit: self.layout.object_heap_end(),
-                });
-            }
-            let reservation = preferred_bytes.min(remaining).max(minimum_bytes);
-            let end = start + reservation;
-            if self
-                .next_object
-                .compare_exchange(start, end, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-            {
-                continue;
-            }
-            self.memory
-                .grow_to(end)
-                .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
-            return Ok((start, end));
-        }
-    }
-    fn take_free_region(&self, minimum_bytes: u64) -> Option<(u64, u64)> {
-        let mut regions = self
-            .free_regions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        // 惰性合并：只在列表相对上次合并明显增长时排序归并一次。GC 清扫逐对象
-        // 释放时若每次 `release_region` 都全表排序，纯对象分配循环会在清扫大堆时
-        // 退化为 O(n² log n)（见 release_region 注释）；这里把排序成本摊还到 NLAB
-        // 补给（take）路径，清扫本身只剩 O(n) 次 push。
-        let baseline = self.merged_free_region_count.load(Ordering::Relaxed) as usize;
-        if regions.len() >= baseline.saturating_add(FREE_REGION_MERGE_BATCH) {
-            self.merged_free_region_count
-                .store(regions.len() as u64, Ordering::Relaxed);
-            Self::merge_regions(&mut regions);
-        }
-        let index = regions
-            .iter()
-            .position(|(start, end)| end.saturating_sub(*start) >= minimum_bytes)?;
-        let (start, end) = regions.remove(index);
-        let allocation_end = start + minimum_bytes;
-        if allocation_end < end {
-            // 余量追加在尾部；首次适配搜索不依赖顺序，下次合并时统一归并。
-            regions.push((allocation_end, end));
-        }
-        Some((start, allocation_end))
-    }
-
-    fn release_region(&self, start: u64, bytes: u64) {
-        let Some(end) = start.checked_add(bytes) else {
-            return;
-        };
-        let mut regions = self
-            .free_regions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        regions.push((start, end));
-        // 批量释放（GC 清扫逐对象 retire_handle / 重定位逐对象 relocate）时按批次
-        // 排序归并：每累计 FREE_REGION_MERGE_BATCH 个新区间才合并一次，单次成本
-        // O((baseline + BATCH) log)，总成本 O(n log BATCH)，避免每次 push 都
-        // O(n log n) 全表排序。
-        let baseline = self.merged_free_region_count.load(Ordering::Relaxed) as usize;
-        if regions.len() >= baseline.saturating_add(FREE_REGION_MERGE_BATCH) {
-            self.merged_free_region_count
-                .store(regions.len() as u64, Ordering::Relaxed);
-            Self::merge_regions(&mut regions);
-        }
-    }
-
-    /// 按起始地址排序并合并相邻/重叠空闲区。
-    fn merge_regions(regions: &mut Vec<(u64, u64)>) {
-        regions.sort_unstable_by_key(|(start, _)| *start);
-        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(regions.len());
-        for (start, end) in regions.drain(..) {
-            if let Some((_, previous_end)) = merged.last_mut()
-                && start <= *previous_end
-            {
-                *previous_end = (*previous_end).max(end);
-            } else {
-                merged.push((start, end));
-            }
-        }
-        *regions = merged;
+        let mut nlab = Nlab::new();
+        self.allocate(&mut nlab, bytes)
+            .map(|allocation| allocation.object().offset())
     }
 
     pub fn free_bytes(&self) -> u64 {
-        self.free_regions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .iter()
-            .map(|(start, end)| end.saturating_sub(*start))
-            .sum()
+        self.heap.allocator().free_bytes()
+    }
+
+    pub fn free_pages(&self) -> u32 {
+        self.heap.allocator().free_pages()
     }
 
     pub fn used_bytes(&self) -> u64 {
-        self.next_object
-            .load(Ordering::Acquire)
-            .saturating_sub(self.layout.object_heap_base())
+        self.heap.allocator().allocated_bytes()
     }
     pub fn heap_limit_bytes(&self) -> u64 {
         self.layout.object_heap_end()
@@ -208,35 +138,28 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.layout.object_heap_base()
     }
 
-    /// 当前 bump 游标（已分配对象区终点）。
-    pub fn next_object_cursor(&self) -> u64 {
-        self.next_object.load(Ordering::Acquire)
-    }
-
-    /// 捕获 `[object_heap_base, next_object)` 连续对象字节，供 startup snapshot。
+    /// 捕获已提交 object heap 字节；稳定 handle 决定恢复时的真实对象集合。
     pub fn capture_object_region(&self) -> Result<Vec<u8>, HeapAccessV2Error> {
         let base = self.object_heap_base();
-        let end = self.next_object_cursor().max(base);
-        let len = end - base;
-        self.memory
-            .copy_to(HeapAddress::new(base), len)
+        let end = self.heap.byte_len().max(base);
+        self.heap
+            .copy_to(HeapAddress::new(base), end - base)
             .map_err(HeapAccessV2Error::Memory)
     }
 
-    /// 恢复对象区字节并推进 bump 游标。
+    /// 恢复 object heap 原始字节；page/object metadata 随稳定 handle 单独重建。
     pub fn restore_object_region(&self, bytes: &[u8]) -> Result<(), HeapAccessV2Error> {
         let base = self.object_heap_base();
         let end = base
             .checked_add(bytes.len() as u64)
             .ok_or(HeapAccessV2Error::AddressOverflow)?;
-        self.memory
+        self.heap
+            .memory()
             .grow_to(end)
             .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
-        self.memory
+        self.heap
             .copy_from(HeapAddress::new(base), bytes)
-            .map_err(HeapAccessV2Error::Memory)?;
-        self.next_object.store(end, Ordering::Release);
-        Ok(())
+            .map_err(HeapAccessV2Error::Memory)
     }
 
     pub fn allocate_handle(&self) -> Result<u32, HeapAccessV2Error> {
@@ -278,6 +201,203 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map_err(HeapAccessV2Error::HandleTable)
     }
 
+    pub fn restore_page_metadata(
+        &self,
+        entries: &[RestoredHandleEntry],
+    ) -> Result<(), HeapAccessV2Error> {
+        for entry in entries {
+            let actual = self.object_handle_at(entry.address)?;
+            if actual != entry.handle.get() {
+                return Err(HeapAccessV2Error::RestoredGcWordHandleMismatch {
+                    object: entry.address,
+                    expected: entry.handle.get(),
+                    actual,
+                });
+            }
+            let bytes = self.object_size(entry.handle.get())?;
+            self.heap
+                .allocator()
+                .restore_object(ObjectRef::new(entry.address), bytes)
+                .map_err(HeapAccessV2Error::Allocator)?;
+        }
+        Ok(())
+    }
+
+    pub fn page_stats(&self) -> Vec<PageStats> {
+        self.heap.allocator().page_stats()
+    }
+
+    pub fn handles_in_page(&self, page: PageId) -> Result<Vec<u32>, HeapAccessV2Error> {
+        self.heap
+            .allocator()
+            .objects_in_page(page)
+            .map(|object| self.object_handle_at(object.offset()))
+            .collect()
+    }
+
+    pub fn generation_bytes(&self) -> Result<(u64, u64), HeapAccessV2Error> {
+        let mut young = 0_u64;
+        let mut old = 0_u64;
+        for page in self.page_stats() {
+            for handle in self.handles_in_page(page.page)? {
+                let bytes = self.object_size(handle)?;
+                match self.handle_generation(handle) {
+                    Some(HandleGeneration::Young) => young = young.saturating_add(bytes),
+                    Some(HandleGeneration::Old) => old = old.saturating_add(bytes),
+                    None => {}
+                }
+            }
+        }
+        Ok((young, old))
+    }
+
+    pub fn set_object_age(&self, handle: u32, age: u8) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let address = HeapAddress::new(object + u64::from(constants::HEAP_OBJECT_GC_WORD_OFFSET));
+        let current = self
+            .heap
+            .memory()
+            .load_word(address)
+            .map_err(HeapAccessV2Error::Memory)?;
+        let age_bits = u64::from(age) << constants::HEAP_GC_AGE_SHIFT;
+        self.heap
+            .memory()
+            .store_word(address, (current & !constants::HEAP_GC_AGE_MASK) | age_bits)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    pub fn prepare_relocation(
+        &self,
+        handles: &[u32],
+        reserve_pages: u32,
+    ) -> Result<Vec<Arc<RelocationDescriptor>>, HeapAccessV2Error> {
+        let HeapBarrier::Zgc(barrier) = &self.barrier else {
+            return Err(HeapAccessV2Error::RelocationAssist(
+                "relocation requires the ZGC barrier".into(),
+            ));
+        };
+        let mut nlab = self
+            .heap
+            .allocator()
+            .reserve_relocation(reserve_pages)
+            .map_err(HeapAccessV2Error::Allocator)?;
+        let mut descriptors = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let source = self.resolve_handle(*handle)?;
+            let size = self.object_size(*handle)?;
+            let generation = self
+                .handle_generation(*handle)
+                .ok_or(HeapAccessV2Error::UnresolvedHandle { handle: *handle })?;
+            let allocation = self
+                .heap
+                .allocator()
+                .allocate_relocation(&mut nlab, size)
+                .map_err(HeapAccessV2Error::Allocator)?;
+            let destination = allocation.object().offset();
+            let end = destination
+                .checked_add(allocation.bytes())
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .memory()
+                .grow_to(end)
+                .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
+            let descriptor = barrier
+                .relocator()
+                .install_descriptor(RelocationDescriptor::new(
+                    HandleId::new(*handle),
+                    source,
+                    destination,
+                    size,
+                    generation,
+                    HeaderLayout::OBJECT,
+                ));
+            descriptors.push(descriptor);
+        }
+        self.heap
+            .allocator()
+            .finish_relocation(nlab)
+            .map_err(HeapAccessV2Error::Allocator)?;
+        Ok(descriptors)
+    }
+
+    pub fn relocate_descriptor(
+        &self,
+        descriptor: &RelocationDescriptor,
+        worker_id: u64,
+    ) -> Result<bool, HeapAccessV2Error> {
+        let HeapBarrier::Zgc(barrier) = &self.barrier else {
+            return Err(HeapAccessV2Error::RelocationAssist(
+                "relocation requires the ZGC barrier".into(),
+            ));
+        };
+        let copied = barrier
+            .relocator()
+            .copy_with_ownership(&self.handles, self.heap.memory(), descriptor, worker_id)
+            .map_err(HeapAccessV2Error::RelocationAssist)?;
+        if copied {
+            self.heap
+                .allocator()
+                .transfer_mark(
+                    ObjectRef::new(descriptor.source),
+                    ObjectRef::new(descriptor.destination),
+                    descriptor.size,
+                    descriptor.generation,
+                )
+                .map_err(HeapAccessV2Error::Allocator)?;
+        }
+        if copied
+            && self
+                .heap
+                .allocator()
+                .forget_object_if_present(ObjectRef::new(descriptor.source), descriptor.size)
+                .map_err(HeapAccessV2Error::Allocator)?
+        {
+            self.heap
+                .allocator()
+                .quarantine_allocation(ObjectRef::new(descriptor.source), descriptor.size);
+        }
+        Ok(copied)
+    }
+
+    pub fn try_mark_handle(&self, handle: u32) -> Result<bool, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let generation = self
+            .handle_generation(handle)
+            .ok_or(HeapAccessV2Error::UnresolvedHandle { handle })?;
+        self.heap
+            .allocator()
+            .try_mark(
+                ObjectRef::new(object),
+                self.object_size(handle)?,
+                generation,
+            )
+            .map_err(HeapAccessV2Error::Allocator)
+    }
+
+    pub fn is_marked_handle(
+        &self,
+        handle: u32,
+        generation: HandleGeneration,
+    ) -> Result<bool, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.heap
+            .allocator()
+            .is_marked(ObjectRef::new(object), generation)
+            .map_err(HeapAccessV2Error::Allocator)
+    }
+
+    pub fn clear_marks(&self, generation: HandleGeneration) {
+        self.heap.allocator().clear_marks(generation);
+    }
+
+    pub fn load_reference_slot(&self, slot_addr: u64) -> Result<i64, HeapAccessV2Error> {
+        self.heap
+            .memory()
+            .load_word(HeapAddress::new(slot_addr))
+            .map(|word| word as i64)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
     /// 发布新对象：header 写 proto / value_capacity / 空 shape，并登记 handle entry。
     /// 调用方随后通过 `set_prototype` 完成原型绑定；该步骤也会使复用的 prototype
     /// handle 对应的原型链 IC 世代失效。`capacity` 是**值槽**容量（8 字节/槽），不是属性数。
@@ -298,13 +418,47 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .copy_from_slice(&capacity.to_le_bytes());
         header[constants::HEAP_OBJECT_SHAPE_ID_OFFSET as usize..][..4]
             .copy_from_slice(&ShapeTable::empty_shape().to_le_bytes());
-        self.memory
+        let gc_word = u64::from(handle) & constants::HEAP_GC_HANDLE_MASK;
+        header[constants::HEAP_OBJECT_GC_WORD_OFFSET as usize..][..8]
+            .copy_from_slice(&gc_word.to_le_bytes());
+        self.heap
+            .memory()
             .copy_from(HeapAddress::new(object), &header)
             .map_err(HeapAccessV2Error::Memory)?;
         self.shapes.note_prototype(prototype);
         self.handles
             .publish(HandleId::new(handle), object, HandleGeneration::Young)
-            .map_err(HeapAccessV2Error::HandleTable)
+            .map_err(HeapAccessV2Error::HandleTable)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && barrier.epoch().young_marking
+        {
+            self.heap
+                .allocator()
+                .try_mark(
+                    ObjectRef::new(object),
+                    object_payload_bytes(capacity)?,
+                    HandleGeneration::Young,
+                )
+                .map_err(HeapAccessV2Error::Allocator)?;
+        }
+        Ok(())
+    }
+
+    pub fn gc_word_at(&self, object: u64) -> Result<u64, HeapAccessV2Error> {
+        self.heap
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_OBJECT_GC_WORD_OFFSET),
+            ))
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    pub fn object_handle_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
+        Ok((self.gc_word_at(object)? & constants::HEAP_GC_HANDLE_MASK) as u32)
+    }
+
+    pub fn object_age_at(&self, object: u64) -> Result<u8, HeapAccessV2Error> {
+        Ok(((self.gc_word_at(object)? & constants::HEAP_GC_AGE_MASK)
+            >> constants::HEAP_GC_AGE_SHIFT) as u8)
     }
 
     /// 宿主侧隐藏类表；IC 回填与属性枚举都经它。
@@ -330,7 +484,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
 
     /// 读对象当前 shape_id。数组没有 shape（`+12` 是 capacity），调用方须先判类型。
     pub fn shape_id_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
-        self.memory
+        self.heap
+            .memory()
             .load_word(HeapAddress::new(
                 object + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64,
             ))
@@ -354,9 +509,9 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     /// code 的属性快链用它把 handle entry 里的逻辑对象地址换算成真实映射地址。
     /// TestHeapMemory 的 virtual_base 即 logical_base，故测试下该值为 0。
     pub fn object_address_delta(&self) -> i64 {
-        let virtual_base = self.memory.virtual_base() as i64;
+        let virtual_base = self.heap.memory().virtual_base() as i64;
         let logical_base =
-            i64::try_from(self.memory.logical_base()).expect("logical heap base fits i64");
+            i64::try_from(self.heap.memory().logical_base()).expect("logical heap base fits i64");
         virtual_base - logical_base
     }
 
@@ -387,14 +542,37 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn set_prototype(&self, handle: u32, prototype: u32) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let header = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier {
+            let epoch = barrier.epoch();
+            let old_prototype = header as u32;
+            if (epoch.young_marking || epoch.old_marking) && old_prototype != PROTO_NULL_SENTINEL {
+                barrier
+                    .record(BarrierRecord::Satb(value::encode_object_handle(
+                        old_prototype,
+                    )))
+                    .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
+            }
+            if (epoch.young_marking || epoch.old_marking) && prototype != PROTO_NULL_SENTINEL {
+                barrier
+                    .record(BarrierRecord::Mark(value::encode_object_handle(prototype)))
+                    .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
+            }
+            if self.handle_generation(handle) == Some(HandleGeneration::Old) {
+                barrier
+                    .record(BarrierRecord::RememberedObject(HandleId::new(handle)))
+                    .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
+            }
+        }
         self.shapes.note_prototype(prototype);
         // 换 proto 会改变整条链的解析结果：接收者自身的 IC 靠缓存的 expected_proto
         // 比较失效，但以本对象为原型的下游对象必须整体重新预热。
         self.shapes.invalidate_if_prototype(handle);
-        self.memory
+        self.heap
+            .memory()
             .store_word(
                 HeapAddress::new(object),
                 (header & !u64::from(u32::MAX)) | u64::from(prototype),
@@ -411,14 +589,17 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<(), HeapAccessV2Error> {
         self.publish_object(handle, object, prototype, capacity)?;
         let mut type_word = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
         type_word |= u64::from(wjsm_ir::HEAP_TYPE_ARRAY) << 32;
-        self.memory
+        self.heap
+            .memory()
             .store_word(HeapAddress::new(object), type_word)
             .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
+        self.heap
+            .memory()
             .store_word(
                 HeapAddress::new(object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64),
                 u64::from(capacity) << 32,
@@ -438,7 +619,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
 
     pub fn array_kind_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
         let header = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
         Ok(((header >> (constants::HEAP_ARRAY_KIND_OFFSET * 8)) & 0xFF) as u32)
@@ -451,7 +633,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn raise_array_kind(&self, handle: u32, kind: u32) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let header = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
         let shift = constants::HEAP_ARRAY_KIND_OFFSET * 8;
@@ -460,7 +643,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Ok(());
         }
         let cleared = header & !(0xFF_u64 << shift);
-        self.memory
+        self.heap
+            .memory()
             .store_word(
                 HeapAddress::new(object),
                 cleared | (u64::from(kind) << shift),
@@ -471,7 +655,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn get_element(&self, handle: u32, index: u32) -> Result<Option<u64>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let shape = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(
                 object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
             ))
@@ -481,9 +666,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Ok(None);
         }
         let address = array_element_address(object, index)?;
-        self.memory
+        self.heap
+            .memory()
             .load_word(HeapAddress::new(address))
-            .map(Some)
+            .map(|stored| Some(value::strip_gc_color(stored as i64) as u64))
             .map_err(HeapAccessV2Error::Memory)
     }
 
@@ -494,10 +680,11 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         value: u64,
     ) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
-        let shape_address = object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64;
         let shape = self
-            .memory
-            .load_word(HeapAddress::new(shape_address))
+            .heap
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_ARRAY_LENGTH_OFFSET),
+            ))
             .map_err(HeapAccessV2Error::Memory)?;
         let length = shape as u32;
         let capacity = (shape >> 32) as u32;
@@ -505,29 +692,24 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             self.grow_array_capacity(handle, index.saturating_add(1))?;
             return self.set_element(handle, index, value);
         }
-        let address = array_element_address(object, index)?;
-        self.memory
-            .store_word(HeapAddress::new(address), value)
-            .map_err(HeapAccessV2Error::Memory)?;
-        if index >= length {
-            // 跨越式写入（`a[5] = v` 而 length 只有 1）必须把 `[length, index)`
-            // 填成洞哨兵：这些槽自分配起是 0，而 `0u64` 解码为 `+0.0`，
-            // 不填就会让 `a[2]` 读出 0 而非 undefined。
-            if index > length {
-                for gap in length..index {
-                    self.memory
-                        .store_word(
-                            HeapAddress::new(array_element_address(object, gap)?),
-                            value::encode_array_hole() as u64,
-                        )
-                        .map_err(HeapAccessV2Error::Memory)?;
-                }
-                // 产生了洞 → 元素读必须落宿主（洞按缺失属性查原型链）。
-                self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+        if index > length {
+            for gap in length..index {
+                let current = self.resolve_handle(handle)?;
+                self.store_reference(
+                    handle,
+                    array_element_address(current, gap)?,
+                    value::encode_array_hole() as u64,
+                )?;
             }
-            self.memory
+            self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+        }
+        let current = self.resolve_handle(handle)?;
+        self.store_reference(handle, array_element_address(current, index)?, value)?;
+        if index >= length {
+            let current = self.resolve_handle(handle)?;
+            self.heap
                 .store_word(
-                    HeapAddress::new(shape_address),
+                    HeapAddress::new(current + u64::from(constants::HEAP_ARRAY_LENGTH_OFFSET)),
                     u64::from(index + 1) | (u64::from(capacity) << 32),
                 )
                 .map_err(HeapAccessV2Error::Memory)?;
@@ -537,7 +719,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
 
     pub fn array_length(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
-        self.memory
+        self.heap
+            .memory()
             .load_word(HeapAddress::new(
                 object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
             ))
@@ -549,7 +732,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         let object = self.resolve_handle(handle)?;
         let shape_address = object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64;
         let shape = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(shape_address))
             .map_err(HeapAccessV2Error::Memory)?;
         let capacity = (shape >> 32) as u32;
@@ -564,7 +748,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         for index in length..old_length {
             self.set_element(handle, index, value::encode_array_hole() as u64)?;
         }
-        self.memory
+        self.heap
+            .memory()
             .store_word(
                 HeapAddress::new(shape_address),
                 u64::from(length) | (u64::from(capacity) << 32),
@@ -575,7 +760,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn array_shape(&self, handle: u32) -> Result<(u32, u32), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let shape = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(
                 object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
             ))
@@ -608,10 +794,6 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Err(HeapAccessV2Error::InvalidObjectAddress { object: new_object });
         }
         let old_object = self.resolve_handle(handle)?;
-        let header = self
-            .memory
-            .load_word(HeapAddress::new(old_object))
-            .map_err(HeapAccessV2Error::Memory)?;
         let (length, old_capacity) = self.array_shape(handle)?;
         if new_capacity < length || new_capacity <= old_capacity {
             return Err(HeapAccessV2Error::ElementCapacityExceeded {
@@ -620,45 +802,65 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 capacity: new_capacity,
             });
         }
-        self.memory
-            .store_word(HeapAddress::new(new_object), header)
-            .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
-            .store_word(
-                HeapAddress::new(new_object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64),
-                u64::from(length) | (u64::from(new_capacity) << 32),
+        let old_bytes = object_payload_bytes(old_capacity)?;
+        let new_bytes = object_payload_bytes(new_capacity)?;
+        let generation = self
+            .handle_generation(handle)
+            .ok_or(HeapAccessV2Error::UnresolvedHandle { handle })?;
+        self.heap
+            .copy_atomic_words(
+                HeapAddress::new(old_object),
+                HeapAddress::new(new_object),
+                old_bytes,
             )
             .map_err(HeapAccessV2Error::Memory)?;
-        for index in 0..length {
-            let value = self
-                .memory
-                .load_word(HeapAddress::new(array_element_address(old_object, index)?))
-                .map_err(HeapAccessV2Error::Memory)?;
-            self.memory
+        for index in old_capacity..new_capacity {
+            self.heap
                 .store_word(
                     HeapAddress::new(array_element_address(new_object, index)?),
-                    value,
+                    0,
                 )
                 .map_err(HeapAccessV2Error::Memory)?;
         }
+        self.heap
+            .store_word(
+                HeapAddress::new(new_object + u64::from(constants::HEAP_ARRAY_LENGTH_OFFSET)),
+                u64::from(length) | (u64::from(new_capacity) << 32),
+            )
+            .map_err(HeapAccessV2Error::Memory)?;
         self.handles
             .begin_relocation(HandleId::new(handle))
             .map_err(HeapAccessV2Error::HandleTable)?;
         self.handles
             .complete_relocation(HandleId::new(handle), new_object)
             .map_err(HeapAccessV2Error::HandleTable)?;
-        let old_bytes = u64::from(old_capacity)
-            .checked_mul(u64::from(constants::HEAP_ARRAY_ELEMENT_SIZE))
-            .and_then(|payload| payload.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
-            .ok_or(HeapAccessV2Error::AddressOverflow)?;
-        self.handles.quarantine_allocation(old_object, old_bytes);
+        self.heap
+            .allocator()
+            .transfer_mark(
+                ObjectRef::new(old_object),
+                ObjectRef::new(new_object),
+                new_bytes,
+                generation,
+            )
+            .map_err(HeapAccessV2Error::Allocator)?;
+        if self
+            .heap
+            .allocator()
+            .forget_object_if_present(ObjectRef::new(old_object), old_bytes)
+            .map_err(HeapAccessV2Error::Allocator)?
+        {
+            self.heap
+                .allocator()
+                .quarantine_allocation(ObjectRef::new(old_object), old_bytes);
+        }
         Ok(())
     }
 
     pub fn push_element(&self, handle: u32, value: u64) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let shape = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(
                 object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
             ))
@@ -679,24 +881,119 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         let Some((dictionary_id, (index, span))) = self.shapes.remove_prop(shape_id, key) else {
             return Ok(true);
         };
-        self.write_shape_id(object, dictionary_id)?;
+        self.write_shape_id(handle, dictionary_id)?;
         self.shapes.invalidate_if_prototype(handle);
         for offset in 0..span {
-            self.memory
-                .store_word(
-                    HeapAddress::new(value_slot_address(object, index + offset)?),
-                    0,
-                )
-                .map_err(HeapAccessV2Error::Memory)?;
+            self.store_value_slot(handle, object, index + offset, 0)?;
         }
         Ok(true)
     }
 
     pub fn resolve_handle(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
-        self.handles
-            .resolve(HandleId::new(handle))
-            .map(|entry| entry.address())
-            .ok_or(HeapAccessV2Error::UnresolvedHandle { handle })
+        let handle_id = HandleId::new(handle);
+        match &self.barrier {
+            HeapBarrier::Disabled => self
+                .handles
+                .resolve(handle_id)
+                .map(|entry| entry.address())
+                .ok_or(HeapAccessV2Error::UnresolvedHandle { handle }),
+            HeapBarrier::Zgc(barrier) => match load_barrier(&self.handles, handle_id) {
+                LoadBarrierOutcome::Stable { address, .. } => Ok(address),
+                LoadBarrierOutcome::Relocating { .. } => {
+                    let participant = self.epoch().register();
+                    participant.enter();
+                    barrier
+                        .relocator()
+                        .assist(&self.handles, self.heap.memory(), handle_id)
+                        .map_err(HeapAccessV2Error::RelocationAssist)
+                }
+
+                LoadBarrierOutcome::Invalid => Err(HeapAccessV2Error::UnresolvedHandle { handle }),
+            },
+        }
+    }
+    pub fn store_reference(
+        &self,
+        owner_handle: u32,
+        slot_addr: u64,
+        value: u64,
+    ) -> Result<(), HeapAccessV2Error> {
+        let owner = self.resolve_handle(owner_handle)?;
+        let owner_generation =
+            self.handle_generation(owner_handle)
+                .ok_or(HeapAccessV2Error::UnresolvedHandle {
+                    handle: owner_handle,
+                })?;
+        let target_generation = (value::is_handle_backed_reference(value as i64))
+            .then(|| self.handle_generation(value::decode_handle(value as i64)))
+            .flatten();
+        let mut stored = value;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier {
+            let epoch = barrier.epoch();
+            let old = self
+                .heap
+                .load_word(HeapAddress::new(slot_addr))
+                .map_err(HeapAccessV2Error::Memory)? as i64;
+            if (epoch.young_marking || epoch.old_marking) && value::is_handle_backed_reference(old)
+            {
+                barrier
+                    .record(BarrierRecord::Satb(value::strip_gc_color(old)))
+                    .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
+            }
+            if (epoch.young_marking || epoch.old_marking)
+                && self
+                    .heap
+                    .allocator()
+                    .is_marked(ObjectRef::new(owner), owner_generation)
+                    .unwrap_or(false)
+                && value::is_handle_backed_reference(value as i64)
+            {
+                barrier
+                    .record(BarrierRecord::Mark(value::strip_gc_color(value as i64)))
+                    .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
+            }
+            if owner_generation == HandleGeneration::Old
+                && target_generation == Some(HandleGeneration::Young)
+            {
+                barrier
+                    .record(BarrierRecord::RememberedSlot { slot_addr })
+                    .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
+            }
+            stored = color_stored_value(epoch, value as i64) as u64;
+        }
+        self.heap
+            .store_word(HeapAddress::new(slot_addr), stored)
+            .map_err(HeapAccessV2Error::Memory)?;
+
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && let Some(descriptor) = barrier.relocator().descriptor(HandleId::new(owner_handle))
+            && descriptor.source == owner
+        {
+            let offset = slot_addr
+                .checked_sub(owner)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            let destination_slot = descriptor
+                .destination
+                .checked_add(offset)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .store_word(HeapAddress::new(destination_slot), stored)
+                .map_err(HeapAccessV2Error::Memory)?;
+        }
+
+        let final_owner = self.resolve_handle(owner_handle)?;
+        if final_owner != owner {
+            let offset = slot_addr
+                .checked_sub(owner)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            let final_slot = final_owner
+                .checked_add(offset)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .store_word(HeapAddress::new(final_slot), stored)
+                .map_err(HeapAccessV2Error::Memory)?;
+        }
+        Ok(())
     }
 
     pub fn handle_generation(&self, handle: u32) -> Option<HandleGeneration> {
@@ -709,15 +1006,35 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     /// 推进 grace period，并同时回收 handle slot 与对应 object allocation。
-    pub fn advance_epoch_and_reclaim(&self) -> (usize, usize) {
+    pub fn advance_epoch_and_reclaim(&self) -> Result<(usize, usize), HeapAccessV2Error> {
         self.handles.advance_epoch();
-        let allocations = self.handles.take_reclaimable_allocations();
+        let allocations = self.heap.allocator().take_reclaimable_allocations();
         let allocation_count = allocations.len();
         for (start, bytes) in allocations {
-            self.release_region(start, bytes);
+            self.heap
+                .allocator()
+                .reclaim_quarantined_object(ObjectRef::new(start), bytes)
+                .map_err(HeapAccessV2Error::Allocator)?;
         }
         let handle_count = self.handles.reclaim_quarantine();
-        (handle_count, allocation_count)
+        Ok((handle_count, allocation_count))
+    }
+
+    pub fn finish_relocation_epoch(&self) -> (usize, usize) {
+        if let HeapBarrier::Zgc(barrier) = &self.barrier {
+            barrier.relocator().epoch_reclaim(&self.handles);
+        } else {
+            self.handles.advance_epoch();
+        }
+        let allocations = self.heap.allocator().take_reclaimable_allocations();
+        let allocation_count = allocations.len();
+        for (start, bytes) in allocations {
+            self.heap
+                .allocator()
+                .reclaim_quarantined_object(ObjectRef::new(start), bytes)
+                .expect("quarantined allocation must belong to the managed heap");
+        }
+        (self.handles.reclaim_quarantine(), allocation_count)
     }
 
     pub fn promote_to_old(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
@@ -736,34 +1053,50 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .collect()
     }
 
-    pub fn object_references(&self, handle: u32) -> Result<Vec<i64>, HeapAccessV2Error> {
-        let mut references = Vec::new();
-        let prototype = self.prototype(handle)?;
+    pub fn scan_references(
+        &self,
+        handle: u32,
+        mut visitor: impl FnMut(i64),
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let header = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let prototype = header as u32;
         if prototype != PROTO_NULL_SENTINEL && prototype != handle {
             if prototype & 0x8000_0000 != 0 {
-                references.push(value::encode_proxy_handle(prototype & 0x7FFF_FFFF));
+                visitor(value::encode_proxy_handle(prototype & 0x7FFF_FFFF));
             } else {
-                references.push(value::encode_object_handle(prototype));
+                visitor(value::encode_object_handle(prototype));
             }
         }
-        if self.object_type(handle)? == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
-            let (length, _) = self.array_shape(handle)?;
-            for index in 0..length {
-                if let Some(element) = self.get_element(handle, index)? {
-                    references.push(element as i64);
-                }
-            }
+        let capacity = if header_heap_type(header) == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
+            self.heap
+                .memory()
+                .load_word(HeapAddress::new(
+                    object + constants::HEAP_ARRAY_LENGTH_OFFSET as u64,
+                ))
+                .map(|word| (word >> 32) as u32)
+                .map_err(HeapAccessV2Error::Memory)?
         } else {
-            for (key, _) in self.own_property_slots(handle)? {
-                if let Some(property) = self.get_property_slot(handle, key)? {
-                    references.extend([
-                        property.value as i64,
-                        property.getter as i64,
-                        property.setter as i64,
-                    ]);
-                }
-            }
+            self.value_capacity(object)?
+        };
+        for index in 0..capacity {
+            let encoded = self
+                .heap
+                .memory()
+                .load_word(HeapAddress::new(value_slot_address(object, index)?))
+                .map_err(HeapAccessV2Error::Memory)? as i64;
+            visitor(encoded);
         }
+        Ok(())
+    }
+
+    pub fn object_references(&self, handle: u32) -> Result<Vec<i64>, HeapAccessV2Error> {
+        let mut references = Vec::new();
+        self.scan_references(handle, |encoded| references.push(encoded))?;
         Ok(references)
     }
 
@@ -773,21 +1106,27 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.handles
             .retire(HandleId::new(handle))
             .map_err(HeapAccessV2Error::HandleTable)?;
-        self.handles.quarantine_allocation(object, bytes);
+        self.heap
+            .allocator()
+            .quarantine_allocation(ObjectRef::new(object), bytes);
         Ok(bytes)
     }
 
     /// Collector 在 stop-the-world/relocation capability 内搬迁对象。
-    fn relocate_object(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
+    fn relocate_object(&self, nlab: &mut Nlab, handle: u32) -> Result<u64, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let bytes = self.object_size(handle)?;
-        let destination = self.reserve_exact(bytes)?;
-        let contents = self
-            .memory
-            .copy_to(HeapAddress::new(object), bytes)
-            .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
-            .copy_from(HeapAddress::new(destination), &contents)
+        let generation = self
+            .handle_generation(handle)
+            .ok_or(HeapAccessV2Error::UnresolvedHandle { handle })?;
+        let destination = self.allocate(nlab, bytes)?.object().offset();
+        self.heap
+            .memory()
+            .copy_atomic_words(
+                HeapAddress::new(object),
+                HeapAddress::new(destination),
+                bytes,
+            )
             .map_err(HeapAccessV2Error::Memory)?;
         self.handles
             .begin_relocation(HandleId::new(handle))
@@ -795,12 +1134,30 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.handles
             .complete_relocation(HandleId::new(handle), destination)
             .map_err(HeapAccessV2Error::HandleTable)?;
-        self.handles.quarantine_allocation(object, bytes);
+        self.heap
+            .allocator()
+            .transfer_mark(
+                ObjectRef::new(object),
+                ObjectRef::new(destination),
+                bytes,
+                generation,
+            )
+            .map_err(HeapAccessV2Error::Allocator)?;
+        if self
+            .heap
+            .allocator()
+            .forget_object_if_present(ObjectRef::new(object), bytes)
+            .map_err(HeapAccessV2Error::Allocator)?
+        {
+            self.heap
+                .allocator()
+                .quarantine_allocation(ObjectRef::new(object), bytes);
+        }
         Ok(bytes)
     }
 
     /// 对象与数组的字节数公式统一为 `header + capacity * 8`——两者 payload 同构。
-    fn object_size(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
+    pub fn object_size(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let capacity = if self.object_at_is_array(object)? {
             self.array_shape(handle)?.1
@@ -822,7 +1179,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
 
     pub fn object_type_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
         let header = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
         Ok(header_heap_type(header))
@@ -839,10 +1197,12 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn set_object_type(&self, handle: u32, object_type: u8) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         let header = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
+        self.heap
+            .memory()
             .store_word(
                 HeapAddress::new(object),
                 (header & u64::from(u32::MAX)) | (u64::from(object_type) << 32),
@@ -853,7 +1213,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn prototype(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         Ok(self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(object))
             .map_err(HeapAccessV2Error::Memory)? as u32)
     }
@@ -930,7 +1291,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             }
             let object = self.resolve_handle(current)?;
             let header = self
-                .memory
+                .heap
+                .memory()
                 .load_word(HeapAddress::new(object))
                 .map_err(HeapAccessV2Error::Memory)?;
             let object_type = header_heap_type(header);
@@ -970,7 +1332,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             }
             let object = self.resolve_handle(current)?;
             let header = self
-                .memory
+                .heap
+                .memory()
                 .load_word(HeapAddress::new(object))
                 .map_err(HeapAccessV2Error::Memory)?;
             // 只接受普通对象：数组/函数/promise 等的命名属性在宿主旁挂表中，
@@ -1070,7 +1433,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if let Some(prop) = self.shapes.lookup(shape_id, key)
             && !prop.is_accessor()
         {
-            return self.store_value_slot(object, prop.index, value);
+            return self.store_value_slot(handle, object, prop.index, value);
         }
         self.define_property_slot(
             handle,
@@ -1101,10 +1464,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         // transition 可能触发扩容 relocate，对象地址随之变化。
         let object = self.apply_transition(handle, object, shape_id, transition)?;
         if flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
-            self.store_value_slot(object, transition.index, getter)?;
-            self.store_value_slot(object, transition.index + 1, setter)
+            self.store_value_slot(handle, object, transition.index, getter)?;
+            self.store_value_slot(handle, object, transition.index + 1, setter)
         } else {
-            self.store_value_slot(object, transition.index, property_value)
+            self.store_value_slot(handle, object, transition.index, property_value)
         }
     }
 
@@ -1125,33 +1488,61 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if let Some((index, span)) = transition.abandoned {
             // 弃用槽必须清零：残留句柄会让 GC 误留对象存活。
             for offset in 0..span {
-                self.store_value_slot(object, index + offset, 0)?;
+                self.store_value_slot(handle, object, index + offset, 0)?;
             }
         }
         if transition.shape_id != old_shape_id {
-            self.write_shape_id(object, transition.shape_id)?;
+            self.write_shape_id(handle, transition.shape_id)?;
             self.shapes.invalidate_if_prototype(handle);
         }
         Ok(object)
     }
 
-    fn write_shape_id(&self, object: u64, shape_id: u32) -> Result<(), HeapAccessV2Error> {
-        let address = object + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64;
+    fn write_shape_id(&self, handle: u32, shape_id: u32) -> Result<(), HeapAccessV2Error> {
+        let owner = self.resolve_handle(handle)?;
+        let address = owner + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64;
         let word = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(address))
             .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
-            .store_word(
-                HeapAddress::new(address),
-                (word & u64::from(u32::MAX)) | (u64::from(shape_id) << 32),
-            )
-            .map_err(HeapAccessV2Error::Memory)
+        let stored = (word & u64::from(u32::MAX)) | (u64::from(shape_id) << 32);
+        self.heap
+            .memory()
+            .store_word(HeapAddress::new(address), stored)
+            .map_err(HeapAccessV2Error::Memory)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && let Some(descriptor) = barrier.relocator().descriptor(HandleId::new(handle))
+            && descriptor.source == owner
+        {
+            let offset = address
+                .checked_sub(owner)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            let destination = descriptor
+                .destination
+                .checked_add(offset)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .memory()
+                .store_word(HeapAddress::new(destination), stored)
+                .map_err(HeapAccessV2Error::Memory)?;
+        }
+        let final_owner = self.resolve_handle(handle)?;
+        if final_owner != owner {
+            let offset = address
+                .checked_sub(owner)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .memory()
+                .store_word(HeapAddress::new(final_owner + offset), stored)
+                .map_err(HeapAccessV2Error::Memory)?;
+        }
+        Ok(())
     }
-
     /// 值槽容量（8 字节/槽）。
     fn value_capacity(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
-        self.memory
+        self.heap
+            .memory()
             .load_word(HeapAddress::new(
                 object + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64,
             ))
@@ -1184,23 +1575,29 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         }
         let old_bytes = object_payload_bytes(capacity)?;
         let new_bytes = object_payload_bytes(new_capacity)?;
+        let generation = self
+            .handle_generation(handle)
+            .ok_or(HeapAccessV2Error::UnresolvedHandle { handle })?;
         let destination = self.reserve_exact(new_bytes)?;
-        let contents = self
-            .memory
-            .copy_to(HeapAddress::new(object), old_bytes)
-            .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
-            .copy_from(HeapAddress::new(destination), &contents)
+        self.heap
+            .memory()
+            .copy_atomic_words(
+                HeapAddress::new(object),
+                HeapAddress::new(destination),
+                old_bytes,
+            )
             .map_err(HeapAccessV2Error::Memory)?;
         for index in capacity..new_capacity {
-            self.store_value_slot(destination, index, 0)?;
+            self.store_unpublished_value_slot(destination, index, 0)?;
         }
         let capacity_address = destination + constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as u64;
         let word = self
-            .memory
+            .heap
+            .memory()
             .load_word(HeapAddress::new(capacity_address))
             .map_err(HeapAccessV2Error::Memory)?;
-        self.memory
+        self.heap
+            .memory()
             .store_word(
                 HeapAddress::new(capacity_address),
                 (word & !u64::from(u32::MAX)) | u64::from(new_capacity),
@@ -1212,7 +1609,25 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.handles
             .complete_relocation(HandleId::new(handle), destination)
             .map_err(HeapAccessV2Error::HandleTable)?;
-        self.handles.quarantine_allocation(object, old_bytes);
+        self.heap
+            .allocator()
+            .transfer_mark(
+                ObjectRef::new(object),
+                ObjectRef::new(destination),
+                new_bytes,
+                generation,
+            )
+            .map_err(HeapAccessV2Error::Allocator)?;
+        if self
+            .heap
+            .allocator()
+            .forget_object_if_present(ObjectRef::new(object), old_bytes)
+            .map_err(HeapAccessV2Error::Allocator)?
+        {
+            self.heap
+                .allocator()
+                .quarantine_allocation(ObjectRef::new(object), old_bytes);
+        }
         Ok(())
     }
 
@@ -1239,18 +1654,30 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     fn load_value_slot(&self, object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
-        self.memory
+        self.heap
+            .memory()
             .load_word(HeapAddress::new(value_slot_address(object, index)?))
+            .map(|stored| value::strip_gc_color(stored as i64) as u64)
             .map_err(HeapAccessV2Error::Memory)
     }
 
     fn store_value_slot(
         &self,
+        handle: u32,
         object: u64,
         index: u32,
         value: u64,
     ) -> Result<(), HeapAccessV2Error> {
-        self.memory
+        self.store_reference(handle, value_slot_address(object, index)?, value)
+    }
+
+    fn store_unpublished_value_slot(
+        &self,
+        object: u64,
+        index: u32,
+        value: u64,
+    ) -> Result<(), HeapAccessV2Error> {
+        self.heap
             .store_word(HeapAddress::new(value_slot_address(object, index)?), value)
             .map_err(HeapAccessV2Error::Memory)
     }
@@ -1268,20 +1695,30 @@ impl<M: GrowableHeapMemory> CollectorHeapCapability<'_, M> {
     pub fn object_size(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
         self.heap.object_size(handle)
     }
+    pub fn scan_references(
+        &self,
+        handle: u32,
+        visitor: impl FnMut(i64),
+    ) -> Result<(), HeapAccessV2Error> {
+        self.heap.scan_references(handle, visitor)
+    }
+    pub fn generation_bytes(&self) -> Result<(u64, u64), HeapAccessV2Error> {
+        self.heap.generation_bytes()
+    }
 
     pub fn promote(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
         self.heap.promote_to_old(handle)
     }
 
-    pub fn relocate(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
-        self.heap.relocate_object(handle)
+    pub fn relocate(&self, nlab: &mut Nlab, handle: u32) -> Result<u64, HeapAccessV2Error> {
+        self.heap.relocate_object(nlab, handle)
     }
 
     pub fn retire(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
         self.heap.retire_handle(handle)
     }
 
-    pub fn advance_epoch_and_reclaim(&self) -> (usize, usize) {
+    pub fn advance_epoch_and_reclaim(&self) -> Result<(usize, usize), HeapAccessV2Error> {
         self.heap.advance_epoch_and_reclaim()
     }
 
@@ -1294,13 +1731,6 @@ impl<M: GrowableHeapMemory> CollectorHeapCapability<'_, M> {
     }
 }
 
-fn align_reservation(bytes: u64) -> Result<u64, HeapAccessV2Error> {
-    bytes
-        .checked_add(7)
-        .map(|bytes| bytes & !7)
-        .ok_or(HeapAccessV2Error::AddressOverflow)
-}
-
 /// 从 header word 提取 heap_type。
 ///
 /// header 首 8 字节是一个 word：低 32 位 proto handle、`+4` heap_type（**单字节**）、
@@ -1310,7 +1740,7 @@ fn header_heap_type(header: u64) -> u32 {
     ((header >> (constants::HEAP_OBJECT_TYPE_OFFSET * 8)) & 0xFF) as u32
 }
 
-/// 值槽地址：`object + 16 + index * 8`，与数组元素同一套公式。
+/// 值槽地址：`object + 24 + index * 8`，与数组元素同一套公式。
 pub fn value_slot_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
     object
         .checked_add(constants::HEAP_OBJECT_HEADER_SIZE as u64)
@@ -1320,7 +1750,7 @@ pub fn value_slot_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Er
         .ok_or(HeapAccessV2Error::AddressOverflow)
 }
 
-/// 对象/数组字节数：`16 + capacity * 8`。
+/// 对象/数组字节数：`24 + capacity * 8`。
 pub fn object_payload_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
     u64::from(capacity)
         .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
@@ -1336,6 +1766,9 @@ fn array_element_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Err
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HeapAccessV2Error {
     AddressOverflow,
+    BarrierHandleTableMismatch,
+    BarrierBufferFull,
+    Allocator(AllocatorError),
     ElementCapacityExceeded {
         handle: u32,
         index: u32,
@@ -1368,6 +1801,12 @@ pub enum HeapAccessV2Error {
     UnresolvedHandle {
         handle: u32,
     },
+    RestoredGcWordHandleMismatch {
+        object: u64,
+        expected: u32,
+        actual: u32,
+    },
+    RelocationAssist(String),
     /// 原型链下一环是高位标记的 Proxy handle，需 host 走 trap。
     ProxyPrototype {
         handle: u32,
@@ -1383,6 +1822,10 @@ impl fmt::Display for HeapAccessV2Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AddressOverflow => formatter.write_str("V2 heap address overflows u64"),
+            Self::BarrierHandleTableMismatch => {
+                formatter.write_str("ZGC barrier and HeapAccessV2 use different handle tables")
+            }
+            Self::Allocator(error) => error.fmt(formatter),
             Self::ElementCapacityExceeded {
                 handle,
                 index,
@@ -1391,6 +1834,7 @@ impl fmt::Display for HeapAccessV2Error {
                 formatter,
                 "V2 array handle {handle} index {index} exceeds capacity {capacity}"
             ),
+            Self::BarrierBufferFull => formatter.write_str("ZGC barrier buffer is full"),
             Self::HandleTable(error) => error.fmt(formatter),
             Self::HandleMirrorMismatch { expected, actual } => write!(
                 formatter,
@@ -1415,6 +1859,14 @@ impl fmt::Display for HeapAccessV2Error {
             Self::InvalidObjectAddress { object } => {
                 write!(formatter, "invalid V2 object address {object:#x}")
             }
+            Self::RestoredGcWordHandleMismatch {
+                object,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "restored object {object:#x} GC word has handle {actual}, expected {expected}"
+            ),
             Self::Memory(error) => error.fmt(formatter),
             Self::PropertyCapacityExceeded { handle, capacity } => {
                 write!(
@@ -1426,6 +1878,9 @@ impl fmt::Display for HeapAccessV2Error {
                 write!(formatter, "unable to grow V2 shared memory64: {error}")
             }
             Self::UnresolvedHandle { handle } => write!(formatter, "unresolved V2 handle {handle}"),
+            Self::RelocationAssist(error) => {
+                write!(formatter, "ZGC relocation assist failed: {error}")
+            }
             Self::ProxyPrototype { handle } => {
                 write!(formatter, "proxy prototype handle {handle:#x}")
             }

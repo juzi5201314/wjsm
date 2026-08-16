@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
+use wjsm_gc::{GcEdge, GcEphemeron, RootSnapshot, RuntimeGcReport};
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
@@ -138,11 +139,13 @@ pub(crate) fn install_prototype_methods(
             .native_callable(NativeCallableKind::Builtin(builtin, true))
             .ok_or(())?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(prototype, key, callable as u64)
             .map_err(|_| ())?;
         state
-            .heap
+            .gc
+            .heap()
             .update_property_flags(prototype, key, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
             .map_err(|_| ())?;
     }
@@ -459,31 +462,49 @@ fn finalization_registry_unregister(
     value::encode_bool(registry.cells.len() != before)
 }
 
-pub(crate) fn collect(
+pub(crate) fn snapshot_gc_graph(
     ctx: &NativeVmContext,
-    state: &mut NativeAgentState,
+    state: &NativeAgentState,
     frame_roots: impl IntoIterator<Item = i64>,
-) -> (HashSet<u32>, HostLiveSet) {
-    let mut live = HostLiveSet::default();
-    let mut reachable = strong_reachable(ctx, state, frame_roots, &mut live);
-    close_ephemerons(state, &mut reachable, &mut live);
+    epoch: u64,
+) -> RootSnapshot {
+    let roots = root_values(ctx, state, frame_roots);
+    let (strong_edges, ephemerons) = host_edges(state);
+    RootSnapshot::new(epoch, roots, strong_edges, ephemerons)
+}
+
+pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcReport) {
+    let mut live_host_values = report.live_host_values.clone();
+    let retired = &report.retired_handles;
     for target in state.weak.weak_refs.values_mut() {
-        if target.is_some_and(|target| !target_is_reachable(&reachable, target)) {
+        if target.is_some_and(|target| retired.binary_search(&value::decode_handle(target)).is_ok())
+        {
             *target = None;
         }
     }
     for entries in state.weak.weak_maps.values_mut() {
-        entries.retain(|(target, _)| target_is_reachable(&reachable, *target));
+        entries.retain(|(target, _)| {
+            retired
+                .binary_search(&value::decode_handle(*target))
+                .is_err()
+        });
     }
     for values in state.weak.weak_sets.values_mut() {
-        values.retain(|target| target_is_reachable(&reachable, *target));
+        values.retain(|target| {
+            retired
+                .binary_search(&value::decode_handle(*target))
+                .is_err()
+        });
     }
 
     let mut cleanup_jobs = Vec::new();
     for registry in state.weak.finalization_registries.values_mut() {
         let callback = registry.callback;
         registry.cells.retain(|cell| {
-            if target_is_reachable(&reachable, cell.target) {
+            if retired
+                .binary_search(&value::decode_handle(cell.target))
+                .is_err()
+            {
                 true
             } else {
                 cleanup_jobs.push((callback, cell.held_value));
@@ -492,6 +513,7 @@ pub(crate) fn collect(
         });
     }
     for (callback, held_value) in cleanup_jobs {
+        live_host_values.extend([callback, held_value]);
         promise::enqueue_microtask(
             state,
             NativeMicrotask::Callback {
@@ -502,15 +524,18 @@ pub(crate) fn collect(
             },
         );
     }
-    (reachable, live)
+    let live = host_live_set(state, &live_host_values);
+    state.cleanup_retired_handles(retired);
+    if report.cleans_host_tables {
+        state.sweep_host_index_tables(retired, &live);
+    }
 }
 
-fn strong_reachable(
+fn root_values(
     ctx: &NativeVmContext,
     state: &NativeAgentState,
     frame_roots: impl IntoIterator<Item = i64>,
-    live: &mut HostLiveSet,
-) -> HashSet<u32> {
+) -> Vec<i64> {
     let mut queue = VecDeque::new();
     queue.extend(frame_roots);
     queue.extend(state.variables.iter().copied());
@@ -540,13 +565,6 @@ fn strong_reachable(
     queue.extend(state.error_prototypes.values().copied());
     queue.extend(state.out_of_memory_error);
     queue.extend(state.out_of_memory_exception);
-    queue.extend(state.callable_properties.values().copied());
-    queue.extend(
-        state
-            .callable_accessors
-            .values()
-            .flat_map(|(getter, setter)| [*getter, *setter]),
-    );
     for activation in &state.activations {
         queue.push_back(activation.environment);
         queue.push_back(activation.new_target);
@@ -563,9 +581,185 @@ fn strong_reachable(
     // 是根：下标表回收后，仍被这些结构引用的闭包/字符串不得被 tombstone。
     extend_host_roots(state, &mut queue);
 
-    let mut reachable = HashSet::new();
-    trace_queue(state, &mut queue, &mut reachable, live);
-    reachable
+    queue.into_iter().collect()
+}
+fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
+    let mut edges = Vec::new();
+    let mut ephemerons = Vec::new();
+    let mut add = |owner: i64, target: i64| edges.push(GcEdge { owner, target });
+    let owner = |handle| object_owner(state, handle);
+    for ((handle, _), stored) in &state.array_properties {
+        add(owner(*handle), *stored);
+    }
+    for ((handle, _), (getter, setter, _)) in &state.array_accessors {
+        add(owner(*handle), *getter);
+        add(owner(*handle), *setter);
+    }
+    for (handle, entries) in &state.maps {
+        for (key, value) in entries {
+            add(owner(*handle), *key);
+            add(owner(*handle), *value);
+        }
+    }
+    for (handle, values) in &state.sets {
+        for value in values {
+            add(owner(*handle), *value);
+        }
+    }
+    for (handle, array) in &state.typed_arrays {
+        let array_owner = owner(*handle);
+        if let Some(buffer) = array.buffer_object {
+            add(array_owner, buffer);
+        }
+        if let Some(storage) = &array.storage {
+            for stored in storage.borrow().iter().copied() {
+                add(array_owner, stored);
+            }
+        }
+    }
+    for (handle, view) in &state.data_views {
+        add(owner(*handle), value::encode_object_handle(view.buffer));
+    }
+    for (handle, buffer) in &state.buffers {
+        add(owner(*handle), buffer.array_buffer);
+    }
+    for (handle, registry) in &state.weak.finalization_registries {
+        let registry_owner = owner(*handle);
+        add(registry_owner, registry.callback);
+        for cell in &registry.cells {
+            add(registry_owner, cell.held_value);
+            if let Some(token) = cell.unregister_token {
+                add(registry_owner, token);
+            }
+        }
+    }
+    for (handle, primitive) in &state.boxed_primitives {
+        add(owner(*handle), *primitive);
+    }
+    for ((owner, _), value) in &state.callable_properties {
+        add(*owner, *value);
+    }
+    for ((owner, _), (getter, setter)) in &state.callable_accessors {
+        add(*owner, *getter);
+        add(*owner, *setter);
+    }
+    for (owner, prototype) in &state.callable_prototypes {
+        add(*owner, *prototype);
+    }
+    for (index, callable) in state.native_callables.iter().enumerate() {
+        let owner = value::encode_native_callable_idx(index as u32);
+        match callable {
+            NativeCallableKind::Bound(index) => {
+                if let Some(bound) = state
+                    .bound_functions
+                    .get(*index as usize)
+                    .and_then(Option::as_ref)
+                {
+                    add(owner, bound.target);
+                    add(owner, bound.this_value);
+                    for argument in &bound.arguments {
+                        add(owner, *argument);
+                    }
+                }
+            }
+            NativeCallableKind::PromiseResolve(handle)
+            | NativeCallableKind::PromiseReject(handle) => {
+                add(owner, value::encode_object_handle(*handle));
+            }
+            NativeCallableKind::ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
+                add(owner, value::encode_proxy_handle(*handle));
+            }
+            _ => {}
+        }
+    }
+    for (owner, exception) in state.exceptions.iter().enumerate() {
+        if let Some(exception) = exception {
+            add(value::encode_exception(owner as u32), *exception);
+        }
+    }
+    for ((owner, _), slot) in &state.private_slots {
+        match slot {
+            crate::NativePrivateSlot::Data(stored) => add(*owner, *stored),
+            crate::NativePrivateSlot::Accessor { getter, setter } => {
+                add(*owner, *getter);
+                add(*owner, *setter);
+            }
+        }
+    }
+    for (handle, entries) in &state.weak.weak_maps {
+        let owner = object_owner(state, *handle);
+        for (key, value) in entries {
+            ephemerons.push(GcEphemeron {
+                owner,
+                key: *key,
+                value: *value,
+            });
+        }
+    }
+    for (owner, closure) in state.closures.iter().enumerate() {
+        if let Some(closure) = closure {
+            add(value::encode_closure_idx(owner as u32), closure.environment);
+        }
+    }
+    for (owner, bound) in state.bound_functions.iter().enumerate() {
+        if let Some(bound) = bound {
+            let encoded = value::encode_bound_idx(owner as u32);
+            add(encoded, bound.target);
+            add(encoded, bound.this_value);
+            for argument in &bound.arguments {
+                add(encoded, *argument);
+            }
+        }
+    }
+    for (owner, proxy) in state.proxies.iter().enumerate() {
+        if let Some(proxy) = proxy {
+            add(value::encode_proxy_handle(owner as u32), proxy.target);
+            add(value::encode_proxy_handle(owner as u32), proxy.handler);
+        }
+    }
+    (edges, ephemerons)
+}
+
+fn object_owner(state: &NativeAgentState, handle: u32) -> i64 {
+    if state.gc.heap().object_type(handle).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) {
+        value::encode_handle(value::TAG_ARRAY, handle)
+    } else {
+        value::encode_object_handle(handle)
+    }
+}
+
+fn host_live_set(state: &NativeAgentState, values: &[i64]) -> HostLiveSet {
+    let mut live = HostLiveSet::default();
+    for encoded in values {
+        if value::is_closure(*encoded) {
+            live.closures.insert(value::decode_closure_idx(*encoded));
+        } else if value::is_bound(*encoded) {
+            live.bound.insert(value::decode_bound_idx(*encoded));
+        } else if value::is_proxy(*encoded) {
+            live.proxies.insert(value::decode_proxy_handle(*encoded));
+        } else if value::is_native_callable(*encoded) {
+            match state.native_callable_kind(*encoded) {
+                Some(NativeCallableKind::Bound(index)) => {
+                    live.bound.insert(index);
+                }
+                Some(
+                    NativeCallableKind::ProxyRevoke(index)
+                    | NativeCallableKind::ProxyCall(index)
+                    | NativeCallableKind::ProxyConstruct(index),
+                ) => {
+                    live.proxies.insert(index);
+                }
+                _ => {}
+            }
+        } else if value::is_regexp(*encoded) {
+            live.regexps.insert(value::decode_regexp_handle(*encoded));
+        } else if value::is_exception(*encoded) {
+            live.exceptions.insert(value::decode_handle(*encoded));
+        } else if value::is_string(*encoded) || value::is_bigint(*encoded) {
+            live.strings.insert(value::decode_handle(*encoded));
+        }
+    }
+    live
 }
 
 /// 把宿主侧持久 JS 值（微任务、计时器、挂起 promise、continuation、generator、
@@ -621,8 +815,7 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
     }
     queue.extend(state.async_from_sync_iterators.values().copied());
     queue.extend(state.fatal_exception);
-    queue.extend(state.node_perf_hooks.observer_callback);
-    queue.extend(state.node_perf_hooks.native_entries.iter().copied());
+    state.node_perf_hooks.extend_gc_roots(queue);
     queue.extend(state.node_async_hooks.defaults.values().copied());
     for frame in &state.node_async_hooks.captured_frames {
         if let Some(stores) = frame {
@@ -727,190 +920,6 @@ fn extend_reaction_roots(reaction: &NativePromiseReaction, queue: &mut VecDeque<
     }
 }
 
-fn trace_queue(
-    state: &NativeAgentState,
-    queue: &mut VecDeque<i64>,
-    reachable: &mut HashSet<u32>,
-    live: &mut HostLiveSet,
-) {
-    while let Some(encoded) = queue.pop_front() {
-        if value::is_object(encoded) || value::is_array(encoded) {
-            let handle = value::decode_handle(encoded);
-            if !reachable.insert(handle) {
-                continue;
-            }
-            if let Ok(references) = state.heap.object_references(handle) {
-                queue.extend(references);
-            }
-            queue.extend(
-                state
-                    .array_properties
-                    .iter()
-                    .filter(|((owner, _), _)| *owner == handle)
-                    .map(|(_, stored)| *stored),
-            );
-            if let Some(entries) = state.maps.get(&handle) {
-                queue.extend(entries.iter().flat_map(|(key, stored)| [*key, *stored]));
-            }
-            if let Some(values) = state.sets.get(&handle) {
-                queue.extend(values.iter().copied());
-            }
-            if let Some(array) = state.typed_arrays.get(&handle)
-                && let Some(buffer) = array.buffer_object
-            {
-                queue.push_back(buffer);
-            }
-            if let Some(view) = state.data_views.get(&handle) {
-                queue.push_back(value::encode_object_handle(view.buffer));
-            }
-            if let Some(buffer) = state.buffers.get(&handle) {
-                queue.push_back(buffer.array_buffer);
-            }
-            if let Some(registry) = state.weak.finalization_registries.get(&handle) {
-                queue.push_back(registry.callback);
-                queue.extend(registry.cells.iter().map(|cell| cell.held_value));
-                queue.extend(
-                    registry
-                        .cells
-                        .iter()
-                        .filter_map(|cell| cell.unregister_token),
-                );
-            }
-            if let Some(primitive) = state.boxed_primitives.get(&handle) {
-                queue.push_back(*primitive);
-            }
-        } else if value::is_closure(encoded) {
-            let index = value::decode_closure_idx(encoded);
-            live.closures.insert(index);
-            if let Some(closure) = state
-                .closures
-                .get(index as usize)
-                .and_then(|closure| closure.as_ref())
-            {
-                queue.push_back(closure.environment);
-            }
-        } else if value::is_bound(encoded) {
-            let index = value::decode_bound_idx(encoded);
-            live.bound.insert(index);
-            if let Some(bound) = state
-                .bound_functions
-                .get(index as usize)
-                .and_then(|bound| bound.as_ref())
-            {
-                queue.extend([bound.target, bound.this_value]);
-                queue.extend(bound.arguments.iter().copied());
-            }
-        } else if value::is_proxy(encoded) {
-            let index = value::decode_proxy_handle(encoded);
-            live.proxies.insert(index);
-            if let Some(proxy) = state
-                .proxies
-                .get(index as usize)
-                .and_then(|proxy| proxy.as_ref())
-            {
-                queue.extend([proxy.target, proxy.handler]);
-            }
-        } else if value::is_regexp(encoded) {
-            live.regexps.insert(value::decode_regexp_handle(encoded));
-        } else if value::is_native_callable(encoded) {
-            queue.extend(
-                state
-                    .callable_properties
-                    .iter()
-                    .filter(|((owner, _), _)| *owner == encoded)
-                    .map(|(_, stored)| *stored),
-            );
-            queue.extend(
-                state
-                    .callable_accessors
-                    .iter()
-                    .filter(|((owner, _), _)| *owner == encoded)
-                    .flat_map(|(_, (getter, setter))| [*getter, *setter]),
-            );
-            if let Some(prototype) = state.callable_prototypes.get(&encoded) {
-                queue.push_back(*prototype);
-            }
-            if let Some(kind) = state.native_callable_kind(encoded) {
-                trace_native_callable(state, kind, live, queue);
-            }
-        } else if value::is_exception(encoded) {
-            let index = value::decode_handle(encoded);
-            live.exceptions.insert(index);
-            if let Some(exception) = state
-                .exceptions
-                .get(index as usize)
-                .and_then(|exception| *exception)
-            {
-                queue.push_back(exception);
-            }
-        } else if value::is_string(encoded) || value::is_bigint(encoded) {
-            // 运行时字符串/bigint 句柄：低 32 位是 intern 表下标。typeof 用的
-            // encode_string_ptr 小偏移若碰巧落进表内只是多钉几个槽，不影响正确性。
-            let index = value::decode_handle(encoded);
-            if (index as usize) < state.strings.len() {
-                live.strings.insert(index);
-            }
-        }
-    }
-}
-
-fn trace_native_callable(
-    state: &NativeAgentState,
-    kind: NativeCallableKind,
-    live: &mut HostLiveSet,
-    queue: &mut VecDeque<i64>,
-) {
-    match kind {
-        NativeCallableKind::Bound(index) => {
-            live.bound.insert(index);
-            if let Some(bound) = state
-                .bound_functions
-                .get(index as usize)
-                .and_then(|bound| bound.as_ref())
-            {
-                queue.extend([bound.target, bound.this_value]);
-                queue.extend(bound.arguments.iter().copied());
-            }
-        }
-        NativeCallableKind::PromiseResolve(handle) | NativeCallableKind::PromiseReject(handle) => {
-            queue.push_back(value::encode_object_handle(handle));
-        }
-        NativeCallableKind::ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
-            queue.push_back(value::encode_proxy_handle(handle));
-        }
-        _ => {}
-    }
-}
-
-fn close_ephemerons(
-    state: &NativeAgentState,
-    reachable: &mut HashSet<u32>,
-    live: &mut HostLiveSet,
-) {
-    loop {
-        let mut queue = VecDeque::new();
-        for (owner, entries) in &state.weak.weak_maps {
-            if !reachable.contains(owner) {
-                continue;
-            }
-            for (key, stored) in entries {
-                if target_is_reachable(reachable, *key) {
-                    queue.push_back(*stored);
-                }
-            }
-        }
-        let before = reachable.len();
-        trace_queue(state, &mut queue, reachable, live);
-        if reachable.len() == before {
-            break;
-        }
-    }
-}
-
-fn target_is_reachable(reachable: &HashSet<u32>, target: i64) -> bool {
-    reachable.contains(&value::decode_handle(target))
-}
-
 fn weak_map_insert(state: &mut NativeAgentState, receiver: i64, key: i64, stored: i64) {
     let entries = state
         .weak
@@ -941,11 +950,12 @@ fn weak_object(state: &NativeAgentState) -> Option<i64> {
 
 fn array_values(state: &NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
     let handle = value::decode_handle(encoded);
-    let length = state.heap.array_length(handle).ok()?;
+    let length = state.gc.heap().array_length(handle).ok()?;
     (0..length)
         .map(|index| {
             state
-                .heap
+                .gc
+                .heap()
                 .get_element(handle, index)
                 .ok()
                 .flatten()

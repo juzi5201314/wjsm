@@ -693,7 +693,8 @@ fn resolve_paths_for_require(
                     return fail_dispatch(ctx);
                 };
                 if state
-                    .heap
+                    .gc
+                    .heap()
                     .set_element(value::decode_handle(array), index, path as u64)
                     .is_err()
                 {
@@ -951,7 +952,8 @@ fn cache_module_object(
     let cache = ensure_cjs_cache(state)?;
     let property = module_cache_key(state, key)?;
     state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(cache),
             value::decode_handle(property),
@@ -985,7 +987,8 @@ fn cache_contains(state: &mut NativeAgentState, key: &RuntimeModuleKey) -> bool 
         return false;
     };
     state
-        .heap
+        .gc
+        .heap()
         .get_property_slot(value::decode_handle(cache), value::decode_handle(property))
         .ok()
         .flatten()
@@ -1002,7 +1005,8 @@ fn remove_cached_module(state: &mut NativeAgentState, key: &RuntimeModuleKey) {
         return;
     };
     let _ = state
-        .heap
+        .gc
+        .heap()
         .delete_property(value::decode_handle(cache), value::decode_handle(property));
 }
 
@@ -1018,7 +1022,8 @@ fn mark_errored_module(state: &mut NativeAgentState, key: &RuntimeModuleKey, err
         return;
     };
     let _ = state
-        .heap
+        .gc
+        .heap()
         .delete_property(value::decode_handle(cache), value::decode_handle(property));
 }
 
@@ -1039,7 +1044,8 @@ fn module_cache_key(state: &mut NativeAgentState, key: &RuntimeModuleKey) -> Opt
 pub(crate) fn named_property(state: &mut NativeAgentState, object: i64, name: &str) -> Option<i64> {
     let key = state.intern_text(name.to_string(), value::TAG_STRING)?;
     state
-        .heap
+        .gc
+        .heap()
         .get_property_slot(value::decode_handle(object), value::decode_handle(key))
         .ok()
         .flatten()
@@ -1056,7 +1062,8 @@ pub(crate) fn set_named_property(
         .intern_text(name.to_string(), value::TAG_STRING)
         .ok_or_else(|| ModuleLoadFailure::Message("property key overflow".into()))?;
     state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(object),
             value::decode_handle(key),
@@ -1146,7 +1153,8 @@ pub(crate) fn named_error_object(
     let error = state.allocate_object(3, false).ok()?;
     let prototype = state.ensure_error_prototype(name)?;
     state
-        .heap
+        .gc
+        .heap()
         .set_prototype(value::decode_handle(error), value::decode_handle(prototype))
         .ok()?;
     initialize_error_object(state, error, name, message)
@@ -1162,12 +1170,14 @@ pub(crate) fn frozen_named_error_object(
     for property in ["name", "message", "stack"] {
         let key = state.intern_text(property.into(), value::TAG_STRING)?;
         let stored = state
-            .heap
+            .gc
+            .heap()
             .get_property_slot(handle, value::decode_handle(key))
             .ok()??
             .value;
         state
-            .heap
+            .gc
+            .heap()
             .define_data_property(handle, value::decode_handle(key), stored, 0)
             .ok()?;
     }

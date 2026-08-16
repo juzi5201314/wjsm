@@ -8,7 +8,7 @@ use histogram::PauseHistogram;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-pub const GC_TELEMETRY_SCHEMA_VERSION: u32 = 1;
+pub const GC_TELEMETRY_SCHEMA_VERSION: u32 = 2;
 
 /// HDR histogram 的稳定 JSON 快照。
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -46,6 +46,11 @@ pub struct GcTelemetrySnapshot {
     pub committed_remset_bytes: Option<u64>,
     pub committed_forwarding_bytes: Option<u64>,
     pub committed_worker_bytes: Option<u64>,
+    pub director_young_alloc_bytes_per_sec: Option<u64>,
+    pub director_old_alloc_bytes_per_sec: Option<u64>,
+    pub director_free_bytes: Option<u64>,
+    pub director_reserve_bytes: Option<u64>,
+    pub director_stall_count: Option<u64>,
 }
 
 /// 可跨线程累计 GC 周期并生成不可变快照的唯一 telemetry owner。
@@ -68,6 +73,15 @@ struct TelemetryInner {
     physical_allocated_bytes: u64,
     barrier_load_fast_events: u64,
     barrier_store_fast_events: u64,
+    director_young_alloc_bytes_per_ns: f64,
+    director_old_alloc_bytes_per_ns: f64,
+    director_free_bytes: u64,
+    director_reserve_bytes: u64,
+    director_stall_count: u64,
+}
+
+fn rate_per_sec(bytes_per_ns: f64) -> u64 {
+    (bytes_per_ns * 1_000_000_000.0).clamp(0.0, u64::MAX as f64) as u64
 }
 
 impl GcTelemetry {
@@ -85,9 +99,20 @@ impl GcTelemetry {
         inner.reclaimed_bytes = inner
             .reclaimed_bytes
             .saturating_add(u64::try_from(stats.freed_bytes).expect("usize fits u64"));
+        inner.gc_cpu_ns = inner.gc_cpu_ns.saturating_add(stats.gc_cpu_ns);
+        inner.mark_cpu_ns = inner.mark_cpu_ns.saturating_add(stats.mark_cpu_ns);
+        inner.relocation_cpu_ns = inner
+            .relocation_cpu_ns
+            .saturating_add(stats.relocation_cpu_ns);
+        inner.mark_live_bytes = inner.mark_live_bytes.saturating_add(stats.mark_live_bytes);
         inner.relocated_bytes = inner
             .relocated_bytes
             .saturating_add(u64::try_from(stats.relocated_bytes).expect("usize fits u64"));
+    }
+
+    pub fn record_allocation(&self, bytes: u64) {
+        let mut inner = self.inner.lock();
+        inner.physical_allocated_bytes = inner.physical_allocated_bytes.saturating_add(bytes);
     }
 
     pub fn record_execution_stats(&self, collector: &str, stats: &GcExecutionStats) {
@@ -128,6 +153,18 @@ impl GcTelemetry {
             .barrier_store_fast_events
             .saturating_add(stats.barrier_store_fast_events);
     }
+    pub fn reset(&self) {
+        *self.inner.lock() = TelemetryInner::default();
+    }
+
+    pub fn record_director(&self, director: &crate::zgc::GcDirector) {
+        let mut inner = self.inner.lock();
+        inner.director_young_alloc_bytes_per_ns = director.young_rates().alloc_bytes_per_ns;
+        inner.director_old_alloc_bytes_per_ns = director.old_rates().alloc_bytes_per_ns;
+        inner.director_free_bytes = director.free_bytes();
+        inner.director_reserve_bytes = director.reserve_bytes();
+        inner.director_stall_count = director.stall_count();
+    }
 
     pub fn from_execution_stats(collector: &str, stats: &GcExecutionStats) -> Self {
         let telemetry = Self::default();
@@ -152,6 +189,15 @@ impl GcTelemetry {
             physical_allocated_bytes: Some(inner.physical_allocated_bytes),
             barrier_load_fast_events: Some(inner.barrier_load_fast_events),
             barrier_store_fast_events: Some(inner.barrier_store_fast_events),
+            director_young_alloc_bytes_per_sec: Some(rate_per_sec(
+                inner.director_young_alloc_bytes_per_ns,
+            )),
+            director_old_alloc_bytes_per_sec: Some(rate_per_sec(
+                inner.director_old_alloc_bytes_per_ns,
+            )),
+            director_free_bytes: Some(inner.director_free_bytes),
+            director_reserve_bytes: Some(inner.director_reserve_bytes),
+            director_stall_count: Some(inner.director_stall_count),
             ..GcTelemetrySnapshot::default()
         }
     }

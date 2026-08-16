@@ -3,15 +3,20 @@
 //! Shared heap words use SeqCst atomics. NaN-box color bits (38–43) attach only
 //! to handle-backed references; non-reference values keep those bits zero.
 
+use parking_lot::RwLock;
+use std::cell::UnsafeCell;
+use std::mem::MaybeUninit;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-
-use parking_lot::Mutex;
 use wjsm_ir::value::{
     self, GcColorMask, apply_gc_color, has_old_mark_color, has_remembered_color,
     has_young_mark_color, strip_gc_color,
 };
 
-use crate::heap::{ColoredHandleEntry, HandleGeneration, HandleId, HandleState, HandleTableV2};
+use crate::heap::{
+    ColoredHandleEntry, GrowableHeapMemory, HandleGeneration, HandleId, HandleState, HandleTableV2,
+};
+use crate::zgc::ConcurrentRelocator;
 
 /// load barrier 结果：稳定地址或需要 assist 的 relocating entry。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,9 +35,14 @@ pub enum LoadBarrierOutcome {
 /// store barrier 可能产生的 work 记录。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BarrierRecord {
-    Satb(HandleId),
+    Satb(i64),
+    Mark(i64),
     RememberedSlot { slot_addr: u64 },
+    RememberedObject(HandleId),
 }
+
+type BarrierAssist = dyn Fn(BarrierRecord, u64) -> bool + Send + Sync;
+const MUTATOR_ASSIST_LIMIT_BYTES: u64 = 256 * 1024;
 
 /// 当前 young/old/remembered epoch 的 color 状态。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +54,96 @@ pub struct BarrierEpoch {
     pub old_marking: bool,
 }
 
+/// 生产 heap access 的屏障模式；非 ZGC collector 不承担 ring/assist 成本。
+pub enum HeapBarrier<M: GrowableHeapMemory> {
+    Disabled,
+    Zgc(Arc<ZgcBarrierSet<M>>),
+}
+
+/// ZGC 屏障共享状态；mutator 与 collector 只共享预分配记录区和原子 epoch。
+pub struct ZgcBarrierSet<M: GrowableHeapMemory> {
+    pub(crate) handles: Arc<HandleTableV2>,
+    pub(crate) memory: M,
+    pub(crate) packed_epoch: AtomicU64,
+    pub(crate) access_epoch: AtomicU64,
+    pub(crate) records: BarrierRing<BarrierRecord>,
+    pub(crate) relocator: ConcurrentRelocator,
+    assist: RwLock<Option<Arc<BarrierAssist>>>,
+}
+
+impl<M: GrowableHeapMemory> ZgcBarrierSet<M> {
+    pub fn new(handles: Arc<HandleTableV2>, memory: M, ring_capacity: usize) -> Self {
+        Self {
+            handles,
+            memory,
+            packed_epoch: AtomicU64::new(BarrierEpoch::IDLE.pack()),
+            access_epoch: AtomicU64::new(0),
+            records: BarrierRing::with_capacity(ring_capacity),
+            relocator: ConcurrentRelocator::new(),
+            assist: RwLock::new(None),
+        }
+    }
+
+    pub fn handles(&self) -> &HandleTableV2 {
+        &self.handles
+    }
+
+    pub fn memory(&self) -> &M {
+        &self.memory
+    }
+
+    pub fn epoch(&self) -> BarrierEpoch {
+        BarrierEpoch::unpack(self.packed_epoch.load(Ordering::SeqCst))
+    }
+
+    pub fn access_epoch(&self) -> u64 {
+        self.access_epoch.load(Ordering::SeqCst)
+    }
+
+    pub fn records(&self) -> &BarrierRing<BarrierRecord> {
+        &self.records
+    }
+
+    pub fn relocator(&self) -> &ConcurrentRelocator {
+        &self.relocator
+    }
+
+    pub(crate) fn install_assist(&self, assist: Arc<BarrierAssist>) {
+        *self.assist.write() = Some(assist);
+    }
+
+    pub fn record(&self, record: BarrierRecord) -> Result<(), BarrierRecord> {
+        match self.records.try_push(record) {
+            Ok(()) => Ok(()),
+            Err(record) => {
+                if self
+                    .assist
+                    .read()
+                    .as_ref()
+                    .is_some_and(|assist| assist(record, MUTATOR_ASSIST_LIMIT_BYTES))
+                {
+                    Ok(())
+                } else {
+                    Err(record)
+                }
+            }
+        }
+    }
+
+    pub fn set_epoch(&self, epoch: BarrierEpoch) {
+        self.packed_epoch.store(epoch.pack(), Ordering::SeqCst);
+    }
+
+    pub fn publish_access_epoch(&self) {
+        self.access_epoch
+            .store(self.relocator.access_epoch(), Ordering::SeqCst);
+    }
+
+    pub fn drain_records(&self, visitor: impl FnMut(BarrierRecord)) {
+        self.records.drain_into(visitor);
+    }
+}
+
 impl BarrierEpoch {
     pub const IDLE: Self = Self {
         young_mark: 0b01,
@@ -52,6 +152,23 @@ impl BarrierEpoch {
         young_marking: false,
         old_marking: false,
     };
+
+    pub const fn pack(self) -> u64 {
+        self.young_mark as u64
+            | ((self.old_mark as u64) << 2)
+            | ((self.remembered as u64) << 4)
+            | ((self.young_marking as u64) << 6)
+            | ((self.old_marking as u64) << 7)
+    }
+    pub const fn unpack(bits: u64) -> Self {
+        Self {
+            young_mark: (bits & 0b11) as u8,
+            old_mark: ((bits >> 2) & 0b11) as u8,
+            remembered: ((bits >> 4) & 0b11) as u8,
+            young_marking: bits & (1 << 6) != 0,
+            old_marking: bits & (1 << 7) != 0,
+        }
+    }
 
     pub fn mask(self) -> GcColorMask {
         GcColorMask {
@@ -104,82 +221,79 @@ const fn flip_color(bits: u8) -> u8 {
     }
 }
 
-/// per-mutator preallocated SATB / remset ring。
-#[derive(Debug)]
+/// 预分配 SPSC 屏障 ring：单 mutator producer、单 collector consumer。
 pub struct BarrierRing<T> {
-    slots: Mutex<Vec<Option<T>>>,
+    slots: Box<[UnsafeCell<MaybeUninit<T>>]>,
     capacity: usize,
     head: AtomicUsize,
     tail: AtomicUsize,
-    host_flushes: AtomicUsize,
+    flush_debt: AtomicUsize,
 }
+
+// SAFETY: SPSC 契约保证每个 slot 同时至多被一个 producer 写或一个 consumer 读；
+// head 的 Release/Acquire 发布写入，tail 的 Release/Acquire 发布消费完成。
+unsafe impl<T: Copy + Send> Sync for BarrierRing<T> {}
 
 impl<T: Copy> BarrierRing<T> {
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity > 0, "barrier ring capacity must be nonzero");
+        let slots = std::iter::repeat_with(|| UnsafeCell::new(MaybeUninit::uninit()))
+            .take(capacity)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
-            slots: Mutex::new(vec![None; capacity]),
+            slots,
             capacity,
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
-            host_flushes: AtomicUsize::new(0),
+            flush_debt: AtomicUsize::new(0),
         }
     }
 
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.capacity
     }
 
-    pub fn host_flushes(&self) -> usize {
-        self.host_flushes.load(Ordering::SeqCst)
-    }
-
-    /// 有空间时绝不进入 host；满时返回 false 供 mutator assist/drain。
-    pub fn try_push(&self, value: T) -> bool {
-        let mut slots = self.slots.lock();
-        let head = self.head.load(Ordering::SeqCst);
-        let tail = self.tail.load(Ordering::SeqCst);
+    /// 有空间时只写预分配 slot；满时发布 flush/assist debt 并返还原值。
+    pub fn try_push(&self, value: T) -> Result<(), T> {
+        let head = self.head.load(Ordering::Relaxed);
+        let tail = self.tail.load(Ordering::Acquire);
         if head.wrapping_sub(tail) >= self.capacity {
-            return false;
+            self.flush_debt.fetch_add(1, Ordering::Release);
+            return Err(value);
         }
         let index = head % self.capacity;
-        slots[index] = Some(value);
-        self.head.store(head.wrapping_add(1), Ordering::SeqCst);
-        true
-    }
-
-    pub fn push_or_mark_full(&self, value: T) -> Result<(), T> {
-        if self.try_push(value) {
-            Ok(())
-        } else {
-            self.host_flushes.fetch_add(1, Ordering::SeqCst);
-            Err(value)
+        // SAFETY: SPSC 契约保证 producer 独占 head slot；容量检查证明 consumer
+        // 已释放该 slot，且 `index` 总在预分配数组范围内。
+        unsafe {
+            (*self.slots[index].get()).write(value);
         }
+        self.head.store(head.wrapping_add(1), Ordering::Release);
+        Ok(())
     }
 
-    pub fn drain(&self) -> Vec<T> {
-        let mut slots = self.slots.lock();
-        let mut out = Vec::new();
-        loop {
-            let tail = self.tail.load(Ordering::SeqCst);
-            let head = self.head.load(Ordering::SeqCst);
-            if tail == head {
-                break;
-            }
+    pub fn drain_into(&self, mut visitor: impl FnMut(T)) {
+        let mut tail = self.tail.load(Ordering::Relaxed);
+        let head = self.head.load(Ordering::Acquire);
+        while tail != head {
             let index = tail % self.capacity;
-            let value = slots[index].take();
-            self.tail.store(tail.wrapping_add(1), Ordering::SeqCst);
-            if let Some(value) = value {
-                out.push(value);
-            }
+            // SAFETY: Acquire 读取 head 后，当前 tail slot 已由 producer 完整初始化；
+            // 单 consumer 独占读取，并在 Release 更新 tail 前不会被 producer 复用。
+            let value = unsafe { (*self.slots[index].get()).assume_init_read() };
+            visitor(value);
+            tail = tail.wrapping_add(1);
         }
-        out
+        self.tail.store(tail, Ordering::Release);
+    }
+
+    pub fn take_flush_debt(&self) -> usize {
+        self.flush_debt.swap(0, Ordering::AcqRel)
     }
 
     pub fn len(&self) -> usize {
         self.head
-            .load(Ordering::SeqCst)
-            .wrapping_sub(self.tail.load(Ordering::SeqCst))
+            .load(Ordering::Acquire)
+            .wrapping_sub(self.tail.load(Ordering::Acquire))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -226,9 +340,7 @@ pub fn store_barrier(
     slot.store(colored as u64, Ordering::SeqCst);
 
     let mut records = Vec::new();
-    if (epoch.young_marking || epoch.old_marking)
-        && let Some(old_handle) = reference_handle(old_raw)
-    {
+    if (epoch.young_marking || epoch.old_marking) && reference_handle(old_raw).is_some() {
         let needs_satb = match owner_generation {
             HandleGeneration::Young => {
                 epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark)
@@ -239,7 +351,7 @@ pub fn store_barrier(
             }
         };
         if needs_satb {
-            records.push(BarrierRecord::Satb(old_handle));
+            records.push(BarrierRecord::Satb(value::strip_gc_color(old_raw)));
         }
     }
 
@@ -264,9 +376,7 @@ pub fn store_barrier(
 /// 仅当 new 值是 handle-backed reference 时附着当前 epoch color。
 pub fn color_stored_value(epoch: BarrierEpoch, value: i64) -> i64 {
     if !value::is_handle_backed_reference(value) {
-        let stripped = strip_gc_color(value);
-        debug_assert_eq!(stripped as u64 & value::GC_COLOR_MASK, 0);
-        return stripped;
+        return value;
     }
     apply_gc_color(strip_gc_color(value), epoch.mask())
 }
@@ -296,9 +406,7 @@ pub fn store_barrier_with_target_generation(
     slot.store(colored as u64, Ordering::SeqCst);
 
     let mut records = Vec::new();
-    if (epoch.young_marking || epoch.old_marking)
-        && let Some(old_handle) = reference_handle(old_raw)
-    {
+    if (epoch.young_marking || epoch.old_marking) && reference_handle(old_raw).is_some() {
         let needs_satb = match owner_generation {
             HandleGeneration::Young => {
                 epoch.young_marking && !has_young_mark_color(old_raw, epoch.young_mark)
@@ -309,7 +417,7 @@ pub fn store_barrier_with_target_generation(
             }
         };
         if needs_satb {
-            records.push(BarrierRecord::Satb(old_handle));
+            records.push(BarrierRecord::Satb(value::strip_gc_color(old_raw)));
         }
     }
 
@@ -447,10 +555,13 @@ mod tests {
     #[test]
     fn one_slot_ring_requires_assist_when_full() {
         let ring = BarrierRing::with_capacity(1);
-        assert!(ring.try_push(HandleId::new(1)));
-        assert!(!ring.try_push(HandleId::new(2)));
-        assert_eq!(ring.drain(), vec![HandleId::new(1)]);
-        assert!(ring.try_push(HandleId::new(2)));
+        assert_eq!(ring.try_push(HandleId::new(1)), Ok(()));
+        assert_eq!(ring.try_push(HandleId::new(2)), Err(HandleId::new(2)));
+        assert_eq!(ring.take_flush_debt(), 1);
+        let mut drained = Vec::new();
+        ring.drain_into(|handle| drained.push(handle));
+        assert_eq!(drained, vec![HandleId::new(1)]);
+        assert_eq!(ring.try_push(HandleId::new(2)), Ok(()));
     }
 
     #[test]
@@ -485,7 +596,7 @@ mod tests {
             encode_object_handle(8),
             0x2000,
         );
-        assert!(records.contains(&BarrierRecord::Satb(HandleId::new(7))));
+        assert!(records.contains(&BarrierRecord::Satb(old)));
     }
 
     #[test]

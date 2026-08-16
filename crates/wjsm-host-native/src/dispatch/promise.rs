@@ -495,7 +495,8 @@ fn new_promise_with_trigger(
         return None;
     };
     if state
-        .heap
+        .gc
+        .heap()
         .set_prototype(
             value::decode_handle(object),
             value::decode_handle(prototype),
@@ -1636,7 +1637,8 @@ fn with_resolvers(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i6
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(result),
                 value::decode_handle(key),

@@ -3,16 +3,14 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use wjsm_gc::heap::{HandleGeneration, HandleId, RestoredHandleEntry};
-use wjsm_gc::{
-    HandleTableV2, HeapAccessV2, ManagedHeapLayout, NativeHeapMemory, ShapeTableSnapshot,
-};
+use wjsm_gc::{HeapAccessV2, NativeHeapMemory, ShapeTableSnapshot};
 use wjsm_host::RuntimeString;
 use wjsm_snapshot_format::{
     NativeStartupSnapshot, SnapshotEndian, SnapshotExpectations, SnapshotGeneration,
     SnapshotLimits, decode_snapshot,
 };
 
-use crate::{NativeAgentState, NativeCallableKind, NativeRuntimeError};
+use crate::{NativeAgentState, NativeCallableKind, NativeRuntimeError, gc};
 
 include!(concat!(env!("OUT_DIR"), "/bootstrap_hash.rs"));
 
@@ -25,37 +23,25 @@ const MAX_BOOTSTRAP_STRINGS: u32 = 1_000_000;
 const MAX_BOOTSTRAP_STRING_UNITS: u32 = 16 * 1024 * 1024;
 
 struct RestoredBootstrap {
-    heap: HeapAccessV2<NativeHeapMemory>,
+    heap: Arc<HeapAccessV2<NativeHeapMemory>>,
     global_object: i64,
     strings: Vec<RuntimeString>,
     native_callables: Vec<NativeCallableKind>,
 }
 
 impl NativeAgentState {
-    pub(super) fn fresh_heap(
-        max_heap_size: u64,
-    ) -> Result<HeapAccessV2<NativeHeapMemory>, NativeRuntimeError> {
-        let layout = Arc::new(
-            ManagedHeapLayout::new(max_heap_size, 64 * 1024)
-                .map_err(wjsm_gc::HeapAccessV2Error::HandleTable)?,
-        );
-        let memory = NativeHeapMemory::for_layout(&layout)
-            .map_err(|error| NativeRuntimeError::Invariant(error.to_string()))?;
-        let handles = Arc::new(
-            HandleTableV2::new(layout.as_ref().clone())
-                .map_err(wjsm_gc::HeapAccessV2Error::HandleTable)?,
-        );
-        HeapAccessV2::with_handles(memory, layout, handles).map_err(Into::into)
-    }
-
     pub(super) fn restore_startup_snapshot(
         &mut self,
         bytes: &[u8],
     ) -> Result<(), NativeRuntimeError> {
-        let restored = restore(bytes, self.runtime_config.max_heap_size)?;
+        let restored = restore(
+            bytes,
+            self.runtime_config.gc_algorithm,
+            self.runtime_config.max_heap_size,
+        )?;
         self.reset_execution();
-        self.heap = restored.heap;
-        self.reset_object_nlab();
+        self.gc.reset_heap(restored.heap)?;
+        self.gc.reset_nlab();
         self.global_object = Some(restored.global_object);
         self.strings = restored.strings;
         self.string_ids = self
@@ -83,7 +69,7 @@ impl NativeAgentState {
                     "native startup snapshot object prototype is missing".into(),
                 )
             })?;
-        self.heap.set_prototype(
+        self.gc.heap().set_prototype(
             wjsm_ir::value::decode_object_handle(restored.global_object),
             object_prototype,
         )?;
@@ -91,8 +77,12 @@ impl NativeAgentState {
     }
 }
 
-fn restore(bytes: &[u8], max_heap_size: u64) -> Result<RestoredBootstrap, NativeRuntimeError> {
-    let heap = NativeAgentState::fresh_heap(max_heap_size)?;
+fn restore(
+    bytes: &[u8],
+    algorithm: wjsm_gc::GcAlgorithmKind,
+    max_heap_size: u64,
+) -> Result<RestoredBootstrap, NativeRuntimeError> {
+    let heap = gc::NativeGc::fresh_heap(algorithm, max_heap_size)?;
     let expected = SnapshotExpectations {
         bootstrap_hash: BOOTSTRAP_HASH,
         lowering_hash: wjsm_backend_native::NATIVE_CODEGEN_HASH,
@@ -126,6 +116,7 @@ fn restore(bytes: &[u8], max_heap_size: u64) -> Result<RestoredBootstrap, Native
         .collect::<Vec<_>>();
     heap.restore_object_region(&snapshot.object_bytes)?;
     heap.restore_handles(&handles, snapshot.next_handle)?;
+    heap.restore_page_metadata(&handles)?;
     heap.import_shapes(shape_table);
     Ok(RestoredBootstrap {
         heap,

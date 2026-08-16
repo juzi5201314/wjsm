@@ -36,7 +36,7 @@ pub(super) fn create(
         return fail_dispatch(ctx);
     };
     let source_handle = value::decode_handle(source);
-    let Ok(length) = state.heap.array_length(source_handle) else {
+    let Ok(length) = state.gc.heap().array_length(source_handle) else {
         return fail_dispatch(ctx);
     };
     let Ok(arguments) = state.allocate_object(length.saturating_add(3), false) else {
@@ -44,7 +44,8 @@ pub(super) fn create(
     };
     let handle = value::decode_handle(arguments);
     if state
-        .heap
+        .gc
+        .heap()
         .set_object_type(handle, wjsm_ir::HEAP_TYPE_ARGUMENTS)
         .is_err()
     {
@@ -52,7 +53,8 @@ pub(super) fn create(
     }
     for index in 0..length {
         let stored = state
-            .heap
+            .gc
+            .heap()
             .get_element(source_handle, index)
             .ok()
             .flatten()
@@ -62,7 +64,8 @@ pub(super) fn create(
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .define_data_property(handle, value::decode_handle(key), stored as u64, DATA_FLAGS)
             .is_err()
         {
@@ -85,7 +88,8 @@ pub(super) fn create(
     };
     let iterator_key = super::runtime::SYMBOL_PROPERTY_KEY_BIT | wjsm_ir::wk_symbol::ITERATOR;
     if state
-        .heap
+        .gc
+        .heap()
         .define_data_property(handle, iterator_key, iterator as u64, HIDDEN_DATA_FLAGS)
         .is_err()
     {
@@ -108,7 +112,8 @@ pub(super) fn create(
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .define_accessor_property_with_flags(
                 handle,
                 value::decode_handle(key),
@@ -145,7 +150,8 @@ fn define_named(
         return false;
     };
     state
-        .heap
+        .gc
+        .heap()
         .define_data_property(object, value::decode_handle(key), stored as u64, flags)
         .is_ok()
 }

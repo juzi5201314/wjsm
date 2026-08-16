@@ -3,6 +3,8 @@
 //! 本模块是 GC 算法与 native host 堆之间的接缝。`HeapMemory`/
 //! `GrowableHeapMemory` 由 native 后端实现，算法经泛型单态化，不绑定具体后端。
 
+use std::sync::Arc;
+
 // 以下子模块是 GC 算法层（HandleTableV2 / MarkSweepV2 / G1V2 / ZgcV2）的预留依赖；
 // 算法层迁完后它们被完全使用。当前仅 heap 纯模块落地，故暂允 dead_code。
 #[allow(dead_code)]
@@ -24,8 +26,8 @@ mod page;
 pub mod platform;
 mod word;
 
-pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationReserve};
-pub use epoch::EpochParticipant;
+pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationNlab};
+pub use epoch::{EpochParticipant, HeapEpoch};
 pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion, RestoredHandleEntry};
 pub use handle_entry::{
     ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN,
@@ -34,7 +36,7 @@ pub use handle_entry::{
 pub use layout::ManagedHeapLayout;
 pub use memory::{GrowableHeapMemory, HeapMemory};
 pub use native_memory::{NativeHeapMemory, TestHeapMemory};
-pub use object_map::PageObjectIter;
+pub use object_map::{PageObjectIter, PageStats};
 pub use page::{AllocationClass, ObjectRef, PAGE_GRANULE_BYTES, PageId, PageRange};
 pub use platform::{
     IsaDispatch, IsaKind, NumaNode, NumaTopology, PlatformCapabilities, PlatformError,
@@ -51,9 +53,17 @@ pub struct ManagedHeap<M> {
 
 impl<M> ManagedHeap<M> {
     pub fn new(memory: M, layout: ManagedHeapLayout) -> Result<Self, AllocatorError> {
+        Self::with_epoch(memory, layout, HeapEpoch::new())
+    }
+
+    pub fn with_epoch(
+        memory: M,
+        layout: ManagedHeapLayout,
+        epoch: Arc<HeapEpoch>,
+    ) -> Result<Self, AllocatorError> {
         Ok(Self {
             memory,
-            allocator: ManagedAllocator::new(layout)?,
+            allocator: ManagedAllocator::with_epoch(layout, epoch)?,
         })
     }
 
@@ -89,5 +99,24 @@ impl<M: HeapMemory> ManagedHeap<M> {
 
     pub fn copy_to(&self, address: HeapAddress, length: u64) -> Result<Vec<u8>, HeapMemoryError> {
         self.memory.copy_to(address, length)
+    }
+
+    pub fn copy_nonoverlapping_unpublished(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError> {
+        self.memory
+            .copy_nonoverlapping_unpublished(source, destination, length)
+    }
+
+    pub fn copy_atomic_words(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError> {
+        self.memory.copy_atomic_words(source, destination, length)
     }
 }

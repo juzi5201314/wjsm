@@ -1,6 +1,8 @@
 use num_bigint::BigInt;
 use num_traits::{FromPrimitive, Zero};
-use wjsm_gc::{HeapAccessV2Error, RuntimeCollectorError};
+use wjsm_gc::{HeapAccessV2Error, StopTheWorldCollectorError};
+
+use crate::gc::NativeGcError;
 use wjsm_ir::{constants, value};
 use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
@@ -197,10 +199,10 @@ pub(super) fn dispatch_runtime(
                 }
                 if value::is_array(*object) {
                     let handle = value::decode_handle(*object);
-                    if state.heap.array_kind(handle).ok()
+                    if state.gc.heap().array_kind(handle).ok()
                         != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
                     {
-                        match state.heap.get_element(handle, index) {
+                        match state.gc.heap().get_element(handle, index) {
                             Ok(Some(stored)) if !value::is_array_hole(stored as i64) => {
                                 return stored as i64;
                             }
@@ -229,7 +231,8 @@ pub(super) fn dispatch_runtime(
                 return fail_dispatch(ctx);
             };
             state
-                .heap
+                .gc
+                .heap()
                 .set_property(value::decode_object_handle(*object), key, *stored as u64)
                 .map(|()| *object)
                 .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -306,10 +309,10 @@ pub(super) fn dispatch_runtime(
                 && let Some(index) = array_index(state, *index)
             {
                 let handle = value::decode_handle(*object);
-                if state.heap.array_kind(handle).ok()
+                if state.gc.heap().array_kind(handle).ok()
                     != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
                 {
-                    match state.heap.get_element(handle, index) {
+                    match state.gc.heap().get_element(handle, index) {
                         Ok(Some(element))
                             if !value::is_array_hole(i64::from_ne_bytes(element.to_ne_bytes())) =>
                         {
@@ -352,7 +355,7 @@ pub(super) fn dispatch_runtime(
                 && let Some(index) = array_index(state, *index)
             {
                 let handle = value::decode_handle(*object);
-                if state.heap.array_kind(handle).ok()
+                if state.gc.heap().array_kind(handle).ok()
                     == Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
                 {
                     let Some(key) = property_key(state, value::encode_f64(f64::from(index))) else {
@@ -381,7 +384,8 @@ pub(super) fn dispatch_runtime(
                     }
                 }
                 return state
-                    .heap
+                    .gc
+                    .heap()
                     .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
                     .map(|()| *stored)
                     .unwrap_or_else(|_| fail_dispatch(ctx));
@@ -679,7 +683,8 @@ fn set_property_impl(
             return range_error(ctx, state, "Invalid array length");
         };
         return state
-            .heap
+            .gc
+            .heap()
             .set_array_length(value::decode_handle(object), length)
             .map(|()| stored)
             .unwrap_or_else(|_| fail_dispatch(ctx));
@@ -792,7 +797,7 @@ fn backfill_set_prop_ic(
         unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
         return;
     };
-    match state.heap.own_data_property_index(handle, name_id) {
+    match state.gc.heap().own_data_property_index(handle, name_id) {
         Ok(Some((shape_id, value_index))) => {
             // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算，
             // IC 区基址 16 字节对齐、槽内 8 个 u32 不越界；只在本 owner 线程写。
@@ -831,10 +836,11 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
         let environment = activation.environment;
         let home_key = state.intern_text("home".into(), value::TAG_STRING)?;
         let home = state
-            .heap
+            .gc
+            .heap()
             .get_property(object_handle(environment)?, value::decode_handle(home_key))
             .ok()?? as i64;
-        let prototype = state.heap.prototype(object_handle(home)?).ok()?;
+        let prototype = state.gc.heap().prototype(object_handle(home)?).ok()?;
         return Some(if prototype == u32::MAX {
             value::encode_null()
         } else {
@@ -851,7 +857,7 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
         wjsm_ir::HomeObject::Prototype(_) => {
             let prototype_key = state.intern_text("prototype".into(), value::TAG_STRING)?;
             let home = state.callable_property(constructor, value::decode_handle(prototype_key))?;
-            let prototype = state.heap.prototype(value::decode_handle(home)).ok()?;
+            let prototype = state.gc.heap().prototype(value::decode_handle(home)).ok()?;
             Some(if prototype == u32::MAX {
                 value::encode_null()
             } else {
@@ -867,19 +873,20 @@ pub(super) fn object_handle(encoded: i64) -> Option<u32> {
 
 fn heap_prototype_value(state: &NativeAgentState, object: i64) -> Result<Option<i64>, ()> {
     let handle = object_handle(object).ok_or(())?;
-    let prototype = state.heap.prototype(handle).map_err(|_| ())?;
+    let prototype = state.gc.heap().prototype(handle).map_err(|_| ())?;
     if prototype == wjsm_gc::PROTO_NULL_SENTINEL {
         return Ok(None);
     }
     if prototype & 0x8000_0000 != 0 {
         return Ok(Some(value::encode_proxy_handle(prototype & 0x7fff_ffff)));
     }
-    let encoded =
-        if state.heap.object_type(prototype).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) {
-            value::encode_handle(value::TAG_ARRAY, prototype)
-        } else {
-            value::encode_object_handle(prototype)
-        };
+    let encoded = if state.gc.heap().object_type(prototype).ok()
+        == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+    {
+        value::encode_handle(value::TAG_ARRAY, prototype)
+    } else {
+        value::encode_object_handle(prototype)
+    };
     Ok(Some(encoded))
 }
 
@@ -905,12 +912,14 @@ fn ordinary_set_key(
 ) -> Result<bool, i64> {
     let target_handle = object_handle(target).ok_or_else(|| fail_dispatch(ctx))?;
     let own = state
-        .heap
+        .gc
+        .heap()
         .get_property_slot(target_handle, key)
         .map_err(|_| fail_dispatch(ctx))?;
     if own.is_none() {
         let prototype = state
-            .heap
+            .gc
+            .heap()
             .prototype(target_handle)
             .map_err(|_| fail_dispatch(ctx))?;
         if prototype != wjsm_gc::PROTO_NULL_SENTINEL {
@@ -969,7 +978,8 @@ fn ordinary_set_key(
     }
     let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
     if let Some(receiver_descriptor) = state
-        .heap
+        .gc
+        .heap()
         .get_property_slot(receiver_handle, key)
         .map_err(|_| fail_dispatch(ctx))?
     {
@@ -982,7 +992,8 @@ fn ordinary_set_key(
         return Ok(false);
     }
     state
-        .heap
+        .gc
+        .heap()
         .set_property(receiver_handle, key, stored as u64)
         .map_err(|_| fail_dispatch(ctx))?;
     Ok(true)
@@ -1003,7 +1014,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
         return;
     };
     // 优先级 1：自有数据属性（最常见；单 load 快路径）。
-    match state.heap.own_data_property_index(handle, name_id) {
+    match state.gc.heap().own_data_property_index(handle, name_id) {
         Ok(Some((shape_id, value_index))) => {
             // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算，
             // IC 区基址 16 字节对齐、槽内 8 个 u32 不越界；只在本 owner 线程写。
@@ -1028,23 +1039,24 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
     }
     // 优先级 2：原型链上的数据/accessor 属性。接收者 shape 和直接原型共同
     // 决定解析结果，链上形状变化另由 proto 世代覆盖。
-    let shape_id = match state.heap.shape_id(handle) {
+    let shape_id = match state.gc.heap().shape_id(handle) {
         Ok(shape_id) => shape_id,
         Err(_) => {
             unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
             return;
         }
     };
-    let expected_proto = match state.heap.prototype(handle) {
+    let expected_proto = match state.gc.heap().prototype(handle) {
         Ok(prototype) => prototype,
         Err(_) => {
             unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
             return;
         }
     };
-    let generation = state.heap.shapes().proto_generation();
+    let generation = state.gc.heap().shapes().proto_generation();
     match state
-        .heap
+        .gc
+        .heap()
         .get_property_slot_on_proto_chain_for_ic(handle, name_id)
     {
         Ok(Some((holder_handle, value_slot_index, property))) => {
@@ -1249,7 +1261,8 @@ pub(super) fn get_property_with_receiver(
     }
     if value::is_array(object) && state.text_matches(key, "length") {
         return state
-            .heap
+            .gc
+            .heap()
             .array_length(value::decode_handle(object))
             .map(|length| value::encode_f64(f64::from(length)))
             .map_err(|_| ());
@@ -1269,7 +1282,7 @@ pub(super) fn get_property_with_receiver(
             return Ok(stored);
         }
         if let Some(index) = array_index(state, encoded_key) {
-            match state.heap.get_element(handle, index) {
+            match state.gc.heap().get_element(handle, index) {
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => {
                     return Ok(element as i64);
                 }
@@ -1315,7 +1328,11 @@ pub(super) fn get_property_with_receiver(
             .unwrap_or_else(value::encode_undefined));
     }
     let handle = object_handle(object).ok_or(())?;
-    match state.heap.get_property_slot_on_proto_chain(handle, key) {
+    match state
+        .gc
+        .heap()
+        .get_property_slot_on_proto_chain(handle, key)
+    {
         Ok(Some(property)) if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 => {
             let getter = property.getter as i64;
             if value::is_callable(getter) {
@@ -1384,10 +1401,11 @@ pub(super) fn delete_property(
         }
         let handle = value::decode_handle(object);
         if let Some(index) = array_index(state, encoded_key) {
-            let length = state.heap.array_length(handle).map_err(|_| ())?;
+            let length = state.gc.heap().array_length(handle).map_err(|_| ())?;
             if index < length {
                 state
-                    .heap
+                    .gc
+                    .heap()
                     .set_element(handle, index, value::encode_array_hole() as u64)
                     .map_err(|_| ())?;
             }
@@ -1412,14 +1430,15 @@ pub(super) fn delete_property(
     }
     let handle = object_handle(object).ok_or(())?;
     if state
-        .heap
+        .gc
+        .heap()
         .get_property_slot(handle, key)
         .map_err(|_| ())?
         .is_some_and(|property| property.flags & configurable == 0)
     {
         return Ok(false);
     }
-    state.heap.delete_property(handle, key).map_err(|_| ())
+    state.gc.heap().delete_property(handle, key).map_err(|_| ())
 }
 pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_key: i64) -> bool {
     if value::is_array(object) && state.text_matches(encoded_key, "length") {
@@ -1428,7 +1447,7 @@ pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_ke
     if value::is_array(object) {
         let handle = value::decode_handle(object);
         if let Some(index) = array_index(state, encoded_key) {
-            match state.heap.get_element(handle, index) {
+            match state.gc.heap().get_element(handle, index) {
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => return true,
                 Ok(_) => {}
                 Err(_) => return false,
@@ -1453,7 +1472,8 @@ pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_ke
         return false;
     };
     state
-        .heap
+        .gc
+        .heap()
         .get_property_slot_on_proto_chain(handle, key)
         .ok()
         .flatten()
@@ -1483,7 +1503,8 @@ fn intrinsic_iterator_source(
         wjsm_ir::Builtin::IteratorFrom
             if value::is_js_object(source)
                 && state
-                    .heap
+                    .gc
+                    .heap()
                     .object_type(handle)
                     .is_ok_and(|kind| kind == u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS)) =>
         {
@@ -1623,7 +1644,8 @@ pub(super) fn iterator_done(
     };
     let done = match iterator.source {
         super::super::NativeIteratorSource::Array(source) => state
-            .heap
+            .gc
+            .heap()
             .array_length(source)
             .is_ok_and(|length| iterator.index >= length),
         super::super::NativeIteratorSource::ArrayLike(source) => {
@@ -1680,7 +1702,7 @@ pub(super) fn iterator_value(
     }
     let (result, step) = match iterator.source {
         super::super::NativeIteratorSource::Array(source) => {
-            let result = match state.heap.get_element(source, iterator.index) {
+            let result = match state.gc.heap().get_element(source, iterator.index) {
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => element as i64,
                 Ok(_) => value::encode_undefined(),
                 Err(_) => return fail_dispatch(ctx),
@@ -1814,7 +1836,8 @@ pub(crate) fn create_iterator_result(
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(object),
                 value::decode_handle(key),
@@ -1897,7 +1920,8 @@ fn ensure_custom_current(
 fn array_like_length(state: &mut NativeAgentState, source: u32) -> Option<u32> {
     let key = state.intern_text("length".into(), value::TAG_STRING)?;
     let stored = state
-        .heap
+        .gc
+        .heap()
         .get_property(source, value::decode_handle(key))
         .ok()
         .flatten()? as i64;
@@ -1993,8 +2017,11 @@ pub(super) fn allocate_object_or_out_of_memory(
     match state.allocate_object_with_gc_retry(ctx, capacity, array) {
         Ok(value) => value,
         Err(NativeRuntimeError::Heap(HeapAccessV2Error::HeapExhausted { .. }))
-        | Err(NativeRuntimeError::Gc(RuntimeCollectorError::Heap(
-            HeapAccessV2Error::HeapExhausted { .. },
+        | Err(NativeRuntimeError::Gc(NativeGcError::Heap(HeapAccessV2Error::HeapExhausted {
+            ..
+        })))
+        | Err(NativeRuntimeError::Gc(NativeGcError::StopTheWorld(
+            StopTheWorldCollectorError::Heap(HeapAccessV2Error::HeapExhausted { .. }),
         ))) => state
             .out_of_memory_exception()
             .unwrap_or_else(|| fail_dispatch(ctx)),
@@ -2308,8 +2335,15 @@ pub(super) fn is_truthy(state: &NativeAgentState, encoded: i64) -> bool {
 }
 
 pub(super) fn strict_equal(state: &NativeAgentState, left: i64, right: i64) -> bool {
+    let left = value::strip_gc_color(left);
+    let right = value::strip_gc_color(right);
     if value::is_f64(left) && value::is_f64(right) {
         value::decode_f64(left) == value::decode_f64(right)
+    } else if value::is_string(left) && value::is_string(right) {
+        state
+            .string(left)
+            .zip(state.string(right))
+            .is_some_and(|(left, right)| left.as_utf16_units() == right.as_utf16_units())
     } else if value::is_bigint(left) && value::is_bigint(right) {
         super::bigint::read(state, left) == super::bigint::read(state, right)
     } else {
@@ -2537,12 +2571,12 @@ pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
         }
     } else if value::is_array(encoded) {
         let handle = value::decode_handle(encoded);
-        let Ok(length) = state.heap.array_length(handle) else {
+        let Ok(length) = state.gc.heap().array_length(handle) else {
             return "[array]".into();
         };
         let mut elements = Vec::with_capacity(length as usize);
         for index in 0..length {
-            let rendered = match state.heap.get_element(handle, index) {
+            let rendered = match state.gc.heap().get_element(handle, index) {
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => {
                     render_value(state, element as i64)
                 }

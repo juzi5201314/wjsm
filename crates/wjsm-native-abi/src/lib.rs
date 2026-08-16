@@ -7,17 +7,34 @@ use std::collections::{BTreeSet, HashMap};
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicPtr, AtomicU64};
 
 use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 10;
+pub const NATIVE_ABI_VERSION: u32 = 11;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
-pub const BARRIER_VERSION: u32 = 1;
+pub const BARRIER_VERSION: u32 = 2;
+pub const NATIVE_BARRIER_YOUNG_MARKING_BIT: u64 = 1 << 6;
+pub const NATIVE_BARRIER_OLD_MARKING_BIT: u64 = 1 << 7;
+pub const NATIVE_BARRIER_MARKING_MASK: u64 =
+    NATIVE_BARRIER_YOUNG_MARKING_BIT | NATIVE_BARRIER_OLD_MARKING_BIT;
+
+/// Generated code 与 ZGC collector 共享的屏障热状态。
+///
+/// `phase` 与 `access_epoch` 由 collector 在 safepoint 发布；两个事件计数只由 owner
+/// mutator 写入并在 safepoint 读取，避免属性快链上的原子 RMW。
+#[derive(Default)]
+#[repr(C)]
+pub struct NativeBarrierState {
+    pub phase: AtomicU64,
+    pub access_epoch: AtomicU64,
+    pub load_fast_events: u64,
+    pub store_fast_events: u64,
+}
 
 /// `NativeVmContext::flags` 的位定义：bit0 置位时生成代码的守卫快路径才内联
 /// 更新反馈槽（宿主在 runtime 构造时按 `specialization_enabled` 写入）。
@@ -509,9 +526,9 @@ pub fn native_variable_slots_for_segments(
 /// Generated code 可引用的 native thunk ABI 签名。
 ///
 /// `may_gc` / `may_reenter` 为 false 的签名是「叶子」调用：generated code 可以
-/// 在不发布额外 GC root、不预留 call arena 的情况下直接调用。当前只有数学 thunk
-/// 属于这类；`HostOperation` 是统一 dispatcher，可能触发 GC / 重入，必须走完整
-/// arena + safepoint 路径。
+/// 在不发布额外 GC root、不预留 call arena 的情况下直接调用。数学 thunk 与 ZGC
+/// 屏障 thunk 属于这类；`HostOperation` 是统一 dispatcher，可能触发 GC / 重入，
+/// 必须走完整 arena + safepoint 路径。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum NativeSignature {
@@ -520,15 +537,25 @@ pub enum NativeSignature {
     F64Unary = 1,
     /// `(F64, F64) -> F64`
     F64Binary = 2,
+    /// `(vmctx, handle) -> address`
+    ZgcLoadBarrier = 3,
+    /// `(vmctx, owner, slot, value) -> status`
+    ZgcStoreBarrier = 4,
 }
 
 impl NativeSignature {
     pub const fn may_gc(self) -> bool {
-        !matches!(self, Self::F64Unary | Self::F64Binary)
+        !matches!(
+            self,
+            Self::F64Unary | Self::F64Binary | Self::ZgcLoadBarrier | Self::ZgcStoreBarrier
+        )
     }
 
     pub const fn may_reenter(self) -> bool {
-        !matches!(self, Self::F64Unary | Self::F64Binary)
+        !matches!(
+            self,
+            Self::F64Unary | Self::F64Binary | Self::ZgcLoadBarrier | Self::ZgcStoreBarrier
+        )
     }
 
     pub const fn argument_count(self) -> u8 {
@@ -536,6 +563,8 @@ impl NativeSignature {
             Self::HostOperation => 0,
             Self::F64Unary => 1,
             Self::F64Binary => 2,
+            Self::ZgcLoadBarrier => 2,
+            Self::ZgcStoreBarrier => 4,
         }
     }
 }
@@ -574,6 +603,8 @@ pub enum NativeHostSymbol {
     MathTan = 19,
     MathTanh = 20,
     MathPow = 21,
+    ZgcLoadBarrierAssist = 22,
+    ZgcStoreBarrier = 23,
 }
 
 impl NativeHostSymbol {
@@ -600,6 +631,8 @@ impl NativeHostSymbol {
         Self::MathTan,
         Self::MathTanh,
         Self::MathPow,
+        Self::ZgcLoadBarrierAssist,
+        Self::ZgcStoreBarrier,
     ];
 
     pub const fn id(self) -> u16 {
@@ -630,6 +663,8 @@ impl NativeHostSymbol {
             Self::MathTan => "wjsm_native_math_tan",
             Self::MathTanh => "wjsm_native_math_tanh",
             Self::MathPow => "wjsm_native_math_pow",
+            Self::ZgcLoadBarrierAssist => "wjsm_native_zgc_load_barrier_assist",
+            Self::ZgcStoreBarrier => "wjsm_native_zgc_store_barrier",
         }
     }
 
@@ -637,6 +672,8 @@ impl NativeHostSymbol {
         match self {
             Self::HostOperationDispatcher => NativeSignature::HostOperation,
             Self::MathAtan2 | Self::MathPow => NativeSignature::F64Binary,
+            Self::ZgcLoadBarrierAssist => NativeSignature::ZgcLoadBarrier,
+            Self::ZgcStoreBarrier => NativeSignature::ZgcStoreBarrier,
             _ => NativeSignature::F64Unary,
         }
     }
@@ -681,7 +718,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v10\0");
+        hasher.update(b"wjsm-native-abi-v11\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -690,6 +727,7 @@ pub fn native_abi_hash() -> [u8; 32] {
         hash_layout::<NativeSourceFrame>(&mut hasher, b"NativeSourceFrame");
         hash_layout::<NativeSourceSlot>(&mut hasher, b"NativeSourceSlot");
         hash_layout::<NativeFeedbackSlot>(&mut hasher, b"NativeFeedbackSlot");
+        hash_layout::<NativeBarrierState>(&mut hasher, b"NativeBarrierState");
         hash_layout::<CallArgs>(&mut hasher, b"CallArgs");
         for offset in [
             offset_of!(NativeVmContext, abi_version),
@@ -728,6 +766,18 @@ pub fn native_abi_hash() -> [u8; 32] {
             hasher.update(
                 u64::try_from(offset)
                     .expect("feedback slot offset fits u64")
+                    .to_le_bytes(),
+            );
+        }
+        for offset in [
+            offset_of!(NativeBarrierState, phase),
+            offset_of!(NativeBarrierState, access_epoch),
+            offset_of!(NativeBarrierState, load_fast_events),
+            offset_of!(NativeBarrierState, store_fast_events),
+        ] {
+            hasher.update(
+                u64::try_from(offset)
+                    .expect("barrier state offset fits u64")
                     .to_le_bytes(),
             );
         }
@@ -821,6 +871,8 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeSignature::HostOperation,
             NativeSignature::F64Unary,
             NativeSignature::F64Binary,
+            NativeSignature::ZgcLoadBarrier,
+            NativeSignature::ZgcStoreBarrier,
         ] {
             hasher.update((signature as u16).to_le_bytes());
             hasher.update([u8::from(signature.may_gc())]);
@@ -916,6 +968,29 @@ mod tests {
     fn abi_hash_is_stable_within_process() {
         assert_eq!(native_abi_hash(), native_abi_hash());
         assert_ne!(native_abi_hash(), [0; 32]);
+    }
+
+    #[test]
+    fn native_barrier_layout_and_symbols_are_stable() {
+        assert_eq!(size_of::<NativeBarrierState>(), 32);
+        assert_eq!(align_of::<NativeBarrierState>(), 8);
+        assert_eq!(offset_of!(NativeBarrierState, phase), 0);
+        assert_eq!(offset_of!(NativeBarrierState, access_epoch), 8);
+        assert_eq!(offset_of!(NativeBarrierState, load_fast_events), 16);
+        assert_eq!(offset_of!(NativeBarrierState, store_fast_events), 24);
+
+        let load = NativeHostSymbol::ZgcLoadBarrierAssist;
+        assert_eq!(load.id(), 22);
+        assert_eq!(load.symbol_name(), "wjsm_native_zgc_load_barrier_assist");
+        assert_eq!(load.signature(), NativeSignature::ZgcLoadBarrier);
+        let store = NativeHostSymbol::ZgcStoreBarrier;
+        assert_eq!(store.id(), 23);
+        assert_eq!(store.symbol_name(), "wjsm_native_zgc_store_barrier");
+        assert_eq!(store.signature(), NativeSignature::ZgcStoreBarrier);
+        for signature in [load.signature(), store.signature()] {
+            assert!(!signature.may_gc());
+            assert!(!signature.may_reenter());
+        }
     }
 
     #[test]

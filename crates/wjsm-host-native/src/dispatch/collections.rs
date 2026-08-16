@@ -137,11 +137,13 @@ pub(crate) fn install_prototype_methods(
             .native_callable(NativeCallableKind::Builtin(builtin, true))
             .ok_or(())?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(prototype, key, callable as u64)
             .map_err(|_| ())?;
         state
-            .heap
+            .gc
+            .heap()
             .update_property_flags(prototype, key, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
             .map_err(|_| ())?;
     }
@@ -258,7 +260,8 @@ pub(crate) fn next(
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(handle, value::decode_handle(key), stored as u64)
             .is_err()
         {
@@ -391,7 +394,8 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
             group
         };
         if state
-            .heap
+            .gc
+            .heap()
             .push_element(value::decode_handle(group), stored as u64)
             .is_err()
         {

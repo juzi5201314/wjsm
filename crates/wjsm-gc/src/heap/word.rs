@@ -24,8 +24,16 @@ pub enum HeapMemoryError {
         length: u64,
         memory_len: u64,
     },
+    OverlappingCopy {
+        source: u64,
+        destination: u64,
+        length: u64,
+    },
     UnalignedWord {
         address: u64,
+    },
+    InvalidAtomicCopyLength {
+        length: u64,
     },
 }
 
@@ -43,10 +51,24 @@ impl fmt::Display for HeapMemoryError {
                 formatter,
                 "heap range address={address:#x} length={length} exceeds memory length={memory_len}"
             ),
+            Self::OverlappingCopy {
+                source,
+                destination,
+                length,
+            } => write!(
+                formatter,
+                "heap copy source={source:#x} destination={destination:#x} length={length} overlaps"
+            ),
             Self::UnalignedWord { address } => {
                 write!(
                     formatter,
                     "heap word address {address:#x} is not 8-byte aligned"
+                )
+            }
+            Self::InvalidAtomicCopyLength { length } => {
+                write!(
+                    formatter,
+                    "atomic heap copy length {length} is not word-aligned"
                 )
             }
         }

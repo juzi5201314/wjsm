@@ -1,6 +1,7 @@
 use wjsm_gc::{
     GcRuntimeV2, HandleId, ManagedHeapLayout, MarkSweepV2, RootSnapshot, TestHeapMemory,
 };
+use wjsm_ir::value;
 
 const PAGE_BYTES: u64 = 64 * 1024;
 
@@ -12,7 +13,11 @@ fn root_snapshot(handles: impl IntoIterator<Item = HandleId>) -> RootSnapshot {
     let runtime = GcRuntimeV2::new();
     let mutator = runtime.register_mutator();
     runtime.request_root_snapshot();
-    mutator.publish_roots(handles.into_iter().map(HandleId::get))
+    mutator.publish_roots(
+        handles
+            .into_iter()
+            .map(|handle| value::encode_object_handle(handle.get())),
+    )
 }
 
 #[test]

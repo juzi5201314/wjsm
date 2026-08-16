@@ -74,17 +74,16 @@ fn satb_old_to_young_and_one_slot_buffer() {
         encode_object_handle(12),
         0xABCD,
     );
-    assert!(records.contains(&BarrierRecord::Satb(HandleId::new(11))));
+    assert!(records.contains(&BarrierRecord::Satb(old)));
     assert!(records.contains(&BarrierRecord::RememberedSlot { slot_addr: 0xABCD }));
 
     let ring = BarrierRing::with_capacity(1);
-    assert!(ring.try_push(HandleId::new(11)));
-    assert_eq!(
-        ring.push_or_mark_full(HandleId::new(12)),
-        Err(HandleId::new(12))
-    );
-    assert_eq!(ring.host_flushes(), 1);
-    assert_eq!(ring.drain(), vec![HandleId::new(11)]);
+    assert_eq!(ring.try_push(HandleId::new(11)), Ok(()));
+    assert_eq!(ring.try_push(HandleId::new(12)), Err(HandleId::new(12)));
+    assert_eq!(ring.take_flush_debt(), 1);
+    let mut drained = Vec::new();
+    ring.drain_into(|handle| drained.push(handle));
+    assert_eq!(drained, vec![HandleId::new(11)]);
 }
 
 #[test]

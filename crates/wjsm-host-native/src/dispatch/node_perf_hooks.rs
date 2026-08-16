@@ -59,6 +59,32 @@ pub(crate) struct NodePerfHooksState {
     histogram_kind_key: Option<i64>,
     histogram_map_key: Option<i64>,
 }
+impl NodePerfHooksState {
+    pub(crate) fn extend_gc_roots(&self, roots: &mut VecDeque<i64>) {
+        roots.extend(self.bridge);
+        roots.extend(self.performance);
+        roots.extend(self.converter);
+        roots.extend(self.dispatcher);
+        roots.extend(self.observer_callback);
+        roots.extend(self.native_entries.iter().copied());
+        roots.extend(
+            self.histograms
+                .keys()
+                .copied()
+                .map(value::encode_object_handle),
+        );
+        roots.extend(
+            self.histogram_prototypes
+                .iter()
+                .copied()
+                .flatten()
+                .map(value::encode_object_handle),
+        );
+        roots.extend(self.histogram_brand);
+        roots.extend(self.histogram_kind_key);
+        roots.extend(self.histogram_map_key);
+    }
+}
 
 struct NativeHistogram {
     highest: u64,
@@ -357,7 +383,7 @@ fn create_histogram(state: &mut NativeAgentState, args: &[i64], interval: bool) 
     };
     let prototype_index = usize::try_from(kind).ok()?;
     if let Some(prototype) = state.node_perf_hooks.histogram_prototypes[prototype_index] {
-        state.heap.set_prototype(handle, prototype).ok()?;
+        state.gc.heap().set_prototype(handle, prototype).ok()?;
     }
     let highest = if interval {
         u64::MAX
@@ -434,7 +460,8 @@ pub(crate) fn materialize_histogram(
         .map_err(|error| error.to_string())?;
     let handle = value::decode_handle(object);
     state
-        .heap
+        .gc
+        .heap()
         .set_prototype(handle, prototype)
         .map_err(|error| error.to_string())?;
     for (key, stored) in [
@@ -445,7 +472,8 @@ pub(crate) fn materialize_histogram(
         let key = runtime::property_key(state, key)
             .ok_or_else(|| "DataCloneError: histogram symbol key is unavailable".to_string())?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(handle, key, stored as u64)
             .map_err(|error| error.to_string())?;
     }
@@ -476,7 +504,7 @@ fn histogram_handle(state: &NativeAgentState, args: &[i64]) -> Option<u32> {
         if state.node_perf_hooks.histograms.contains_key(&handle) {
             return Some(handle);
         }
-        handle = state.heap.prototype(handle).ok()?;
+        handle = state.gc.heap().prototype(handle).ok()?;
         if handle == u32::MAX {
             return None;
         }

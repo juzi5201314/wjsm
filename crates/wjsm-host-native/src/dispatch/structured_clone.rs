@@ -246,7 +246,8 @@ pub(crate) fn deserialize(
                 for element in elements {
                     let stored = deserialize_value(state, element, &objects)?;
                     state
-                        .heap
+                        .gc
+                        .heap()
                         .push_element(value::decode_handle(object), stored as u64)
                         .map_err(|error| error.to_string())?;
                 }
@@ -258,7 +259,8 @@ pub(crate) fn deserialize(
                         .ok_or_else(|| "DataCloneError: string table overflow".to_string())?;
                     let stored = deserialize_value(state, stored, &objects)?;
                     state
-                        .heap
+                        .gc
+                        .heap()
                         .set_property(
                             value::decode_handle(object),
                             value::decode_handle(key),
@@ -330,14 +332,16 @@ fn transfer_list(
         return Err("DataCloneError: transfer must be an array".into());
     }
     let length = state
-        .heap
+        .gc
+        .heap()
         .array_length(value::decode_handle(transfer))
         .map_err(|error| error.to_string())?;
     let mut seen = HashSet::new();
     let mut handles = Vec::with_capacity(length as usize);
     for index in 0..length {
         let encoded = state
-            .heap
+            .gc
+            .heap()
             .get_element(value::decode_handle(transfer), index)
             .map_err(|error| error.to_string())?
             .map(|value| value as i64)
@@ -463,13 +467,15 @@ fn serialize_node(
     }
     if value::is_array(encoded) {
         let length = state
-            .heap
+            .gc
+            .heap()
             .array_length(value::decode_handle(encoded))
             .map_err(|error| error.to_string())?;
         let mut elements = Vec::with_capacity(length as usize);
         for index in 0..length {
             let stored = state
-                .heap
+                .gc
+                .heap()
                 .get_element(value::decode_handle(encoded), index)
                 .map_err(|error| error.to_string())?;
             elements.push(match stored.map(|value| value as i64) {

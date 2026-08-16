@@ -161,7 +161,7 @@ pub const NAME_ID_INDEX_MASK: u32 = !NAME_ID_KIND_MASK;
 // accessor 属性占两个相邻值槽（index = getter，index + 1 = setter），无侧表。
 //
 // 这条同构性是 GC / handle remap / ZGC 重定位 / 快照恢复能统一按
-// `16 + value_capacity * 8` 遍历的前提：扫描期无需查 ShapeTable，
+// `24 + value_capacity * 8` 遍历的前提：扫描期无需查 ShapeTable，
 // 未使用的值槽恒为 0（即 +0.0，不是句柄），扫到也是惰性的。
 
 /// 空对象 shape；`ShapeTable` 的 0 号记录恒为它。
@@ -185,7 +185,7 @@ pub const SHAPE_TABLE_BUDGET: u32 = 1 << 16;
 // ── 启动快照相关堆布局常量 ──────────────────────────────────────────────────
 // 这些值决定 object heap 与 handle table 的二进制布局；任何变更都必须进入
 // `wjsm-snapshot-format::abi_hash()`，否则旧启动快照会按新布局静默恢复。
-pub const HEAP_OBJECT_HEADER_SIZE: u32 = 16;
+pub const HEAP_OBJECT_HEADER_SIZE: u32 = 24;
 pub const HEAP_OBJECT_PROTO_OFFSET: u32 = 0;
 pub const HEAP_OBJECT_TYPE_OFFSET: u32 = 4;
 pub const HEAP_OBJECT_HEADER_PAD_START: u32 = 5;
@@ -196,6 +196,11 @@ pub const HEAP_OBJECT_HEADER_PAD_END: u32 =
 pub const HEAP_OBJECT_VALUE_CAPACITY_OFFSET: u32 = 8;
 /// 指向宿主 `ShapeTable` 的隐藏类 id；与数组的 length 字段位置别名。
 pub const HEAP_OBJECT_SHAPE_ID_OFFSET: u32 = 12;
+/// GC word：低 32 位稳定 handle，高 8 位 age；其余位保留为零。
+pub const HEAP_OBJECT_GC_WORD_OFFSET: u32 = 16;
+pub const HEAP_GC_HANDLE_MASK: u64 = 0xffff_ffff;
+pub const HEAP_GC_AGE_SHIFT: u32 = 32;
+pub const HEAP_GC_AGE_MASK: u64 = 0xff_u64 << HEAP_GC_AGE_SHIFT;
 pub const HEAP_OBJECT_VALUE_SLOT_SIZE: u32 = 8;
 
 // ── Inline Cache 槽布局（主 memory0，紧接 data segment）─────────────────────
@@ -338,6 +343,10 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
             HEAP_OBJECT_VALUE_CAPACITY_OFFSET,
         ),
         ("heap_object_shape_id_offset", HEAP_OBJECT_SHAPE_ID_OFFSET),
+        ("heap_object_gc_word_offset", HEAP_OBJECT_GC_WORD_OFFSET),
+        ("heap_gc_handle_mask", HEAP_GC_HANDLE_MASK as u32),
+        ("heap_gc_age_shift", HEAP_GC_AGE_SHIFT),
+        ("heap_gc_age_mask_upper", (HEAP_GC_AGE_MASK >> 32) as u32),
         ("heap_object_value_slot_size", HEAP_OBJECT_VALUE_SLOT_SIZE),
         ("shape_id_empty", SHAPE_ID_EMPTY),
         ("shape_map_threshold", SHAPE_MAP_THRESHOLD),

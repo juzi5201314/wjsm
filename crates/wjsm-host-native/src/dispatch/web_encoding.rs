@@ -258,7 +258,8 @@ fn object_with_callables(
 fn set_property(state: &mut NativeAgentState, object: i64, name: &str, stored: i64) -> Option<()> {
     let key = state.intern_text(name.to_owned(), value::TAG_STRING)?;
     state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(object),
             value::decode_handle(key),

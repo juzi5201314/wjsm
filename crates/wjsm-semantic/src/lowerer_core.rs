@@ -177,10 +177,7 @@ impl Lowerer {
     ///
     /// ScopeTree 始终维持严格 TDZ；只有当前对象字面量方法的延迟体，且解析出的
     /// `(scope_id, name)` 与正在初始化的 declarator 完全一致时，才返回该绑定。
-    pub(crate) fn lookup_binding_for_read(
-        &self,
-        name: &str,
-    ) -> Result<(usize, VarKind), String> {
+    pub(crate) fn lookup_binding_for_read(&self, name: &str) -> Result<(usize, VarKind), String> {
         if self.eval_scope_bridge_active() {
             return self.scopes.lookup(name);
         }
@@ -190,10 +187,7 @@ impl Lowerer {
     }
 
     /// 赋值使用同一窄边界；const 仍由严格 lookup 返回不可重赋值错误。
-    pub(crate) fn lookup_binding_for_assign(
-        &self,
-        name: &str,
-    ) -> Result<(usize, VarKind), String> {
+    pub(crate) fn lookup_binding_for_assign(&self, name: &str) -> Result<(usize, VarKind), String> {
         if self.eval_scope_bridge_active() {
             return self.scopes.lookup_for_assign(name);
         }
@@ -212,13 +206,11 @@ impl Lowerer {
         }
 
         let scope_id = self.scopes.resolve_scope_id(name).ok()?;
-        let is_current_declarator = self
-            .declarator_tdz_escape_stack
-            .iter()
-            .rev()
-            .any(|(declarator_scope_id, declarator_name)| {
+        let is_current_declarator = self.declarator_tdz_escape_stack.iter().rev().any(
+            |(declarator_scope_id, declarator_name)| {
                 *declarator_scope_id == scope_id && declarator_name == name
-            });
+            },
+        );
         if !is_current_declarator {
             return None;
         }

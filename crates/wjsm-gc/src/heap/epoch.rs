@@ -8,8 +8,8 @@ use super::handle_entry::HandleId;
 
 const INACTIVE_EPOCH: u64 = u64::MAX;
 
-/// 追踪可能仍持有旧 handle 地址的 mutator / worker epoch。
-pub(crate) struct EpochQuarantine {
+/// 追踪可能仍持有旧对象地址的 mutator / worker epoch，并统一隔离 handle 与 allocation。
+pub struct HeapEpoch {
     current: AtomicU64,
     next_participant: AtomicU64,
     participants: Mutex<BTreeMap<u64, Arc<AtomicU64>>>,
@@ -18,8 +18,8 @@ pub(crate) struct EpochQuarantine {
     reusable: Mutex<Vec<HandleId>>,
 }
 
-impl EpochQuarantine {
-    pub(crate) fn new() -> Arc<Self> {
+impl HeapEpoch {
+    pub fn new() -> Arc<Self> {
         Arc::new(Self {
             current: AtomicU64::new(1),
             next_participant: AtomicU64::new(0),
@@ -30,7 +30,7 @@ impl EpochQuarantine {
         })
     }
 
-    pub(crate) fn register(self: &Arc<Self>) -> EpochParticipant {
+    pub fn register(self: &Arc<Self>) -> EpochParticipant {
         let id = self.next_participant.fetch_add(1, Ordering::SeqCst);
         let epoch = Arc::new(AtomicU64::new(INACTIVE_EPOCH));
         self.participants.lock().insert(id, Arc::clone(&epoch));
@@ -41,7 +41,11 @@ impl EpochQuarantine {
         }
     }
 
-    pub(crate) fn advance(&self) -> u64 {
+    pub fn current(&self) -> u64 {
+        self.current.load(Ordering::SeqCst)
+    }
+
+    pub fn advance(&self) -> u64 {
         self.current.fetch_add(1, Ordering::SeqCst) + 1
     }
 
@@ -103,8 +107,8 @@ impl EpochQuarantine {
         self.reusable.lock().pop()
     }
 
-    fn safe_epoch(&self) -> u64 {
-        let current = self.current.load(Ordering::SeqCst);
+    pub fn safe_epoch(&self) -> u64 {
+        let current = self.current();
         self.participants
             .lock()
             .values()
@@ -128,14 +132,14 @@ struct RetiredAllocation {
 
 /// 一个参与者在读取可移动对象地址前进入当前 epoch。
 pub struct EpochParticipant {
-    owner: Arc<EpochQuarantine>,
+    owner: Arc<HeapEpoch>,
     id: u64,
     epoch: Arc<AtomicU64>,
 }
 
 impl EpochParticipant {
     pub fn enter(&self) {
-        let epoch = self.owner.current.load(Ordering::SeqCst);
+        let epoch = self.owner.current();
         self.epoch.store(epoch, Ordering::SeqCst);
     }
 

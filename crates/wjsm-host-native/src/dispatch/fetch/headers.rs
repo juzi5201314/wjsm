@@ -140,20 +140,21 @@ fn collect_sequence(
     state: &mut NativeAgentState,
     init: i64,
 ) -> Result<Vec<(String, Vec<String>)>, i64> {
-    let Ok(length) = state.heap.array_length(value::decode_handle(init)) else {
+    let Ok(length) = state.gc.heap().array_length(value::decode_handle(init)) else {
         return Err(super::super::fail_dispatch(ctx));
     };
     let mut entries = Vec::with_capacity(length as usize);
     for index in 0..length {
         let entry = state
-            .heap
+            .gc
+            .heap()
             .get_element(value::decode_handle(init), index)
             .ok()
             .flatten()
             .map(|stored| stored as i64)
             .filter(|stored| value::is_array(*stored))
             .ok_or_else(|| super::type_error(ctx, state, "header sequence entry is invalid"))?;
-        let Ok(entry_length) = state.heap.array_length(value::decode_handle(entry)) else {
+        let Ok(entry_length) = state.gc.heap().array_length(value::decode_handle(entry)) else {
             return Err(super::super::fail_dispatch(ctx));
         };
         if entry_length != 2 {
@@ -166,7 +167,8 @@ fn collect_sequence(
         let mut values = [value::encode_undefined(); 2];
         for (slot, value) in values.iter_mut().enumerate() {
             *value = state
-                .heap
+                .gc
+                .heap()
                 .get_element(value::decode_handle(entry), slot as u32)
                 .ok()
                 .flatten()

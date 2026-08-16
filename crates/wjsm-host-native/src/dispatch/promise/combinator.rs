@@ -181,13 +181,14 @@ fn input_array(
 ) -> Option<(u32, u32)> {
     let iterable = args.get(1).or_else(|| args.first()).copied()?;
     let source = value::is_array(iterable).then(|| value::decode_handle(iterable))?;
-    let length = state.heap.array_length(source).ok()?;
+    let length = state.gc.heap().array_length(source).ok()?;
     Some((source, length))
 }
 
 fn array_element(state: &NativeAgentState, source: u32, index: u32) -> i64 {
     state
-        .heap
+        .gc
+        .heap()
         .get_element(source, index)
         .ok()
         .flatten()
@@ -263,7 +264,8 @@ fn set_named_property(
 ) -> Option<()> {
     let key = state.intern_text(name.into(), value::TAG_STRING)?;
     state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(object),
             value::decode_handle(key),

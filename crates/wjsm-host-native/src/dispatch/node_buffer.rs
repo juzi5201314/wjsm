@@ -865,11 +865,12 @@ fn typed_array_bytes(state: &NativeAgentState, encoded: i64) -> Option<Vec<u8>> 
 
 fn array_values(state: &NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
     let handle = value::decode_handle(encoded);
-    let length = state.heap.array_length(handle).ok()?;
+    let length = state.gc.heap().array_length(handle).ok()?;
     (0..length)
         .map(|index| {
             state
-                .heap
+                .gc
+                .heap()
                 .get_element(handle, index)
                 .ok()
                 .flatten()
@@ -1010,7 +1011,8 @@ fn relative_offset(
 fn set_property(state: &mut NativeAgentState, object: i64, name: &str, stored: i64) -> Option<()> {
     let key = state.intern_text(name.into(), value::TAG_STRING)?;
     state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(object),
             value::decode_handle(key),

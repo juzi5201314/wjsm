@@ -712,13 +712,15 @@ fn string_array(
     }
     let handle = value::decode_handle(array);
     let length = state
-        .heap
+        .gc
+        .heap()
         .array_length(handle)
         .map_err(|_| runtime::fail_dispatch(ctx))?;
     let mut strings = Vec::with_capacity(length as usize);
     for index in 0..length {
         let item = state
-            .heap
+            .gc
+            .heap()
             .get_element(handle, index)
             .map_err(|_| runtime::fail_dispatch(ctx))?
             .map(|item| item as i64)

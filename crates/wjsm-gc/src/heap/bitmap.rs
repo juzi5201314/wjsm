@@ -20,11 +20,11 @@ impl AtomicBitmap {
         Self { bits, words }
     }
 
-    pub(crate) fn mark(&self, bit: usize) {
+    pub(crate) fn mark(&self, bit: usize) -> bool {
         debug_assert!(bit < self.bits);
         let word = bit / u64::BITS as usize;
         let mask = 1_u64 << (bit % u64::BITS as usize);
-        self.words[word].fetch_or(mask, Ordering::Release);
+        self.words[word].fetch_or(mask, Ordering::AcqRel) & mask == 0
     }
 
     pub(crate) fn clear_bit(&self, bit: usize) {

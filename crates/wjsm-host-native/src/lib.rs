@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -17,10 +17,7 @@ use wjsm_backend_native::cache::{NativeCacheError, NativeImageRepository};
 use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver};
 use wjsm_gc::heap_access::object_payload_bytes;
-use wjsm_gc::{
-    GcAlgorithmKind, HeapAccessV2, HeapAccessV2Error, NativeHeapMemory, PROTO_NULL_SENTINEL,
-    RuntimeCollector, RuntimeCollectorError,
-};
+use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL};
 use wjsm_host::RuntimeString;
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
@@ -29,6 +26,7 @@ use wjsm_native_abi::{
     encode_feedback_tag_signature, native_variable_names, native_variable_slots_for_segments,
 };
 mod dispatch;
+mod gc;
 mod inspector;
 mod side_tables;
 mod snapshot;
@@ -41,7 +39,8 @@ use dispatch::{
     native_math_asinh, native_math_atan, native_math_atan2, native_math_atanh, native_math_cbrt,
     native_math_cos, native_math_cosh, native_math_exp, native_math_expm1, native_math_log,
     native_math_log1p, native_math_log2, native_math_log10, native_math_pow, native_math_sin,
-    native_math_sinh, native_math_tan, native_math_tanh,
+    native_math_sinh, native_math_tan, native_math_tanh, native_zgc_load_barrier_assist,
+    native_zgc_store_barrier,
 };
 use specialization::{
     CompilationRequest, SpecializationCoordinator, ValidatedFeedbackSlot, VariantKey,
@@ -50,16 +49,13 @@ use specialization::{
 const DEFAULT_CALL_ARENA_SLOTS: usize = 64 * 1024;
 const FIRST_USER_SYMBOL_HANDLE: u32 = wjsm_ir::wk_symbol::UNSCOPABLES + 1;
 const DEFAULT_MAX_HEAP_BYTES: u64 = 64 * 1024 * 1024;
-const MIN_GC_ALLOCATION_THRESHOLD: u64 = 256 * 1024;
-const MAX_GC_ALLOCATION_THRESHOLD: u64 = 8 * 1024 * 1024;
 const OUT_OF_MEMORY_MESSAGE: &str = "JavaScript heap out of memory";
 const MAX_JS_CALL_DEPTH: u32 = 1024;
 pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32
     | wjsm_ir::constants::FLAG_CONFIGURABLE as u32
     | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const BUILTIN_PROTOTYPE_PROPERTY_FLAGS: u32 =
-    wjsm_ir::constants::FLAG_CONFIGURABLE as u32
-        | wjsm_ir::constants::FLAG_WRITABLE as u32;
+    wjsm_ir::constants::FLAG_CONFIGURABLE as u32 | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_PROTOTYPE_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_METADATA_FLAGS: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 
@@ -435,6 +431,8 @@ impl NativeSymbolResolver for NativeHostRegistry {
             NativeHostSymbol::MathTan => native_math_tan as *const (),
             NativeHostSymbol::MathTanh => native_math_tanh as *const (),
             NativeHostSymbol::MathPow => native_math_pow as *const (),
+            NativeHostSymbol::ZgcLoadBarrierAssist => native_zgc_load_barrier_assist as *const (),
+            NativeHostSymbol::ZgcStoreBarrier => native_zgc_store_barrier as *const (),
         };
         Some((pointer).addr())
     }
@@ -864,12 +862,7 @@ struct NativeAgentState {
     output: RefCell<Vec<u8>>,
     stderr: RefCell<Vec<u8>>,
     call_arena: Box<[i64]>,
-    object_nlab_cursor: Cell<u64>,
-    object_nlab_end: Cell<u64>,
-    allocated_bytes_since_gc: Cell<u64>,
-    gc_allocation_threshold: u64,
-    heap: HeapAccessV2<NativeHeapMemory>,
-    collector: RuntimeCollector,
+    gc: gc::NativeGc,
     runtime_config: NativeRuntimeConfig,
     variables: Vec<i64>,
     shared_variable_slots: HashMap<String, usize>,
@@ -1037,7 +1030,7 @@ struct NativeArrayIterator {
 
 impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
-        let heap = Self::fresh_heap(config.max_heap_size)?;
+        let gc = gc::NativeGc::new(config.gc_algorithm, config.max_heap_size)?;
         let compiler = NativeCompiler::new()?;
         let repository = NativeImageRepository::new(compiler.clone(), config.cache_dir.clone());
         let specialization = config
@@ -1049,13 +1042,8 @@ impl NativeAgentState {
             stderr: RefCell::new(Vec::new()),
             call_arena: vec![value::encode_undefined(); DEFAULT_CALL_ARENA_SLOTS]
                 .into_boxed_slice(),
-            object_nlab_cursor: Cell::new(0),
-            object_nlab_end: Cell::new(0),
-            allocated_bytes_since_gc: Cell::new(0),
-            gc_allocation_threshold: gc_allocation_threshold(config.max_heap_size),
-            heap,
             runtime_config: config.clone(),
-            collector: RuntimeCollector::new(config.gc_algorithm),
+            gc,
             variables: Vec::new(),
             shared_variable_slots: HashMap::new(),
             isolated_variable_images: HashSet::new(),
@@ -1447,7 +1435,7 @@ impl NativeAgentState {
         self.symbol_registry.clear();
         self.symbol_descriptions.clear();
         self.next_symbol_handle = FIRST_USER_SYMBOL_HANDLE;
-        self.allocated_bytes_since_gc.set(0);
+        self.gc.reset_nlab();
     }
 
     fn take_program_state(&mut self) -> NativeProgramState {
@@ -1515,14 +1503,14 @@ impl NativeAgentState {
         ctx.current_image_id = image_id;
         // 与 function_table 同步：snapshot 恢复替换 heap 后句柄表基址会变，
         // 生成代码的属性快链依赖这些基址，必须在每次 image 激活时刷新。
-        ctx.handle_table_base = self.heap.handle_table_base();
+        ctx.handle_table_base = self.gc.heap().handle_table_base();
         ctx.ic_slots_base = image.ic_slots().cast::<u8>().cast_mut();
         ctx.feedback_slots_base = image.feedback_slots();
-        ctx.proto_generation = self.heap.shapes().proto_generation();
+        ctx.proto_generation = self.gc.heap().shapes().proto_generation();
         // 对象地址的「逻辑 → 虚拟」偏移：snapshot 恢复后 virtual_base 可能改变，
         // 必须与 handle_table_base 同步刷新，属性快链才能把 entry 里的逻辑地址
         // 换算成真实映射地址。
-        ctx.heap_object_delta = self.heap.object_address_delta();
+        ctx.heap_object_delta = self.gc.heap().object_address_delta();
         Some(())
     }
 
@@ -1718,7 +1706,8 @@ impl NativeAgentState {
 
     fn property_value_by_name(&self, object: i64, name: &str) -> Option<i64> {
         let key = self.string_ids.get(&RuntimeString::from(name)).copied()?;
-        self.heap
+        self.gc
+            .heap()
             .get_property(value::decode_handle(object), key)
             .ok()
             .flatten()
@@ -1783,7 +1772,7 @@ impl NativeAgentState {
             if current == target {
                 return true;
             }
-            let Ok(parent) = self.heap.prototype(current) else {
+            let Ok(parent) = self.gc.heap().prototype(current) else {
                 return false;
             };
             if parent == PROTO_NULL_SENTINEL || parent & 0x8000_0000 != 0 {
@@ -1819,7 +1808,7 @@ impl NativeAgentState {
             else {
                 return false;
             };
-            let Ok(parent) = self.heap.prototype(handle) else {
+            let Ok(parent) = self.gc.heap().prototype(handle) else {
                 return false;
             };
             if parent == PROTO_NULL_SENTINEL {
@@ -1827,7 +1816,7 @@ impl NativeAgentState {
             }
             if parent & 0x8000_0000 != 0 {
                 current = value::encode_proxy_handle(parent & 0x7fff_ffff);
-            } else if self.heap.object_type(parent).ok()
+            } else if self.gc.heap().object_type(parent).ok()
                 == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
             {
                 current = value::encode_handle(value::TAG_ARRAY, parent);
@@ -1882,7 +1871,8 @@ impl NativeAgentState {
                 || value::is_string(receiver)
                 || value::is_js_object(receiver)
                     && self
-                        .heap
+                        .gc
+                        .heap()
                         .object_type(value::decode_handle(receiver))
                         .is_ok_and(|kind| kind == u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
             {
@@ -2131,7 +2121,8 @@ impl NativeAgentState {
         ] {
             let key = self.intern_text(name.into(), value::TAG_STRING)?;
             let callable = self.native_callable(NativeCallableKind::Builtin(builtin, false))?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(console),
                     value::decode_handle(key),
@@ -2152,7 +2143,8 @@ impl NativeAgentState {
         for (name, text) in self.environment.clone() {
             let key = self.intern_text(name, value::TAG_STRING)?;
             let stored = self.intern_text(text, value::TAG_STRING)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(environment),
                     value::decode_handle(key),
@@ -2182,7 +2174,8 @@ impl NativeAgentState {
         let stdin = self.allocate_object(2, false).ok()?;
         for name in ["on", "resume"] {
             let key = self.intern_text(name.into(), value::TAG_STRING)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(stdin),
                     value::decode_handle(key),
@@ -2198,7 +2191,8 @@ impl NativeAgentState {
             let end = self.native_callable(NativeCallableKind::ProcessStreamEnd(is_stderr))?;
             for (name, callable) in [("write", write), ("end", end), ("on", return_this)] {
                 let key = self.intern_text(name.into(), value::TAG_STRING)?;
-                self.heap
+                self.gc
+                    .heap()
                     .set_property(
                         value::decode_handle(stream),
                         value::decode_handle(key),
@@ -2213,7 +2207,8 @@ impl NativeAgentState {
         let wjsm_version = self.intern_text(env!("CARGO_PKG_VERSION").into(), value::TAG_STRING)?;
         for (name, stored) in [("node", node_version), ("wjsm", wjsm_version)] {
             let key = self.intern_text(name.into(), value::TAG_STRING)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(versions),
                     value::decode_handle(key),
@@ -2285,7 +2280,8 @@ impl NativeAgentState {
             ("connected", process_connected),
         ] {
             let key = self.intern_text(name.into(), value::TAG_STRING)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(process),
                     value::decode_handle(key),
@@ -2414,7 +2410,8 @@ impl NativeAgentState {
         };
         let prototype = self.allocate_object(2, false).ok()?;
         if let Some(parent) = parent {
-            self.heap
+            self.gc
+                .heap()
                 .set_prototype(
                     value::decode_handle(prototype),
                     value::decode_handle(parent),
@@ -2425,7 +2422,8 @@ impl NativeAgentState {
         let message = self.intern_text(String::new(), value::TAG_STRING)?;
         for (key, stored) in [("name", name_value), ("message", message)] {
             let key = self.intern_text(key.into(), value::TAG_STRING)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(prototype),
                     value::decode_handle(key),
@@ -2849,7 +2847,7 @@ impl NativeAgentState {
                     .copied()
                     .unwrap_or(0)
                     != request.ic_epoch
-                || u64::from(self.heap.shapes().proto_generation()) != request.proto_generation
+                || u64::from(self.gc.heap().shapes().proto_generation()) != request.proto_generation
             {
                 continue;
             }
@@ -2921,7 +2919,7 @@ impl NativeAgentState {
         Self::store_feedback_slot(feedback, slot);
 
         let ic_epoch = self.ic_epochs.get(&function.image_id).copied().unwrap_or(0);
-        let proto_generation = u64::from(self.heap.shapes().proto_generation());
+        let proto_generation = u64::from(self.gc.heap().shapes().proto_generation());
         if let Some(image) = self
             .specialization
             .as_mut()
@@ -3326,6 +3324,8 @@ impl NativeAgentState {
             environment: *environment,
         });
         let closure = value::encode_closure_idx(index);
+        self.gc.record_host_write(closure, None, Some(closure));
+        self.gc.record_host_write(closure, None, Some(*environment));
         self.function_closures.insert(
             (
                 function_ref.image_id,
@@ -3348,6 +3348,7 @@ impl NativeAgentState {
     }
 
     fn callable_property(&mut self, callable: i64, key: u32) -> Option<i64> {
+        let callable = value::strip_gc_color(callable);
         if let Some(value) = self.callable_properties.get(&(callable, key)).copied() {
             return Some(value);
         }
@@ -3426,7 +3427,8 @@ impl NativeAgentState {
                 let constructor_key = self
                     .intern_text("constructor".into(), value::TAG_STRING)
                     .map(value::decode_handle)?;
-                self.heap
+                self.gc
+                    .heap()
                     .set_property(
                         value::decode_handle(prototype),
                         constructor_key,
@@ -3471,7 +3473,8 @@ impl NativeAgentState {
             let constructor_key = self
                 .intern_text("constructor".into(), value::TAG_STRING)
                 .map(value::decode_handle)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(prototype),
                     constructor_key,
@@ -3494,7 +3497,8 @@ impl NativeAgentState {
             let constructor_key = self
                 .intern_text("constructor".into(), value::TAG_STRING)
                 .map(value::decode_handle)?;
-            self.heap
+            self.gc
+                .heap()
                 .set_property(
                     value::decode_handle(prototype),
                     constructor_key,
@@ -3517,7 +3521,8 @@ impl NativeAgentState {
         let constructor_key = self
             .intern_text("constructor".into(), value::TAG_STRING)
             .map(value::decode_handle)?;
-        self.heap
+        self.gc
+            .heap()
             .set_property(
                 value::decode_handle(prototype),
                 constructor_key,
@@ -3550,14 +3555,16 @@ impl NativeAgentState {
         let constructor_key = self
             .intern_text("constructor".into(), value::TAG_STRING)
             .map(value::decode_handle)?;
-        self.heap
+        self.gc
+            .heap()
             .set_property(
                 value::decode_handle(prototype),
                 constructor_key,
                 constructor as u64,
             )
             .ok()?;
-        self.heap
+        self.gc
+            .heap()
             .update_property_flags(
                 value::decode_handle(prototype),
                 constructor_key,
@@ -3603,7 +3610,8 @@ impl NativeAgentState {
             .filter(|prototype| value::is_object(*prototype))
             .map(value::decode_handle)
             .ok_or(())?;
-        self.heap
+        self.gc
+            .heap()
             .set_prototype(value::decode_handle(object), prototype)
             .map_err(|_| ())
     }
@@ -3655,7 +3663,10 @@ impl NativeAgentState {
             }
         };
         self.exceptions[index as usize] = Some(value);
-        Some(value::encode_handle(value::TAG_EXCEPTION, index))
+        let exception = value::encode_handle(value::TAG_EXCEPTION, index);
+        self.gc.record_host_write(exception, None, Some(exception));
+        self.gc.record_host_write(exception, None, Some(value));
+        Some(exception)
     }
 
     fn exception_value(&self, exception: i64) -> Option<i64> {
@@ -3688,7 +3699,8 @@ impl NativeAgentState {
         let handle = value::decode_handle(array);
         let base = usize::try_from(activation.active_len.checked_add(skip)?).ok()?;
         for index in 0..usize::try_from(length).ok()? {
-            self.heap
+            self.gc
+                .heap()
                 .push_element(handle, *self.call_arena.get(base + index)? as u64)
                 .ok()?;
         }
@@ -3703,7 +3715,9 @@ impl NativeAgentState {
         if tag == value::TAG_STRING
             && let Some(handle) = self.string_ids.get(&text).copied()
         {
-            return Some(value::encode_handle(tag, handle));
+            let encoded = value::encode_runtime_string_handle(handle);
+            self.gc.record_host_write(encoded, None, Some(encoded));
+            return Some(encoded);
         }
         // 复用空闲槽；无空闲才扩表。TAG_STRING 写入反向映射，TAG_BIGINT 不进 string_ids。
         let handle = match self.string_free.pop() {
@@ -3718,7 +3732,13 @@ impl NativeAgentState {
             self.string_ids.insert(text.clone(), handle);
         }
         self.strings[handle as usize] = text;
-        Some(value::encode_handle(tag, handle))
+        let encoded = if tag == value::TAG_STRING {
+            value::encode_runtime_string_handle(handle)
+        } else {
+            value::encode_handle(tag, handle)
+        };
+        self.gc.record_host_write(encoded, None, Some(encoded));
+        Some(encoded)
     }
 
     fn allocate_object(&self, capacity: u32, array: bool) -> Result<i64, HeapAccessV2Error> {
@@ -3743,8 +3763,10 @@ impl NativeAgentState {
             self.object_prototype
         }
         .map_or(PROTO_NULL_SENTINEL, value::decode_handle);
+        if self.gc.take_pacing_poll_request() {
+            self.poll_gc(ctx)?;
+        }
 
-        self.collect_garbage_if_needed(ctx)?;
         match self.allocate_object_with_prototype(capacity, array, prototype) {
             Ok(value) => Ok(value),
             Err(HeapAccessV2Error::HeapExhausted { .. }) => {
@@ -3764,17 +3786,18 @@ impl NativeAgentState {
     ) -> Result<i64, HeapAccessV2Error> {
         let bytes = object_payload_bytes(capacity)?;
         let address = self.reserve_object_space(bytes)?;
-        let handle = self.heap.allocate_handle()?;
+        let handle = self.gc.heap().allocate_handle()?;
         if array {
-            self.heap
+            self.gc
+                .heap()
                 .publish_array(handle, address, u32::MAX, capacity)?;
         } else {
-            self.heap
+            self.gc
+                .heap()
                 .publish_object(handle, address, u32::MAX, capacity)?;
         }
-        self.heap.set_prototype(handle, prototype)?;
-        self.allocated_bytes_since_gc
-            .set(self.allocated_bytes_since_gc.get().saturating_add(bytes));
+        self.gc.mark_black_allocation(handle)?;
+        self.gc.heap().set_prototype(handle, prototype)?;
         Ok(value::encode_handle(
             if array {
                 value::TAG_ARRAY
@@ -3786,38 +3809,14 @@ impl NativeAgentState {
     }
 
     fn reserve_object_space(&self, bytes: u64) -> Result<u64, HeapAccessV2Error> {
-        let cursor = self.object_nlab_cursor.get();
-        let next = cursor
-            .checked_add(bytes)
-            .ok_or(HeapAccessV2Error::AddressOverflow)?;
-        if cursor != 0 && next <= self.object_nlab_end.get() {
-            self.object_nlab_cursor.set(next);
-            return Ok(cursor);
-        }
-        let (start, end) = self.heap.reserve_nlab(bytes)?;
-        self.object_nlab_cursor.set(start + bytes);
-        self.object_nlab_end.set(end);
-        Ok(start)
-    }
-
-    fn reset_object_nlab(&self) {
-        self.object_nlab_cursor.set(0);
-        self.object_nlab_end.set(0);
-    }
-
-    fn should_collect_garbage(&self) -> bool {
-        self.allocated_bytes_since_gc.get() >= self.gc_allocation_threshold
+        self.gc.allocate(bytes)
     }
 
     fn collect_garbage_if_needed(
         &mut self,
         ctx: &NativeVmContext,
     ) -> Result<bool, NativeRuntimeError> {
-        if !self.should_collect_garbage() {
-            return Ok(false);
-        }
-        self.collect_garbage(ctx)?;
-        Ok(true)
+        self.poll_gc(ctx)
     }
 
     fn has_pending_external_events(&self) -> bool {
@@ -3900,7 +3899,7 @@ impl NativeAgentState {
         let array = self.allocate_object(capacity, true)?;
         let handle = value::decode_handle(array);
         for value in values {
-            self.heap.push_element(handle, *value as u64)?;
+            self.gc.heap().push_element(handle, *value as u64)?;
         }
         Ok(array)
     }
@@ -3909,15 +3908,27 @@ impl NativeAgentState {
         ctx: &NativeVmContext,
     ) -> Result<wjsm_gc::RuntimeGcReport, NativeRuntimeError> {
         let frame_roots = native_root_values(ctx)?;
-        let (reachable, live) = dispatch::weak::collect(ctx, self, frame_roots);
-        self.reset_object_nlab();
-        self.allocated_bytes_since_gc.set(0);
-        let report = self
-            .collector
-            .collect(self.heap.collector_capability(), &reachable)?;
-        self.cleanup_retired_handles(&report.retired_handles);
-        self.sweep_host_index_tables(&report.retired_handles, &live);
+        let graph = dispatch::weak::snapshot_gc_graph(ctx, self, frame_roots, 0);
+        let report = self.gc.collect_full(graph)?;
+        dispatch::weak::finish_gc_cycle(self, &report);
         Ok(report)
+    }
+
+    fn poll_gc(&mut self, ctx: &NativeVmContext) -> Result<bool, NativeRuntimeError> {
+        let action = self.gc.safepoint_action();
+        let snapshot = if let wjsm_gc::GcSafepointAction::PublishRoots { epoch } = action {
+            let frame_roots = native_root_values(ctx)?;
+            let graph = dispatch::weak::snapshot_gc_graph(ctx, self, frame_roots, epoch);
+            Some(graph)
+        } else {
+            None
+        };
+        let report = self.gc.at_safepoint(snapshot)?;
+        if let Some(report) = report {
+            dispatch::weak::finish_gc_cycle(self, &report);
+            return Ok(true);
+        }
+        Ok(!matches!(action, wjsm_gc::GcSafepointAction::Idle))
     }
 
     fn cleanup_retired_handles(&mut self, retired: &[u32]) {
@@ -3960,13 +3971,13 @@ impl NativeAgentState {
             .retain(|handle, _| is_live(handle));
         self.promise_reactions.retain(|handle, _| is_live(handle));
     }
-}
-
-fn gc_allocation_threshold(max_heap_size: u64) -> u64 {
-    (max_heap_size / 8).clamp(
-        MIN_GC_ALLOCATION_THRESHOLD.min(max_heap_size),
-        MAX_GC_ALLOCATION_THRESHOLD.min(max_heap_size),
-    )
+    fn drain_gc_cycle(&mut self, ctx: &NativeVmContext) -> Result<(), NativeRuntimeError> {
+        while self.gc.cycle_active() {
+            self.poll_gc(ctx)?;
+            std::thread::yield_now();
+        }
+        Ok(())
+    }
 }
 
 fn native_root_values(ctx: &NativeVmContext) -> Result<Vec<i64>, NativeRuntimeError> {
@@ -4045,7 +4056,8 @@ fn process_numeric_object(state: &mut NativeAgentState, fields: &[(&str, f64)]) 
     for (name, number) in fields {
         let key = state.intern_text((*name).into(), value::TAG_STRING)?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(object),
                 value::decode_handle(key),
@@ -4367,8 +4379,8 @@ unsafe extern "C" fn native_callable_call(
             value::encode_f64(state.process_started_at.elapsed().as_secs_f64())
         }
         NativeCallableKind::ProcessMemoryUsage => {
-            let used = state.heap.used_bytes() as f64;
-            let total = state.heap.heap_limit_bytes() as f64;
+            let used = state.gc.heap().used_bytes() as f64;
+            let total = state.gc.heap().heap_limit_bytes() as f64;
             process_numeric_object(
                 state,
                 &[
@@ -4512,7 +4524,8 @@ impl NativeRuntime {
         context.stack_budget_bytes = wjsm_native_abi::COOPERATIVE_POLL_BUDGET;
         // 句柄表基址：generated code 属性快链用；snapshot 恢复替换 heap 后由
         // `activate_image` 重新同步（每次 execute 必经）。
-        context.handle_table_base = state.heap.handle_table_base();
+        context.handle_table_base = state.gc.heap().handle_table_base();
+        state.gc.bind_context(context);
         Ok(Self {
             state,
             vmctx,
@@ -4571,6 +4584,9 @@ impl NativeRuntime {
         self.state.stderr.borrow_mut().clear();
         self.state
             .restore_startup_snapshot(snapshot::STARTUP_SNAPSHOT_BYTES)?;
+        self.state
+            .gc
+            .bind_context(Pin::as_mut(&mut self.vmctx).get_mut());
         let manifest_entry = artifact
             .manifest()
             .modules
@@ -4698,6 +4714,7 @@ impl NativeRuntime {
         if value::is_exception(value) {
             inspector::pause_for_exception(context, &mut self.state, value, true);
         }
+        self.state.drain_gc_cycle(context)?;
         if context.pending_exception_kind == PendingExceptionKind::None
             && self.state.requested_exit_code.is_none()
         {
@@ -4706,6 +4723,7 @@ impl NativeRuntime {
                 value = drained;
             }
         }
+        self.state.drain_gc_cycle(context)?;
         self.state
             .finish_call(context)
             .ok_or_else(|| NativeRuntimeError::Invariant("entry activation is missing".into()))?;
@@ -4742,7 +4760,10 @@ impl NativeRuntime {
     }
 
     pub fn gc_telemetry(&self) -> wjsm_gc::GcTelemetrySnapshot {
-        self.state.collector.telemetry_snapshot()
+        self.state.gc.telemetry_snapshot()
+    }
+    pub fn reset_gc_telemetry(&self) {
+        self.state.gc.reset_telemetry();
     }
 
     pub fn take_output(&mut self) -> Vec<u8> {
@@ -4799,7 +4820,7 @@ pub enum NativeRuntimeError {
     #[error(transparent)]
     Heap(#[from] HeapAccessV2Error),
     #[error(transparent)]
-    Gc(#[from] RuntimeCollectorError),
+    Gc(#[from] gc::NativeGcError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("native runtime invariant failed: {0}")]
@@ -5013,8 +5034,7 @@ second true RangeError JavaScript heap out of memory true\n";
                 panic!("{algorithm:?} should rebuild the OOM error after reset: {error:?}")
             });
         assert_eq!(
-            lifecycle_execution.stdout,
-            b"true RangeError JavaScript heap out of memory\n",
+            lifecycle_execution.stdout, b"true RangeError JavaScript heap out of memory\n",
             "{algorithm:?} reset lifecycle",
         );
         let oom_error = runtime
@@ -5567,7 +5587,9 @@ second true RangeError JavaScript heap out of memory true\n";
                     std::path::Path::new("."),
                     std::path::Path::new("."),
                 )
-                .expect("allocation pressure should collect and finish");
+                .unwrap_or_else(|error| {
+                    panic!("{algorithm:?} allocation pressure should finish: {error:?}")
+                });
             let telemetry = runtime.gc_telemetry();
             assert_eq!(execution.stdout, b"71994000\n");
             assert!(telemetry.cycles > 0, "{algorithm:?} should collect");

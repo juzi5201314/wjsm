@@ -47,7 +47,8 @@ pub(super) fn remote_object(state: &NativeAgentState, encoded: i64) -> Value {
     }
     if value::is_array(encoded) {
         let length = state
-            .heap
+            .gc
+            .heap()
             .array_length(value::decode_handle(encoded))
             .unwrap_or(0);
         return json!({
@@ -128,10 +129,10 @@ fn number_object(number: f64) -> Value {
 
 fn array_properties(state: &NativeAgentState, encoded: i64) -> Vec<Value> {
     let handle = value::decode_handle(encoded);
-    let length = state.heap.array_length(handle).unwrap_or(0);
+    let length = state.gc.heap().array_length(handle).unwrap_or(0);
     let mut properties = Vec::with_capacity(length as usize + 1);
     for index in 0..length {
-        if let Ok(Some(element)) = state.heap.get_element(handle, index) {
+        if let Ok(Some(element)) = state.gc.heap().get_element(handle, index) {
             properties.push(data_property(
                 index.to_string(),
                 remote_object(state, element as i64),
@@ -149,7 +150,7 @@ fn array_properties(state: &NativeAgentState, encoded: i64) -> Vec<Value> {
 
 fn object_properties(state: &NativeAgentState, encoded: i64) -> Vec<Value> {
     let handle = value::decode_handle(encoded);
-    let Ok(slots) = state.heap.own_property_slots(handle) else {
+    let Ok(slots) = state.gc.heap().own_property_slots(handle) else {
         return Vec::new();
     };
     slots
@@ -158,7 +159,7 @@ fn object_properties(state: &NativeAgentState, encoded: i64) -> Vec<Value> {
             let name = state
                 .string(value::encode_handle(value::TAG_STRING, key))?
                 .to_utf8()?;
-            let property = state.heap.get_property_slot(handle, key).ok()??;
+            let property = state.gc.heap().get_property_slot(handle, key).ok()??;
             let stored = if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
                 value::encode_undefined()
             } else {

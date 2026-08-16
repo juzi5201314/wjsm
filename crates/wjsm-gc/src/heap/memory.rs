@@ -16,6 +16,22 @@ pub trait HeapMemory: Send + Sync {
     fn copy_from(&self, address: HeapAddress, bytes: &[u8]) -> Result<(), HeapMemoryError>;
     fn copy_to(&self, address: HeapAddress, length: u64) -> Result<Vec<u8>, HeapMemoryError>;
 
+    /// 复制两个不重叠、尚未 publish 的范围；调用方保证期间没有并发访问。
+    fn copy_nonoverlapping_unpublished(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError>;
+
+    /// 以 SeqCst word load/store 复制已 publish 的并发可变对象。
+    fn copy_atomic_words(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError>;
+
     /// 读取 nul 结尾字节串的 owned snapshot。
     ///
     /// 默认实现按 `copy_to` 分块扫描；具体后端可用直接内存视图覆写以加速。

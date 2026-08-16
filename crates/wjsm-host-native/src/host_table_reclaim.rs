@@ -59,6 +59,21 @@ fn stats_after_gc(source: &str) -> HostSideTableStats {
 }
 
 #[test]
+fn explicit_gc_waits_for_an_inflight_concurrent_cycle() {
+    let mut runtime = small_zgc_runtime();
+    let artifact = artifact(
+        "let keep={v:42}; for(let i=0;i<10;i++){keep.next={v:i,next:keep.next}} gc(); console.log(keep.v);",
+    );
+    let result = runtime.execute(&artifact, Path::new("."), Path::new("."));
+    assert!(
+        result.is_ok(),
+        "result={result:?}, stderr={}",
+        String::from_utf8_lossy(&runtime.take_stderr())
+    );
+    assert_eq!(result.unwrap().stdout, b"42\n");
+}
+
+#[test]
 fn dead_closures_are_reclaimed() {
     let mut runtime = small_zgc_runtime();
     let execution = execute_source_with_runtime(

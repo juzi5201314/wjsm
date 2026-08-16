@@ -41,9 +41,17 @@ pub(super) fn dispatch_function(
                 this_value,
                 arguments: arguments.to_vec(),
             });
-            state
-                .native_callable(NativeCallableKind::Bound(index))
-                .unwrap_or_else(|| fail_dispatch(ctx))
+            let Some(bound) = state.native_callable(NativeCallableKind::Bound(index)) else {
+                return Some(fail_dispatch(ctx));
+            };
+            state.gc.record_host_write(bound, None, Some(bound));
+            for stored in std::iter::once(target)
+                .chain(std::iter::once(this_value))
+                .chain(arguments.iter().copied())
+            {
+                state.gc.record_host_write(bound, None, Some(stored));
+            }
+            bound
         }
         Builtin::FuncCall => {
             let Some((&callee, rest)) = args.split_first() else {
@@ -96,13 +104,15 @@ fn create_list_from_array_like(
     if value::is_array(source) {
         let handle = value::decode_handle(source);
         let length = state
-            .heap
+            .gc
+            .heap()
             .array_length(handle)
             .map_err(|_| fail_dispatch(ctx))?;
         return (0..length)
             .map(|index| {
                 state
-                    .heap
+                    .gc
+                    .heap()
                     .get_element(handle, index)
                     .map(|stored| {
                         stored

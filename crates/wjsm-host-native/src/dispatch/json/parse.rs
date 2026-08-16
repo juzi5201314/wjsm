@@ -113,7 +113,8 @@ fn materialize(
                     .ok_or_else(|| runtime::fail_dispatch(ctx))?;
                 let property = materialize(ctx, state, property)?;
                 state
-                    .heap
+                    .gc
+                    .heap()
                     .set_property(handle, value::decode_handle(name), property as u64)
                     .map_err(|_| runtime::fail_dispatch(ctx))?;
             }
@@ -133,14 +134,16 @@ fn internalize(
     if value::is_array(encoded) {
         let handle = value::decode_handle(encoded);
         let length = state
-            .heap
+            .gc
+            .heap()
             .array_length(handle)
             .map_err(|_| runtime::fail_dispatch(ctx))?;
         for index in 0..length {
             let key = index.to_string();
             let replacement = internalize(ctx, state, reviver, encoded, &key)?;
             state
-                .heap
+                .gc
+                .heap()
                 .set_element(
                     handle,
                     index,

@@ -11,7 +11,7 @@ use crate::heap::{
     HandleGeneration, HandleId, HandleState, HandleTableV2, HeapAddress, HeapMemory,
 };
 
-use super::barrier::{HeaderFieldKind, HeaderLayout};
+use super::barrier::HeaderLayout;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -210,10 +210,20 @@ impl ConcurrentRelocator {
             return Ok(false);
         }
 
-        // begin_relocation CAS on handle entry
-        handles
-            .begin_relocation(descriptor.handle)
-            .map_err(|error| error.to_string())?;
+        let state = handles
+            .resolve(descriptor.handle)
+            .ok_or_else(|| "relocation handle disappeared before copy".to_string())?
+            .state();
+        if state.is_stable() {
+            handles
+                .begin_relocation(descriptor.handle)
+                .map_err(|error| error.to_string())?;
+        } else if !matches!(
+            state,
+            HandleState::RelocatingYoung | HandleState::RelocatingOld
+        ) {
+            return Err(format!("invalid relocation copy state {state:?}"));
+        }
 
         // immutable byte-copy regions + mutable word snapshot
         self.atomic_snapshot_copy(memory, descriptor)?;
@@ -235,54 +245,13 @@ impl ConcurrentRelocator {
         memory: &M,
         descriptor: &RelocationDescriptor,
     ) -> Result<(), String> {
-        // reject unclassified bulk header copy for mutable layouts
-        if descriptor.layout.rejects_bulk_copy_of_mutable_headers() {
-            for field in descriptor.layout.fields {
-                match field.kind {
-                    HeaderFieldKind::ImmutableByteCopy => {
-                        let bytes = memory
-                            .copy_to(HeapAddress::new(descriptor.source + field.offset), 8)
-                            .map_err(|error| error.to_string())?;
-                        memory
-                            .copy_from(
-                                HeapAddress::new(descriptor.destination + field.offset),
-                                &bytes,
-                            )
-                            .map_err(|error| error.to_string())?;
-                    }
-                    HeaderFieldKind::MutableAtomicWord | HeaderFieldKind::ReferenceSlot => {
-                        let word = memory
-                            .load_word(HeapAddress::new(descriptor.source + field.offset))
-                            .map_err(|error| error.to_string())?;
-                        memory
-                            .store_word(
-                                HeapAddress::new(descriptor.destination + field.offset),
-                                word,
-                            )
-                            .map_err(|error| error.to_string())?;
-                    }
-                }
-            }
-            // remaining payload words after header (8-byte aligned)
-            let mut offset = 16u64;
-            while offset + 8 <= descriptor.size {
-                let word = memory
-                    .load_word(HeapAddress::new(descriptor.source + offset))
-                    .map_err(|error| error.to_string())?;
-                memory
-                    .store_word(HeapAddress::new(descriptor.destination + offset), word)
-                    .map_err(|error| error.to_string())?;
-                offset += 8;
-            }
-        } else {
-            let bytes = memory
-                .copy_to(HeapAddress::new(descriptor.source), descriptor.size)
-                .map_err(|error| error.to_string())?;
-            memory
-                .copy_from(HeapAddress::new(descriptor.destination), &bytes)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(())
+        memory
+            .copy_atomic_words(
+                HeapAddress::new(descriptor.source),
+                HeapAddress::new(descriptor.destination),
+                descriptor.size,
+            )
+            .map_err(|error| error.to_string())
     }
 
     pub fn assist<M: HeapMemory>(

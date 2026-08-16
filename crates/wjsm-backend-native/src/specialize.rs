@@ -22,10 +22,10 @@ use wjsm_native_abi::{NativeFeedbackTag, NativeFunctionEntry, NativeVmContext};
 
 use crate::f64_analysis::{infer_f64_values, infer_f64_values_with_param_seeds};
 use crate::lower::{
-    DeclaredData, DeclaredFunction, allocate_feedback_slots, allocate_ic_slots,
-    boxed_frame_local_names, compile_one_function, declare_host_dispatcher, declare_math_thunks,
-    declare_root_bitmaps, emit_feedback_tag_code, gimli_endian, libcall_name, root_frame_capacity,
-    slow_entry_signature,
+    DeclaredBarrierThunks, DeclaredData, DeclaredFunction, allocate_feedback_slots,
+    allocate_ic_slots, boxed_frame_local_names, compile_one_function, declare_barrier_thunks,
+    declare_host_dispatcher, declare_math_thunks, declare_root_bitmaps, emit_feedback_tag_code,
+    gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
 };
 use crate::root_plan::RootPlan;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
@@ -164,6 +164,7 @@ pub(crate) fn compile_specialized(
         .declare_function("wjsm_specialized_body", Linkage::Export, &signature)
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
+    let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let math_thunks = declare_math_thunks(&mut module, program, &seeded)?;
 
     let frame_locals: BTreeSet<&str> = program
@@ -177,6 +178,8 @@ pub(crate) fn compile_specialized(
     let root_capacity = root_frame_capacity(ir_function, &root_plan, boxed_frame_locals.len());
     let root_bitmaps = declare_root_bitmaps(&mut module, root_capacity)?;
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
+    let barrier_thunks =
+        DeclaredBarrierThunks::snapshot(module.declarations(), zgc_load_barrier, zgc_store_barrier);
     let math_thunk_decls: HashMap<Builtin, DeclaredFunction> = math_thunks
         .iter()
         .map(|(builtin, func_id)| {
@@ -206,6 +209,7 @@ pub(crate) fn compile_specialized(
         &signature,
         body_id,
         &dispatcher_decl,
+        &barrier_thunks,
         &math_thunk_decls,
         &bitmap_decls,
         &seeded_values,
