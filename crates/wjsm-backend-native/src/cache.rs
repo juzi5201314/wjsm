@@ -135,6 +135,16 @@ impl NativeImageRepository {
         }
     }
 
+    /// Worker / agent 线程自用：不与父 runtime 共享 `CompiledImage` 的 IC/反馈槽。
+    pub fn new_exclusive(compiler: NativeCompiler, cache_dir: Option<PathBuf>) -> Self {
+        Self {
+            compiler,
+            cache_dir,
+            state: Arc::new(Mutex::new(RepositoryState::default())),
+            stats: AtomicCacheStats::default(),
+        }
+    }
+
     pub fn prepare(
         &self,
         artifact: &PortableArtifact,
@@ -212,6 +222,36 @@ impl NativeImageRepository {
             gate.ready.notify_all();
             return prepared;
         }
+    }
+
+    /// 用打包期预编译的 object 发布 image，不走 compile / 磁盘 cache。
+    pub fn load_precompiled(
+        &self,
+        program: &wjsm_ir::Program,
+        object: &NativeObject,
+        resolver: &dyn NativeSymbolResolver,
+    ) -> Result<Arc<CompiledImage>, NativeCacheError> {
+        let key = NativeCacheKey::for_program(program, &self.compiler);
+        let expected_feedback = crate::lower::feedback_site_count(program);
+        if object.feedback_slot_count() != expected_feedback {
+            return Err(NativeCacheError::Invalid(
+                "precompiled object feedback slot count does not match program".into(),
+            ));
+        }
+        let function_count = u32::try_from(program.functions().len())
+            .map_err(|_| NativeCacheError::LengthOverflow)?;
+        if object.function_count() != function_count {
+            return Err(NativeCacheError::Invalid(
+                "precompiled object function count does not match program".into(),
+            ));
+        }
+        let image = CompiledImage::load(object, key.image_id(), resolver)?;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.images.insert(key, Arc::downgrade(&image));
+        Ok(image)
     }
 
     pub fn stats(&self) -> NativeCacheStats {

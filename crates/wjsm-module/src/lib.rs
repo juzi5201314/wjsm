@@ -14,6 +14,8 @@ mod resolution_options;
 mod resolver;
 mod runtime_resolution;
 mod semantic;
+mod source_store;
+mod static_runtime_entries;
 use swc_core::ecma::ast;
 
 pub use bundler::{ModuleBundler, RuntimeEntryBundle, logical_url_from_path, logical_url_path};
@@ -22,9 +24,15 @@ pub use resolution_options::ResolutionOptions;
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
 pub use runtime_resolution::{
     RuntimeModuleFormat, RuntimeModuleKey, RuntimeResolveKind, RuntimeResolvePaths,
-    RuntimeResolvedModule, resolve_runtime_paths, resolve_runtime_specifier,
+    RuntimeResolvedModule, resolve_runtime_paths, resolve_runtime_paths_with_store,
+    resolve_runtime_specifier, resolve_runtime_specifier_with_store,
 };
 pub use semantic::{ModuleLinkResult, analyze_module_links};
+pub use source_store::{
+    ModuleSourceStore, SNAPSHOT_FILE_URL_PREFIX, SNAPSHOT_VIRTUAL_ROOT, is_snapshot_fs_path,
+    snapshot_file_url, snapshot_virtual_path, snapshot_virtual_root,
+};
+pub use static_runtime_entries::include_static_runtime_entries;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -74,6 +82,18 @@ pub fn lower_artifact_input_with_options(
         .lower_artifact_input(entry)
 }
 
+/// 用显式 store lower portable artifact 输入（打包期 Recording / packed Snapshot）。
+pub fn lower_artifact_input_with_store(
+    entry: &Path,
+    store: ModuleSourceStore,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<wjsm_artifact_format::ArtifactBuildInput> {
+    ModuleBundler::with_store(store, options)?
+        .with_emit_debug_checks(emit_debug_checks)
+        .lower_artifact_input(entry)
+}
+
 /// 同 [`lower_bundle_with_debug`]，但 builtin 依赖闭包走独立 lower + 磁盘缓存
 /// （`${WJSM_CACHE_DIR}/builtin_ir`，issue #344）。`WJSM_CACHE_DIR` 未设置时构建段但不落盘；
 /// `WJSM_NO_BUILTIN_CACHE` 非空时整体退化为 [`lower_bundle_with_debug`]。
@@ -102,6 +122,27 @@ pub fn lower_bundle_cached_with_debug(
     bundler.lower_bundle_cached(entry)
 }
 
+/// 同 [`lower_bundle_cached_with_options`]，但走显式 store。
+pub fn lower_bundle_cached_with_store(
+    entry: &Path,
+    store: ModuleSourceStore,
+    options: ResolutionOptions,
+) -> Result<wjsm_ir::Program> {
+    lower_bundle_cached_with_store_and_debug(entry, store, options, false)
+}
+
+/// 同 [`lower_bundle_cached_with_store`]，可开启语句级 debug 插桩。
+pub fn lower_bundle_cached_with_store_and_debug(
+    entry: &Path,
+    store: ModuleSourceStore,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<wjsm_ir::Program> {
+    ModuleBundler::with_store(store, options)?
+        .with_emit_debug_checks(emit_debug_checks)
+        .lower_bundle_cached(entry)
+}
+
 /// Lowers a runtime-loaded entry module and creates a namespace for that entry.
 pub fn lower_runtime_entry_bundle_with_options(
     entry: &Path,
@@ -123,6 +164,18 @@ pub fn lower_runtime_entry_bundle_with_debug(
     bundler.lower_runtime_entry_bundle(entry)
 }
 
+/// 同 [`lower_runtime_entry_bundle_with_debug`]，但走显式 store。
+pub fn lower_runtime_entry_bundle_with_store(
+    entry: &Path,
+    store: ModuleSourceStore,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<RuntimeEntryBundle> {
+    ModuleBundler::with_store(store, options)?
+        .with_emit_debug_checks(emit_debug_checks)
+        .lower_runtime_entry_bundle(entry)
+}
+
 /// 将运行时加载的 Node 内置模块 lower 为 ESM，并为入口创建命名空间对象。
 pub fn lower_runtime_builtin_bundle_with_options(
     specifier: &str,
@@ -142,6 +195,18 @@ pub fn lower_runtime_builtin_bundle_with_debug(
     let bundler = ModuleBundler::with_resolution_options(root_path, options)?
         .with_emit_debug_checks(emit_debug_checks);
     bundler.lower_runtime_builtin_bundle(specifier)
+}
+
+/// 同 [`lower_runtime_builtin_bundle_with_debug`]，但走显式 store。
+pub fn lower_runtime_builtin_bundle_with_store(
+    specifier: &str,
+    store: ModuleSourceStore,
+    options: ResolutionOptions,
+    emit_debug_checks: bool,
+) -> Result<RuntimeEntryBundle> {
+    ModuleBundler::with_store(store, options)?
+        .with_emit_debug_checks(emit_debug_checks)
+        .lower_runtime_builtin_bundle(specifier)
 }
 
 /// 解析入口模块 AST（用于 dump-ast 等，会构建依赖图）

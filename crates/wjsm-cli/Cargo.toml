@@ -12,6 +12,7 @@ clap = { workspace = true }
 clap_complete = { workspace = true }
 wjsm-artifact-format = { path = "../wjsm-artifact-format" }
 wjsm-backend-native = { path = "../wjsm-backend-native" }
+wjsm-exec-format = { path = "../wjsm-exec-format" }
 wjsm-host-native = { path = "../wjsm-host-native" }
 wjsm-ir = { path = "../wjsm-ir" }
 wjsm-parser = { path = "../wjsm-parser" }

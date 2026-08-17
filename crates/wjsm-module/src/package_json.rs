@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+
+use crate::source_store::ModuleSourceStore;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PackageInfo {
@@ -40,19 +41,20 @@ pub(crate) enum BrowserField {
     Map(BTreeMap<String, Option<String>>),
 }
 
-pub(crate) fn read_package_info(package_dir: &Path) -> Result<Option<PackageInfo>> {
+pub(crate) fn read_package_info(
+    store: &ModuleSourceStore,
+    package_dir: &Path,
+) -> Result<Option<PackageInfo>> {
     let path = package_dir.join("package.json");
-    match fs::metadata(&path) {
-        Ok(_) => read_package_info_manifest(&path).map(Some),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => {
-            Err(error).with_context(|| format!("stat package.json at {}", path.display()))
-        }
+    if !store.is_file(&path) {
+        return Ok(None);
     }
+    read_package_info_manifest(store, &path).map(Some)
 }
 
-fn read_package_info_manifest(path: &Path) -> Result<PackageInfo> {
-    let text = fs::read_to_string(path)
+fn read_package_info_manifest(store: &ModuleSourceStore, path: &Path) -> Result<PackageInfo> {
+    let text = store
+        .read_to_string(path)
         .with_context(|| format!("read package.json at {}", path.display()))?;
     let value: Value = serde_json::from_str(&text)
         .with_context(|| format!("parse package.json at {}", path.display()))?;
@@ -109,6 +111,7 @@ fn parse_browser_field(value: Option<&Value>, path: &Path) -> Result<Option<Brow
 #[cfg(test)]
 mod tests {
     use super::{BrowserField, PackageType, read_package_info};
+    use crate::source_store::ModuleSourceStore;
 
     use std::collections::BTreeMap;
     use std::fs;
@@ -165,7 +168,9 @@ mod tests {
         )
         .unwrap();
 
-        let info = read_package_info(temp.path()).unwrap().unwrap();
+        let info = read_package_info(&ModuleSourceStore::disk(temp.path()), temp.path())
+            .unwrap()
+            .unwrap();
 
         assert_eq!(info.name.as_deref(), Some("demo-pkg"));
         assert_eq!(info.package_type, PackageType::Module);
@@ -187,7 +192,9 @@ mod tests {
         let package_json = temp.path().join("package.json");
         fs::write(&package_json, r#"{"name":"demo-pkg"}"#).unwrap();
 
-        let info = read_package_info(temp.path()).unwrap().unwrap();
+        let info = read_package_info(&ModuleSourceStore::disk(temp.path()), temp.path())
+            .unwrap()
+            .unwrap();
 
         assert_eq!(info.package_type, PackageType::CommonJs);
         assert_eq!(info.browser, None);
@@ -201,7 +208,7 @@ mod tests {
     fn read_package_info_returns_none_without_package_json() {
         let temp = TestDir::new("missing_package_json");
 
-        let info = read_package_info(temp.path()).unwrap();
+        let info = read_package_info(&ModuleSourceStore::disk(temp.path()), temp.path()).unwrap();
 
         assert_eq!(info, None);
     }
@@ -215,7 +222,9 @@ mod tests {
         )
         .unwrap();
 
-        let info = read_package_info(temp.path()).unwrap().unwrap();
+        let info = read_package_info(&ModuleSourceStore::disk(temp.path()), temp.path())
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             info.browser,

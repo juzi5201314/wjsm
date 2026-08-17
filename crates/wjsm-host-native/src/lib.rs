@@ -28,11 +28,17 @@ use wjsm_native_abi::{
 mod dispatch;
 mod gc;
 mod inspector;
+mod native_exec;
 mod side_tables;
 mod snapshot;
 mod specialization;
 
 pub use inspector::InspectorConfig;
+pub use native_exec::{
+    PrecompiledNativeImages, compile_native_exec_images, compile_snapshot_entry,
+    exec_payload_from_images, images_from_exec_payload,
+};
+pub use wjsm_module::ModuleSourceStore;
 
 use dispatch::{
     native_host_operation, native_math_acos, native_math_acosh, native_math_asin,
@@ -155,7 +161,7 @@ fn function_slots_for_program(
         .collect()
 }
 
-fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
+pub(crate) fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
     native_variable_names(program)
         .into_iter()
         .enumerate()
@@ -199,6 +205,13 @@ pub struct NativeExecution {
     pub cache_invalidated_count: u64,
 }
 
+/// 进程输出是捕获到 `NativeExecution` 还是立即写 OS 流。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputMode {
+    Capture,
+    Inherit,
+}
+
 #[derive(Clone, Debug)]
 pub struct NativeRuntimeConfig {
     pub cache_dir: Option<PathBuf>,
@@ -208,6 +221,10 @@ pub struct NativeRuntimeConfig {
     /// 用于同 binary 的 generic AOT 对照。关闭时不启动反馈 worker、不发布 overlay，
     /// generic lowering、IC 与全部语义路径保持不变。
     pub specialization_enabled: bool,
+    pub output_mode: OutputMode,
+    /// 子 agent 不得复用父进程 `SHARED_IMAGE_STATE` 里已跑过的 image：
+    /// IC / 反馈槽指向父堆对象，packed worker 里 `require` 会变成 undefined。
+    pub isolate_native_images: bool,
 }
 
 impl Default for NativeRuntimeConfig {
@@ -217,6 +234,8 @@ impl Default for NativeRuntimeConfig {
             gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled: true,
+            output_mode: OutputMode::Capture,
+            isolate_native_images: false,
         }
     }
 }
@@ -237,6 +256,8 @@ impl NativeRuntimeConfig {
             gc_algorithm,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled,
+            output_mode: OutputMode::Capture,
+            isolate_native_images: false,
         })
     }
 
@@ -255,12 +276,19 @@ impl NativeRuntimeConfig {
         self
     }
 
+    pub fn with_output_mode(mut self, output_mode: OutputMode) -> Self {
+        self.output_mode = output_mode;
+        self
+    }
+
     pub(crate) fn child_config(&self) -> Self {
         Self {
             cache_dir: self.cache_dir.clone(),
             gc_algorithm: self.gc_algorithm,
             max_heap_size: self.max_heap_size,
             specialization_enabled: self.specialization_enabled,
+            output_mode: self.output_mode,
+            isolate_native_images: true,
         }
     }
 }
@@ -397,6 +425,8 @@ pub fn execute_with_writer_with_options(
         gc_algorithm: options.gc_algorithm,
         max_heap_size: options.max_heap_size,
         specialization_enabled: NativeRuntimeConfig::from_environment(None)?.specialization_enabled,
+        output_mode: OutputMode::Capture,
+        isolate_native_images: false,
     })?;
     runtime.configure_environment(options.inherit_env, options.env)?;
     let execution = runtime.execute(&artifact, &options.module_root, &options.working_directory)?;
@@ -1032,7 +1062,11 @@ impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
         let gc = gc::NativeGc::new(config.gc_algorithm, config.max_heap_size)?;
         let compiler = NativeCompiler::new()?;
-        let repository = NativeImageRepository::new(compiler.clone(), config.cache_dir.clone());
+        let repository = if config.isolate_native_images {
+            NativeImageRepository::new_exclusive(compiler.clone(), config.cache_dir.clone())
+        } else {
+            NativeImageRepository::new(compiler.clone(), config.cache_dir.clone())
+        };
         let specialization = config
             .specialization_enabled
             .then(|| SpecializationCoordinator::new(compiler));
@@ -1262,6 +1296,24 @@ impl NativeAgentState {
         self.isolated_variable_tables.clear();
         self.isolated_variable_active = None;
         self.shared_variables_backup = None;
+    }
+
+    pub(crate) fn emit_output(&self, bytes: &[u8], stderr: bool) {
+        if stderr {
+            self.stderr.borrow_mut().extend_from_slice(bytes);
+        } else {
+            self.output.borrow_mut().extend_from_slice(bytes);
+        }
+        if self.runtime_config.output_mode != OutputMode::Inherit {
+            return;
+        }
+        if stderr {
+            let _ = std::io::stderr().write_all(bytes);
+            let _ = std::io::stderr().flush();
+        } else {
+            let _ = std::io::stdout().write_all(bytes);
+            let _ = std::io::stdout().flush();
+        }
     }
 
     fn install_isolated_program(&mut self, image: Arc<CompiledImage>, program: &wjsm_ir::Program) {
@@ -2217,7 +2269,7 @@ impl NativeAgentState {
                 .ok()?;
         }
 
-        let process = self.allocate_object(23, false).ok()?;
+        let process = self.allocate_object(24, false).ok()?;
         let platform = if cfg!(target_os = "windows") {
             "win32"
         } else if cfg!(target_os = "macos") {
@@ -2246,6 +2298,7 @@ impl NativeAgentState {
             dispatch::node_child_process::NodeChildProcessCallable::ProcessDisconnect,
         ))?;
         let process_connected = value::encode_bool(self.node_child_process.process_connected());
+        let packed = value::encode_bool(self.runtime_modules.store.is_snapshot());
         let pid = value::encode_f64(f64::from(std::process::id()));
         #[cfg(unix)]
         let ppid = {
@@ -2278,6 +2331,7 @@ impl NativeAgentState {
             ("send", process_send),
             ("disconnect", process_disconnect),
             ("connected", process_connected),
+            ("__wjsm_packed", packed),
         ] {
             let key = self.intern_text(name.into(), value::TAG_STRING)?;
             self.gc
@@ -4041,11 +4095,7 @@ fn process_write(
         Ok(text) => text,
         Err(exception) => return exception,
     };
-    if stderr {
-        state.stderr.borrow_mut().extend_from_slice(text.as_bytes());
-    } else {
-        state.output.borrow_mut().extend_from_slice(text.as_bytes());
-    }
+    state.emit_output(text.as_bytes(), stderr);
     value::encode_bool(true)
 }
 
@@ -4579,6 +4629,43 @@ impl NativeRuntime {
         module_root: &std::path::Path,
         working_directory: &std::path::Path,
     ) -> Result<NativeExecution, NativeRuntimeError> {
+        self.execute_with_store(
+            artifact,
+            ModuleSourceStore::disk(module_root),
+            working_directory,
+        )
+    }
+
+    pub fn execute_with_store(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: ModuleSourceStore,
+        working_directory: &std::path::Path,
+    ) -> Result<NativeExecution, NativeRuntimeError> {
+        self.begin_execute(artifact, &store, working_directory)?;
+        let (entry, image_id) = self.install_compiled_images(artifact, &store)?;
+        self.finish_execute(artifact, entry, image_id)
+    }
+
+    /// 用打包期预编译 object 执行，跳过启动 codegen。
+    pub fn execute_precompiled(
+        &mut self,
+        artifact: &PortableArtifact,
+        images: &PrecompiledNativeImages,
+        store: ModuleSourceStore,
+        working_directory: &std::path::Path,
+    ) -> Result<NativeExecution, NativeRuntimeError> {
+        self.begin_execute(artifact, &store, working_directory)?;
+        let (entry, image_id) = self.install_precompiled_images(artifact, &store, images)?;
+        self.finish_execute(artifact, entry, image_id)
+    }
+
+    fn begin_execute(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: &ModuleSourceStore,
+        working_directory: &std::path::Path,
+    ) -> Result<(), NativeRuntimeError> {
         self.assert_owner_thread()?;
         self.state.output.borrow_mut().clear();
         self.state.stderr.borrow_mut().clear();
@@ -4587,25 +4674,19 @@ impl NativeRuntime {
         self.state
             .gc
             .bind_context(Pin::as_mut(&mut self.vmctx).get_mut());
-        let manifest_entry = artifact
-            .manifest()
-            .modules
-            .iter()
-            .find(|module| module.id == artifact.manifest().entry)
-            .filter(|module| !module.logical_url.starts_with("node:"))
-            .map(|module| wjsm_module::logical_url_path(module_root, &module.logical_url))
-            .transpose()
-            .map_err(|error| NativeRuntimeError::Invariant(error.to_string()))?
-            .map(|path| path.to_string_lossy().into_owned());
-        self.state.process_entry = artifact
-            .program()
-            .source_file()
-            .map(str::to_owned)
-            .or(manifest_entry);
+        self.state.process_entry = process_entry_for_store(artifact, store)?;
         self.state.working_directory = working_directory
             .canonicalize()
             .unwrap_or_else(|_| working_directory.to_path_buf());
-        let (entry, image_id) = match artifact.program().split_builtin_segment() {
+        Ok(())
+    }
+
+    fn install_compiled_images(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: &ModuleSourceStore,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        match artifact.program().split_builtin_segment() {
             Some((builtin_program, user_program)) => {
                 let (builtin_slots, user_slots) =
                     native_variable_slots_for_segments(&builtin_program, &user_program);
@@ -4619,85 +4700,170 @@ impl NativeRuntime {
                     &user_slots,
                     &NativeHostRegistry,
                 )?;
-                self.state
-                    .install_shared_variables(&builtin_slots, &user_slots);
-                let builtin_image_id = builtin_image.image_id();
-                let user_image_id = user_image.image_id();
-                let shared_module_slots = builtin_slots
-                    .keys()
-                    .map(String::as_str)
-                    .filter(|name| is_module_scope_var(name))
-                    .collect::<HashSet<_>>();
-                self.state.install_program(
+                self.install_split_images(
+                    artifact,
+                    store,
+                    builtin_program,
+                    user_program,
+                    builtin_slots,
+                    user_slots,
                     builtin_image,
-                    &builtin_program,
-                    &builtin_slots,
-                    &shared_module_slots,
-                );
-                self.state.install_program(
-                    user_image.clone(),
-                    &user_program,
-                    &user_slots,
-                    &shared_module_slots,
-                );
-                self.state.builtin_image_id = Some(builtin_image_id);
-                self.state.user_image_id = Some(user_image_id);
-                self.state.user_function_count = u32::try_from(user_program.functions().len()).ok();
-                let entry_index = user_program
-                    .functions()
-                    .iter()
-                    .position(|function| is_module_entry_ir_function(function.name()))
-                    .unwrap_or(0);
-                let entry = user_image
-                    .entries()
-                    .get(entry_index)
-                    .ok_or_else(|| {
-                        NativeRuntimeError::Invariant("entry function is missing".into())
-                    })?
-                    .slow_entry;
-                dispatch::modules::configure(
-                    &mut self.state,
-                    module_root,
-                    user_image_id,
-                    artifact.manifest(),
+                    user_image,
                 )
-                .map_err(NativeRuntimeError::Invariant)?;
-                (entry, user_image_id)
             }
             None => {
                 let image = self
                     .state
                     .repository
                     .prepare(artifact, &NativeHostRegistry)?;
-                let slots = whole_program_slots(artifact.program());
-                self.state
-                    .install_whole_program_variables(artifact.program());
-                let entry_index = artifact
-                    .program()
-                    .functions()
-                    .iter()
-                    .position(|function| is_module_entry_ir_function(function.name()))
-                    .unwrap_or(0);
-                let entry = image
-                    .entries()
-                    .get(entry_index)
-                    .ok_or_else(|| {
-                        NativeRuntimeError::Invariant("entry function is missing".into())
-                    })?
-                    .slow_entry;
-                let image_id = image.image_id();
-                dispatch::modules::configure(
-                    &mut self.state,
-                    module_root,
-                    image_id,
-                    artifact.manifest(),
-                )
-                .map_err(NativeRuntimeError::Invariant)?;
-                self.state
-                    .install_program(image, artifact.program(), &slots, &HashSet::new());
-                (entry, image_id)
+                self.install_whole_image(artifact, store, image)
             }
-        };
+        }
+    }
+
+    fn install_precompiled_images(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: &ModuleSourceStore,
+        images: &PrecompiledNativeImages,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        native_exec::validate_images_match_program(artifact.program(), images)?;
+        match (artifact.program().split_builtin_segment(), images) {
+            (
+                Some((builtin_program, user_program)),
+                PrecompiledNativeImages::Split { builtin, user },
+            ) => {
+                let (builtin_slots, user_slots) =
+                    native_variable_slots_for_segments(&builtin_program, &user_program);
+                let builtin_image = self.state.repository.load_precompiled(
+                    &builtin_program,
+                    builtin,
+                    &NativeHostRegistry,
+                )?;
+                let user_image = self.state.repository.load_precompiled(
+                    &user_program,
+                    user,
+                    &NativeHostRegistry,
+                )?;
+                self.install_split_images(
+                    artifact,
+                    store,
+                    builtin_program,
+                    user_program,
+                    builtin_slots,
+                    user_slots,
+                    builtin_image,
+                    user_image,
+                )
+            }
+            (None, PrecompiledNativeImages::Whole(object)) => {
+                let image = self.state.repository.load_precompiled(
+                    artifact.program(),
+                    object,
+                    &NativeHostRegistry,
+                )?;
+                self.install_whole_image(artifact, store, image)
+            }
+            _ => Err(NativeRuntimeError::Invariant(
+                "precompiled images do not match program layout".into(),
+            )),
+        }
+    }
+
+    fn install_split_images(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: &ModuleSourceStore,
+        builtin_program: wjsm_ir::Program,
+        user_program: wjsm_ir::Program,
+        builtin_slots: HashMap<String, u32>,
+        user_slots: HashMap<String, u32>,
+        builtin_image: Arc<CompiledImage>,
+        user_image: Arc<CompiledImage>,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        self.state
+            .install_shared_variables(&builtin_slots, &user_slots);
+        let builtin_image_id = builtin_image.image_id();
+        let user_image_id = user_image.image_id();
+        let shared_module_slots = builtin_slots
+            .keys()
+            .map(String::as_str)
+            .filter(|name| is_module_scope_var(name))
+            .collect::<HashSet<_>>();
+        self.state.install_program(
+            builtin_image,
+            &builtin_program,
+            &builtin_slots,
+            &shared_module_slots,
+        );
+        self.state.install_program(
+            user_image.clone(),
+            &user_program,
+            &user_slots,
+            &shared_module_slots,
+        );
+        self.state.builtin_image_id = Some(builtin_image_id);
+        self.state.user_image_id = Some(user_image_id);
+        self.state.user_function_count = u32::try_from(user_program.functions().len()).ok();
+        let entry_index = user_program
+            .functions()
+            .iter()
+            .position(|function| is_module_entry_ir_function(function.name()))
+            .unwrap_or(0);
+        let entry = user_image
+            .entries()
+            .get(entry_index)
+            .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+            .slow_entry;
+        dispatch::modules::configure(
+            &mut self.state,
+            store.clone(),
+            user_image_id,
+            artifact.manifest(),
+        )
+        .map_err(NativeRuntimeError::Invariant)?;
+        Ok((entry, user_image_id))
+    }
+
+    fn install_whole_image(
+        &mut self,
+        artifact: &PortableArtifact,
+        store: &ModuleSourceStore,
+        image: Arc<CompiledImage>,
+    ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        let slots = whole_program_slots(artifact.program());
+        self.state
+            .install_whole_program_variables(artifact.program());
+        let entry_index = artifact
+            .program()
+            .functions()
+            .iter()
+            .position(|function| is_module_entry_ir_function(function.name()))
+            .unwrap_or(0);
+        let entry = image
+            .entries()
+            .get(entry_index)
+            .ok_or_else(|| NativeRuntimeError::Invariant("entry function is missing".into()))?
+            .slow_entry;
+        let image_id = image.image_id();
+        dispatch::modules::configure(
+            &mut self.state,
+            store.clone(),
+            image_id,
+            artifact.manifest(),
+        )
+        .map_err(NativeRuntimeError::Invariant)?;
+        self.state
+            .install_program(image, artifact.program(), &slots, &HashSet::new());
+        Ok((entry, image_id))
+    }
+
+    fn finish_execute(
+        &mut self,
+        artifact: &PortableArtifact,
+        entry: NativeSlowEntry,
+        image_id: u64,
+    ) -> Result<NativeExecution, NativeRuntimeError> {
         if let Some(inspector) = self.state.inspector.as_mut() {
             inspector.register_script(artifact);
         }
@@ -4809,6 +4975,31 @@ impl NativeRuntime {
     }
 }
 
+/// packed 用虚拟入口；`wjsm run` 仍优先 IR `source_file`（主机路径）。
+fn process_entry_for_store(
+    artifact: &PortableArtifact,
+    store: &ModuleSourceStore,
+) -> Result<Option<String>, NativeRuntimeError> {
+    let logical = artifact
+        .manifest()
+        .modules
+        .iter()
+        .find(|module| module.id == artifact.manifest().entry)
+        .filter(|module| !module.logical_url.starts_with("node:"))
+        .map(|module| module.logical_url.as_str());
+    if store.is_snapshot() {
+        return Ok(logical.map(|url| format!("{}/{}", wjsm_module::SNAPSHOT_VIRTUAL_ROOT, url)));
+    }
+    if let Some(source) = artifact.program().source_file() {
+        return Ok(Some(source.to_owned()));
+    }
+    logical
+        .map(|url| wjsm_module::logical_url_path(&store.root(), url))
+        .transpose()
+        .map_err(|error| NativeRuntimeError::Invariant(error.to_string()))
+        .map(|path| path.map(|path| path.to_string_lossy().into_owned()))
+}
+
 #[derive(Debug, Error)]
 pub enum NativeRuntimeError {
     #[error("portable artifact error: {0}")]
@@ -4880,6 +5071,7 @@ mod tests {
         assert_eq!(child.gc_algorithm, parent.gc_algorithm);
         assert_eq!(child.max_heap_size, parent.max_heap_size);
         assert_eq!(child.specialization_enabled, parent.specialization_enabled);
+        assert!(child.isolate_native_images);
     }
     fn artifact(source: &str) -> PortableArtifact {
         let source: Arc<str> = source.into();
@@ -4910,6 +5102,27 @@ mod tests {
                 std::path::Path::new("."),
             )
             .expect("source should execute")
+    }
+
+    #[test]
+    fn execute_precompiled_matches_compile_path() {
+        let artifact = artifact("console.log(1 + 2)");
+        let images =
+            compile_native_exec_images(&artifact).expect("precompiled images should compile");
+        let mut runtime = NativeRuntime::new_with_config(
+            NativeRuntimeConfig::default().with_specialization_enabled(false),
+        )
+        .expect("native runtime should initialize");
+        let execution = runtime
+            .execute_precompiled(
+                &artifact,
+                &images,
+                ModuleSourceStore::disk(std::path::Path::new(".")),
+                std::path::Path::new("."),
+            )
+            .expect("precompiled source should execute");
+        assert_eq!(execution.stdout, b"3\n");
+        assert_eq!(execution.exit_code, 0);
     }
 
     #[test]

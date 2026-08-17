@@ -22,6 +22,89 @@ pub struct InspectorConfig {
     pub break_on_start: bool,
 }
 
+impl InspectorConfig {
+    /// 从 `WJSM_INSPECT` / `WJSM_INSPECT_BRK` / `NODE_OPTIONS` 读取。
+    pub fn from_environment() -> Result<Option<Self>, String> {
+        if let Some(config) = parse_inspect_var("WJSM_INSPECT_BRK", true)? {
+            return Ok(Some(config));
+        }
+        if let Some(config) = parse_inspect_var("WJSM_INSPECT", false)? {
+            return Ok(Some(config));
+        }
+        parse_node_options_inspect()
+    }
+}
+
+fn parse_inspect_var(name: &str, break_on_start: bool) -> Result<Option<InspectorConfig>, String> {
+    let Ok(raw) = std::env::var(name) else {
+        return Ok(None);
+    };
+    let (host, port) = parse_inspect_address(&raw)?;
+    Ok(Some(InspectorConfig {
+        host,
+        port,
+        break_on_start,
+    }))
+}
+
+fn parse_node_options_inspect() -> Result<Option<InspectorConfig>, String> {
+    let Ok(options) = std::env::var("NODE_OPTIONS") else {
+        return Ok(None);
+    };
+    let mut found = None;
+    for token in options.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("--inspect-brk") {
+            let raw = rest.strip_prefix('=').unwrap_or("");
+            let (host, port) = parse_inspect_address(raw)?;
+            found = Some(InspectorConfig {
+                host,
+                port,
+                break_on_start: true,
+            });
+        } else if let Some(rest) = token.strip_prefix("--inspect")
+            && found.as_ref().is_none_or(|config| !config.break_on_start)
+        {
+            let raw = rest.strip_prefix('=').unwrap_or("");
+            let (host, port) = parse_inspect_address(raw)?;
+            found = Some(InspectorConfig {
+                host,
+                port,
+                break_on_start: false,
+            });
+        }
+    }
+    Ok(found)
+}
+
+fn parse_inspect_address(raw: &str) -> Result<(String, u16), String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "1" || trimmed.eq_ignore_ascii_case("true") {
+        return Ok(("127.0.0.1".to_string(), 9229));
+    }
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        let port = trimmed
+            .parse::<u16>()
+            .map_err(|_| format!("invalid inspect port `{trimmed}`"))?;
+        return Ok(("127.0.0.1".to_string(), port));
+    }
+    if let Some(port_part) = trimmed.strip_prefix(':') {
+        let port = port_part
+            .parse::<u16>()
+            .map_err(|_| format!("invalid inspect address `{trimmed}`"))?;
+        return Ok(("127.0.0.1".to_string(), port));
+    }
+    let (host, port_part) = trimmed.rsplit_once(':').ok_or_else(|| {
+        format!("invalid inspect address `{trimmed}` (expected HOST:PORT or PORT)")
+    })?;
+    if host.is_empty() {
+        return Err(format!("invalid inspect address `{trimmed}` (empty host)"));
+    }
+    let port = port_part
+        .parse::<u16>()
+        .map_err(|_| format!("invalid inspect port `{port_part}` in `{trimmed}`"))?;
+    Ok((host.to_string(), port))
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ScriptInfo {
     pub id: String,

@@ -2,7 +2,7 @@
 
 ## stdout
 
-程序主动产生的输出写 stdout，例如 `console.log`、`process.stdout.write` 和 `wjsm eval` 的求值结果。`build -o -` 也写 stdout，但只允许重定向到非终端目标，避免 portable artifact 二进制污染终端。
+程序主动产生的输出写 stdout，例如 `console.log`、`process.stdout.write` 和 `wjsm eval` 的求值结果。`wjsm run`、`wjsm eval` 与 packed native-executable 立即写 OS stdout/stderr，不等待进程退出。进程内 fixture 仍捕获输出以比对 `.expected`。`build -o -` 也写 stdout，但只允许重定向到非终端目标，避免 portable artifact 二进制污染终端。
 
 ## stderr
 
@@ -29,4 +29,4 @@ wjsm run app.ts >program.out 2>diagnostics.log
 | `3` | CLI 参数用法错误 |
 | 其他 | `process.exit(n)` 请求的状态 |
 
-`--format native-executable` 当前属于编译侧 NotImplemented contract，返回 1，且不会创建或覆盖目标文件。
+`--format native-executable` 属于编译侧打包：成功写出同宿主 ELF/PE；失败返回 1，且不会创建或覆盖目标文件。

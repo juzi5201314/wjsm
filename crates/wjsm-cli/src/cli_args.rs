@@ -311,7 +311,7 @@ pub(crate) enum Stage {
 pub(crate) enum BuildFormat {
     /// Portable semantic-IR artifact
     Wjsm,
-    /// Platform executable output（当前明确不支持）
+    /// Same-host ELF/PE packed from the wjsm-exec stub
     NativeExecutable,
 }
 
@@ -355,6 +355,10 @@ pub(crate) enum Commands {
         /// Evaluate inline code string instead of a file
         #[arg(short, long = "eval")]
         eval: Option<String>,
+
+        /// Extra files to embed in a native-executable snapshot
+        #[arg(long = "include", value_name = "PATH")]
+        include: Vec<PathBuf>,
     },
 
     /// Run a JS/TS file directly

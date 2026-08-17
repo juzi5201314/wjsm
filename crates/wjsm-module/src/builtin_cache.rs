@@ -28,6 +28,7 @@ use crate::bundler::module_metadata_for_node;
 use crate::graph::ModuleGraph;
 use crate::resolution_options::ResolutionOptions;
 use crate::semantic::analyze_module_links;
+use crate::source_store::ModuleSourceStore;
 use wjsm_semantic::ModuleLoweringInput;
 
 use crate::builtin_modules::canonical_from_virtual_path;
@@ -221,7 +222,7 @@ pub(crate) fn build_builtin_segment(
         modules.push(ModuleLoweringInput {
             id: node.id,
             ast: node.ast.clone(),
-            metadata: module_metadata_for_node(node)?,
+            metadata: module_metadata_for_node(node, &ModuleSourceStore::disk(root))?,
             source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
         });
     }

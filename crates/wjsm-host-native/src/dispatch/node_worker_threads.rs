@@ -13,7 +13,7 @@ use super::{
     modules,
     structured_clone::{self, SerializedGraph},
 };
-use crate::{NativeAgentState, NativeCallableKind, NativeRuntime};
+use crate::{ModuleSourceStore, NativeAgentState, NativeCallableKind, NativeRuntime};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum WorkerThreadsMethod {
@@ -905,25 +905,32 @@ fn create_worker(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
         command_rx,
         runtime_config: state.runtime_config.child_config(),
     };
-    let root = state.working_directory.clone();
+    let store = state.runtime_modules.store.clone();
+    let cwd = state.working_directory.clone();
     std::thread::Builder::new()
         .name(format!("wjsm-worker-{worker_id}"))
-        .spawn(move || run_worker(filename, is_eval, root, context))
+        .spawn(move || run_worker(filename, is_eval, store, cwd, context))
         .map(|_| id_pair(ctx, state, "id", worker_id, "threadId", thread_id))
         .unwrap_or_else(|error| type_error(ctx, state, &format!("ERR_WORKER_INIT_FAILED: {error}")))
 }
 
-fn run_worker(filename: String, is_eval: bool, root: PathBuf, context: WorkerAgentContext) {
+fn run_worker(
+    filename: String,
+    is_eval: bool,
+    store: ModuleSourceStore,
+    cwd: PathBuf,
+    context: WorkerAgentContext,
+) {
     let worker_id = context.worker_id;
     let control = Arc::clone(&context.control);
     let event_tx = context.event_tx.clone();
     let _ = event_tx.send(WorkerEvent::Online(worker_id));
-    let outcome = compile_worker_artifact(&filename, is_eval, &root).and_then(|artifact| {
+    let outcome = compile_worker_artifact(&filename, is_eval, &store, &cwd).and_then(|artifact| {
         let mut runtime = NativeRuntime::new_with_config(context.runtime_config.clone())
             .map_err(|error| error.to_string())?;
         runtime.configure_worker(context);
         runtime
-            .execute(&artifact, &root, &root)
+            .execute_with_store(&artifact, store, &cwd)
             .map_err(|error| error.to_string())
             .map(|execution| execution.stdout)
     });
@@ -949,7 +956,8 @@ fn run_worker(filename: String, is_eval: bool, root: PathBuf, context: WorkerAge
 fn compile_worker_artifact(
     filename: &str,
     is_eval: bool,
-    root: &Path,
+    store: &ModuleSourceStore,
+    cwd: &Path,
 ) -> Result<PortableArtifact, String> {
     let program = if is_eval {
         let module =
@@ -960,7 +968,7 @@ fn compile_worker_artifact(
             ast: module,
             metadata: wjsm_semantic::ModuleMetadata {
                 filename: "[worker eval]".into(),
-                dirname: root.display().to_string(),
+                dirname: store.root().display().to_string(),
                 url: "worker:eval".into(),
                 kind: wjsm_semantic::ModuleKind::CommonJs,
             },
@@ -976,16 +984,16 @@ fn compile_worker_artifact(
         )
         .map_err(|error| error.to_string())?
     } else {
-        let path = PathBuf::from(filename);
-        let path = if path.is_absolute() {
-            path
-        } else {
-            root.join(path)
-        };
-        let module_root = path.parent().unwrap_or(root);
-        wjsm_module::lower_bundle_cached_with_options(
+        let path = resolve_worker_entry(filename, store, cwd);
+        if !store.is_file(&path) {
+            return Err(format!(
+                "worker entry '{}' is not in the module source store",
+                filename
+            ));
+        }
+        wjsm_module::lower_bundle_cached_with_store(
             &path,
-            module_root,
+            store.clone(),
             wjsm_module::ResolutionOptions::default(),
         )
         .map_err(|error| error.to_string())?
@@ -996,6 +1004,18 @@ fn compile_worker_artifact(
         BuildOptions::default(),
     ))
     .map_err(|error| error.to_string())
+}
+
+fn resolve_worker_entry(filename: &str, store: &ModuleSourceStore, cwd: &Path) -> PathBuf {
+    if store.uses_virtual_identity() {
+        return store.resolve_entry(Path::new(filename));
+    }
+    let path = PathBuf::from(filename);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
 }
 
 fn worker_post_message(
@@ -1275,6 +1295,7 @@ mod tests {
         let artifact = compile_worker_artifact(
             worker.to_str().expect("fixture 路径必须是 UTF-8"),
             false,
+            &ModuleSourceStore::disk(&fixture_root),
             &fixture_root,
         )
         .expect("worker fixture 必须可以编译");

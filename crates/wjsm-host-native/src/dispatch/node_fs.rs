@@ -106,6 +106,10 @@ fn read_file(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        let as_text = encoding_requested(state, args.get(1).copied());
+        return super::node_fs_snapshot::read_file(ctx, state, &path, as_text);
+    }
     match fs::read(&path) {
         Ok(bytes) if encoding_requested(state, args.get(1).copied()) => state
             .intern_text(
@@ -129,6 +133,9 @@ fn write_file(
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, "open", &path);
+    }
     let data = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let bytes = super::node_buffer::bytes(state, data).unwrap_or_else(|| {
         state
@@ -159,9 +166,13 @@ fn write_file(
 }
 
 fn exists(state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    value::encode_bool(
-        argument_path(state, args.first().copied()).is_some_and(|path| path.exists()),
-    )
+    let Some(path) = argument_path(state, args.first().copied()) else {
+        return value::encode_bool(false);
+    };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::exists(state, &path);
+    }
+    value::encode_bool(path.exists())
 }
 
 fn stat(
@@ -173,6 +184,9 @@ fn stat(
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::stat(ctx, state, &path);
+    }
     let result = if follow {
         fs::metadata(&path)
     } else {
@@ -238,6 +252,9 @@ fn readdir(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         .get(1)
         .copied()
         .is_some_and(|argument| is_truthy(state, argument));
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readdir(ctx, state, &path, with_types);
+    }
     let entries = match fs::read_dir(&path) {
         Ok(entries) => entries,
         Err(error) => return io_exception(ctx, state, error, "scandir", &path),
@@ -291,6 +308,9 @@ fn mkdir(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, "mkdir", &path);
+    }
     let recursive = option_bool(state, args.get(1).copied(), "recursive");
     let result = if recursive {
         fs::create_dir_all(&path)
@@ -307,6 +327,9 @@ fn rm(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> 
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, "rm", &path);
+    }
     let recursive = option_bool(state, args.get(1).copied(), "recursive");
     let force = option_bool(state, args.get(1).copied(), "force");
     let result = match fs::symlink_metadata(&path) {
@@ -339,6 +362,24 @@ fn copy_file(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     let Some(target) = argument_path(state, args.get(1).copied()) else {
         return type_error(ctx, state, "Invalid target path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &target) {
+        return super::node_fs_snapshot::readonly(ctx, state, "copyfile", &target);
+    }
+    if super::node_fs_snapshot::is_virtual(state, &source) {
+        return match state.runtime_modules.store.read_bytes(&source) {
+            Ok(bytes) => match fs::write(&target, bytes) {
+                Ok(()) => value::encode_undefined(),
+                Err(error) => io_exception(ctx, state, error, "copyfile", &target),
+            },
+            Err(error) => io_exception(
+                ctx,
+                state,
+                std::io::Error::new(std::io::ErrorKind::NotFound, error.to_string()),
+                "copyfile",
+                &source,
+            ),
+        };
+    }
     match fs::copy(&source, &target) {
         Ok(_) => value::encode_undefined(),
         Err(error) => io_exception(ctx, state, error, "copyfile", &source),
@@ -349,6 +390,9 @@ fn access(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::access(ctx, state, &path);
+    }
     match fs::metadata(&path) {
         Ok(_) => value::encode_undefined(),
         Err(error) => io_exception(ctx, state, error, "access", &path),
@@ -359,6 +403,9 @@ fn realpath(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::realpath(ctx, state, &path);
+    }
     match fs::canonicalize(&path) {
         Ok(path) => path_value(ctx, state, path),
         Err(error) => io_exception(ctx, state, error, "realpath", &path),
@@ -369,6 +416,15 @@ fn readlink(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return io_exception(
+            ctx,
+            state,
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a symlink"),
+            "readlink",
+            &path,
+        );
+    }
     match fs::read_link(&path) {
         Ok(path) => path_value(ctx, state, path),
         Err(error) => io_exception(ctx, state, error, "readlink", &path),
@@ -382,6 +438,9 @@ fn symlink(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
     let Some(path) = argument_path(state, args.get(1).copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, "symlink", &path);
+    }
     #[cfg(unix)]
     let result = std::os::unix::fs::symlink(&target, &path);
     #[cfg(windows)]
@@ -396,6 +455,9 @@ fn chmod(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, "chmod", &path);
+    }
     let mode = args
         .get(1)
         .and_then(|mode| to_number(state, *mode))
@@ -425,6 +487,9 @@ fn chown(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, "chown", &path);
+    }
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
@@ -464,6 +529,9 @@ fn unary_path_operation(
     let Some(path) = argument_path(state, args.first().copied()) else {
         return type_error(ctx, state, "Invalid path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &path) {
+        return super::node_fs_snapshot::readonly(ctx, state, syscall, &path);
+    }
     match operation(&path) {
         Ok(()) => value::encode_undefined(),
         Err(error) => io_exception(ctx, state, error, syscall, &path),
@@ -483,6 +551,11 @@ fn binary_path_operation(
     let Some(target) = argument_path(state, args.get(1).copied()) else {
         return type_error(ctx, state, "Invalid target path");
     };
+    if super::node_fs_snapshot::is_virtual(state, &source)
+        || super::node_fs_snapshot::is_virtual(state, &target)
+    {
+        return super::node_fs_snapshot::readonly(ctx, state, syscall, &source);
+    }
     match operation(&source, &target) {
         Ok(()) => value::encode_undefined(),
         Err(error) => io_exception(ctx, state, error, syscall, &source),
@@ -490,15 +563,10 @@ fn binary_path_operation(
 }
 
 fn argument_path(state: &NativeAgentState, encoded: Option<i64>) -> Option<PathBuf> {
-    let path = argument_path_raw(state, encoded)?;
-    Some(if path.is_absolute() {
-        path
-    } else {
-        state.working_directory.join(path)
-    })
+    super::node_fs_snapshot::resolve_fs_path(state, encoded)
 }
 
-fn argument_path_raw(state: &NativeAgentState, encoded: Option<i64>) -> Option<PathBuf> {
+pub(super) fn argument_path_raw(state: &NativeAgentState, encoded: Option<i64>) -> Option<PathBuf> {
     state
         .string(encoded?)
         .and_then(|path| path.to_utf8())
@@ -523,7 +591,11 @@ fn option_bool(state: &mut NativeAgentState, options: Option<i64>, name: &str) -
         .is_some_and(|option| is_truthy(state, option))
 }
 
-fn path_value(ctx: &mut NativeVmContext, state: &mut NativeAgentState, path: PathBuf) -> i64 {
+pub(super) fn path_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    path: PathBuf,
+) -> i64 {
     state
         .intern_text(path.to_string_lossy().into_owned(), value::TAG_STRING)
         .unwrap_or_else(|| fail_dispatch(ctx))
@@ -534,7 +606,12 @@ fn system_time_ms(time: Option<SystemTime>) -> f64 {
         .map_or(0.0, |duration| duration.as_secs_f64() * 1_000.0)
 }
 
-fn set_property(state: &mut NativeAgentState, object: i64, name: &str, stored: i64) -> Option<()> {
+pub(super) fn set_property(
+    state: &mut NativeAgentState,
+    object: i64,
+    name: &str,
+    stored: i64,
+) -> Option<()> {
     let key = state.intern_text(name.into(), value::TAG_STRING)?;
     state
         .gc
@@ -547,7 +624,7 @@ fn set_property(state: &mut NativeAgentState, object: i64, name: &str, stored: i
         .ok()
 }
 
-fn io_exception(
+pub(super) fn io_exception(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     error: std::io::Error,
@@ -563,6 +640,17 @@ fn io_exception(
         std::io::ErrorKind::IsADirectory => "EISDIR",
         _ => "EIO",
     };
+    io_exception_with_code(ctx, state, error, syscall, path, code)
+}
+
+pub(super) fn io_exception_with_code(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    error: std::io::Error,
+    syscall: &str,
+    path: &Path,
+    code: &str,
+) -> i64 {
     let message = format!("{code}: {}, {syscall} '{}'", error, path.to_string_lossy());
     let Some(object) = super::modules::named_error_object(state, "Error", message) else {
         return fail_dispatch(ctx);

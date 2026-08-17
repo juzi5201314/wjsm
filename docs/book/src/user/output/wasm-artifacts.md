@@ -48,9 +48,9 @@ wjsm run /tmp/app.wjsm
 
 `run` 接受 `.wjsm` artifact 作为输入。运行时先验证 artifact，再由当前宿主编译为 native image 并执行。设置了 `WJSM_CACHE_DIR` 时才会按 artifact digest、native ABI hash、codegen hash、target、Cranelift 版本和 settings 查找磁盘缓存。
 
-## 未实现的格式
+## 同宿主可执行文件
 
-`--format native-executable` 当前明确未实现，返回稳定的未实现错误、退出码 1，并且不创建或覆盖输出文件。runtime 私有 native object/image 不是平台 executable，不能当作可分发的二进制。
+`--format native-executable` 把预链 `wjsm-exec` stub、`.wjsm`、预编译 `NativeObject` 与制品内源码快照打成当前宿主的 ELF/PE。它不是 portable 制品，也不能把 runtime-private object 改后缀冒充。打包失败不创建或覆盖输出文件。拷走 exe 后只读快照，不依赖构建机源码树。
 
 ## 深入了解
 

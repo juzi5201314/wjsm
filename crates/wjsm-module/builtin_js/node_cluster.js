@@ -724,7 +724,12 @@ export function fork(env) {
   const execPath = typeof process.execPath === 'string' && process.execPath
     ? process.execPath
     : 'wjsm';
-  const commandArgs = ['run', String(exec)];
+  const commandArgs = [];
+  if (!process.__wjsm_packed) {
+    commandArgs.push('run', String(exec));
+  } else if (settings.exec) {
+    childEnv.WJSM_EXEC_ENTRY = String(settings.exec);
+  }
   if (Array.isArray(args)) {
     for (var ai = 0; ai < args.length; ai = ai + 1) {
       if (args[ai] !== undefined && args[ai] !== null) commandArgs.push(String(args[ai]));

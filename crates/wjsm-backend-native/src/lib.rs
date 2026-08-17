@@ -54,6 +54,30 @@ impl NativeObject {
     pub fn feedback_slot_count(&self) -> u32 {
         self.feedback_slot_count
     }
+
+    /// 从已验证的预编译字段重建 object；不解析机器码。
+    pub fn from_parts(
+        bytes: impl Into<Arc<[u8]>>,
+        frame_bytes: Vec<u32>,
+        function_count: u32,
+        ic_slot_count: u32,
+        feedback_slot_count: u32,
+    ) -> Result<Self, NativeCompileError> {
+        let count = usize::try_from(function_count)
+            .map_err(|_| NativeCompileError::Capacity("function count"))?;
+        if frame_bytes.len() != count {
+            return Err(NativeCompileError::CompilerInvariant(
+                "native object frame_bytes length does not match function_count".into(),
+            ));
+        }
+        Ok(Self {
+            bytes: bytes.into(),
+            frame_bytes,
+            function_count,
+            ic_slot_count,
+            feedback_slot_count,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

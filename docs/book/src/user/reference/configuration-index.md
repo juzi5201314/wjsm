@@ -24,6 +24,7 @@
 | `--watch` | 监听文件改动重新执行 | 关闭 |
 | `--stage <parse\|lower\|compile\|execute>` | build 流水线阶段 | `compile` |
 | `--format <wjsm\|native-executable>` | 制品格式 | `wjsm` |
+| `--include <PATH>` | 补入 native-executable 快照的文件 | 无 |
 | `-o/--output <PATH>` | build 输出路径 | `out.wjsm` |
 
 `--gc` 不能写入配置文件，只接受命令行或环境变量。
@@ -41,6 +42,8 @@
 | `WJSM_STARTUP_SNAPSHOT_DEBUG` | 快照调试诊断 | 关闭 |
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级 | `default` |
 | `WJSM_DISABLE_LICM` | 关闭循环不变量提升 | 启用 |
+| `WJSM_DISABLE_SPECIALIZATION` | 关闭热函数特化 | 启用 |
+| `WJSM_INSPECT` / `WJSM_INSPECT_BRK` | packed exe 启用 CDP | 关闭 |
 | `WJSM_CHILD_PROCESS_ALLOW` | child_process 命令白名单 | 禁用 |
 | `WJSM_WORKER_THREADS_MAX` | worker_threads 上限 | `32` |
 | `WJSM_UPDATE_FIXTURES` | 更新 fixture 期望输出 | 未设置 |
