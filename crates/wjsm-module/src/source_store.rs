@@ -372,7 +372,10 @@ fn resolve_snapshot_entry(entry: &Path) -> PathBuf {
     {
         return path;
     }
-    snapshot_virtual_root().join(entry)
+    // `./worker.js` 不能当 logical URL（`.` 不是 Normal 分量），join 后必须再
+    // 归一化，否则入口会停在 `/wjsm-exec/./worker.js`，packed worker/fork 的
+    // builtin require 会拿到 undefined。
+    normalize_path(&snapshot_virtual_root().join(normalized))
 }
 
 fn logical_url_from_disk_path(root: &Path, path: &Path) -> Result<String> {
@@ -520,6 +523,21 @@ mod tests {
             recorded.get("main.js").map(Vec::as_slice),
             Some(b"export const x = 1;\n".as_slice())
         );
+    }
+
+    #[test]
+    fn snapshot_resolve_entry_normalizes_dot_relative_specs() {
+        let mut files = BTreeMap::new();
+        files.insert("worker.js".into(), b"export {};\n".to_vec());
+        let store = ModuleSourceStore::snapshot(files).expect("snapshot");
+        let expected = snapshot_virtual_path("worker.js").expect("path");
+        assert_eq!(store.resolve_entry(Path::new("./worker.js")), expected);
+        assert_eq!(store.resolve_entry(Path::new("worker.js")), expected);
+        assert_eq!(
+            store.resolve_entry(Path::new("/wjsm-exec/./worker.js")),
+            expected
+        );
+        assert!(store.is_file(&store.resolve_entry(Path::new("./worker.js"))));
     }
 
     #[test]

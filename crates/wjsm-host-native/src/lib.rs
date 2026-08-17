@@ -222,6 +222,9 @@ pub struct NativeRuntimeConfig {
     /// generic lowering、IC 与全部语义路径保持不变。
     pub specialization_enabled: bool,
     pub output_mode: OutputMode,
+    /// 子 agent 不得复用父进程 `SHARED_IMAGE_STATE` 里已跑过的 image：
+    /// IC / 反馈槽指向父堆对象，packed worker 里 `require` 会变成 undefined。
+    pub isolate_native_images: bool,
 }
 
 impl Default for NativeRuntimeConfig {
@@ -232,6 +235,7 @@ impl Default for NativeRuntimeConfig {
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled: true,
             output_mode: OutputMode::Capture,
+            isolate_native_images: false,
         }
     }
 }
@@ -253,6 +257,7 @@ impl NativeRuntimeConfig {
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled,
             output_mode: OutputMode::Capture,
+            isolate_native_images: false,
         })
     }
 
@@ -283,6 +288,7 @@ impl NativeRuntimeConfig {
             max_heap_size: self.max_heap_size,
             specialization_enabled: self.specialization_enabled,
             output_mode: self.output_mode,
+            isolate_native_images: true,
         }
     }
 }
@@ -420,6 +426,7 @@ pub fn execute_with_writer_with_options(
         max_heap_size: options.max_heap_size,
         specialization_enabled: NativeRuntimeConfig::from_environment(None)?.specialization_enabled,
         output_mode: OutputMode::Capture,
+        isolate_native_images: false,
     })?;
     runtime.configure_environment(options.inherit_env, options.env)?;
     let execution = runtime.execute(&artifact, &options.module_root, &options.working_directory)?;
@@ -1055,7 +1062,11 @@ impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
         let gc = gc::NativeGc::new(config.gc_algorithm, config.max_heap_size)?;
         let compiler = NativeCompiler::new()?;
-        let repository = NativeImageRepository::new(compiler.clone(), config.cache_dir.clone());
+        let repository = if config.isolate_native_images {
+            NativeImageRepository::new_exclusive(compiler.clone(), config.cache_dir.clone())
+        } else {
+            NativeImageRepository::new(compiler.clone(), config.cache_dir.clone())
+        };
         let specialization = config
             .specialization_enabled
             .then(|| SpecializationCoordinator::new(compiler));
@@ -5060,6 +5071,7 @@ mod tests {
         assert_eq!(child.gc_algorithm, parent.gc_algorithm);
         assert_eq!(child.max_heap_size, parent.max_heap_size);
         assert_eq!(child.specialization_enabled, parent.specialization_enabled);
+        assert!(child.isolate_native_images);
     }
     fn artifact(source: &str) -> PortableArtifact {
         let source: Arc<str> = source.into();

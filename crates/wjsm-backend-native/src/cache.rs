@@ -135,6 +135,16 @@ impl NativeImageRepository {
         }
     }
 
+    /// Worker / agent 线程自用：不与父 runtime 共享 `CompiledImage` 的 IC/反馈槽。
+    pub fn new_exclusive(compiler: NativeCompiler, cache_dir: Option<PathBuf>) -> Self {
+        Self {
+            compiler,
+            cache_dir,
+            state: Arc::new(Mutex::new(RepositoryState::default())),
+            stats: AtomicCacheStats::default(),
+        }
+    }
+
     pub fn prepare(
         &self,
         artifact: &PortableArtifact,
