@@ -24,7 +24,7 @@ wjsm --inspect-brk run app.js
 Debugger listening on ws://127.0.0.1:9229/...
 ```
 
-`--inspect` 必须用 `=` 传参（`--inspect=9229`），否则会把后续子命令名当地址解析。
+`--inspect` 必须用 `=` 传参（`--inspect=9229`），否则会把后续子命令名当地址解析。packed exe 改用 `WJSM_INSPECT` / `WJSM_INSPECT_BRK` 或 `NODE_OPTIONS`。
 
 ## 连接方式
 
@@ -64,7 +64,7 @@ wjsm 通过 epoch interruption 实现暂停：
 - **safepoint 依赖**：暂停只在 safepoint 生效。纯计算密集的代码路径如果长时间不到达 safepoint，断点不会立即触发。
 - **非所有路径支持**：部分 native 代码路径不检查 epoch，在这些路径上无法暂停。
 - **断点精度**：源码映射依赖 debug info，优化等级降低映射质量。
-- **性能开销**：启用 inspector 时强制使用 Cranelift 后端（非优化路径），且有 safepoint 检查开销。
+- **性能开销**：启用 inspector 会走 debug lowering（插入 `DebugCheck`），packed exe 还会忽略预编译 object、从源码快照重编译。
 
 ## 深入了解
 

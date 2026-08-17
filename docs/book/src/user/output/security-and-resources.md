@@ -22,3 +22,8 @@ wjsm 直接把 verified semantic IR 编译为当前宿主机器码。它不提�
 Portable `.wjsm` 在执行前做 bounded decode、hash/ABI、manifest 与 IR verification。native cache 是可重建派生数据；损坏、stale 或权限不安全的 cache entry 会被 invalidated，而不是执行其 bytes。
 
 这些检查提升输入与加载完整性，但不改变“需要 OS process 隔离不受信任代码”的结论。
+
+## 深入了解
+
+- [核心不变量](../../internals/reference/invariants.md)
+- [GC 选择、配置与不变量](../../internals/gc/configuration-and-invariants.md)

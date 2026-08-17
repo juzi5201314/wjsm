@@ -1,6 +1,6 @@
 # 控制流代码生成
 
-IR 的 CFG 在 direct native 后端被编译为 Cranelift 的结构化控制流。这一章说明映射规则。
+IR 的 CFG 在 direct native 后端被编译为 Cranelift CLIF。CLIF 是非结构化的基本块图，不需要 WASM 式的 `block`/`loop`/`if` 嵌套。这一章说明映射规则。
 
 ## CFG → CLIF block
 

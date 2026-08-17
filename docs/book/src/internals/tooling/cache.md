@@ -22,25 +22,38 @@
 
 1. `WJSM_CACHE_DIR` 被设置 → 使用该路径。
 2. 未设置或空值 → `NativeRuntimeConfig.cache_dir = None`，不读写磁盘。
-3. `NativeRuntimeConfig::default()` / `RuntimeOptions::default()` / `child_config()` 都是 `None`。
+3. `NativeRuntimeConfig::default()` / `child_config()` 都是 `None`。
 
-`wjsm run`、in-process fixture 和普通测试套件都不设这个变量。测试里只有 `tests/cluster_ipc.rs`（`/tmp/wjsm-test-cache`）和 builtin cache e2e 会显式打开。
+`wjsm run`、in-process fixture 和普通测试套件都不设这个变量。测试里只有显式打开缓存的用例会写盘。
+
+## 自动 LRU
+
+写入后按全局计数节流扫描（每 32 次写入一次）。统计对象是目录顶层 `*.wnat` 加上 `builtin_ir/*.bin`。总字节超过上限时按 mtime 删最旧文件，直到低于上限。
+
+| 变量 | 行为 |
+| --- | --- |
+| 未设置 `WJSM_CACHE_MAX_BYTES` | 上限 256 MiB |
+| `WJSM_CACHE_MAX_BYTES=<正整数>` | 使用该上限 |
+| `WJSM_CACHE_MAX_BYTES=0` | 禁用自动淘汰 |
+| 非法值 | 回落 256 MiB |
+
+`wjsm cache prune` 是手动裁剪，与自动 LRU 独立。
 
 ## Native image cache
 
 `NativeImageRepository` 是进程内 image 与磁盘 cache 的唯一 owner。`cache_dir` 为 `None` 时只做内存 Weak 池和 in-flight gate，编译产物不落盘。
 
-磁盘条目是 `${WJSM_CACHE_DIR}/<sha256>.wnat`。key 不是 SipHash，而是 `NativeCacheKey` 的 SHA-256：
+磁盘条目是 `${WJSM_CACHE_DIR}/<sha256>.wnat`。key 是 `NativeCacheKey` 的 SHA-256：
 
 | 维度 | 来源 |
 | --- | --- |
 | cache schema | `CACHE_SCHEMA` |
-| portable artifact digest | `.wjsm` 内容 SHA-256 |
+| program digest | 编码后的 IR `Program` SHA-256 |
 | native ABI hash | `native_abi_hash()` |
 | native codegen source hash | `NATIVE_CODEGEN_HASH` |
 | 当前 target | `{ARCH}-{OS}` |
 | Cranelift 版本 | `CRANELIFT_VERSION` |
-| codegen / ISA settings | `NativeCompiler::settings_key()` |
+| codegen / ISA settings | `NativeCompiler::settings_key()`（含 `WJSM_OPT_LEVEL`） |
 
 命中时加载 `.wnat` object 再 `CompiledImage::load`；header / object / hash / 权限校验失败计为 invalidated 并重编译。同 key 的并发 prepare 由 in-flight gate 合并。
 
@@ -54,13 +67,13 @@
 | `WJSM_NO_BUILTIN_CACHE` 非空 | 整体跳过缓存，每次完整 lower builtin 段 |
 | `WJSM_CACHE_DIR` 未设置或为空 | 仍可走分段 lower，但构建段不落盘 |
 
-缓存键是 `sha256(BUILTIN_CACHE_VERSION ‖ emit_debug_checks ‖ 每个 builtin canonical 与其源码 SHA-256)`。`BUILTIN_CACHE_VERSION` 是语义版本号——builtin_js 源码、lowerer 或 IR 布局任一变化时必须手动 bump，否则会命中语义过期但结构合法的旧缓存。resolution options 与 root 有意不入键：builtin 源码是编译期常量、自包含。
+缓存键是 `sha256(BUILTIN_CACHE_ABI_HASH ‖ u8(emit_debug_checks) ‖ 每个 canonical 名)`。`BUILTIN_CACHE_ABI_HASH` 由 `wjsm-module` 的 `build.rs` 在构建期对 builtin_js 源码及 module/parser/semantic/IR 输入做摘要，**不是**手工 bump 的 `BUILTIN_CACHE_VERSION`。源码或 lower 输入变化会自动换命名空间，并拒绝 `cache_abi_hash` 不匹配的旧载荷。resolution options 与 root 有意不入键：builtin 源码自包含。
 
-段文件落盘在 `${WJSM_CACHE_DIR}/builtin_ir/<key>.bin`，原子写入（先写临时文件再 rename）。读取时任何失败（缺文件、反序列化错误、版本不匹配）都回落到重建。
+段文件落盘在 `${WJSM_CACHE_DIR}/builtin_ir/<key>.bin`，原子写入（先写临时文件再 rename）。读取时任何失败（缺文件、反序列化错误、ABI hash 不匹配）都回落到重建。
 
 > <details><summary>为什么不做 `program.verify()` 门禁？</summary>
 >
-> 部分 builtin 闭包（events/path/perf_hooks）在基线上就存在死块校验告警（block has instructions but terminator is unreachable），运行时与 native 编译均容忍。若把 verify 当命中条件，这些闭包的缓存永远不命中。段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + 版本号保证。
+> 部分 builtin 闭包（events/path/perf_hooks）在基线上就存在死块校验告警（block has instructions but terminator is unreachable），运行时与 native 编译均容忍。若把 verify 当命中条件，这些闭包的缓存永远不命中。段与 plain 路径同源（同一 lowerer），结构合法由 bincode 解码 + `BUILTIN_CACHE_ABI_HASH` 保证。
 >
 > </details>
 
@@ -72,9 +85,9 @@
 | --- | --- | --- |
 | Native image cache | 用户代码的 native image | 设置了 `WJSM_CACHE_DIR` 且编译用户代码 |
 | Builtin IR 段缓存 | builtin 模块的 IR 段 | 设置了 `WJSM_CACHE_DIR` 且首次冷 lower |
-| 启动快照 | bootstrap 后的堆状态 | 进程启动时 |
+| 启动快照 | bootstrap 后的堆状态 | `NativeRuntime::new_*` 始终恢复嵌入快照 |
 
-三者都加速启动，但对象不同。native image cache 跳过 Cranelift 编译，builtin IR 段缓存跳过 builtin 模块 lower，startup snapshot 跳过 builtin JS 的执行。
+三者都加速启动，但对象不同。native image cache 跳过 Cranelift 编译，builtin IR 段缓存跳过 builtin 模块 lower，startup snapshot 跳过进程内 builtin JS 的执行。
 
 ## 深入了解
 

@@ -44,7 +44,7 @@ Error: error: cannot access `z` before initialisation
 ```text
 Parsing...
 Lowering to IR...
-Compiling to WASM...
+Compiling portable artifact...
 ```
 
 `--time` 打印各阶段耗时。不带 `-v` 用毫秒，带 `-v` 用微秒：
@@ -61,7 +61,9 @@ Timing: parse=285µs, lower=326µs, compile=1844µs, execute=16680µs
 
 ## 统计与 IR 自检
 
-`--stats` 打印 IR 与产物规模：常量数、函数数、基本块数、指令数、WASM 字节数。`--verify-ir` 在 lowering 之后校验 IR 不变量，通过时无额外输出，失败时报错并终止。两者都可与任意子命令组合。
+`--stats` 打印 IR 规模：常量数、函数数、基本块数、指令数。对已经编码的 portable artifact，还会额外打印 artifact 字节数。设置了 `WJSM_CACHE_DIR` 时，执行后还会打印 native cache 的 entries / bytes / hits / misses / invalidated。未打开磁盘缓存时 cache 计数为 0。
+
+`--verify-ir` 在 lowering 之后校验 IR 不变量，通过时无额外输出，失败时报错并终止。两者都可与任意子命令组合。
 
 > <details><summary>为什么用不同前缀区分错误阶段？</summary>
 >

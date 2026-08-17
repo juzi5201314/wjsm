@@ -5,7 +5,7 @@ wjsm 的行为由四类输入决定，优先级从高到低：
 | 优先级 | 来源 | 说明 |
 | --- | --- | --- |
 | 1 | 命令行选项 | `--gc`、`--inspect`、`--max-heap-size` 等 |
-| 2 | 环境变量 | `WJSM_GC`、`WJSM_STARTUP_SNAPSHOT` 等 |
+| 2 | 环境变量 | `WJSM_GC`、`WJSM_CACHE_DIR` 等 |
 | 3 | 配置文件 | `wjsm.toml` / `wjsm.json`，项目级默认值 |
 | 4 | 默认值 | 内置在代码里的 fallback |
 

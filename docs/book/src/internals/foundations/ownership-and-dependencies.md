@@ -69,7 +69,7 @@ ADR 0014 确立了三条硬边界：
 | GC 算法选择 | `wjsm-host-native/src/lib.rs::NativeRuntimeConfig::from_environment` |
 | 缓存目录 | 调用方传入的 `cache_dir`；CLI 只读 `WJSM_CACHE_DIR`，无默认目录 |
 | NaN-boxing 标签 | `wjsm-ir/src/value.rs` |
-| 影子栈默认值 | `wjsm-ir/src/lib.rs` 的 `SHADOW_STACK_*` 常量 |
+| Root 帧布局 | `wjsm-native-abi` 的 `NativeRootFrame` |
 | Node 内置模块清单 | `wjsm-module/src/builtin_modules.rs` |
 | 全局名单 | `wjsm-semantic/src/builtins.rs::BUILTIN_GLOBALS` |
 

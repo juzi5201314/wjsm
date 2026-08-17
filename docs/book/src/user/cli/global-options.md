@@ -17,4 +17,9 @@
 | `--inspect[=HOST:PORT]` | 启动 CDP inspector |
 | `--inspect-brk[=HOST:PORT]` | 启动并在入口暂停 |
 
-项目只有一个 production execution backend，因此没有 target/compiler selector，也没有 Wasm engine tuning 参数。不支持的宿主由 native compiler capability gate 拒绝。
+项目只有一个 production execution backend，因此没有 target/compiler selector。不支持的宿主由 native compiler capability gate 拒绝。`--inspect` / `--inspect-brk` 必须用 `=` 传参（例如 `--inspect=9229`），避免把后续子命令名当成地址。
+
+## 深入了解
+
+- [CLI 参数模型与配置合并](../../internals/tooling/cli-and-config.md)
+- [命令行索引](../reference/cli-index.md)

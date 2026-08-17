@@ -6,13 +6,11 @@
 
 Realm 是 JavaScript 的执行上下文，有自己的全局对象、intrinsics 和原型链。`node:vm.createContext()` 创建一个新 realm，`vm.Script` 和 `vm.SourceTextModule` 在指定 realm 中执行。
 
-wjsm 的 realm 实现基于 `RuntimeState` 的 realm 表。每个 realm 有独立的 `RealmIntrinsics`，存储原型句柄和全局构造器。`RealmId` 标识 realm，`DEFAULT_MAX_REALMS = 1024` 是上限。
+wjsm 的 realm 是宿主表，不是第二份 `NativeRuntime`。`NativeAgentState::node_vm` 用 `HashMap<u32, VmContextOptions>` 登记 sandbox 句柄，并维护 `active_contexts` 栈。每个 context 可以有独立的 `Array.prototype` / `Array` 构造器（`RealmArrayConstructor`）。跨 realm 对象仍活在同一 `ManagedHeap` 上。
 
 ## createContext
 
-`vm.createContext(sandbox)` 把 sandbox 对象设为新 realm 的全局对象。新 realm 的 `Object.prototype`、`Array.prototype` 等是独立的，与主 realm 不共享。
-
-context 创建后，`vm.Script` 在该 context 中执行代码。`vm.runInContext` 是快捷方式。
+`vm.createContext(sandbox)` 把 sandbox 对象登记为新 realm 的全局对象，并按需分配该 realm 的 array intrinsics。`vm.Script` 在该 context 中执行代码。`vm.runInContext` 是快捷方式。
 
 ## Script 与 SourceTextModule
 
@@ -22,7 +20,7 @@ context 创建后，`vm.Script` 在该 context 中执行代码。`vm.runInContex
 | `vm.SourceTextModule` | 编译 ES 模块，按 ESM 语义链接 |
 | `vm.compileFunction` | 编译函数体，可指定作用域 |
 
-三者都走 eval 模式编译，产出独立 WASM module。
+三者都走 eval 模式 lowering，再经 `NativeCompiler` 编成 native image，在当前 `NativeRuntime` 上执行。
 
 ## Isolate 与边界
 

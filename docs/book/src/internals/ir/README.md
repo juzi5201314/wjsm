@@ -1,6 +1,6 @@
 # 中间表示
 
-`wjsm-ir` 是零依赖 crate，定义前端与后端之间唯一的契约。它不做优化，也不感知 WASM：语义层往里写，后端从里读。
+`wjsm-ir` 是零依赖 crate，定义前端与后端之间唯一的契约。它不做优化，也不感知 Cranelift 或目标机器：语义层往里写，`wjsm-backend-native` 从里读并编成 CLIF。
 
 - [Program、Module 与 Function](program-module-function.md)：顶层容器与函数元数据。
 - [基本块与控制流图](cfg.md)：块、终止器与 CFG 形状约束。

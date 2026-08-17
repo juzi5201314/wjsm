@@ -31,7 +31,7 @@ Realm 是 JavaScript 执行上下文，有自己的全局对象、intrinsics 和
 
 每个 realm 有独立的 `RealmIntrinsics`，存储原型句柄和全局构造器。跨 realm 对象可以传递（共享同一 ManagedHeap），但不能直接访问对方的全局对象。
 
-Realm 数量上限默认 1024，可用 `WJSM_VM_MAX_REALMS` 调整。
+当前没有独立的 `WJSM_VM_MAX_REALMS` 开关；Realm 表由 `NativeAgentState` 持有，受堆预算与进程资源约束。
 
 ## SharedRuntimeState
 
@@ -43,7 +43,7 @@ Realm 数量上限默认 1024，可用 `WJSM_VM_MAX_REALMS` 调整。
 
 GC 根集来自三个来源：
 
-1. **栈上活跃句柄**：safepoint spill 写入 shadow stack 的值。
+1. **栈上活跃句柄**：safepoint 上 `NativeRootFrame` 里 bitmap 置位的槽。
 2. **RuntimeState 显式 root**：primordial 句柄（原型对象、全局构造器）。
 3. **Realm intrinsics**：每个 realm 的 `RealmIntrinsics` 结构里的原型句柄。
 

@@ -4,32 +4,41 @@
 
 ## 快照格式
 
-startup snapshot 是 bootstrap 后的堆状态序列化。它保存：
+startup snapshot 是 bootstrap 后的堆状态序列化，构建期写入 `startup_snapshot.bin`，由 `wjsm-host-native` `include_bytes!` 嵌入。`NativeRuntime::new_*` **始终**调用 `restore_startup_snapshot`。没有环境变量可以跳过恢复。
+
+它保存：
 
 - 对象堆字节内容；
-- 句柄偏移；
-- runtime 字符串表；
-- native callable 表。
+- 句柄偏移与世代；
+- shape table；
+- runtime 字符串表与 native callable 表（host state）。
 
-`SNAPSHOT_FORMAT_VERSION` 任何 wire 改动必须递增。快照 ABI hash 由 `support_abi_union_hash` + `builtin_js_bundle_hash` + `compatibility_fingerprint` 组成。
+`SNAPSHOT_FORMAT_VERSION` 任何 wire 改动必须递增。解码时 `SnapshotExpectations` 还校验：
+
+| 字段 | 来源 |
+| --- | --- |
+| `bootstrap_hash` | `wjsm-host-native` 构建期 `BOOTSTRAP_HASH` |
+| `lowering_hash` | `wjsm_backend_native::NATIVE_CODEGEN_HASH` |
+| `semantic_abi_hash` | `wjsm_artifact_format::semantic_abi_hash()` |
+| `native_abi_hash` | `wjsm_native_abi::native_abi_hash()` |
+| `target` | `{ARCH}-{OS}` |
+| `endian` | `SnapshotEndian::current()` |
+| `object_heap_base` / `object_heap_capacity_end` | 当前 `NativeHeapMemory` 布局 |
+
+见 `crates/wjsm-host-native/src/snapshot.rs`。
 
 ## 改动步骤
 
-1. **格式定义**：在快照格式定义处修改序列化/反序列化逻辑。
+1. **格式定义**：在 `wjsm-snapshot-format` 修改序列化/反序列化逻辑。
 2. **版本递增**：`SNAPSHOT_FORMAT_VERSION` 递增。
-3. **ABI hash 更新**：如果快照内容影响 native cache key，更新 hash 计算。
-4. **自校验**：`ManagedHeapV2ArtifactAbi` 生成时自校验，确保格式合法。
-5. **cold bootstrap**：确保从空堆执行 builtin JS 能重建快照。
-6. **warm restore**：确保快照恢复路径与 cold bootstrap 产出一致。
-7. **测试**：`startup_snapshot.rs` 和 `embedded_startup_snapshot.rs` 测试通过。
-
-## 禁用快照
-
-`WJSM_STARTUP_SNAPSHOT=0` / `false` / `off` 禁用快照，每次都走 cold bootstrap。用于调试和变更 bootstrap 逻辑时验证一致性。
+3. **期望哈希**：bootstrap / codegen / semantic ABI / native ABI 任一变化都会让旧快照拒收，需要重建嵌入工件。
+4. **cold bootstrap**：构建期从空堆执行 builtin JS，写出新的 `startup_snapshot.bin`。
+5. **warm restore**：确认 `NativeRuntime::new_*` 恢复后的 primordial 与 cold 产出一致。
+6. **测试**：快照编解码与 runtime 启动测试通过。
 
 ## 嵌入工件
 
-当前开发构建不生成嵌入工件。native cache 按需在运行时生成。`wjsm-host-native` 的 `include_bytes!` 路径用于嵌入预构建的工件（如 builtin IR 段缓存），修改时需要同步更新 build 流程。
+开发构建把快照编进 `wjsm-host-native`。native image 磁盘缓存是另一条路径，只在设置了 `WJSM_CACHE_DIR` 时按需生成，不替代启动快照。
 
 ## 深入了解
 

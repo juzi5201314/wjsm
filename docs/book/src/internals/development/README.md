@@ -8,7 +8,7 @@
 - [新增 Builtin](adding-builtins.md)
 - [新增 Host Import](adding-host-imports.md)
 - [新增 Node.js 模块](adding-node-modules.md)
-- [修改 WASM ABI](changing-wasm-abi.md)
+- [修改 Native ABI](changing-wasm-abi.md)
 - [修改快照与嵌入工件](changing-snapshots.md)
 - [修改 GC 与堆布局](changing-gc.md)
 - [跨层变更检查清单](cross-layer-checklist.md)

@@ -29,7 +29,7 @@
 
 ## 语义拦截的配合
 
-语义层（`wjsm-semantic/src/builtins.rs`）识别已知调用形态并发射 `CallBuiltin`。后端 codegen 查 `NativeCallable` 注册表得到 WASM function index。运行时 host import 函数调用 `wjsm-builtins` 的泛型算法。
+语义层（`wjsm-semantic/src/builtins.rs`）识别已知调用形态并发射 `CallBuiltin`。后端 codegen 把 `Builtin` 编成 `NativeHostOp` wire ID，经 `wjsm_native_host_operation` 进入宿主 dispatcher。运行时再调用 `wjsm-builtins` 的泛型算法。
 
 三层各司其职：语义层决定「这是什么操作」，后端决定「调哪个函数」，builtins 决定「怎么执行」。
 

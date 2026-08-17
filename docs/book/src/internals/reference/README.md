@@ -5,7 +5,7 @@
 - [Crate 与公共 API 索引](crate-api-index.md)
 - [Owner 与单一事实来源](owners-and-sources-of-truth.md)
 - [核心不变量](invariants.md)
-- [WASM 与 Host ABI 索引](abi-index.md)
+- [Native ABI 索引](abi-index.md)
 - [对象、值与标签索引](layout-and-tags.md)
 - [运行时配置与环境变量索引](runtime-configuration-index.md)
 - [构建工件索引](artifact-index.md)

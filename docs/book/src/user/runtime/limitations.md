@@ -91,7 +91,7 @@ import { URL, URLSearchParams } from "node:url";
 
 `wjsm build --format native-executable` 在当前宿主上产出可直接运行的 ELF/PE：预链 `wjsm-exec` stub 加上 portable `.wjsm`、预编译 `NativeObject` 与制品内源码快照。Linux 上的 wjsm 出 ELF，Windows 上的 wjsm 出 PE。交叉编译、把 runtime-private object 改后缀冒充 executable，都不支持。打包失败不创建或覆盖输出文件。发行物需要同时带 `wjsm` 与 `wjsm-exec`。
 
-packed exe 的源码 owner 是快照，不是主机目录。静态 `new Worker('./x')` / `fork('./x')` 会在打包期自动纳入；计算出来的入口仍须 `--include`。快照外模块与虚拟路径写操作明确失败。`wjsm run` 与 portable `.wjsm` 仍用主机路径。详见 [ADR 0017](../../../adr/0017-native-executable-source-snapshot.md) 与 [ADR 0019](../../../adr/0019-native-executable-application-contract.md)。
+packed exe 的源码 owner 是快照，不是主机目录。静态 `new Worker('./x')` / `fork('./x')` 会在打包期自动纳入；计算出来的入口仍须 `--include`。快照外模块与虚拟路径写操作明确失败。`wjsm run` 与 portable `.wjsm` 仍用主机路径。详见 [ADR 0017](../../../../adr/0017-native-executable-source-snapshot.md) 与 [ADR 0019](../../../../adr/0019-native-executable-application-contract.md)。
 
 ## 深入了解
 

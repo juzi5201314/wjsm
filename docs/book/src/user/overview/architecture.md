@@ -36,3 +36,9 @@ JavaScript 值使用固定宽度 NaN-boxing。对象、数组、字符串与 Pro
 当前 production capability 只承诺 x86_64 Linux 与 x86_64 Windows。不支持的宿主在 native compiler 初始化时 fail-closed，不切换到另一 backend。
 
 Direct native code 不提供进程内 sandbox。artifact verifier、checked lowering、strict relocation、symbol allowlist 与 W^X 是受信编译/加载边界；运行不受信任代码必须使用独立 OS process、权限隔离和资源限制。
+
+## 深入了解
+
+- [端到端架构](../../internals/foundations/architecture.md)
+- [编译与执行流水线](../../internals/pipeline/index.html)
+- [跨 crate 所有权与依赖边界](../../internals/foundations/ownership-and-dependencies.md)

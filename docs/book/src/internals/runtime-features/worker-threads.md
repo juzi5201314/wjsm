@@ -35,7 +35,7 @@ MessagePort 的消息通过 `AsyncHostCompletion::HostTask` 投递。`scope` 在
 
 ## 限制
 
-Worker 是独立的 wjsm 进程/线程，有自己的堆和 GC。worker 之间不共享 JavaScript 对象，只能通过结构化克隆传递消息。`SharedArrayBuffer` 通过 shared memory 共享。
+Worker 是独立 agent，有自己的 ManagedHeap 和 GC。worker 之间不共享 JavaScript 对象或 GC handle，只能通过结构化克隆传递消息。`SharedArrayBuffer` 有独立的字节 backing，经 SAB/Atomics 共享，不是对象堆，也不是 Wasm shared memory。
 
 ## 深入了解
 

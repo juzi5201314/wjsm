@@ -30,3 +30,8 @@ wjsm run app.ts >program.out 2>diagnostics.log
 | 其他 | `process.exit(n)` 请求的状态 |
 
 `--format native-executable` 属于编译侧打包：成功写出同宿主 ELF/PE；失败返回 1，且不会创建或覆盖目标文件。
+
+## 深入了解
+
+- [实例化与执行生命周期](../../internals/host-runtime/instantiation-and-lifecycle.md)
+- [制品与宿主要求](wasm-artifacts.md)

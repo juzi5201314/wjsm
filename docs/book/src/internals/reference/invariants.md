@@ -17,7 +17,7 @@ ADR 0010 确立：
 
 - 统一 ManagedHeap，三种回收器共用。
 - 8 字节句柄（V2），不用 4 字节句柄（V1）。
-- shared memory64 对象堆，不用 memory32。
+- 逻辑 memory64 对象堆（生产 `NativeHeapMemory`），不用 memory32。
 - 不引入 dual-heap fallback 或第二个运行时 owner。
 
 ## 后端边界

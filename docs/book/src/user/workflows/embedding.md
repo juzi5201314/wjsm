@@ -46,3 +46,8 @@ let execution = execute_with_writer_with_options(
 `RuntimeOptions` 配置 cache dir、module root、working directory、环境变量、collector、heap 上限与 source compile options。执行 API 是同步 owner-thread API；I/O/timer 等异步语义由 `NativeRuntime` 自己的 event loop 驱动。
 
 `NativeRuntime` 不能跨线程移动或并发调用。每个 agent/runtime 拥有独立 heap、scheduler 与 mutable side tables。
+
+## 深入了解
+
+- [实例化与执行生命周期](../../internals/host-runtime/instantiation-and-lifecycle.md)
+- [Host 能力 Trait](../../internals/host-runtime/host-traits.md)

@@ -27,7 +27,7 @@ store var $0.x, %21
 
 `$0` 是模块顶层作用域，嵌套块和函数各有自己的编号。这个编码让同名变量在不同作用域下天然区分，后端不需要重跑作用域分析。
 
-几个固定名不带作用域号：`$this`、`$env`、`$module_main`（模块入口函数名，常量 `MODULE_ENTRY_IR_NAME`）。
+几个固定名不带作用域号：`$this`、`$env`、`$module_main`（模块入口函数名，常量 `MODULE_ENTRY_IR_NAME`）。它们对应 Native ABI 入口的 env / this，以及 bundle 入口函数。
 
 > <details><summary>为什么用字符串名而不是单独的 VarId？</summary>
 >
@@ -42,9 +42,7 @@ store var $0.x, %21
 > - 快照测试友好：IR 快照里能看到变量名，不需要查表。
 > - 后端无歧义：同名变量在不同作用域下字符串不同，不会混淆。
 >
-> 代价：每次访问变量要做字符串比较而不是整数比较。`%3` vs `$0.x` 的差距。
->
-> 实测这个开销不显著——IR 处理阶段（lowering、codegen）本来就在做大量字符串操作。
+> 代价：每次访问变量要做字符串比较而不是整数比较。IR 处理阶段（lowering、codegen）本来就在做大量字符串操作，这个开销不显著。
 >
 > </details>
 
@@ -72,6 +70,6 @@ IR 不携带 JS 值的静态类型。后端自己在 `analysis_value_ty.rs` 里�
 
 ## 深入了解
 
-- [NaN-boxed 值在 WASM 侧的位布局](../backend/value-representation.md)
+- [NaN-boxed 值在 native 侧的位布局](../backend/value-representation.md)
 - [后端如何做值类型推断与槽位分配](../backend/liveness-slots-and-spills.md)
 - [闭包捕获在语义层的判定](../frontend/functions-closures-and-classes.md)

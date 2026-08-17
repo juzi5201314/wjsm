@@ -22,10 +22,10 @@ wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。
 | `child_process` | 6 | 默认禁用，需 `WJSM_CHILD_PROCESS_ALLOW` |
 | `dgram` | 2 | |
 | `tls` | 6 | |
-| `worker_threads` | 10 | 上限 32，可用 `WJSM_WORKER_THREADS_MAX` 调整 |
+| `worker_threads` | 10 | 每 agent 独立堆；无 `WJSM_WORKER_THREADS_MAX` |
 | `inspector` | 3 | |
 | `cluster` | 21 | |
-| `vm` | 11 | 多 Realm，上限 1024 |
+| `vm` | 11 | 多 Realm，共用同一 ManagedHeap |
 | `async_hooks` | 7 | 含 `AsyncLocalStorage` |
 | `perf_hooks` | 13 | |
 
