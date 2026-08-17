@@ -1,6 +1,6 @@
 # Crate 与公共 API 索引
 
-这一章是 15 个 crate 的公共 API 速查表。
+这一章是 workspace crate 的公共 API 速查表。
 
 ## wjsm-parser
 
@@ -111,6 +111,17 @@ Cranelift 后端实现。
 ## wjsm-builtins
 
 JavaScript builtins 算法。按域组织：object、collections、array、typedarray、string、promise、async、proxy、json、date、fetch、weakref、modules、inspector、render、core。
+
+## wjsm-intl-data
+
+ICU4X compiled_data、UTS #46 与 WHATWG Encoding 标签的唯一入口。
+
+| 导出 | 用途 |
+| --- | --- |
+| `DATA_MANIFEST` / `manifest_sha256` | 版本契约与稳定 hash |
+| `normalize` | Unicode NFC/NFD/NFKC/NFKD |
+| `probe_locale` / `keep_compiled_data` | smoke 覆盖与发行 stub 链接保活 |
+| `icu` / `idna` / `encoding_rs` | 测试与发行构建 re-export；debug `wjsm` 只链 normalize |
 
 ## wjsm-gc
 

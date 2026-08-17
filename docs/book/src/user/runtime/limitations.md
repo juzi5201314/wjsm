@@ -75,7 +75,7 @@ set.forEach((value) => console.log(typeof value)); // "object"
 
 ## Intl 未实现
 
-`Intl` 对象未实现，依赖它的方法会 trap。`Date.prototype.toLocaleString`、`Number.prototype.toLocaleString` 等 locale 敏感方法不提供 locale 定制，返回默认格式。
+`Intl` 对象未实现，依赖它的方法会 trap。`Date.prototype.toLocaleString`、`Number.prototype.toLocaleString` 等 locale 敏感方法不提供 locale 定制，返回默认格式。CLDR/Unicode 数据已经嵌入 `wjsm` / `wjsm-exec` stub（见内部手册「国际化数据契约」），供后续阶段接线。
 
 ## URL / URLSearchParams 不是全局
 

@@ -29,13 +29,13 @@ num-traits = { version = "0.2" }
 sysinfo = { workspace = true }
 url = { workspace = true }
 regress = { workspace = true }
-unicode-normalization = { workspace = true }
 wjsm-artifact-format = { path = "../wjsm-artifact-format" }
 wjsm-backend-native = { path = "../wjsm-backend-native" }
 wjsm-exec-format = { path = "../wjsm-exec-format" }
 wjsm-builtins = { path = "../wjsm-builtins" }
 wjsm-gc = { path = "../wjsm-gc" }
 wjsm-host = { path = "../wjsm-host" }
+wjsm-intl-data = { path = "../wjsm-intl-data" }
 wjsm-ir = { path = "../wjsm-ir" }
 wjsm-module = { path = "../wjsm-module" }
 wjsm-native-abi = { path = "../wjsm-native-abi" }

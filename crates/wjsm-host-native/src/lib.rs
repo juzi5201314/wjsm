@@ -1060,6 +1060,8 @@ struct NativeArrayIterator {
 
 impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
+        // 把 ICU4X compiled_data 留在 rustc 链接的 stub 里，避免 DCE 在 Intl API 落地前删掉。
+        wjsm_intl_data::keep_compiled_data();
         let gc = gc::NativeGc::new(config.gc_algorithm, config.max_heap_size)?;
         let compiler = NativeCompiler::new()?;
         let repository = if config.isolate_native_images {

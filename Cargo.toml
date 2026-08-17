@@ -24,6 +24,7 @@ members = [
     "crates/wjsm-host",
     "crates/wjsm-builtins",
     "crates/wjsm-gc",
+    "crates/wjsm-intl-data",
 ]
 
 [workspace.package]
@@ -70,7 +71,6 @@ reqwest = { version = "0.12", default-features = false, features = [
 proptest = "1.9.0"
 url = "2"
 encoding_rs = "0.8"
-unicode-normalization = "0.1"
 get_if_addrs = "0.5.3"
 sysinfo = "0.39.5"
 hdrhistogram = { version = "7.5.4", default-features = false }

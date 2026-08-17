@@ -1,5 +1,3 @@
-use unicode_normalization::UnicodeNormalization;
-
 use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
@@ -55,14 +53,6 @@ pub(super) fn dispatch_string(
     })
 }
 
-#[derive(Clone, Copy)]
-enum NormalizationForm {
-    Nfc,
-    Nfd,
-    Nfkc,
-    Nfkd,
-}
-
 fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let receiver = args
         .first()
@@ -91,59 +81,16 @@ fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         RuntimeString::from(render_value(state, primitive))
     };
     let form = if args.get(1).is_none_or(|form| value::is_undefined(*form)) {
-        NormalizationForm::Nfc
+        "NFC".to_string()
     } else {
-        let form = match to_string_coerced(ctx, state, args[1]) {
+        match to_string_coerced(ctx, state, args[1]) {
             Ok(form) => form,
             Err(exception) => return exception,
-        };
-        match form.as_str() {
-            "NFC" => NormalizationForm::Nfc,
-            "NFD" => NormalizationForm::Nfd,
-            "NFKC" => NormalizationForm::Nfkc,
-            "NFKD" => NormalizationForm::Nfkd,
-            _ => {
-                return range_error(
-                    ctx,
-                    state,
-                    wjsm_builtins::string_methods::INVALID_NORMALIZATION_FORM_MESSAGE,
-                );
-            }
         }
     };
-    intern(ctx, state, normalize_utf16(&text, form))
-}
-
-fn normalize_utf16(text: &RuntimeString, form: NormalizationForm) -> RuntimeString {
-    let mut output = Vec::with_capacity(text.utf16_len());
-    let mut scalar_run = String::new();
-    for decoded in char::decode_utf16(text.as_utf16_units().iter().copied()) {
-        match decoded {
-            Ok(character) => scalar_run.push(character),
-            Err(error) => {
-                extend_normalized(&mut output, &scalar_run, form);
-                scalar_run.clear();
-                output.push(error.unpaired_surrogate());
-            }
-        }
-    }
-    extend_normalized(&mut output, &scalar_run, form);
-    RuntimeString::from_utf16_units(output)
-}
-
-fn extend_normalized(output: &mut Vec<u16>, text: &str, form: NormalizationForm) {
-    fn extend(output: &mut Vec<u16>, characters: impl Iterator<Item = char>) {
-        let mut encoded = [0_u16; 2];
-        for character in characters {
-            output.extend_from_slice(character.encode_utf16(&mut encoded));
-        }
-    }
-
-    match form {
-        NormalizationForm::Nfc => extend(output, text.nfc()),
-        NormalizationForm::Nfd => extend(output, text.nfd()),
-        NormalizationForm::Nfkc => extend(output, text.nfkc()),
-        NormalizationForm::Nfkd => extend(output, text.nfkd()),
+    match wjsm_builtins::string_methods::normalize_runtime_string_by_form(&text, &form) {
+        Ok(normalized) => intern(ctx, state, normalized),
+        Err(message) => range_error(ctx, state, message),
     }
 }
 

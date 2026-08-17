@@ -33,7 +33,7 @@
 
 **`.wjsm` 不是独立可执行文件。** 默认 `build` 输出的 portable 制品依赖 wjsm 宿主 runtime。`--format native-executable` 在当前宿主上打包预链 stub 与预编译 object，得到可直接运行的 ELF/PE；它不是跨平台制品，也不调用系统 linker。
 
-**不引入完整 ICU。** locale 敏感方法不实现，`Intl` 只在全局名单占位。Unicode 归一化通过 `icu_normalizer` 单点提供。
+**不引入 ICU4C / 宿主 ICU。** 国际化数据由 ICU4X compiled_data 嵌入 `wjsm` / `wjsm-exec` stub，覆盖为 full locale，不读 system ICU、`NODE_ICU_DATA` 或联网下载。JS `Intl` API 仍由后续阶段实现；数据契约见 [国际化数据契约](intl-data.md)。
 
 **不为兼容而保留旧路径。** 切换实现时直接迁移全部调用方，不留 shim、别名或双写。ManagedHeap 取代 memory32 对象堆后，旧堆路径已完全移除。
 

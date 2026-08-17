@@ -8,3 +8,4 @@
 - [仓库布局](repository-layout.md)
 - [Workspace crate 地图](crate-map.md)
 - [跨 crate 所有权与依赖边界](ownership-and-dependencies.md)
+- [国际化数据契约](intl-data.md)

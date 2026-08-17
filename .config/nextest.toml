@@ -59,6 +59,19 @@ filter = 'binary(/native_executable/)'
 threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }
 
+# r1_accessor_slots：20000 次分配后再读 accessor；单独约 1s，全量并行时
+# 堆与 debug `wjsm` 启动抖动会越过 3s。独占 CPU，3s 报慢、9s 才终止。
+[[profile.default.overrides]]
+filter = 'test(/happy__r1_accessor_slots/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
+# large_array_churn：GC 协作回收压力。单独约 2.4s，调度抖动会越过 3s。
+[[profile.default.overrides]]
+filter = 'test(/large_array_churn_collects_before_cooperative_poll/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
 # host_table_reclaim：4MB 小堆 + ZGC + 20000 次闭包分配，本质是 GC 回收
 # 压力测试。单独执行约 2.7s，调度抖动会越过默认 3s，因此独占 CPU 且采用
 # 三周期门禁：3s 报慢、9s 才终止，仍能捕获卡死或资源未释放。

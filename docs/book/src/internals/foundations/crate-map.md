@@ -15,6 +15,7 @@
 | `wjsm-host` | backend-independent host/ExecContext contract |
 | `wjsm-builtins` | ECMAScript/WHATWG/Node semantic algorithms |
 | `wjsm-gc` | ManagedHeap、HandleTableV2、collectors与虚拟内存 |
+| `wjsm-intl-data` | ICU4X compiled_data / IDNA / Encoding 标签，唯一国际化数据 provider |
 | `wjsm-runtime` | native runtime public facade，只 re-export |
 | `wjsm-cli` | CLI/config/input/artifact/run orchestration |
 | `wjsm-test262` | Test262 runner |
@@ -23,7 +24,7 @@
 
 ## 依赖边界
 
-Cranelift、object、平台映射与 native ABI 只属于 `wjsm-backend-native`/`wjsm-host-native`。`wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 不依赖执行 backend。portable artifact 不依赖 native image/cache。
+Cranelift、object、平台映射与 native ABI 只属于 `wjsm-backend-native`/`wjsm-host-native`。`wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module`、`wjsm-intl-data` 不依赖执行 backend。portable artifact 不依赖 native image/cache。
 
 ## 修改落点
 
@@ -35,6 +36,7 @@ Cranelift、object、平台映射与 native ABI 只属于 `wjsm-backend-native`/
 | artifact schema/limits | `wjsm-artifact-format` |
 | CLIF/relocation/unwind | `wjsm-backend-native` |
 | JS algorithm | `wjsm-builtins` / `wjsm-host` |
+| CLDR/Unicode 数据 | `wjsm-intl-data` |
 | runtime object/Promise/I/O | `wjsm-host-native` |
 | heap/handle/barrier/GC | `wjsm-gc` |
 | public CLI | `wjsm-cli` |

@@ -12,11 +12,12 @@
 | 内置模块表 | `wjsm-module/src/builtin_modules.rs` | `node:` 模块 |
 | Builtin 拦截 | `wjsm-semantic/src/builtins.rs` | `Builtin` enum |
 | Cranelift ISA 构造 | `wjsm-backend-native/src/isa_config.rs` | 唯一 ISA/flags owner |
+| CLDR/Unicode 数据 | `wjsm-intl-data` | 唯一 ICU4X compiled_data / IDNA / Encoding provider |
 
 ADR 0014 的约束：
 
 - Cranelift 依赖只在 `wjsm-backend-native` 和 `wjsm-host-native`。
-- `wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 后端无关。
+- `wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module`、`wjsm-intl-data` 后端无关。
 - `wjsm-runtime` 是 facade，只 re-export。
 - `wjsm-gc` 通过 `GcContext` / `RootProvider` 接合层访问内存。
 
@@ -25,7 +26,7 @@ ADR 0014 的约束：
 | 关注点 | 来源 |
 | --- | --- |
 | 用户行为和 CLI | README.md 和 `wjsm --help` |
-| 架构边界和不变量 | `docs/adr/`，尤其是 0010、0012、0014 |
+| 架构边界和不变量 | `docs/adr/`，尤其是 0010、0012、0014、0020 |
 | Fixture 和测试机制 | `build.rs`、`tests/`、`fixtures/`、`.config/nextest.toml` |
 
 ## ECMAScript 规范

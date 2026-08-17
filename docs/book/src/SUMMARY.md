@@ -95,6 +95,7 @@
     - [仓库布局](internals/foundations/repository-layout.md)
     - [Workspace crate 地图](internals/foundations/crate-map.md)
     - [跨 crate 所有权与依赖边界](internals/foundations/ownership-and-dependencies.md)
+    - [国际化数据契约](internals/foundations/intl-data.md)
   - [编译与执行流水线](internals/pipeline/README.md)
     - [解析阶段](internals/pipeline/parse.md)
     - [语义 Lowering 阶段](internals/pipeline/lower.md)
