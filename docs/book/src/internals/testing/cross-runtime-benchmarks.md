@@ -11,12 +11,10 @@ wjsm 是 AOT 运行时（SWC AST → 语义 IR → portable `.wjsm` → Cranelif
 
 因此单测"一次运行"的墙钟时间会把 V8 的 warmup 成本与 wjsm 的启动成本混在一起，无法区分稳态性能与启动性能。基准必须分两档：
 
-- **default 档（稳态）**：wjsm 打开磁盘缓存（`WJSM_CACHE_DIR`），node 由 hyperfine `--warmup` 预热 —— 测"实际使用中的端到端体验"。
-- **wjsm_cold 档（`--cold`）**：每轮清空/禁用磁盘缓存 —— 量化"每进程真冷启动"成本。
+- **default 档（稳态）**：不强制设置 `WJSM_CACHE_DIR`（沿用进程环境）；node 由 hyperfine `--warmup` 预热。
+- **wjsm_cold 档（`--cold`）**：把 `WJSM_CACHE_DIR` 指到 `/tmp/wjsm-bench-cold-cache`，每轮 `--prepare` 清空 —— 量化无热 native/builtin 磁盘缓存的启动+编译成本。启动快照始终恢复。
 
-两档对比能回答：wjsm 的差距来自启动/编译（冷档恶化、稳态缩小），还是执行核心本身（两档同比例差距）。
-
-冷档 runner 仍会写 `WJSM_STARTUP_SNAPSHOT=0`，但宿主不再读取该变量。快照无法通过环境变量关闭；当前冷档只可靠地清除或关闭磁盘缓存。`WJSM_DISABLE_LICM=1` 同样由 runner 写入，crate 侧已不读——循环内 `work()` 是否被提升不再由这个变量控制。
+两档对比能回答：wjsm 的差距来自磁盘缓存 miss 的编译（冷档恶化、稳态缩小），还是执行核心本身（两档同比例差距）。
 
 ## 方法论来源
 
@@ -72,7 +70,7 @@ WJSM=target/release/wjsm-cli target/release/wjsm-bench --runtimes node   # 只�
 | 字段 | 含义 |
 | --- | --- |
 | `regimes.default` | 稳态档：热磁盘缓存 |
-| `regimes.wjsm_cold` | 冷启动档：每轮清空 `WJSM_CACHE_DIR`（runner 仍写未使用的 `WJSM_STARTUP_SNAPSHOT=0`） |
+| `regimes.wjsm_cold` | 冷档：每轮清空 `WJSM_CACHE_DIR`；启动快照仍恢复 |
 | `wall` | hyperfine 壁钟分布（mean / stddev / median / min / max / runs） |
 | `ns_per_op` | 场景内稳态单次 work 耗时（仅 default 档；场景 stdout 的 `ns_per_op=` 解析） |
 | `max_rss_kb` | `/usr/bin/time -v` 的最大驻留集（仅 Linux 且有 GNU time 时） |

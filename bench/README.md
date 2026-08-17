@@ -22,7 +22,7 @@ crates/wjsm-bench/ Rust harness：CLI、环境快照、hyperfine 调用、RSS、
 cargo build --release -p wjsm-bench -p wjsm-cli
 WJSM=target/release/wjsm-cli target/release/wjsm-bench            # 全场景 default 档
 WJSM=target/release/wjsm-cli target/release/wjsm-bench --quick    # 冒烟：runs=3 warmup=1 window=200ms
-WJSM=target/release/wjsm-cli target/release/wjsm-bench --cold     # 追加 wjsm 冷启动档
+WJSM=target/release/wjsm-cli target/release/wjsm-bench --cold     # 追加无热磁盘缓存档（启动快照仍开）
 WJSM=target/release/wjsm-cli target/release/wjsm-bench --scenarios fib   # 子串过滤场景
 WJSM=target/release/wjsm-cli target/release/wjsm-bench --runtimes node   # 只测 node
 ```

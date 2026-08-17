@@ -1,8 +1,9 @@
 # ADR 0003: Startup Snapshot Boundary
 
-**Status**: snapshot 边界/格式仍采纳；分发与启动策略由 [ADR 0004](0004-build-time-embedded-runtime.md) 部分取代。ADR 0004 将 first-run capture 从客户运行时迁移到 build-time embedded bytes，并退役运行时磁盘 cache；本 ADR 仍是可捕获内容与 restore 重定位规则的权威文档。ManagedHeap / 8-byte handle / page metadata / shared memory64 对象堆 wire 扩展见 [ADR 0010](0010-generational-zgc-managed-heap.md)：内容边界不变（用户对象、scheduler、side table 永不进 snapshot）；二进制 layout 在 cutover 后仅描述 ManagedHeap 对象堆与 8-byte handle 表元数据。
+**Status**: snapshot 边界仍采纳；分发由 [ADR 0004](0004-build-time-embedded-runtime.md) 部分取代。Direct Cranelift 之后的现行合同见下方 **Amended (2026-08-17)**。下文「Snapshot 内容」到「Wasm 导出契约」是 Wasm 时代原文，不再描述当前嵌入字节。
 
-**Date**: 2026-06-18
+**Date**: 2026-06-18  
+**Amended**: 2026-08-17（强制 restore；废止 `WJSM_STARTUP_SNAPSHOT` / `_DEBUG`；现行种子载荷）
 
 ## Context
 
@@ -18,9 +19,20 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 2. 恢复时按当前模块的 `__object_heap_start` 重定位，随后执行当前模块专属的 `__wjsm_init_function_props`（幂等），再进入用户 `main`。
 3. Snapshot 格式为手写 little-endian 二进制，不走 JSON/serde 热路径。
 4. ADR 0004 分发策略：snapshot bytes 在构建期嵌入；运行时磁盘 startup snapshot cache 已退役。
-5. 默认开启；显式设 `WJSM_STARTUP_SNAPSHOT=0`/`false`/`off` 关闭。embedded ABI mismatch / missing embedded bytes 走 cold bootstrap，不污染默认 stderr；`WJSM_STARTUP_SNAPSHOT_DEBUG=1` 输出诊断。
+5. **强制 restore。** `NativeRuntime::new_*` 始终恢复嵌入的 `startup_snapshot.bin`。不读取 `WJSM_STARTUP_SNAPSHOT` / `WJSM_STARTUP_SNAPSHOT_DEBUG`。指纹或格式失配时启动失败，不回退到运行时 cold bootstrap，也不在客户机器上重写快照。`wjsm-bench --cold` 只清空磁盘编译缓存，不关闭启动快照。
 
-### Snapshot 内容
+### Amended (2026-08-17)：现行 native 种子
+
+`wjsm-host-native/build.rs` 写入的不是 builtin JS，也不是引导完的 primordial 堆。当前载荷是：
+
+- 一块对象头大小的 `object_bytes`（handle `0` 作为 global object）；
+- 空 shape table；
+- host state：0 个 intern 字符串，1 个 `EvalIndirect` callable；
+- 指纹：`bootstrap_hash`、`NATIVE_CODEGEN_HASH`、semantic/native ABI、`{ARCH}-{OS}`、endian。
+
+`Object.prototype` / `Array.prototype` / `RegExp.prototype` 在 restore 之后由 `ensure_intrinsic_prototypes` 当场分配。`node:` builtin 源码仍由 `wjsm-module` 在编译期 lower，不进这份快照。
+
+### Snapshot 内容（历史，Wasm 路径）
 
 - **header**: magic `WJSMSNP\0`, format version, ABI hash, heap range, handle count, prototype handles, `arr_proto_table_base`/length/table ABI hash, 三个 `i64` 原型字段
 - **object_bytes**: `memory[object_heap_start..heap_ptr]` 的原始拷贝
@@ -90,6 +102,7 @@ Snapshot 不保存 scheduler、worker、async host completion channel/counter。
 - **Wasmtime Instance/Store snapshot**：绑定了特定编译产物的 linear memory 布局，不可跨模块重定位，且 wasmtime snapshot API 不稳定。
 - **Per-module snapshot (单模块缓存)**：曾可绕开 `indirect call type mismatch`，但会失去跨模块共享收益；现由 `arr_proto_table_base` 导出 + restore 重定位替代。
 - **JSON/serde 序列化**：较简单的格式，但 restore 热路径的解析和分配开销大。
+- **运行时 `WJSM_STARTUP_SNAPSHOT=0` 关闭**：Direct Cranelift 之后没有可接的运行时 cold bootstrap；现行种子也不含 builtin JS。关闭开关已废止，避免假 A/B。
 
 ## References
 

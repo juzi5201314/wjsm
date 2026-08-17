@@ -1,6 +1,6 @@
 # 运行时配置与环境变量索引
 
-这一章汇总当前 crate 真正读取的运行时配置。下列「已死」变量仍可能出现在 bench runner 或旧文档里，但宿主不再读取：`WJSM_STARTUP_SNAPSHOT`、`WJSM_STARTUP_SNAPSHOT_DEBUG`、`WJSM_DISABLE_LICM`、`WJSM_COMPILER`、`WJSM_GC_LOG`、`WJSM_VM_MAX_REALMS`、`WJSM_WORKER_THREADS_MAX`。
+这一章汇总当前 crate 真正读取的运行时配置。已废止、宿主不读：`WJSM_STARTUP_SNAPSHOT`、`WJSM_STARTUP_SNAPSHOT_DEBUG`、`WJSM_DISABLE_LICM`、`WJSM_COMPILER`、`WJSM_GC_LOG`、`WJSM_VM_MAX_REALMS`、`WJSM_WORKER_THREADS_MAX`。启动快照强制恢复，见 [ADR 0003](../../../../adr/0003-startup-snapshot-boundary.md)。
 
 ## CLI 选项
 
@@ -53,7 +53,7 @@
 | `WJSM_CHILD_PROCESS_ALLOW` | 允许 `child_process` 执行的命令白名单 |
 | `WJSM_EXEC_ENTRY` | 父进程写给 packed worker 的入口；不是对外承诺 |
 
-启动快照始终从嵌入的 `startup_snapshot.bin` 恢复，没有关闭开关。
+启动种子始终从嵌入的 `startup_snapshot.bin` 恢复。`WJSM_STARTUP_SNAPSHOT` 已废止。`wjsm-bench --cold` 只清空磁盘缓存。
 
 ### 测试
 

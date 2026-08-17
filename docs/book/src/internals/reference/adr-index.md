@@ -2,7 +2,7 @@
 
 | ADR | 标题 | 状态 |
 | --- | --- | --- |
-| 0001–0009 | Symbol、RuntimeState、snapshot、inspector、realm、async hooks 等早期决策 | 按各文件状态 |
+| 0001–0009 | Symbol、RuntimeState、snapshot、inspector、realm、async hooks 等早期决策 | 按各文件状态；0003 于 2026-08-17 改为强制 restore |
 | 0010 | Generational ZGC Managed Heap | Accepted，当前 GC 基线 |
 | 0011 | Runtime Split by Backend Independence | 历史；Wasmtime 生产路径由 0014 取代 |
 | 0012 | Host Builtins Decouple | Accepted；后端无关 builtins/host 分层继续有效 |

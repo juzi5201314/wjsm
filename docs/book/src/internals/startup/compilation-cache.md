@@ -46,9 +46,9 @@ native image cache 由 `NativeImageRepository` 管理。cache key 绑定六个�
 | --- | --- | --- |
 | Native image cache | 用户代码的 native image | 每次编译用户代码 |
 | Builtin IR 段缓存 | builtin 模块的 IR 段 | 首次冷启动 |
-| Startup snapshot | bootstrap 后的堆状态 | 进程启动时 |
+| 启动种子 | 嵌入的 global/EvalIndirect 种子 | 进程启动时始终恢复 |
 
-三者都加速启动，但对象不同。native image cache 跳过编译，builtin IR 段缓存跳过 builtin 模块 lower，startup snapshot 跳过 builtin JS 执行。
+三者对象不同。native image cache 跳过编译，builtin IR 段缓存跳过 builtin 模块 lower。启动种子不包含 builtin JS。
 
 ## 深入了解
 

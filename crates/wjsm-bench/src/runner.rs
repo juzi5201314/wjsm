@@ -286,7 +286,7 @@ fn measure_wall(
     // node 忽略 WJSM_* 变量，无副作用。
     process.env("WJSM_DISABLE_LICM", "1");
     if cold {
-        process.env("WJSM_STARTUP_SNAPSHOT", "0");
+        // 冷档只隔离 native / builtin 磁盘缓存；启动快照始终恢复。
         process.env("WJSM_CACHE_DIR", cold_cache_dir());
     }
     apply_scenario_env(&mut process, effective);
@@ -466,7 +466,6 @@ fn measure_rss_with_env(
         .stdout(Stdio::null());
     apply_env(&mut process, effective);
     if rt == RuntimeKind::Wjsm && cold {
-        process.env("WJSM_STARTUP_SNAPSHOT", "0");
         process.env("WJSM_CACHE_DIR", cold_cache_dir());
     }
     let output = process.output().with_context(|| {

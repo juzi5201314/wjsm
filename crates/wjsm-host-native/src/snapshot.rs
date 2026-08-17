@@ -30,6 +30,7 @@ struct RestoredBootstrap {
 }
 
 impl NativeAgentState {
+    /// 恢复构建期嵌入的启动种子。`NativeRuntime::new_*` 必须调用；无关闭开关。
     pub(super) fn restore_startup_snapshot(
         &mut self,
         bytes: &[u8],

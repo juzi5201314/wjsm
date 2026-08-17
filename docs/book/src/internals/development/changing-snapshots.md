@@ -1,19 +1,12 @@
 # 修改快照与嵌入工件
 
-这一章说明修改 startup snapshot 格式或嵌入工件时需要改动哪些地方。
+这一章说明修改启动种子格式或嵌入工件时需要改动哪些地方。
 
 ## 快照格式
 
-startup snapshot 是 bootstrap 后的堆状态序列化，构建期写入 `startup_snapshot.bin`，由 `wjsm-host-native` `include_bytes!` 嵌入。`NativeRuntime::new_*` **始终**调用 `restore_startup_snapshot`。没有环境变量可以跳过恢复。
+`wjsm-host-native/build.rs` 写出 `startup_snapshot.bin`，再由 `include_bytes!` 嵌入。`NativeRuntime::new_*` **始终** `restore_startup_snapshot`。没有关闭开关。
 
-它保存：
-
-- 对象堆字节内容；
-- 句柄偏移与世代；
-- shape table；
-- runtime 字符串表与 native callable 表（host state）。
-
-`SNAPSHOT_FORMAT_VERSION` 任何 wire 改动必须递增。解码时 `SnapshotExpectations` 还校验：
+现行种子包含：对象头大小的对象区、handle `0`、空 shape table、仅 `EvalIndirect` 的 host state。`SNAPSHOT_FORMAT_VERSION` 任何 wire 改动必须递增。解码时 `SnapshotExpectations` 还校验：
 
 | 字段 | 来源 |
 | --- | --- |
@@ -29,19 +22,20 @@ startup snapshot 是 bootstrap 后的堆状态序列化，构建期写入 `start
 
 ## 改动步骤
 
-1. **格式定义**：在 `wjsm-snapshot-format` 修改序列化/反序列化逻辑。
+1. **格式定义**：在 `wjsm-snapshot-format` 修改编解码。
 2. **版本递增**：`SNAPSHOT_FORMAT_VERSION` 递增。
-3. **期望哈希**：bootstrap / codegen / semantic ABI / native ABI 任一变化都会让旧快照拒收，需要重建嵌入工件。
-4. **cold bootstrap**：构建期从空堆执行 builtin JS，写出新的 `startup_snapshot.bin`。
-5. **warm restore**：确认 `NativeRuntime::new_*` 恢复后的 primordial 与 cold 产出一致。
+3. **期望哈希**：bootstrap / codegen / semantic ABI / native ABI 任一变化都会让旧种子拒收，需要重建嵌入工件。
+4. **构建期生成**：更新 `wjsm-host-native/build.rs` 的种子内容。
+5. **强制 restore**：确认 `NativeRuntime::new_*` 在失配时失败，而不是跳过。
 6. **测试**：快照编解码与 runtime 启动测试通过。
 
 ## 嵌入工件
 
-开发构建把快照编进 `wjsm-host-native`。native image 磁盘缓存是另一条路径，只在设置了 `WJSM_CACHE_DIR` 时按需生成，不替代启动快照。
+开发构建把种子编进 `wjsm-host-native`。native image 磁盘缓存只在设置了 `WJSM_CACHE_DIR` 时按需生成，不替代启动种子。
 
 ## 深入了解
 
 - [构建工件索引](../reference/artifact-index.md)
 - [核心不变量](../reference/invariants.md)
 - [启动快照与嵌入工件](../../user/configuration/startup-snapshot.md)
+- [ADR 0003](../../../../adr/0003-startup-snapshot-boundary.md)

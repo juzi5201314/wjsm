@@ -2,7 +2,8 @@
 
 **Status**: Workspace 全测试通过。P0/P1/P2.0-P2.5/P2.7/P3.0/P4 实施落地。运行时磁盘 startup cache 已退役。Normal mode 下 10 个 helper（obj_new/obj_get/obj_set/obj_delete/arr_new/elem_get/elem_set/string_eq/to_int32/get_proto_from_ctor）已从 wjsm_support import；bootstrap 阶段函数（wjsm_bootstrap_once / wjsm_init_function_props）保持 user wasm 内联（仅启动时调用一次，无 wasmtime compile 收益）。Eval mode 仍走 inline helper 路径（compiled eval 无独立 support instance）。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道 + support module 双 instance**，不再依赖客户机器缓存。ManagedHeap / shared memory64 / engine fingerprint 与 support ABI 对齐见 [ADR 0010](0010-generational-zgc-managed-heap.md) 与 `wjsm-engine-config`（唯一 Wasmtime Config owner）；support cwasm 三 flavor 仍按 active GC 选择，且必须绑定 ManagedHeap host imports，禁止 memory32 动态对象堆 fallback。
 
-**Date**: 2026-06-19
+**Date**: 2026-06-19  
+**Amended**: 2026-08-17（嵌入快照强制 restore；失配 fail-closed，见 ADR 0003）
 
 **Supersedes (partial)**: [ADR 0003](0003-startup-snapshot-boundary.md) 在 P2.8 完成后整体替代。
 
@@ -37,7 +38,7 @@ pub fn embedded_support_cwasm() -> Option<&'static [u8]>;
 pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>>;
 ```
 
-`wjsm-cli::main_entry` 启动时无条件 install 两份 embedded。未安装或 ABI 失配时只走 cold bootstrap，不在客户机器上 capture/write snapshot cache。
+`wjsm-cli::main_entry` 启动时无条件装入嵌入快照。Direct Cranelift 之后 `NativeRuntime` 始终 restore；指纹或格式失配时启动失败，不再走运行时 cold bootstrap，也不在客户机器上 capture/write snapshot cache。关闭开关已废止，见 [ADR 0003](0003-startup-snapshot-boundary.md) Amended 2026-08-17。
 
 ### 三类制品共享同一个 ABI hash 边界
 
@@ -48,7 +49,7 @@ pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>>;
    = DefaultHasher( support_module_layout_hash || builtin_js_bundle_hash )
 ```
 
-`combined_abi_external_input` 由 `wjsm-runtime` 在 `startup_snapshot_enabled()`/`build_embedded_startup_snapshot_bytes()` 入口注册一次（OnceLock 重复 set 静默）。这样 build.rs 与 runtime 计算的 abi_hash 一致；任一 ABI 输入变化都使 embedded snapshot abi_hash 失配 → cold startup。
+`combined_abi_external_input` 由 `wjsm-runtime` 在 `startup_snapshot_enabled()`/`build_embedded_startup_snapshot_bytes()` 入口注册一次（OnceLock 重复 set 静默）。这样 build.rs 与 runtime 计算的 abi_hash 一致；任一 ABI 输入变化都使 embedded snapshot 指纹失配 → 启动失败（fail-closed），必须重新构建嵌入种子。
 
 为什么用 `OnceLock` 而非 `LazyLock`：external input 来源（`wjsm-runtime-support` crate 的 hash）在 `wjsm-snapshot-format` 静态期不可知，必须在 runtime crate 加载后注入。这是 rs-lazylock 规则的"runtime input required"例外。
 

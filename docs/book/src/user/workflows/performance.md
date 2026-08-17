@@ -72,7 +72,7 @@ wjsm validate /tmp/app.wjsm
 wjsm run /tmp/app.wjsm
 ```
 
-bench 报告默认写到 `/tmp/wjsm-bench-<unix秒>.json`，冷缓存固定在 `/tmp/wjsm-bench-cold-cache`。不要并发跑 `--cold`，两个进程会互相清空缓存目录。
+bench 报告默认写到 `/tmp/wjsm-bench-<unix秒>.json`，`--cold` 把磁盘缓存固定在 `/tmp/wjsm-bench-cold-cache` 并每轮清空。启动快照仍恢复。不要并发跑 `--cold`。
 
 ## 深入了解
 

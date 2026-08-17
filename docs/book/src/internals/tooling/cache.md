@@ -85,9 +85,9 @@
 | --- | --- | --- |
 | Native image cache | 用户代码的 native image | 设置了 `WJSM_CACHE_DIR` 且编译用户代码 |
 | Builtin IR 段缓存 | builtin 模块的 IR 段 | 设置了 `WJSM_CACHE_DIR` 且首次冷 lower |
-| 启动快照 | bootstrap 后的堆状态 | `NativeRuntime::new_*` 始终恢复嵌入快照 |
+| 启动种子 | 嵌入的 global/EvalIndirect 种子 | `NativeRuntime::new_*` 始终恢复 |
 
-三者都加速启动，但对象不同。native image cache 跳过 Cranelift 编译，builtin IR 段缓存跳过 builtin 模块 lower，startup snapshot 跳过进程内 builtin JS 的执行。
+三者对象不同。native image cache 跳过 Cranelift 编译，builtin IR 段缓存跳过 builtin 模块 lower。启动种子不包含 builtin JS。
 
 ## 深入了解
 
