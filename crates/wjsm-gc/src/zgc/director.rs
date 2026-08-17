@@ -265,7 +265,16 @@ impl GcDirector {
 
     /// Evaluate whether young/old collection should start based on runway.
     pub fn evaluate(&mut self, young_live_bytes: u64, old_live_bytes: u64) -> DirectorDecision {
-        if self.young_active || self.old_active {
+        if self.young_active {
+            self.last_decision = DirectorDecision::Continue;
+            return DirectorDecision::Continue;
+        }
+        if self.old_active {
+            if self.should_start(DirectorGeneration::Young, young_live_bytes) {
+                self.young_active = true;
+                self.last_decision = DirectorDecision::StartYoung;
+                return DirectorDecision::StartYoung;
+            }
             self.last_decision = DirectorDecision::Continue;
             return DirectorDecision::Continue;
         }

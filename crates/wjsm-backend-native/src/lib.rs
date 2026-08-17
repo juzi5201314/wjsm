@@ -441,6 +441,71 @@ mod tests {
         .expect("artifact should encode")
     }
 
+    fn property_ic_artifact() -> PortableArtifact {
+        let mut program = Program::new();
+        let key = program.add_constant(Constant::String("value".into()));
+        let stored = program.add_constant(Constant::Null);
+        let mut function = Function::new("property_ic", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: key,
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: stored,
+        });
+        block.push_instruction(Instruction::NewObject {
+            dest: ValueId(2),
+            capacity: 1,
+        });
+        block.push_instruction(Instruction::SetProp {
+            dest: ValueId(3),
+            object: ValueId(2),
+            key: ValueId(0),
+            value: ValueId(1),
+        });
+        block.push_instruction(Instruction::GetProp {
+            dest: ValueId(4),
+            object: ValueId(2),
+            key: ValueId(0),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(4)),
+        });
+        function.push_block(block);
+        program.push_function(function);
+        PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("property IC artifact should encode")
+    }
+
+    #[test]
+    fn property_ic_lowering_guards_epoch_and_imports_barriers() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&property_ic_artifact())
+            .expect("property IC diagnostics should compile");
+        assert!(diagnostics.clif.contains("atomic_load"));
+        assert!(diagnostics.clif.contains("atomic_store"));
+
+        let parsed = object::File::parse(diagnostics.object.bytes()).expect("object should parse");
+        assert!(
+            parsed
+                .symbol_by_name("wjsm_native_zgc_load_barrier_assist")
+                .is_some()
+        );
+        assert!(
+            parsed
+                .symbol_by_name("wjsm_native_zgc_store_barrier")
+                .is_some()
+        );
+    }
+
     #[test]
     fn compiles_arithmetic_to_native_object() {
         let compiler = NativeCompiler::new().expect("host ISA should be supported");

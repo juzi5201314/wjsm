@@ -207,7 +207,8 @@ fn build_named_groups(
             None => value::encode_undefined(),
         };
         state
-            .heap
+            .gc
+            .heap()
             .set_property(handle, value::decode_handle(key), stored as u64)
             .ok()?;
     }
@@ -333,7 +334,8 @@ fn iterator_result(
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(handle, value::decode_handle(key), stored as u64)
             .is_err()
         {

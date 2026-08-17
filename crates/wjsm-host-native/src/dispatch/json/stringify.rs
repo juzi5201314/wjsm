@@ -179,14 +179,16 @@ fn serialize_array(
     }
     let result = (|| {
         let length = state
-            .heap
+            .gc
+            .heap()
             .array_length(value::decode_handle(array))
             .map_err(|_| runtime::fail_dispatch(ctx))?;
         let next_indent = next_indent(gap, current_indent);
         let mut elements = Vec::with_capacity(length as usize);
         for index in 0..length {
             let encoded = state
-                .heap
+                .gc
+                .heap()
                 .get_element(value::decode_handle(array), index)
                 .map_err(|_| runtime::fail_dispatch(ctx))?
                 .map(|encoded| encoded as i64)
@@ -319,13 +321,15 @@ fn replacer_property_list(
         return Ok(None);
     }
     let length = state
-        .heap
+        .gc
+        .heap()
         .array_length(value::decode_handle(replacer))
         .map_err(|_| ())?;
     let mut properties = Vec::new();
     for index in 0..length {
         let Some(encoded) = state
-            .heap
+            .gc
+            .heap()
             .get_element(value::decode_handle(replacer), index)
             .map_err(|_| ())?
             .map(|encoded| encoded as i64)

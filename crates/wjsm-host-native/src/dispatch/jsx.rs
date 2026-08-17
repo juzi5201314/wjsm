@@ -32,7 +32,8 @@ fn create_element(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(handle, value::decode_handle(key), stored as u64)
             .is_err()
         {

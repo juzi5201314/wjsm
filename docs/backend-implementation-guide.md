@@ -97,9 +97,9 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 - 一个 `NativeAgentState`；
 - 一个只持 `Weak<CompiledImage>` 的 `NativeImageRepository`；
 - 一个按需启动 bounded worker 的 `SpecializationCoordinator`；
-- 一个 production ManagedHeap/HandleTableV2；
-- 启动时固定的 Mark-Sweep、G1 或 ZGC collector；
-- module、Promise、continuation、worker、scheduler、snapshot、inspector 与 host side tables。
+ - 一个 production `ManagedHeap`/`HandleTableV2`/`HeapAccessV2` owner；
+ - 启动时固定的 Mark-Sweep、G1 或由 `GenerationalZgc` 实现的并发分代 ZGC collector；
+ - module、Promise、continuation、worker、scheduler、snapshot、inspector 与 host side tables。
 
 `NativeRuntime::execute` 的顺序是：
 
@@ -118,15 +118,16 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 ## 5. ManagedHeap 与 GC 接合
 
-Production heap 只有一个 owner：同一 layout、`HandleTableV2`、`HeapAccessV2<NativeHeapMemory>` 与 `RuntimeCollector`。host side table 只保存 stable handle/generation，不保存可跨 safepoint 的 raw address。
+Production heap 只有一个 owner：同一 layout、`HandleTableV2`、`HeapAccessV2<NativeHeapMemory>` 与 collector。Mark-Sweep/G1 由 `StopTheWorldCollector` 接合；ZGC 由 `GenerationalZgc` 接合，使用共享页、固定 worker pool、分代 mark/relocate 与 epoch reclaim。host side table 只保存 stable handle/generation，不保存可跨 safepoint 的 raw address。
 
-Generated code 在 may-GC edge 发布 live boxed roots。runtime collector 的 strong closure合并：
+Generated code 在 may-GC edge 发布 live boxed roots。runtime collector 的 strong closure 合并：
 
 - native root frames；
 - active call arena/activation/continuation；
-- variables、intrinsics 与 host roots；
-- object side-table internal slots；
-- WeakMap ephemeron fixed point。
+- host side roots 与 weak/ephemeron/finalizer closure；
+- ZGC barrier ring 中的 SATB/remembered references。
+
+ZGC 的 mutator allocation 走 `HeapAccessV2` 的 NLAB/page allocator；分配压力请求 safepoint，worker 在 mutator 继续运行时执行 mark、稀疏页 relocation 与 handle epoch reclaim。显式 `gc()` 等待完整 `GenerationalZgc` cycle，不能回退到旧的全量搬迁 collector。
 
 collection 后按 retired handle 清理 weak/side-table state。cooperative poll 与 `NewObject`、`NewArray`、`new Array(length)` 的 native object allocation 都只在 root frame 已发布且 raw access region 为空时触发 allocation-pressure collection；后三条路径在 `HeapExhausted` 时完整收集并重试一次。runtime 在执行开始前预建、冻结并显式作为 host root 的 OOM `RangeError` 及专用 exception side-table entry；仍不可恢复时直接返回该 entry，稳定抛出可捕获的 `RangeError("JavaScript heap out of memory")`，不从已满 managed heap 分配 error/prototype/message，也不随重复 OOM 增长 exception 表。这是 #337 受控堆上限契约在上述 object allocation 路径上的 native 终态；array growth、`allocate_array_values`、rest 参数与字符串 intern 不在本保证内。collector 选择在 runtime 初始化后不可切换。
 

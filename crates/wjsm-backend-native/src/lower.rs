@@ -19,8 +19,8 @@ use wjsm_ir::{
     FunctionId, Instruction, Program, Terminator, UnaryOp, ValueId, constants, value,
 };
 use wjsm_native_abi::{
-    COOPERATIVE_POLL_STEP_BYTES, NativeHostSymbol, NativeRootFrame, NativeRuntimeOp,
-    NativeSignature, NativeVmContext, native_variable_names,
+    COOPERATIVE_POLL_STEP_BYTES, NATIVE_BARRIER_MARKING_MASK, NativeBarrierState, NativeHostSymbol,
+    NativeRootFrame, NativeRuntimeOp, NativeSignature, NativeVmContext, native_variable_names,
 };
 
 use rayon::prelude::*;
@@ -317,6 +317,21 @@ fn vmctx_offset(offset: usize) -> Result<i32> {
     i32::try_from(offset).context("native vmctx field offset exceeds i32")
 }
 
+fn barrier_state_offset(offset: usize) -> i32 {
+    i32::try_from(offset).expect("native barrier state field offset fits i32")
+}
+
+fn increment_barrier_counter(builder: &mut FunctionBuilder<'_>, barrier: ir::Value, offset: usize) {
+    let offset = barrier_state_offset(offset);
+    let current = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), barrier, offset);
+    let next = builder.ins().iadd_imm_u(current, 1);
+    builder
+        .ins()
+        .store(MemFlagsData::trusted(), next, barrier, offset);
+}
+
 fn frame_offset(offset: usize) -> Result<i32> {
     i32::try_from(offset).context("native root frame field offset exceeds i32")
 }
@@ -553,6 +568,16 @@ pub(crate) struct DeclaredFunction {
     colocated: bool,
 }
 
+pub(crate) struct DeclaredBarrierThunks {
+    load: DeclaredFunction,
+    store: DeclaredFunction,
+}
+
+struct BarrierThunks {
+    load: ir::FuncRef,
+    store: ir::FuncRef,
+}
+
 pub(crate) struct DeclaredData {
     id: DataId,
     colocated: bool,
@@ -582,6 +607,22 @@ impl DeclaredFunction {
             colocated: self.colocated,
             patchable: false,
         })
+    }
+}
+
+impl DeclaredBarrierThunks {
+    pub(crate) fn snapshot(declarations: &ModuleDeclarations, load: FuncId, store: FuncId) -> Self {
+        Self {
+            load: DeclaredFunction::snapshot(declarations, load),
+            store: DeclaredFunction::snapshot(declarations, store),
+        }
+    }
+
+    fn import(&self, function: &mut Function) -> BarrierThunks {
+        BarrierThunks {
+            load: self.load.import(function),
+            store: self.store.import(function),
+        }
     }
 }
 
@@ -634,6 +675,7 @@ fn compile_program_inner(
     let signature = slow_entry_signature(module.isa().default_call_conv());
     let function_ids = declare_functions(&mut module, program, &signature)?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
+    let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
     let math_thunks = declare_math_thunks(&mut module, program, &inferred_f64)?;
     let frame_locals = program.frame_local_variable_names_by_function();
@@ -670,6 +712,8 @@ fn compile_program_inner(
     let root_bitmaps = declare_root_bitmaps(&mut module, max_roots)?;
 
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
+    let barrier_thunks =
+        DeclaredBarrierThunks::snapshot(module.declarations(), zgc_load_barrier, zgc_store_barrier);
     let math_thunk_decls: HashMap<Builtin, DeclaredFunction> = math_thunks
         .iter()
         .map(|(builtin, func_id)| {
@@ -706,6 +750,7 @@ fn compile_program_inner(
                 &signature,
                 function_ids[index],
                 &dispatcher_decl,
+                &barrier_thunks,
                 &math_thunk_decls,
                 &bitmap_decls,
                 inferred_f64
@@ -792,6 +837,7 @@ pub(crate) fn compile_one_function(
     signature: &Signature,
     function_id: FuncId,
     dispatcher: &DeclaredFunction,
+    barrier_thunks: &DeclaredBarrierThunks,
     math_thunks: &HashMap<Builtin, DeclaredFunction>,
     root_bitmaps: &[DeclaredData],
     f64_values: &HashSet<ValueId>,
@@ -820,6 +866,7 @@ pub(crate) fn compile_one_function(
         ir_function,
         function_index,
         dispatcher,
+        barrier_thunks,
         math_thunks,
         f64_values,
         variable_slots,
@@ -945,6 +992,38 @@ pub(crate) fn declare_host_dispatcher(
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
 }
 
+pub(crate) fn declare_barrier_thunks(
+    module: &mut ObjectModule,
+) -> Result<(FuncId, FuncId), NativeCompileError> {
+    let pointer_type = module.target_config().pointer_type();
+    let mut load_signature = module.make_signature();
+    load_signature.params.push(AbiParam::new(pointer_type));
+    load_signature.params.push(AbiParam::new(types::I32));
+    load_signature.returns.push(AbiParam::new(types::I64));
+    let load = module
+        .declare_function(
+            NativeHostSymbol::ZgcLoadBarrierAssist.symbol_name(),
+            Linkage::Import,
+            &load_signature,
+        )
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
+
+    let mut store_signature = module.make_signature();
+    store_signature.params.push(AbiParam::new(pointer_type));
+    store_signature.params.push(AbiParam::new(types::I32));
+    store_signature.params.push(AbiParam::new(types::I64));
+    store_signature.params.push(AbiParam::new(types::I64));
+    store_signature.returns.push(AbiParam::new(types::I32));
+    let store = module
+        .declare_function(
+            NativeHostSymbol::ZgcStoreBarrier.symbol_name(),
+            Linkage::Import,
+            &store_signature,
+        )
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
+    Ok((load, store))
+}
+
 /// 按需声明本程序真正走 typed 路径的 math thunk（模块级声明一次；函数内 import
 /// 复用之，避免每条调用重建签名）。只有 `infer_f64_values` 已证明 dest 且实参
 /// arity 与 thunk 签名一致的调用点才需要声明。
@@ -987,8 +1066,10 @@ pub(crate) fn declare_math_thunks(
         let signature = match symbol.signature() {
             NativeSignature::F64Unary => &unary_signature,
             NativeSignature::F64Binary => &binary_signature,
-            NativeSignature::HostOperation => {
-                unreachable!("math thunk 不存在 HostOperation 签名")
+            NativeSignature::HostOperation
+            | NativeSignature::ZgcLoadBarrier
+            | NativeSignature::ZgcStoreBarrier => {
+                unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
             }
         };
         let func_id = module
@@ -1009,8 +1090,10 @@ fn math_thunk_signature(module: &ObjectModule, signature: NativeSignature) -> Si
             clif_signature.params.push(AbiParam::new(types::F64));
             clif_signature.params.push(AbiParam::new(types::F64));
         }
-        NativeSignature::HostOperation => {
-            unreachable!("math thunk 不存在 HostOperation 签名")
+        NativeSignature::HostOperation
+        | NativeSignature::ZgcLoadBarrier
+        | NativeSignature::ZgcStoreBarrier => {
+            unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
         }
     }
     clif_signature.returns.push(AbiParam::new(types::F64));
@@ -1037,6 +1120,7 @@ pub(crate) fn lower_function(
     ir_function: &wjsm_ir::Function,
     function_index: u32,
     host_dispatcher: &DeclaredFunction,
+    barrier_thunks: &DeclaredBarrierThunks,
     math_thunks: &HashMap<Builtin, DeclaredFunction>,
     f64_values: &HashSet<ValueId>,
     variable_slots: &HashMap<String, u32>,
@@ -1072,6 +1156,7 @@ pub(crate) fn lower_function(
     let dispatcher_ref = host_dispatcher.import(builder.func);
     let mut imported_math_thunks: HashMap<Builtin, ir::FuncRef> =
         HashMap::with_capacity(math_thunks.len());
+    let barrier_thunks = barrier_thunks.import(builder.func);
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
     let constants = program.constants();
@@ -1126,6 +1211,7 @@ pub(crate) fn lower_function(
                 function_index,
                 &variables,
                 dispatcher_ref,
+                &barrier_thunks,
                 ctx_value,
                 f64_values,
                 math_thunks,
@@ -1298,6 +1384,7 @@ fn lower_instruction(
     function_index: u32,
     variables: &HashMap<ValueId, Variable>,
     dispatcher: ir::FuncRef,
+    barrier_thunks: &BarrierThunks,
     ctx: ir::Value,
     f64_values: &HashSet<ValueId>,
     math_thunks: &HashMap<Builtin, DeclaredFunction>,
@@ -1527,8 +1614,10 @@ fn lower_instruction(
                         .first()
                         .context("typed math thunk returned no result")?
                 }
-                NativeSignature::HostOperation => {
-                    unreachable!("math thunk 不存在 HostOperation 签名")
+                NativeSignature::HostOperation
+                | NativeSignature::ZgcLoadBarrier
+                | NativeSignature::ZgcStoreBarrier => {
+                    unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
                 }
             };
             let result = box_f64_result(builder, result);
@@ -1682,7 +1771,16 @@ fn lower_instruction(
         Instruction::GetProp { dest, object, key } => {
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_get_prop_ic(
-                    builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, slot,
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    barrier_thunks,
+                    ctx,
+                    *dest,
+                    *object,
+                    *key,
+                    slot,
                     roots,
                 )
             } else {
@@ -1706,7 +1804,16 @@ fn lower_instruction(
         } => {
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_set_prop_ic(
-                    builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, *value,
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    barrier_thunks,
+                    ctx,
+                    *dest,
+                    *object,
+                    *key,
+                    *value,
                     slot,
                 )
             } else {
@@ -1802,7 +1909,16 @@ fn lower_instruction(
         Instruction::OptionalGetProp { dest, object, key } => {
             if let Some(slot) = ic_slots.get(dest).copied() {
                 lower_optional_get_prop_ic(
-                    builder, variables, root_frame, dispatcher, ctx, *dest, *object, *key, slot,
+                    builder,
+                    variables,
+                    root_frame,
+                    dispatcher,
+                    barrier_thunks,
+                    ctx,
+                    *dest,
+                    *object,
+                    *key,
+                    slot,
                     roots,
                 )
             } else {
@@ -2486,6 +2602,7 @@ fn lower_get_prop_ic(
     variables: &HashMap<ValueId, Variable>,
     root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
+    barrier_thunks: &BarrierThunks,
     ctx: ir::Value,
     dest: ValueId,
     object: ValueId,
@@ -2499,6 +2616,7 @@ fn lower_get_prop_ic(
         variables,
         root_frame,
         dispatcher,
+        barrier_thunks,
         ctx,
         dest,
         object,
@@ -2528,6 +2646,7 @@ fn lower_get_prop_ic_non_nullish(
     variables: &HashMap<ValueId, Variable>,
     root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
+    barrier_thunks: &BarrierThunks,
     ctx: ir::Value,
     dest: ValueId,
     object: ValueId,
@@ -2553,6 +2672,12 @@ fn lower_get_prop_ic_non_nullish(
         MemFlagsData::trusted(),
         ctx,
         vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
+    );
+    let barrier_state = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
     );
 
     // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
@@ -2580,16 +2705,26 @@ fn lower_get_prop_ic_non_nullish(
     );
 
     let entry_block = builder.create_block();
+    let legacy_entry_block = builder.create_block();
+    let zgc_kind_block = builder.create_block();
+    let zgc_entry_block = builder.create_block();
+    let zgc_fast_block = builder.create_block();
+    let receiver_assist_block = builder.create_block();
     let shape_check_block = builder.create_block();
+    builder.append_block_param(shape_check_block, types::I64);
     let shape_hit_block = builder.create_block();
     let own_hit_block = builder.create_block();
     let holder_block = builder.create_block();
     let holder_resolve_block = builder.create_block();
+    let holder_legacy_block = builder.create_block();
+    let holder_zgc_block = builder.create_block();
+    let holder_fast_block = builder.create_block();
+    let holder_assist_block = builder.create_block();
     let holder_addr_block = builder.create_block();
+    builder.append_block_param(holder_addr_block, types::I64);
     let proto_hit_block = builder.create_block();
     let accessor_hit_block = builder.create_block();
     let miss_block = builder.create_block();
-
     // 第一级：标签必须是 TAG_OBJECT。**句柄表 entry 读取必须放在此分支之后**：
     // `trusted()`（notrap）load 允许 Cranelift 块内投机提前，若 entry 读取与
     // tag 检查同块，非对象值（字符串等）的 handle 可能落在未提交的 block，
@@ -2599,11 +2734,13 @@ fn lower_get_prop_ic_non_nullish(
         .ins()
         .brif(tag_ok, entry_block, &[], miss_block, &[]);
 
-    // 第二级：读接收者句柄 entry 与 IC 槽，检查稳定态与 kind。
+    // 第二级：读取接收者句柄 entry。Disabled 模式沿用稳定态快链；ZGC 只有偶数
+    // access epoch 与稳定 entry 能直接使用地址，其余状态进入 no-GC load assist。
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
     let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
-    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
+    let handle_i32 = builder.ins().ireduce(types::I32, handle_idx);
+    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3);
     let entry_addr = builder.ins().iadd(ht_base, entry_offset);
     let entry = builder
         .ins()
@@ -2614,18 +2751,13 @@ fn lower_get_prop_ic_non_nullish(
         entry_state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
-    // entry 里的对象地址是 memory64 逻辑偏移，须加 `heap_object_delta`
-    // （virtual_base - logical_base）才是真实映射地址；直接 load 逻辑地址
-    // 会命中未映射的虚拟页。TestHeapMemory 的 delta 为 0。
-    let addr = builder.ins().ushr_imm_u(entry, 16);
+    let logical_addr = builder.ins().ushr_imm_u(entry, 16);
     let heap_delta = builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
         ctx,
         vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
     );
-    let addr = builder.ins().iadd(addr, heap_delta);
-
     // IC 槽（32 字节）：
     // word0 = shape_id(lo32) | value_index(hi32)
     // word1 = kind(lo32) | proto_generation(hi32)
@@ -2662,14 +2794,84 @@ fn lower_get_prop_ic_non_nullish(
     );
     let kind_holder = builder.ins().bor(kind_proto, kind_accessor);
     let kind_supported = builder.ins().bor(kind_own, kind_holder);
-    let first_ok = builder.ins().band(stable, kind_supported);
+    let barrier_disabled = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    builder.ins().brif(
+        barrier_disabled,
+        legacy_entry_block,
+        &[],
+        zgc_kind_block,
+        &[],
+    );
+
+    builder.switch_to_block(legacy_entry_block);
+    builder.seal_block(legacy_entry_block);
+    let legacy_ok = builder.ins().band(stable, kind_supported);
+    builder.ins().brif(
+        legacy_ok,
+        shape_check_block,
+        &[ir::BlockArg::Value(logical_addr)],
+        miss_block,
+        &[],
+    );
+
+    builder.switch_to_block(zgc_kind_block);
+    builder.seal_block(zgc_kind_block);
     builder
         .ins()
-        .brif(first_ok, shape_check_block, &[], miss_block, &[]);
+        .brif(kind_supported, zgc_entry_block, &[], miss_block, &[]);
 
-    // 第三级：对象地址已由 stable 确认有效，读 shape 并与 IC 槽比对。
+    builder.switch_to_block(zgc_entry_block);
+    builder.seal_block(zgc_entry_block);
+    let epoch_addr = builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let access_epoch = builder
+        .ins()
+        .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
+    let epoch_bit = builder.ins().band_imm_u(access_epoch, 1);
+    let epoch_even = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
+    let direct = builder.ins().band(stable, epoch_even);
+    builder
+        .ins()
+        .brif(direct, zgc_fast_block, &[], receiver_assist_block, &[]);
+
+    builder.switch_to_block(zgc_fast_block);
+    builder.seal_block(zgc_fast_block);
+    increment_barrier_counter(
+        builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, load_fast_events),
+    );
+    builder
+        .ins()
+        .jump(shape_check_block, &[ir::BlockArg::Value(logical_addr)]);
+
+    builder.switch_to_block(receiver_assist_block);
+    builder.seal_block(receiver_assist_block);
+    let call = builder.ins().call(barrier_thunks.load, &[ctx, handle_i32]);
+    let assisted = builder.inst_results(call)[0];
+    let assisted_ok = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
+    builder.ins().brif(
+        assisted_ok,
+        shape_check_block,
+        &[ir::BlockArg::Value(assisted)],
+        miss_block,
+        &[],
+    );
+
+    // 第三级：对象地址已经过稳定态检查或 load assist，读取 shape 并与 IC 槽比对。
     builder.switch_to_block(shape_check_block);
     builder.seal_block(shape_check_block);
+    let logical_addr = builder.block_params(shape_check_block)[0];
+    let addr = builder.ins().iadd(logical_addr, heap_delta);
     let obj_word = builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), addr, 8);
@@ -2720,7 +2922,8 @@ fn lower_get_prop_ic_non_nullish(
         .ins()
         .brif(holder_valid, holder_resolve_block, &[], miss_block, &[]);
 
-    // 解析 holder_handle → holder entry → holder 地址；entry 同样必须稳定。
+    // 解析 holder_handle → holder entry → holder 地址；ZGC holder 与 receiver 使用
+    // 同一 access epoch 协议，odd epoch 或 relocating entry 必须进入 load assist。
     builder.switch_to_block(holder_resolve_block);
     builder.seal_block(holder_resolve_block);
     let holder_entry_offset = builder.ins().ishl_imm_u(ic_holder, 3);
@@ -2735,14 +2938,83 @@ fn lower_get_prop_ic_non_nullish(
         holder_state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
-    builder
-        .ins()
-        .brif(holder_stable, holder_addr_block, &[], miss_block, &[]);
+    let holder_logical_addr = builder.ins().ushr_imm_u(holder_entry, 16);
+    builder.ins().brif(
+        barrier_disabled,
+        holder_legacy_block,
+        &[],
+        holder_zgc_block,
+        &[],
+    );
+
+    builder.switch_to_block(holder_legacy_block);
+    builder.seal_block(holder_legacy_block);
+    builder.ins().brif(
+        holder_stable,
+        holder_addr_block,
+        &[ir::BlockArg::Value(holder_logical_addr)],
+        miss_block,
+        &[],
+    );
+
+    builder.switch_to_block(holder_zgc_block);
+    builder.seal_block(holder_zgc_block);
+    let holder_epoch_addr = builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let holder_epoch =
+        builder
+            .ins()
+            .atomic_load(types::I64, MemFlagsData::trusted(), holder_epoch_addr);
+    let holder_epoch_bit = builder.ins().band_imm_u(holder_epoch, 1);
+    let holder_epoch_even =
+        builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, holder_epoch_bit, 0);
+    let holder_direct = builder.ins().band(holder_stable, holder_epoch_even);
+    builder.ins().brif(
+        holder_direct,
+        holder_fast_block,
+        &[],
+        holder_assist_block,
+        &[],
+    );
+
+    builder.switch_to_block(holder_fast_block);
+    builder.seal_block(holder_fast_block);
+    increment_barrier_counter(
+        builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, load_fast_events),
+    );
+    builder.ins().jump(
+        holder_addr_block,
+        &[ir::BlockArg::Value(holder_logical_addr)],
+    );
+
+    builder.switch_to_block(holder_assist_block);
+    builder.seal_block(holder_assist_block);
+    let holder_i32 = builder.ins().ireduce(types::I32, ic_holder);
+    let call = builder.ins().call(barrier_thunks.load, &[ctx, holder_i32]);
+    let assisted_holder = builder.inst_results(call)[0];
+    let assisted_holder_ok =
+        builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted_holder, 0);
+    builder.ins().brif(
+        assisted_holder_ok,
+        holder_addr_block,
+        &[ir::BlockArg::Value(assisted_holder)],
+        miss_block,
+        &[],
+    );
 
     builder.switch_to_block(holder_addr_block);
     builder.seal_block(holder_addr_block);
-    let holder_addr = builder.ins().ushr_imm_u(holder_entry, 16);
-    let holder_addr = builder.ins().iadd(holder_addr, heap_delta);
+    let holder_logical_addr = builder.block_params(holder_addr_block)[0];
+    let holder_addr = builder.ins().iadd(holder_logical_addr, heap_delta);
     builder
         .ins()
         .brif(kind_accessor, accessor_hit_block, &[], proto_hit_block, &[]);
@@ -2828,6 +3100,7 @@ fn lower_set_prop_ic(
     variables: &HashMap<ValueId, Variable>,
     root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
+    barrier_thunks: &BarrierThunks,
     ctx: ir::Value,
     dest: ValueId,
     object: ValueId,
@@ -2854,6 +3127,12 @@ fn lower_set_prop_ic(
         ctx,
         vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
     );
+    let barrier_state = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
+    );
 
     // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
     let boxed_bits = builder.ins().band_imm_s(obj, box_base);
@@ -2879,10 +3158,21 @@ fn lower_set_prop_ic(
         i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
     );
 
-    // 与 GetProp 相同的三级判定：tag →（稳定句柄 + OWN_DATA kind）→ shape 匹配。
     let entry_block = builder.create_block();
+    let legacy_entry_block = builder.create_block();
+    let zgc_kind_block = builder.create_block();
+    let zgc_entry_block = builder.create_block();
+    let zgc_fast_block = builder.create_block();
+    let receiver_assist_block = builder.create_block();
     let shape_check_block = builder.create_block();
+    builder.append_block_param(shape_check_block, types::I64);
+    builder.append_block_param(shape_check_block, types::I8);
     let hit_block = builder.create_block();
+    let zgc_store_mode_block = builder.create_block();
+    let legacy_store_block = builder.create_block();
+    let zgc_direct_store_block = builder.create_block();
+    let barrier_store_block = builder.create_block();
+    let store_done_block = builder.create_block();
     let miss_block = builder.create_block();
     let merge_block = builder.create_block();
     builder
@@ -2892,7 +3182,8 @@ fn lower_set_prop_ic(
     builder.switch_to_block(entry_block);
     builder.seal_block(entry_block);
     let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
-    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3); // × HANDLE_TABLE_ENTRY_SIZE
+    let handle_i32 = builder.ins().ireduce(types::I32, handle_idx);
+    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3);
     let entry_addr = builder.ins().iadd(ht_base, entry_offset);
     let entry = builder
         .ins()
@@ -2903,14 +3194,13 @@ fn lower_set_prop_ic(
         state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
-    let addr = builder.ins().ushr_imm_u(entry, 16);
+    let logical_addr = builder.ins().ushr_imm_u(entry, 16);
     let heap_delta = builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
         ctx,
         vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
     );
-    let addr = builder.ins().iadd(addr, heap_delta);
 
     let ic_word0 = builder
         .ins()
@@ -2926,13 +3216,114 @@ fn lower_set_prop_ic(
         ic_kind,
         i64::from(constants::IC_KIND_OWN_DATA),
     );
-    let first_ok = builder.ins().band(stable, kind_own);
+    let barrier_disabled = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    builder.ins().brif(
+        barrier_disabled,
+        legacy_entry_block,
+        &[],
+        zgc_kind_block,
+        &[],
+    );
+
+    builder.switch_to_block(legacy_entry_block);
+    builder.seal_block(legacy_entry_block);
+    let legacy_ok = builder.ins().band(stable, kind_own);
+    let direct_store = builder.ins().iconst(types::I8, 1);
+    builder.ins().brif(
+        legacy_ok,
+        shape_check_block,
+        &[
+            ir::BlockArg::Value(logical_addr),
+            ir::BlockArg::Value(direct_store),
+        ],
+        miss_block,
+        &[],
+    );
+
+    builder.switch_to_block(zgc_kind_block);
+    builder.seal_block(zgc_kind_block);
     builder
         .ins()
-        .brif(first_ok, shape_check_block, &[], miss_block, &[]);
+        .brif(kind_own, zgc_entry_block, &[], miss_block, &[]);
+
+    builder.switch_to_block(zgc_entry_block);
+    builder.seal_block(zgc_entry_block);
+    let epoch_addr = builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let access_epoch = builder
+        .ins()
+        .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
+    let epoch_bit = builder.ins().band_imm_u(access_epoch, 1);
+    let epoch_even = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
+    let direct_resolve = builder.ins().band(stable, epoch_even);
+    builder.ins().brif(
+        direct_resolve,
+        zgc_fast_block,
+        &[],
+        receiver_assist_block,
+        &[],
+    );
+
+    builder.switch_to_block(zgc_fast_block);
+    builder.seal_block(zgc_fast_block);
+    let phase_addr = builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, phase)).expect("phase offset fits i64"),
+    );
+    let phase = builder
+        .ins()
+        .atomic_load(types::I64, MemFlagsData::trusted(), phase_addr);
+    let marking = builder
+        .ins()
+        .band_imm_u(phase, NATIVE_BARRIER_MARKING_MASK as i64);
+    let marking_idle = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, marking, 0);
+    let stable_young = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        state,
+        i64::from(constants::HANDLE_STATE_STABLE_YOUNG),
+    );
+    let direct_store = builder.ins().band(marking_idle, stable_young);
+    builder.ins().jump(
+        shape_check_block,
+        &[
+            ir::BlockArg::Value(logical_addr),
+            ir::BlockArg::Value(direct_store),
+        ],
+    );
+
+    builder.switch_to_block(receiver_assist_block);
+    builder.seal_block(receiver_assist_block);
+    let call = builder.ins().call(barrier_thunks.load, &[ctx, handle_i32]);
+    let assisted = builder.inst_results(call)[0];
+    let assisted_ok = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
+    let no_direct_store = builder.ins().iconst(types::I8, 0);
+    builder.ins().brif(
+        assisted_ok,
+        shape_check_block,
+        &[
+            ir::BlockArg::Value(assisted),
+            ir::BlockArg::Value(no_direct_store),
+        ],
+        miss_block,
+        &[],
+    );
 
     builder.switch_to_block(shape_check_block);
     builder.seal_block(shape_check_block);
+    let logical_addr = builder.block_params(shape_check_block)[0];
+    let direct_store = builder.block_params(shape_check_block)[1];
+    let addr = builder.ins().iadd(logical_addr, heap_delta);
     let obj_word = builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), addr, 8);
@@ -2944,18 +3335,67 @@ fn lower_set_prop_ic(
         .ins()
         .brif(shape_match, hit_block, &[], miss_block, &[]);
 
-    // 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处直接 store 写入值；
-    // shape 不可变迁移保证 shape 匹配 ⇔ 该属性是 writable 数据属性，可原地覆写。
     builder.switch_to_block(hit_block);
     builder.seal_block(hit_block);
-    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
+    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3);
     let value_offset = builder
         .ins()
         .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let logical_slot = builder.ins().iadd(logical_addr, value_offset);
     let value_addr = builder.ins().iadd(addr, value_offset);
+    builder.ins().brif(
+        barrier_disabled,
+        legacy_store_block,
+        &[],
+        zgc_store_mode_block,
+        &[],
+    );
+
+    builder.switch_to_block(zgc_store_mode_block);
+    builder.seal_block(zgc_store_mode_block);
+    builder.ins().brif(
+        direct_store,
+        zgc_direct_store_block,
+        &[],
+        barrier_store_block,
+        &[],
+    );
+
+    builder.switch_to_block(legacy_store_block);
+    builder.seal_block(legacy_store_block);
     builder
         .ins()
         .store(MemFlagsData::trusted(), stored, value_addr, 0);
+    builder.ins().jump(store_done_block, &[]);
+
+    builder.switch_to_block(zgc_direct_store_block);
+    builder.seal_block(zgc_direct_store_block);
+    builder
+        .ins()
+        .atomic_store(MemFlagsData::trusted(), stored, value_addr);
+    increment_barrier_counter(
+        builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, store_fast_events),
+    );
+    builder.ins().jump(store_done_block, &[]);
+
+    builder.switch_to_block(barrier_store_block);
+    builder.seal_block(barrier_store_block);
+    let call = builder.ins().call(
+        barrier_thunks.store,
+        &[ctx, handle_i32, logical_slot, stored],
+    );
+    let status = builder.inst_results(call)[0];
+    let stored_ok = builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, status, 0);
+    builder
+        .ins()
+        .brif(stored_ok, store_done_block, &[], miss_block, &[]);
+
+    builder.switch_to_block(store_done_block);
+    builder.seal_block(store_done_block);
     define_value(builder, variables, dest, stored)?;
     builder.ins().jump(merge_block, &[]);
 
@@ -2988,6 +3428,7 @@ fn lower_optional_get_prop_ic(
     variables: &HashMap<ValueId, Variable>,
     root_frame: &mut FrameLowering,
     dispatcher: ir::FuncRef,
+    barrier_thunks: &BarrierThunks,
     ctx: ir::Value,
     dest: ValueId,
     object: ValueId,
@@ -3030,6 +3471,7 @@ fn lower_optional_get_prop_ic(
         variables,
         root_frame,
         dispatcher,
+        barrier_thunks,
         ctx,
         dest,
         object,

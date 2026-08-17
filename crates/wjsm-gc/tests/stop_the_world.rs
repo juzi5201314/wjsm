@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use wjsm_gc::{
-    GcAlgorithmKind, HandleGeneration, HandleTableV2, HeapAccessV2, ManagedHeapLayout,
-    PROTO_NULL_SENTINEL, RuntimeCollector, TestHeapMemory,
+    GcAlgorithmKind, HandleGeneration, HandleTableV2, HeapAccessV2, ManagedHeapLayout, Nlab,
+    PROTO_NULL_SENTINEL, RootSnapshot, StopTheWorldCollector, TestHeapMemory,
 };
 use wjsm_ir::constants;
 
@@ -12,6 +12,7 @@ const PROPERTY_KEY: u32 = 17;
 
 struct TestHeap {
     access: HeapAccessV2<TestHeapMemory>,
+    nlab: RefCell<Nlab>,
 }
 
 impl TestHeap {
@@ -20,7 +21,14 @@ impl TestHeap {
         let memory = TestHeapMemory::for_layout(&layout);
         let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
         Self {
-            access: HeapAccessV2::with_handles(memory, layout, handles).unwrap(),
+            access: HeapAccessV2::with_handles(
+                memory,
+                layout,
+                handles,
+                wjsm_gc::HeapBarrier::Disabled,
+            )
+            .unwrap(),
+            nlab: RefCell::new(Nlab::new()),
         }
     }
 
@@ -28,7 +36,12 @@ impl TestHeap {
         let handle = self.access.allocate_handle().unwrap();
         let bytes = u64::from(constants::HEAP_OBJECT_HEADER_SIZE)
             + u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE);
-        let (object, _) = self.access.reserve_nlab(bytes).unwrap();
+        let object = self
+            .access
+            .allocate(&mut self.nlab.borrow_mut(), bytes)
+            .unwrap()
+            .object()
+            .offset();
         self.access
             .publish_object(handle, object, PROTO_NULL_SENTINEL, 1)
             .unwrap();
@@ -52,10 +65,16 @@ fn mark_sweep_retires_only_dead_handles_without_moving_live_objects() {
     let live = heap.object(41);
     let dead = heap.object(99);
     let live_address = heap.access.resolve_handle(live).unwrap();
-    let mut collector = RuntimeCollector::new(GcAlgorithmKind::MarkSweep);
+    let mut collector = StopTheWorldCollector::new(GcAlgorithmKind::MarkSweep).unwrap();
 
+    let roots = RootSnapshot::new(
+        1,
+        vec![wjsm_ir::value::encode_object_handle(live)],
+        vec![],
+        vec![],
+    );
     let report = collector
-        .collect(heap.access.collector_capability(), &HashSet::from([live]))
+        .collect(heap.access.collector_capability(), &roots)
         .unwrap();
 
     assert_eq!(report.retired_handles, [dead]);
@@ -70,8 +89,13 @@ fn g1_relocates_young_survivors_then_promotes_them() {
     let heap = TestHeap::new();
     let live = heap.object(42);
     let first_address = heap.access.resolve_handle(live).unwrap();
-    let mut collector = RuntimeCollector::new(GcAlgorithmKind::G1);
-    let roots = HashSet::from([live]);
+    let mut collector = StopTheWorldCollector::new(GcAlgorithmKind::G1).unwrap();
+    let roots = RootSnapshot::new(
+        1,
+        vec![wjsm_ir::value::encode_object_handle(live)],
+        vec![],
+        vec![],
+    );
 
     let first = collector
         .collect(heap.access.collector_capability(), &roots)
@@ -96,30 +120,4 @@ fn g1_relocates_young_survivors_then_promotes_them() {
         Some(HandleGeneration::Old)
     );
     assert_eq!(heap.property(live), 42);
-}
-
-#[test]
-fn zgc_relocates_all_live_objects_and_retires_dead_objects() {
-    let heap = TestHeap::new();
-    let first = heap.object(1);
-    let second = heap.object(2);
-    let dead = heap.object(3);
-    let first_address = heap.access.resolve_handle(first).unwrap();
-    let second_address = heap.access.resolve_handle(second).unwrap();
-    let mut collector = RuntimeCollector::new(GcAlgorithmKind::Zgc);
-
-    let report = collector
-        .collect(
-            heap.access.collector_capability(),
-            &HashSet::from([first, second]),
-        )
-        .unwrap();
-
-    assert_eq!(report.retired_handles, [dead]);
-    assert_eq!(report.relocated_handles, [first, second]);
-    assert_ne!(heap.access.resolve_handle(first).unwrap(), first_address);
-    assert_ne!(heap.access.resolve_handle(second).unwrap(), second_address);
-    assert_eq!(heap.property(first), 1);
-    assert_eq!(heap.property(second), 2);
-    assert_eq!(collector.telemetry_snapshot().cycles, 1);
 }

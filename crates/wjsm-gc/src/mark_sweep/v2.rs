@@ -137,7 +137,7 @@ impl<M: GrowableHeapMemory> MarkSweepV2<M> {
         self.objects.lock().get(&handle).is_some_and(|object| {
             self.heap
                 .allocator()
-                .is_marked_current(object.allocation.object())
+                .is_marked(object.allocation.object(), HandleGeneration::Young)
                 .unwrap_or(false)
         })
     }
@@ -151,20 +151,20 @@ impl<M: GrowableHeapMemory> MarkSweepV2<M> {
         roots: &RootSnapshot,
         mut cleanup_side_tables: impl FnMut(HandleId),
     ) -> Result<MarkSweepV2Report, MarkSweepV2Error> {
-        self.heap.allocator().clear_current_marks();
+        self.heap.allocator().clear_marks(HandleGeneration::Young);
         let roots = roots
-            .handles()
-            .iter()
-            .copied()
+            .root_handles()
             .map(HandleId::new)
             .collect::<BTreeSet<_>>();
         let objects = self.objects.lock();
         let marked = mark_reachable(&objects, roots);
         for handle in &marked {
             if let Some(object) = objects.get(handle) {
-                self.heap
-                    .allocator()
-                    .mark_current(object.allocation.object())?;
+                self.heap.allocator().try_mark(
+                    object.allocation.object(),
+                    object.allocation.bytes(),
+                    HandleGeneration::Young,
+                )?;
             }
         }
         let dead = objects

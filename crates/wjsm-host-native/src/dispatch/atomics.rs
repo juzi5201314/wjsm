@@ -564,7 +564,8 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
         // 立即 "not-equal"。
         let result = encode_string(state, "not-equal");
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(object),
                 value::decode_handle(async_key),
@@ -572,7 +573,8 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
             )
             .is_err()
             || state
-                .heap
+                .gc
+                .heap()
                 .set_property(
                     value::decode_handle(object),
                     value::decode_handle(value_key),
@@ -589,7 +591,8 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     if timeout == 0.0 {
         let result = encode_string(state, "timed-out");
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(object),
                 value::decode_handle(async_key),
@@ -597,7 +600,8 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
             )
             .is_err()
             || state
-                .heap
+                .gc
+                .heap()
                 .set_property(
                     value::decode_handle(object),
                     value::decode_handle(value_key),
@@ -641,7 +645,8 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
         .ok();
 
     if state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(object),
             value::decode_handle(async_key),
@@ -649,7 +654,8 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
         )
         .is_err()
         || state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(object),
                 value::decode_handle(value_key),

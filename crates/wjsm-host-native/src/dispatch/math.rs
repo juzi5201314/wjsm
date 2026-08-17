@@ -158,12 +158,12 @@ pub(super) fn dispatch_math(
             let Some(array) = args.first().and_then(|array| object_handle(*array)) else {
                 return Some(fail_dispatch(ctx));
             };
-            let Ok(length) = state.heap.array_length(array) else {
+            let Ok(length) = state.gc.heap().array_length(array) else {
                 return Some(fail_dispatch(ctx));
             };
             let mut values = Vec::with_capacity(length as usize);
             for index in 0..length {
-                let Ok(Some(element)) = state.heap.get_element(array, index) else {
+                let Ok(Some(element)) = state.gc.heap().get_element(array, index) else {
                     return Some(fail_dispatch(ctx));
                 };
                 values.push(element as i64);

@@ -128,7 +128,7 @@ fn receiver_brand(state: &NativeAgentState, receiver: i64) -> Option<i64> {
         return Some(receiver);
     }
     let handle = runtime::object_handle(receiver)?;
-    let prototype = state.heap.prototype(handle).ok()?;
+    let prototype = state.gc.heap().prototype(handle).ok()?;
     Some(if prototype == u32::MAX {
         value::encode_null()
     } else {

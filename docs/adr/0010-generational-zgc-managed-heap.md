@@ -1,9 +1,9 @@
 # ADR 0010: Generational ZGC Managed Heap
 
-**Status**: Accepted. Active runtime cutover is complete: unified ManagedHeap on shared memory64 is the sole dynamic object-heap path for mark-sweep, G1, and ZGC. JDK-normalized performance matrices (Task 24) and isolated 4/16 GiB / named-capability nightly (Task 25) remain **`needs-verification`** until instrumented JDK 25 probe evidence and hard-isolation runners are available. This ADR supersedes [ADR 0005](0005-pluggable-gc-v2.md) for ownership, concurrency, generation, and entry decisions.
+**Status**: Accepted. Active runtime cutover is complete: unified ManagedHeap on shared memory64 is the sole dynamic object-heap path for mark-sweep, G1, and ZGC. Production `--gc zgc` is owned by `wjsm-host-native::NativeGc` and `wjsm-gc::GenerationalZgc`; the retired `RuntimeCollector`, `ZgcV2`, `YoungController`, and `OldController` paths are not compatibility fallbacks. JDK-normalized performance matrices (Task 24) and isolated 4/16 GiB / named-capability nightly (Task 25) remain **`needs-verification`** until instrumented JDK 25 probe evidence and hard-isolation runners are available. This ADR supersedes [ADR 0005](0005-pluggable-gc-v2.md) for ownership, concurrency, generation, and entry decisions.
 
 **Date**: 2026-07-20  
-**Amended**: 2026-07-23 (Task 27 closure)
+**Amended**: 2026-08-16 (production NativeGc/GenerationalZgc cutover and old model retirement)
 
 **Supersedes**: [ADR 0005: Pluggable GC v2 Boundary](0005-pluggable-gc-v2.md)
 
@@ -48,13 +48,12 @@ ADR 0005 established pluggable mark-sweep / G1 / ZGC under a safepoint-budgeted,
 | Owner | Responsibility |
 |---|---|
 | `zgc::color` / barrier emit | load/store barriers, good color, SATB/buffer flush |
-| young controller | concurrent young mark, promotion, remset edges |
-| old mark | concurrent old marking |
-| concurrent relocate | relocation set, copy/heal, source reclaim |
-| remset | precise remembered sets / promotion destinations |
-| director / pacing | prediction, debt, stall bounds, uncommit |
-| host_roots | strong/weak/finalizer roots integrated with concurrent cycles |
-| `active_zgc::collect_dispatch` | public `--gc zgc` full collect entry on ManagedHeap |
+| `GenerationalZgc::run_cycle` | concurrent young/old mark, promotion, relocation-set selection, and cycle state |
+| `ConcurrentRelocator` | relocation CAS, copy/heal, and epoch-delayed source reclaim |
+| `remset` / page metadata | precise remembered edges, generation/page accounting, and promotion destinations |
+| `GcDirector` | allocation-rate prediction, pacing, assist debt, reserve stalls, and uncommit telemetry |
+| `wjsm-host-native::dispatch::weak` | host roots, weak/ephemeron/finalizer closure, side-table cleanup |
+| `NativeGc` | public `--gc zgc` allocation, poll, safepoint, explicit `gc()`, barrier-state, and telemetry entry |
 
 Public GC modes remain `mark-sweep`, `g1`, `zgc` via `RuntimeOptions` / CLI `--gc` / `WJSM_GC`; `WJSM_TEST_GC` is test-matrix only. All three run on the same ManagedHeap.
 

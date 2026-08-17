@@ -61,7 +61,8 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
         let key = state.intern_text(name.into(), value::TAG_STRING)?;
         let callable = state.native_callable(crate::NativeCallableKind::NodeFs(method))?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(bridge),
                 value::decode_handle(key),
@@ -613,7 +614,8 @@ pub(super) fn set_property(
 ) -> Option<()> {
     let key = state.intern_text(name.into(), value::TAG_STRING)?;
     state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(object),
             value::decode_handle(key),

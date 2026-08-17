@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::control::{GcRuntimeV2, RootSnapshot};
 
-/// mutator 只发布 handle roots；owner context 统一持有堆与 collector 状态。
+/// mutator 发布 encoded-value roots；owner context 统一持有堆与 collector 状态。
 pub struct MutatorContext {
     runtime: Arc<GcRuntimeV2>,
     participant_id: u32,
@@ -23,9 +23,10 @@ impl MutatorContext {
         self.participant_id
     }
 
-    pub fn publish_roots(&self, roots: impl IntoIterator<Item = u32>) -> RootSnapshot {
+    pub fn publish_roots(&self, roots: impl IntoIterator<Item = i64>) -> RootSnapshot {
         let epoch = self.runtime.requested_epoch();
-        let snapshot = RootSnapshot::new(epoch, roots.into_iter().collect());
+        let snapshot =
+            RootSnapshot::new(epoch, roots.into_iter().collect(), Vec::new(), Vec::new());
         self.published_epoch.store(epoch, Ordering::SeqCst);
         snapshot
     }

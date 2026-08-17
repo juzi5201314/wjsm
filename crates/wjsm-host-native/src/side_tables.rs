@@ -137,7 +137,7 @@ impl NativeAgentState {
     /// 这些 name_id 一旦复用会让 transition 别名到错误属性名，故一并钉扎。
     fn sweep_strings(&mut self, live: &HostLiveSet) {
         let mut live_strings = live.strings.clone();
-        live_strings.extend(self.heap.property_name_ids());
+        live_strings.extend(self.gc.heap().property_name_ids());
         live_strings.extend(self.array_properties.keys().map(|(_, key)| *key));
         live_strings.extend(self.array_accessors.keys().map(|(_, key)| *key));
         live_strings.extend(self.array_property_flags.keys().map(|(_, key)| *key));
@@ -174,8 +174,6 @@ impl NativeAgentState {
             if live_strings.contains(&(index as u32)) {
                 continue;
             }
-            // 仅当该槽仍是自身文本的 canonical 下标时才摘 string_ids 反向映射；
-            // 复用槽改写文本时 string_ids 会在 intern 时更新，这里不能误删别的槽。
             if self.string_ids.get(&self.strings[index]).copied() == Some(index as u32) {
                 self.string_ids.remove(&self.strings[index]);
             }

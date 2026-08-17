@@ -74,7 +74,8 @@ pub(crate) fn construct(
         let handle = value::decode_handle(array);
         for index in 0..length {
             if state
-                .heap
+                .gc
+                .heap()
                 .set_element(handle, index, value::encode_array_hole() as u64)
                 .is_err()
             {
@@ -83,7 +84,8 @@ pub(crate) fn construct(
         }
         if length != 0
             && state
-                .heap
+                .gc
+                .heap()
                 .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_HOLEY)
                 .is_err()
         {
@@ -197,12 +199,13 @@ fn handle(args: &[i64]) -> Option<u32> {
 }
 
 fn length(state: &NativeAgentState, handle: u32) -> Option<u32> {
-    state.heap.array_length(handle).ok()
+    state.gc.heap().array_length(handle).ok()
 }
 
 fn get_raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i64> {
     state
-        .heap
+        .gc
+        .heap()
         .get_element(handle, index)
         .ok()
         .flatten()
@@ -216,7 +219,11 @@ fn get(state: &NativeAgentState, handle: u32, index: u32) -> i64 {
 }
 
 fn set(state: &NativeAgentState, handle: u32, index: u32, stored: i64) -> bool {
-    state.heap.set_element(handle, index, stored as u64).is_ok()
+    state
+        .gc
+        .heap()
+        .set_element(handle, index, stored as u64)
+        .is_ok()
 }
 
 /// `array.allocate(len)`：按长度创建全 hole 数组（length=len），供 map 结果容器。
@@ -240,7 +247,8 @@ fn array_allocate(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i
     let handle = value::decode_handle(array);
     for index in 0..length {
         if state
-            .heap
+            .gc
+            .heap()
             .set_element(handle, index, value::encode_array_hole() as u64)
             .is_err()
         {
@@ -249,13 +257,14 @@ fn array_allocate(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i
     }
     if length != 0
         && state
-            .heap
+            .gc
+            .heap()
             .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_HOLEY)
             .is_err()
     {
         return fail_dispatch(ctx);
     }
-    if state.heap.set_array_length(handle, length).is_err() {
+    if state.gc.heap().set_array_length(handle, length).is_err() {
         return fail_dispatch(ctx);
     }
     array
@@ -273,7 +282,7 @@ fn array_has_element(ctx: &mut NativeVmContext, state: &NativeAgentState, args: 
     let Some(index) = array_index(state, *index) else {
         return value::encode_bool(false);
     };
-    match state.heap.get_element(handle, index) {
+    match state.gc.heap().get_element(handle, index) {
         Ok(Some(stored)) => value::encode_bool(!value::is_array_hole(stored as i64)),
         Ok(None) => value::encode_bool(false),
         Err(_) => fail_dispatch(ctx),
@@ -310,7 +319,12 @@ fn array_push(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64])
         return fail_dispatch(ctx);
     };
     for stored in &args[1..] {
-        if state.heap.push_element(handle, *stored as u64).is_err() {
+        if state
+            .gc
+            .heap()
+            .push_element(handle, *stored as u64)
+            .is_err()
+        {
             return fail_dispatch(ctx);
         }
     }
@@ -322,7 +336,8 @@ fn array_push_hole(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[
         return fail_dispatch(ctx);
     };
     state
-        .heap
+        .gc
+        .heap()
         .push_element(handle, value::encode_array_hole() as u64)
         .map(|length| value::encode_f64(f64::from(length)))
         .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -352,7 +367,7 @@ fn array_push_spread(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
         if value::is_exception(stored) {
             return stored;
         }
-        if state.heap.push_element(target, stored as u64).is_err() {
+        if state.gc.heap().push_element(target, stored as u64).is_err() {
             return fail_dispatch(ctx);
         }
     }
@@ -374,7 +389,8 @@ fn array_pop(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) 
     }
     let result = get(state, handle, length - 1);
     state
-        .heap
+        .gc
+        .heap()
         .set_array_length(handle, length - 1)
         .map(|()| result)
         .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -433,7 +449,12 @@ fn array_splice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
             return fail_dispatch(ctx);
         }
     }
-    if state.heap.set_array_length(handle, new_length).is_err() {
+    if state
+        .gc
+        .heap()
+        .set_array_length(handle, new_length)
+        .is_err()
+    {
         return fail_dispatch(ctx);
     }
     removed
@@ -814,7 +835,8 @@ fn array_set_length(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &
         return fail_dispatch(ctx);
     };
     state
-        .heap
+        .gc
+        .heap()
         .set_array_length(value::decode_handle(*array), requested)
         .map(|()| *array)
         .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -845,7 +867,8 @@ fn array_shift(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]
         }
     }
     state
-        .heap
+        .gc
+        .heap()
         .set_array_length(handle, length - 1)
         .map(|()| first)
         .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -862,7 +885,12 @@ fn array_unshift(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i6
     let Some(new_length) = length.checked_add(count) else {
         return fail_dispatch(ctx);
     };
-    if state.heap.set_array_length(handle, new_length).is_err() {
+    if state
+        .gc
+        .heap()
+        .set_array_length(handle, new_length)
+        .is_err()
+    {
         return fail_dispatch(ctx);
     }
     for index in (0..length).rev() {

@@ -103,7 +103,8 @@ fn ensure_prototypes(ctx: &mut NativeVmContext, state: &mut NativeAgentState) ->
     let async_iterator_prototype = state.allocate_object(2, false).ok()?;
     let async_generator_prototype = state.allocate_object(0, false).ok()?;
     if state
-        .heap
+        .gc
+        .heap()
         .set_prototype(
             value::decode_handle(async_generator_prototype),
             value::decode_handle(async_iterator_prototype),
@@ -116,7 +117,8 @@ fn ensure_prototypes(ctx: &mut NativeVmContext, state: &mut NativeAgentState) ->
     let name = state.intern_text("Symbol.toStringTag".into(), value::TAG_STRING)?;
     let tag = state.intern_text("AsyncIterator".into(), value::TAG_STRING)?;
     if state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(async_iterator_prototype),
             value::decode_handle(name),
@@ -135,7 +137,8 @@ fn ensure_prototypes(ctx: &mut NativeVmContext, state: &mut NativeAgentState) ->
         true,
     ))?;
     if state
-        .heap
+        .gc
+        .heap()
         .set_property(
             value::decode_handle(async_iterator_prototype),
             key,
@@ -254,7 +257,8 @@ fn start(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         return fail_dispatch(ctx);
     };
     if state
-        .heap
+        .gc
+        .heap()
         .set_prototype(
             value::decode_handle(generator),
             value::decode_handle(prototype),

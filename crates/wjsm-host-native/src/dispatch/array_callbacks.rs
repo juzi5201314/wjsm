@@ -37,12 +37,13 @@ fn array(args: &[i64]) -> Option<(i64, u32)> {
 }
 
 fn length(state: &NativeAgentState, handle: u32) -> Option<u32> {
-    state.heap.array_length(handle).ok()
+    state.gc.heap().array_length(handle).ok()
 }
 
 fn raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i64> {
     state
-        .heap
+        .gc
+        .heap()
         .get_element(handle, index)
         .ok()
         .flatten()
@@ -111,7 +112,8 @@ fn iterate(
                 return fail_dispatch(ctx);
             };
             if state
-                .heap
+                .gc
+                .heap()
                 .set_array_length(value::decode_handle(array), array_length)
                 .is_err()
             {
@@ -156,7 +158,8 @@ fn iterate(
             IterationKind::Map => {
                 let output = value::decode_handle(result_array.expect("map allocates output"));
                 if state
-                    .heap
+                    .gc
+                    .heap()
                     .set_element(output, index, callback_result as u64)
                     .is_err()
                 {
@@ -167,7 +170,12 @@ fn iterate(
                 if is_truthy(state, callback_result) {
                     let output =
                         value::decode_handle(result_array.expect("filter allocates output"));
-                    if state.heap.push_element(output, element as u64).is_err() {
+                    if state
+                        .gc
+                        .heap()
+                        .push_element(output, element as u64)
+                        .is_err()
+                    {
                         return fail_dispatch(ctx);
                     }
                 }
@@ -181,12 +189,18 @@ fn iterate(
                     };
                     for inner_index in 0..inner_length {
                         let inner_value = observable(raw(state, inner, inner_index));
-                        if state.heap.push_element(output, inner_value as u64).is_err() {
+                        if state
+                            .gc
+                            .heap()
+                            .push_element(output, inner_value as u64)
+                            .is_err()
+                        {
                             return fail_dispatch(ctx);
                         }
                     }
                 } else if state
-                    .heap
+                    .gc
+                    .heap()
                     .push_element(output, callback_result as u64)
                     .is_err()
                 {
@@ -332,7 +346,8 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], c
         let present = values.len() as u32;
         for (index, stored) in values.into_iter().enumerate() {
             if state
-                .heap
+                .gc
+                .heap()
                 .set_element(handle, index as u32, stored as u64)
                 .is_err()
             {
@@ -341,7 +356,8 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], c
         }
         for index in present..length {
             if state
-                .heap
+                .gc
+                .heap()
                 .set_element(handle, index, value::encode_array_hole() as u64)
                 .is_err()
             {

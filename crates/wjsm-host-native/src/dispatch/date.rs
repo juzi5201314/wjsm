@@ -153,7 +153,8 @@ fn set_date_prototype(state: &mut NativeAgentState, object: i64) -> Result<(), (
         .map(value::decode_handle)
         .ok_or(())?;
     state
-        .heap
+        .gc
+        .heap()
         .set_prototype(value::decode_handle(object), prototype)
         .map_err(|_| ())
 }
@@ -271,7 +272,8 @@ pub(crate) fn parts(state: &mut NativeAgentState, encoded: i64) -> Option<(f64, 
     }
     let key = state.intern_text("__date_ms__".into(), value::TAG_STRING)?;
     let milliseconds = state
-        .heap
+        .gc
+        .heap()
         .get_property(value::decode_handle(encoded), value::decode_handle(key))
         .ok()?? as i64;
     value::is_f64(milliseconds).then_some((

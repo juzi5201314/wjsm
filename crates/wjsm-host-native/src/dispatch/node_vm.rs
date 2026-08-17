@@ -71,7 +71,8 @@ fn create_array_intrinsics(state: &mut NativeAgentState, context: u32) -> Option
     let object_prototype = state.object_prototype?;
     let array_prototype = state.allocate_array_values(&[]).ok()?;
     state
-        .heap
+        .gc
+        .heap()
         .set_prototype(
             value::decode_handle(array_prototype),
             value::decode_handle(object_prototype),
@@ -327,7 +328,8 @@ fn compile_function(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_prototype(value::decode_handle(overlay), value::decode_handle(global))
             .is_err()
             || !copy_extensions(state, overlay, extensions)
@@ -395,11 +397,12 @@ fn timeout_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64
 }
 fn string_array(state: &NativeAgentState, array: i64) -> Option<Vec<String>> {
     let handle = value::decode_handle(array);
-    let length = state.heap.array_length(handle).ok()?;
+    let length = state.gc.heap().array_length(handle).ok()?;
     (0..length)
         .map(|index| {
             state
-                .heap
+                .gc
+                .heap()
                 .get_element(handle, index)
                 .ok()
                 .flatten()
@@ -433,12 +436,13 @@ pub(crate) fn strings_enabled(state: &NativeAgentState, context: i64) -> bool {
 
 fn copy_extensions(state: &mut NativeAgentState, target: i64, extensions: i64) -> bool {
     let handle = value::decode_handle(extensions);
-    let Ok(length) = state.heap.array_length(handle) else {
+    let Ok(length) = state.gc.heap().array_length(handle) else {
         return false;
     };
     for index in 0..length {
         let Some(extension) = state
-            .heap
+            .gc
+            .heap()
             .get_element(handle, index)
             .ok()
             .flatten()
@@ -451,7 +455,8 @@ fn copy_extensions(state: &mut NativeAgentState, target: i64, extensions: i64) -
         };
         for (key, stored) in properties {
             if state
-                .heap
+                .gc
+                .heap()
                 .set_property(
                     value::decode_handle(target),
                     value::decode_handle(key),

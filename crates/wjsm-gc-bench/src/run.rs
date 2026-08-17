@@ -17,7 +17,7 @@ pub(crate) fn run_bench(args: &RunArgs) -> Result<BenchReport> {
         args.objects,
     );
     let hardware = HostInfo::detect();
-    let mut driver = WjsmDriver::compile(&scenario)?;
+    let mut driver = WjsmDriver::compile(&scenario, args.gc)?;
     let duration = Duration::from_secs(args.duration);
 
     let mut samples = Vec::with_capacity(args.samples);
@@ -89,6 +89,17 @@ fn aggregate_telemetry(samples: &[SampleReport]) -> wjsm_gc::GcTelemetrySnapshot
             add_opt(agg.barrier_load_fast_events, t.barrier_load_fast_events);
         agg.barrier_store_fast_events =
             add_opt(agg.barrier_store_fast_events, t.barrier_store_fast_events);
+        agg.director_young_alloc_bytes_per_sec = max_opt(
+            agg.director_young_alloc_bytes_per_sec,
+            t.director_young_alloc_bytes_per_sec,
+        );
+        agg.director_old_alloc_bytes_per_sec = max_opt(
+            agg.director_old_alloc_bytes_per_sec,
+            t.director_old_alloc_bytes_per_sec,
+        );
+        agg.director_free_bytes = max_opt(agg.director_free_bytes, t.director_free_bytes);
+        agg.director_reserve_bytes = max_opt(agg.director_reserve_bytes, t.director_reserve_bytes);
+        agg.director_stall_count = add_opt(agg.director_stall_count, t.director_stall_count);
         // pause 取所有样本中的最大值
         agg.pause.max_ns = agg.pause.max_ns.max(t.pause.max_ns);
         agg.pause.count = agg.pause.count.saturating_add(t.pause.count);
@@ -107,6 +118,9 @@ fn add_opt(acc: Option<u64>, val: Option<u64>) -> Option<u64> {
         (None, Some(v)) => Some(v),
         (None, None) => None,
     }
+}
+fn max_opt(acc: Option<u64>, val: Option<u64>) -> Option<u64> {
+    Some(acc.unwrap_or(0).max(val.unwrap_or(0)))
 }
 
 fn derive_metrics(

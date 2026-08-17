@@ -160,6 +160,64 @@ impl HeapMemory for NativeHeapMemory {
         }
         Ok(bytes)
     }
+
+    fn copy_nonoverlapping_unpublished(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError> {
+        let source_offset = self.checked_offset(source, length)?;
+        let destination_offset = self.checked_offset(destination, length)?;
+        let source_end = source_offset + length;
+        let destination_end = destination_offset + length;
+        if source_offset < destination_end && destination_offset < source_end {
+            return Err(HeapMemoryError::OverlappingCopy {
+                source: source.get(),
+                destination: destination.get(),
+                length,
+            });
+        }
+        let source_offset =
+            usize::try_from(source_offset).map_err(|_| HeapMemoryError::AddressTooLarge {
+                address: source.get(),
+            })?;
+        let destination_offset =
+            usize::try_from(destination_offset).map_err(|_| HeapMemoryError::AddressTooLarge {
+                address: destination.get(),
+            })?;
+        let length = usize::try_from(length).map_err(|_| HeapMemoryError::AddressTooLarge {
+            address: source.get(),
+        })?;
+        // SAFETY: checked_offset 证明两段都位于同一 live reservation 内；上面的区间
+        // 检查证明不重叠，且本 API 只允许用于未 publish、无并发访问的范围。
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.inner.virtual_base.add(source_offset),
+                self.inner.virtual_base.add(destination_offset),
+                length,
+            );
+        }
+        Ok(())
+    }
+
+    fn copy_atomic_words(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError> {
+        if !length.is_multiple_of(8) {
+            return Err(HeapMemoryError::InvalidAtomicCopyLength { length });
+        }
+        let mut offset = 0;
+        while offset < length {
+            let word = self.load_word(HeapAddress::new(source.get() + offset))?;
+            self.store_word(HeapAddress::new(destination.get() + offset), word)?;
+            offset += 8;
+        }
+        Ok(())
+    }
 }
 
 impl GrowableHeapMemory for NativeHeapMemory {
@@ -377,6 +435,50 @@ impl HeapMemory for TestHeapMemory {
             bytes.push((self.word(byte_offset).load(Ordering::SeqCst) >> shift) as u8);
         }
         Ok(bytes)
+    }
+
+    fn copy_nonoverlapping_unpublished(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError> {
+        let source_offset = self.checked_offset(source, length)?;
+        let destination_offset = self.checked_offset(destination, length)?;
+        let source_end = source_offset + length;
+        let destination_end = destination_offset + length;
+        if source_offset < destination_end && destination_offset < source_end {
+            return Err(HeapMemoryError::OverlappingCopy {
+                source: source.get(),
+                destination: destination.get(),
+                length,
+            });
+        }
+        for offset in 0..length {
+            let source_byte = source_offset + offset;
+            let shift = (source_byte % 8) * 8;
+            let value = (self.word(source_byte).load(Ordering::SeqCst) >> shift) as u8;
+            self.write_byte(destination_offset + offset, value);
+        }
+        Ok(())
+    }
+
+    fn copy_atomic_words(
+        &self,
+        source: HeapAddress,
+        destination: HeapAddress,
+        length: u64,
+    ) -> Result<(), HeapMemoryError> {
+        if !length.is_multiple_of(8) {
+            return Err(HeapMemoryError::InvalidAtomicCopyLength { length });
+        }
+        let mut offset = 0;
+        while offset < length {
+            let word = self.load_word(HeapAddress::new(source.get() + offset))?;
+            self.store_word(HeapAddress::new(destination.get() + offset), word)?;
+            offset += 8;
+        }
+        Ok(())
     }
 }
 

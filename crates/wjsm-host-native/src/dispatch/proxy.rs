@@ -105,7 +105,11 @@ fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
         handler: *handler,
         revoked: false,
     });
-    value::encode_proxy_handle(handle)
+    let proxy = value::encode_proxy_handle(handle);
+    for stored in [proxy, *target, *handler] {
+        state.gc.record_host_write(proxy, None, Some(stored));
+    }
+    proxy
 }
 
 fn revocable(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -126,7 +130,8 @@ fn revocable(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
             return fail_dispatch(ctx);
         };
         if state
-            .heap
+            .gc
+            .heap()
             .set_property(result_handle, value::decode_handle(key), stored as u64)
             .is_err()
         {
@@ -755,7 +760,8 @@ fn set_plain(
         return fail_dispatch(ctx);
     };
     state
-        .heap
+        .gc
+        .heap()
         .set_property(handle, key_id, stored as u64)
         .map(|()| stored)
         .unwrap_or_else(|_| fail_dispatch(ctx))
@@ -773,7 +779,8 @@ fn set_descriptor(state: &mut NativeAgentState, stored: i64, create: bool) -> Op
     for &(name, field) in &fields[..field_count] {
         let key = state.intern_text(name.into(), value::TAG_STRING)?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(descriptor),
                 value::decode_handle(key),
@@ -935,11 +942,12 @@ fn array_arguments(state: &NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
         return None;
     }
     let handle = value::decode_handle(encoded);
-    let length = state.heap.array_length(handle).ok()?;
+    let length = state.gc.heap().array_length(handle).ok()?;
     (0..length)
         .map(|index| {
             state
-                .heap
+                .gc
+                .heap()
                 .get_element(handle, index)
                 .ok()
                 .flatten()
@@ -1051,7 +1059,8 @@ fn reflect_construct(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     }
     if let Some(prototype) = object_handle(prototype)
         && state
-            .heap
+            .gc
+            .heap()
             .set_prototype(value::decode_handle(this_value), prototype)
             .is_err()
     {

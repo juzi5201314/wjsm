@@ -110,7 +110,8 @@ pub(super) fn install_prototype_methods(
             .native_callable(NativeCallableKind::DateMethod(kind))
             .ok_or(())?;
         state
-            .heap
+            .gc
+            .heap()
             .set_property(
                 value::decode_handle(prototype),
                 value::decode_handle(key),

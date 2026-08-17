@@ -60,12 +60,13 @@ fn enumerable_keys(state: &mut NativeAgentState, source: i64) -> Option<Vec<i64>
     let mut keys = Vec::new();
     let mut seen = HashSet::new();
     loop {
-        let encoded =
-            if state.heap.object_type(object).ok() == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) {
-                value::encode_handle(value::TAG_ARRAY, object)
-            } else {
-                value::encode_object_handle(object)
-            };
+        let encoded = if state.gc.heap().object_type(object).ok()
+            == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
+        {
+            value::encode_handle(value::TAG_ARRAY, object)
+        } else {
+            value::encode_object_handle(object)
+        };
         let all = super::object::own_keys(state, encoded, false)?;
         let enumerable: HashSet<i64> = super::object::own_keys(state, encoded, true)?
             .into_iter()
@@ -79,7 +80,7 @@ fn enumerable_keys(state: &mut NativeAgentState, source: i64) -> Option<Vec<i64>
                 keys.push(key);
             }
         }
-        object = state.heap.prototype(object).ok()?;
+        object = state.gc.heap().prototype(object).ok()?;
         if object == u32::MAX {
             break;
         }

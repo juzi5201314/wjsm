@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
-use super::epoch::{EpochParticipant, EpochQuarantine};
+use super::epoch::{EpochParticipant, HeapEpoch};
 use super::handle_entry::{
     ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HEAP_COMMIT_GRANULE_BYTES,
     HandleGeneration, HandleId, HandleState, HandleTableError,
@@ -186,13 +186,20 @@ pub struct HandleTableV2 {
     layout: ManagedHeapLayout,
     region: HandleRegion,
     next_handle: AtomicU64,
-    epochs: Arc<EpochQuarantine>,
+    epochs: Arc<HeapEpoch>,
 }
 
 impl HandleTableV2 {
     /// 用平台虚拟内存后端创建 handle table（后端无关默认）。
     pub fn new(layout: ManagedHeapLayout) -> Result<Self, HandleTableError> {
-        Self::with_backend(layout, Box::new(PlatformHandleRegion::reserve()?))
+        Self::with_epoch(layout, HeapEpoch::new())
+    }
+
+    pub fn with_epoch(
+        layout: ManagedHeapLayout,
+        epochs: Arc<HeapEpoch>,
+    ) -> Result<Self, HandleTableError> {
+        Self::with_backend_and_epoch(layout, Box::new(PlatformHandleRegion::reserve()?), epochs)
     }
 
     /// 用指定物理后端创建 handle table；production 传入平台 region，测试传入协议后端。
@@ -200,16 +207,28 @@ impl HandleTableV2 {
         layout: ManagedHeapLayout,
         backend: Box<dyn HandleRegionBackend>,
     ) -> Result<Self, HandleTableError> {
+        Self::with_backend_and_epoch(layout, backend, HeapEpoch::new())
+    }
+
+    pub fn with_backend_and_epoch(
+        layout: ManagedHeapLayout,
+        backend: Box<dyn HandleRegionBackend>,
+        epochs: Arc<HeapEpoch>,
+    ) -> Result<Self, HandleTableError> {
         Ok(Self {
             layout,
             region: HandleRegion::new(backend)?,
             next_handle: AtomicU64::new(0),
-            epochs: EpochQuarantine::new(),
+            epochs,
         })
     }
 
     pub const fn layout(&self) -> &ManagedHeapLayout {
         &self.layout
+    }
+
+    pub fn epoch(&self) -> Arc<HeapEpoch> {
+        Arc::clone(&self.epochs)
     }
 
     pub const fn reserved_bytes(&self) -> u64 {
@@ -416,14 +435,6 @@ impl HandleTableV2 {
             self.epochs.make_reusable(*handle);
         }
         handles.len()
-    }
-
-    pub(crate) fn quarantine_allocation(&self, start: u64, bytes: u64) {
-        self.epochs.retire_allocation(start, bytes);
-    }
-
-    pub(crate) fn take_reclaimable_allocations(&self) -> Vec<(u64, u64)> {
-        self.epochs.take_reclaimable_allocations()
     }
 
     fn compare_exchange(

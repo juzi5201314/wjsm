@@ -1,5 +1,6 @@
 use wjsm_gc::{
-    AllocationClass, ManagedAllocator, ManagedHeapLayout, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
+    AllocationClass, HandleGeneration, ManagedAllocator, ManagedHeapLayout, Nlab, ObjectRef,
+    PAGE_GRANULE_BYTES,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -45,31 +46,69 @@ fn allocator_selects_page_classes_and_contiguous_ranges() {
 }
 
 #[test]
-fn object_map_and_double_bitmap_stream_live_objects_without_raw_pointers() {
+fn object_map_and_generation_bitmaps_stream_live_objects_without_size_table() {
     let allocator = allocator();
     let mut nlab = Nlab::new();
     let first = allocator.allocate(&mut nlab, 16).unwrap();
     let second = allocator.allocate(&mut nlab, 32).unwrap();
 
-    allocator.mark_current(first.object()).unwrap();
-    allocator.mark_previous(second.object()).unwrap();
+    assert!(
+        allocator
+            .try_mark(first.object(), first.bytes(), HandleGeneration::Young)
+            .unwrap()
+    );
+    assert!(
+        !allocator
+            .try_mark(first.object(), first.bytes(), HandleGeneration::Young)
+            .unwrap()
+    );
+    assert!(
+        allocator
+            .try_mark(second.object(), second.bytes(), HandleGeneration::Old)
+            .unwrap()
+    );
     let objects: Vec<ObjectRef> = allocator.objects_in_page(first.page()).collect();
 
     assert_eq!(objects, vec![first.object(), second.object()]);
-    assert!(allocator.is_marked_current(first.object()).unwrap());
-    assert!(allocator.is_marked_previous(second.object()).unwrap());
-    assert!(!allocator.is_marked_current(second.object()).unwrap());
+    assert!(
+        allocator
+            .is_marked(first.object(), HandleGeneration::Young)
+            .unwrap()
+    );
+    assert!(
+        allocator
+            .is_marked(second.object(), HandleGeneration::Old)
+            .unwrap()
+    );
+    assert!(
+        !allocator
+            .is_marked(second.object(), HandleGeneration::Young)
+            .unwrap()
+    );
+    let stats = allocator.page_stats();
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].allocated_bytes, 48);
+    assert_eq!(stats[0].young_live_bytes, 16);
+    assert_eq!(stats[0].old_live_bytes, 32);
+    assert_eq!(stats[0].object_count, 2);
+    assert!(!stats[0].dedicated);
 }
 
 #[test]
-fn relocation_reserve_isolated_and_released_ranges_coalesce() {
+fn relocation_nlab_allocates_reserved_pages_and_returns_unused_tail() {
     let allocator = allocator();
-    let reserve = allocator.reserve_relocation(4).unwrap();
+    let mut relocation = allocator.reserve_relocation(4).unwrap();
+    let relocated = allocator.allocate_relocation(&mut relocation, 24).unwrap();
+    assert_eq!(relocation.remaining_pages(), 3);
+
     let mut nlab = Nlab::new();
     let large = allocator.allocate(&mut nlab, 2 * MIB).unwrap();
+    assert!(!relocated.pages().overlaps(large.pages()));
 
-    assert!(!reserve.pages().overlaps(large.pages()));
+    allocator.finish_relocation(relocation).unwrap();
     allocator.release_dedicated(&large).unwrap();
-    allocator.release_relocation(reserve).unwrap();
+    allocator
+        .reclaim_object(relocated.object(), relocated.bytes())
+        .unwrap();
     assert_eq!(allocator.free_pages(), allocator.total_pages());
 }

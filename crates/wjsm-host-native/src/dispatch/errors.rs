@@ -76,7 +76,8 @@ pub(crate) fn error_constructor(
             .filter(|prototype| value::is_js_object(*prototype))
             .unwrap_or(intrinsic_prototype);
         if state
-            .heap
+            .gc
+            .heap()
             .set_prototype(value::decode_handle(error), value::decode_handle(prototype))
             .is_err()
         {

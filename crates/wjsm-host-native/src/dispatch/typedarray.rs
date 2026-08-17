@@ -1235,11 +1235,12 @@ fn relative_index(state: &NativeAgentState, encoded: Option<i64>, length: usize)
 fn array_values(state: &NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
     if value::is_array(encoded) {
         let handle = value::decode_handle(encoded);
-        let length = state.heap.array_length(handle).ok()?;
+        let length = state.gc.heap().array_length(handle).ok()?;
         return (0..length)
             .map(|index| {
                 state
-                    .heap
+                    .gc
+                    .heap()
                     .get_element(handle, index)
                     .ok()
                     .flatten()

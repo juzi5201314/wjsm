@@ -82,6 +82,46 @@ pub(crate) fn store_bigint(state: &mut NativeAgentState, input: BigInt) -> Optio
     bigint::store(state, input)
 }
 
+pub(super) unsafe extern "C" fn native_zgc_load_barrier_assist(
+    ctx: *mut NativeVmContext,
+    handle: u32,
+) -> u64 {
+    // SAFETY:generated code 传入 pinned vmctx；本叶子 thunk 不保存该引用。
+    let Some(ctx) = (unsafe { ctx.as_ref() }) else {
+        return 0;
+    };
+    // SAFETY:heap_state 在 runtime 生命周期内指向 pinned NativeAgentState，屏障 thunk
+    // 只在 owner mutator 线程同步调用。
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_ref() }) else {
+        return 0;
+    };
+    state.gc.heap().resolve_handle(handle).unwrap_or(0)
+}
+
+pub(super) unsafe extern "C" fn native_zgc_store_barrier(
+    ctx: *mut NativeVmContext,
+    owner: u32,
+    slot: u64,
+    value: i64,
+) -> u32 {
+    // SAFETY:generated code 传入 pinned vmctx；本叶子 thunk 不保存该引用。
+    let Some(ctx) = (unsafe { ctx.as_ref() }) else {
+        return 1;
+    };
+    // SAFETY:heap_state 在 runtime 生命周期内指向 pinned NativeAgentState，屏障 thunk
+    // 只在 owner mutator 线程同步调用。
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_ref() }) else {
+        return 1;
+    };
+    u32::from(
+        state
+            .gc
+            .heap()
+            .store_reference(owner, slot, value as u64)
+            .is_err(),
+    )
+}
+
 pub(super) unsafe extern "C" fn native_host_operation(
     ctx: *mut NativeVmContext,
     operation: u32,
@@ -172,7 +212,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
     // 任何宿主操作都可能直接或间接改变 shape（builtin 会直接改 heap）；
     // 这里统一同步 proto 世代，让生成代码中的 ProtoData/Accessor IC 在下次命中
     // 前看到最新值。读锁极短，仅在所有宿主操作返回后执行一次。
-    ctx.proto_generation = state.heap.shapes().proto_generation();
+    ctx.proto_generation = state.gc.heap().shapes().proto_generation();
     result
 }
 

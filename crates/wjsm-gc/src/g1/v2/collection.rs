@@ -2,7 +2,7 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
-use crate::heap::{GrowableHeapMemory, PageId};
+use crate::heap::{GrowableHeapMemory, HandleGeneration, PageId};
 
 const MIXED_LIVE_PERCENT: u64 = 85;
 
@@ -165,12 +165,20 @@ impl<M: GrowableHeapMemory + Clone + 'static> G1V2<M> {
         objects: &BTreeMap<HandleId, G1Object>,
         reachable: &BTreeSet<HandleId>,
     ) -> Result<(), G1V2Error> {
-        self.heap.allocator().clear_current_marks();
+        self.heap.allocator().clear_marks(HandleGeneration::Young);
+        self.heap.allocator().clear_marks(HandleGeneration::Old);
         for handle in reachable {
             if let Some(object) = objects.get(handle) {
-                self.heap
-                    .allocator()
-                    .mark_current(object.allocation.object())?;
+                let generation = if object.generation.is_young() {
+                    HandleGeneration::Young
+                } else {
+                    HandleGeneration::Old
+                };
+                self.heap.allocator().try_mark(
+                    object.allocation.object(),
+                    object.allocation.bytes(),
+                    generation,
+                )?;
             }
         }
         Ok(())
@@ -182,12 +190,7 @@ impl<M: GrowableHeapMemory + Clone + 'static> G1V2<M> {
 }
 
 fn snapshot_handles(snapshot: &RootSnapshot) -> BTreeSet<HandleId> {
-    snapshot
-        .handles()
-        .iter()
-        .copied()
-        .map(HandleId::new)
-        .collect()
+    snapshot.root_handles().map(HandleId::new).collect()
 }
 
 fn mark_reachable(

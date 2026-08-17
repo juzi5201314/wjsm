@@ -21,7 +21,7 @@
 //!
 //! 1. **属性读退化为「u32 shape 比较 + 常量偏移 load」**，不需要遍历任何 shape
 //!    结构（IC 槽里存的是编译期无关的 `shape_id` + `value_index`）。
-//! 2. **GC / handle remap / ZGC 重定位 / 快照恢复统统按 `16 + capacity*8` 走**，
+//! 2. **GC / handle remap / ZGC 重定位 / 快照恢复统统按 `24 + capacity*8` 走**，
 //!    每槽当作一个 boxed i64，与数组元素同一套公式——不再需要「每槽 trace 三个字
 //!    并按 flags 区分 accessor」的分支。未使用的值槽恒为 0（即 `+0.0`），不是句柄，
 //!    因此扫描整个 capacity 而非 `slot_count` 也是安全的，扫描期无需查 ShapeTable。
