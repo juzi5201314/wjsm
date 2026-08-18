@@ -1,4 +1,8 @@
-exit_code: 2
+exit_code: 1
 --- stdout ---
 --- stderr ---
-Runtime error: SyntaxError: Invalid regular expression: Unbalanced parenthesis
+Error: error: SyntaxError: Invalid regular expression: Unbalanced parenthesis
+ --> errors/regex_invalid.js:2:9
+2 | var r = /(/;
+  |         ^^^
+
