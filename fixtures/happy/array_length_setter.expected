@@ -9,4 +9,5 @@ RangeError
 RangeError
 RangeError
 RangeError
+100 7 true false false undefined
 --- stderr ---

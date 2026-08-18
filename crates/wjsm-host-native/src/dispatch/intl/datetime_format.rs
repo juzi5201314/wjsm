@@ -512,9 +512,9 @@ fn format_value(
     }
 }
 
-fn wall_millis(millis: f64) -> f64 {
+fn wall_millis(millis: f64, tz: impl chrono::TimeZone) -> f64 {
     use chrono::{Datelike, TimeZone, Timelike, Utc};
-    let Some(local) = chrono::Local.timestamp_millis_opt(millis as i64).single() else {
+    let Some(local) = tz.timestamp_millis_opt(millis as i64).single() else {
         return millis;
     };
     let millis_of_second = f64::from(local.nanosecond() / 1_000_000);
@@ -664,12 +664,16 @@ fn strip_unicode_key(tag: &str, key: &str) -> String {
 
 fn zone_millis(millis: f64, time_zone: &str, implicit_local: bool) -> f64 {
     if implicit_local {
-        return wall_millis(millis);
+        return wall_millis(millis, chrono::Local);
     }
     if let Some(minutes) = offset_minutes(time_zone) {
         return millis + f64::from(minutes) * 60_000.0;
     }
-    millis
+    // ICU compiled_data 只提供 IANA 标识与显示名，不含 DST 转换表；墙钟换算走 tzdb。
+    match time_zone.parse::<chrono_tz::Tz>() {
+        Ok(tz) => wall_millis(millis, tz),
+        Err(_) => millis,
+    }
 }
 
 fn offset_minutes(time_zone: &str) -> Option<i32> {
@@ -748,4 +752,54 @@ fn ensure_formatter(
         slot.formatter = Some(formatter);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{TimeZone, Timelike, Utc};
+
+    use super::{offset_minutes, zone_millis};
+
+    fn utc_millis(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> f64 {
+        Utc.with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .single()
+            .expect("utc instant")
+            .timestamp_millis() as f64
+    }
+
+    fn wall_hour_minute(millis: f64) -> (u32, u32) {
+        let wall = Utc
+            .timestamp_millis_opt(millis as i64)
+            .single()
+            .expect("wall instant");
+        (wall.hour(), wall.minute())
+    }
+
+    #[test]
+    fn iana_zone_converts_utc_instant_to_wall_clock() {
+        let utc = utc_millis(2024, 1, 15, 17, 0);
+        assert_eq!(
+            wall_hour_minute(zone_millis(utc, "America/New_York", false)),
+            (12, 0)
+        );
+        assert_eq!(
+            wall_hour_minute(zone_millis(utc, "Asia/Tokyo", false)),
+            (2, 0)
+        );
+    }
+
+    #[test]
+    fn iana_zone_applies_daylight_saving() {
+        let utc = utc_millis(2024, 7, 15, 16, 0);
+        assert_eq!(
+            wall_hour_minute(zone_millis(utc, "America/New_York", false)),
+            (12, 0)
+        );
+    }
+
+    #[test]
+    fn numeric_offset_still_applies() {
+        assert_eq!(offset_minutes("+05:00"), Some(5 * 60));
+        assert_eq!(zone_millis(0.0, "+01:00", false), 3_600_000.0);
+    }
 }

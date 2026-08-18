@@ -701,6 +701,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         let capacity = (shape >> 32) as u32;
         if index >= capacity {
             self.grow_array_capacity(handle, index.saturating_add(1))?;
+            // 写入 length 以内、尚未分配的槽：前后仍是隐式 hole。
+            if index < length {
+                self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+            }
             return self.set_element(handle, index, value);
         }
         if index > length {
@@ -803,7 +807,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         }
         let old_object = self.resolve_handle(handle)?;
         let (length, old_capacity) = self.array_shape(handle)?;
-        if new_capacity < length || new_capacity <= old_capacity {
+        // length 可以超过容量（隐式 hole）；扩容只要求新容量严格大于旧容量。
+        if new_capacity <= old_capacity {
             return Err(HeapAccessV2Error::ElementCapacityExceeded {
                 handle,
                 index: length,
@@ -822,11 +827,12 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 old_bytes,
             )
             .map_err(HeapAccessV2Error::Memory)?;
+        let hole = value::encode_array_hole() as u64;
         for index in old_capacity..new_capacity {
             self.heap
                 .store_word(
                     HeapAddress::new(array_element_address(new_object, index)?),
-                    0,
+                    hole,
                 )
                 .map_err(HeapAccessV2Error::Memory)?;
         }

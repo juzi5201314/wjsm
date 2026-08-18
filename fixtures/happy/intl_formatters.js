@@ -19,6 +19,23 @@ console.log(dtf.resolvedOptions().timeZone, dtf.resolvedOptions().year);
 console.log(String(dtf.format(date)).length > 0);
 console.log(dtf.formatToParts(date).some((part) => part.type === "year"));
 
+const winter = new Date(Date.UTC(2024, 0, 15, 17, 0, 0));
+const summer = new Date(Date.UTC(2024, 6, 15, 16, 0, 0));
+function hourIn(timeZone, value) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(value);
+  return parts.find((part) => part.type === "hour").value;
+}
+console.log(
+  hourIn("UTC", winter),
+  hourIn("America/New_York", winter),
+  hourIn("Asia/Tokyo", winter),
+  hourIn("America/New_York", summer),
+);
+
 const plural = new Intl.PluralRules("en");
 console.log(plural.select(1), plural.select(2));
 
