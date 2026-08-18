@@ -1003,11 +1003,11 @@ pub(crate) fn find_exception_path(
     // 调用点之后的指令中找 `is_exception(call_dest)`。
     let mut exc_dest = None;
     for ins in block.instructions().iter().skip(instr_idx + 1) {
-        if let Instruction::IsException { dest, value } = ins {
-            if *value == call_dest {
-                exc_dest = Some(*dest);
-                break;
-            }
+        if let Instruction::IsException { dest, value } = ins
+            && *value == call_dest
+        {
+            exc_dest = Some(*dest);
+            break;
         }
     }
     let exc_dest = exc_dest?;
@@ -1081,22 +1081,22 @@ fn compute_region(
                     uses.extend(sources.iter().map(|s| s.value));
                 }
                 let uses_closure = uses.iter().any(|u| closure.contains(u));
-                if uses_closure {
-                    if let Some(d) = instruction_dest(ins) {
-                        if closure.insert(d) {
-                            changed = true;
-                        }
-                    }
+                if uses_closure
+                    && let Some(d) = instruction_dest(ins)
+                    && closure.insert(d)
+                {
+                    changed = true;
                 }
-                if let Instruction::StoreVar { name, value } = ins {
-                    if closure.contains(value) {
-                        for block2 in function.blocks() {
-                            for ins2 in block2.instructions() {
-                                if let Instruction::LoadVar { dest: d, name: n } = ins2 {
-                                    if n == name && closure.insert(*d) {
-                                        changed = true;
-                                    }
-                                }
+                if let Instruction::StoreVar { name, value } = ins
+                    && closure.contains(value)
+                {
+                    for block2 in function.blocks() {
+                        for ins2 in block2.instructions() {
+                            if let Instruction::LoadVar { dest: d, name: n } = ins2
+                                && n == name
+                                && closure.insert(*d)
+                            {
+                                changed = true;
                             }
                         }
                     }
@@ -1195,13 +1195,10 @@ fn compute_region(
 fn rename_var_in_blocks(blocks: &mut [BasicBlock], old_name: &str, new_name: &str) {
     for block in blocks {
         for ins in block.instructions_mut() {
-            match ins {
-                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => {
-                    if name == old_name {
-                        *name = new_name.to_string();
-                    }
-                }
-                _ => {}
+            if let Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } = ins
+                && name == old_name
+            {
+                *name = new_name.to_string();
             }
         }
     }

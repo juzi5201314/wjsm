@@ -1,6 +1,6 @@
 # Node.js 兼容矩阵
 
-wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
+wjsm 内置 25 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
 
 | 模块 | 导出项 | 备注 |
 | --- | --- | --- |
@@ -8,7 +8,8 @@ wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。
 | `util` | 10 | 含 `inspect` |
 | `events` | 2 | `EventEmitter` 及默认导出 |
 | `assert` | 19 | |
-| `url` | 9 | 全局 `URL` 不可用，用本模块 |
+| `buffer` | 2 | 导出全局 `Buffer` 与 `transcode` |
+| `url` | 9 | 含 IDN；全局 `URL` / `URLSearchParams` 可用 |
 | `querystring` | 4 | |
 | `os` | 14 | |
 | `fs` | 20 | 受文件系统沙箱约束 |
@@ -22,10 +23,10 @@ wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。
 | `child_process` | 6 | 默认禁用，需 `WJSM_CHILD_PROCESS_ALLOW` |
 | `dgram` | 2 | |
 | `tls` | 6 | |
-| `worker_threads` | 10 | 上限 32，可用 `WJSM_WORKER_THREADS_MAX` 调整 |
+| `worker_threads` | 10 | 每 agent 独立堆；无 `WJSM_WORKER_THREADS_MAX` |
 | `inspector` | 3 | |
 | `cluster` | 21 | |
-| `vm` | 11 | 多 Realm，上限 1024 |
+| `vm` | 11 | 多 Realm，共用同一 ManagedHeap |
 | `async_hooks` | 7 | 含 `AsyncLocalStorage` |
 | `perf_hooks` | 13 | |
 

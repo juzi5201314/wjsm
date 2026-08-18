@@ -293,17 +293,15 @@ impl Lowerer {
                     let after_then = self
                         .current_function
                         .ensure_jump_or_terminated(then_flow, merge);
-                    let after_else = self
+                    let _after_else = self
                         .current_function
                         .ensure_jump_or_terminated(else_flow, merge);
                     self.merge_eval_completion_after_if(
                         merge,
                         then_flow,
                         then_eval_completion,
-                        after_then,
                         else_flow,
                         else_eval_completion,
-                        after_else,
                     );
                     after_then
                 }
@@ -323,16 +321,13 @@ impl Lowerer {
 
         Ok(has_else)
     }
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn merge_eval_completion_after_if(
         &mut self,
         merge: BasicBlockId,
         then_flow: StmtFlow,
         then_eval_completion: Option<ValueId>,
-        _after_then: StmtFlow,
         else_flow: StmtFlow,
         else_eval_completion: Option<ValueId>,
-        _after_else: StmtFlow,
     ) {
         if !self.eval_mode {
             return;

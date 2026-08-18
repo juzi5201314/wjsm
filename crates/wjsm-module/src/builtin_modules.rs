@@ -33,6 +33,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         source: include_str!("../builtin_js/node_assert.js"),
     },
     BuiltinModule {
+        canonical: "buffer",
+        source: include_str!("../builtin_js/node_buffer.js"),
+    },
+    BuiltinModule {
         canonical: "url",
         source: include_str!("../builtin_js/node_url.js"),
     },

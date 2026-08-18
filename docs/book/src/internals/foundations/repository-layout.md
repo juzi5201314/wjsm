@@ -9,7 +9,7 @@ wjsm/
 ├── src/main.rs              根二进制入口，仅调用 wjsm_cli::main_entry()
 ├── build.rs                 生成 fixture 测试用例列表
 ├── Cargo.toml               workspace 定义 + 依赖版本 + profile
-├── crates/                  全部 15 个 workspace 成员
+├── crates/                  全部 workspace 成员
 ├── fixtures/                端到端行为用例与 IR 快照
 ├── tests/                   根级集成测试与 fixture runner
 ├── docs/                    ADR、设计文档、本手册

@@ -75,12 +75,10 @@ pub(super) fn dispatch_runtime(
             let [slot] = args else {
                 return fail_dispatch(ctx);
             };
-            let result = usize::try_from(*slot)
+            usize::try_from(*slot)
                 .ok()
                 .and_then(|slot| state.variables.get(slot).copied())
-                .unwrap_or_else(|| fail_dispatch(ctx));
-
-            result
+                .unwrap_or_else(|| fail_dispatch(ctx))
         }
         NativeRuntimeOp::IsTruthy => args
             .first()
@@ -193,7 +191,8 @@ pub(super) fn dispatch_runtime(
                 return value::encode_undefined();
             }
             if let Some(index) = array_index(state, *key) {
-                if let Some(stored) = super::typedarray::get_element(state, *object, index as usize)
+                if let Some(stored) =
+                    super::typedarray::get_element_intern(state, *object, index as usize)
                 {
                     return stored;
                 }
@@ -230,12 +229,16 @@ pub(super) fn dispatch_runtime(
             let Some(key) = property_key(state, *key) else {
                 return fail_dispatch(ctx);
             };
-            state
-                .gc
-                .heap()
-                .set_property(value::decode_object_handle(*object), key, *stored as u64)
-                .map(|()| *object)
-                .unwrap_or_else(|_| fail_dispatch(ctx))
+            match set_property_or_out_of_memory(
+                ctx,
+                state,
+                value::decode_object_handle(*object),
+                key,
+                *stored as u64,
+            ) {
+                Ok(()) => *object,
+                Err(exception) => exception,
+            }
         }
         NativeRuntimeOp::SetPropIc => {
             let [object, key, stored, ic_slot_ptr] = args else {
@@ -299,11 +302,11 @@ pub(super) fn dispatch_runtime(
             if value::is_proxy(*object) {
                 return super::proxy::get(ctx, state, *object, *index, *object);
             }
-            if let Some(index) = array_index(state, *index) {
-                if let Some(stored) = super::typedarray::get_element(state, *object, index as usize)
-                {
-                    return stored;
-                }
+            if let Some(index) = array_index(state, *index)
+                && let Some(stored) =
+                    super::typedarray::get_element_intern(state, *object, index as usize)
+            {
+                return stored;
             }
             if value::is_array(*object)
                 && let Some(index) = array_index(state, *index)
@@ -351,6 +354,17 @@ pub(super) fn dispatch_runtime(
                     return *stored;
                 }
             }
+            if value::is_array(*object) && state.text_matches(*index, "length") {
+                let Some(length) = array_length(state, *stored) else {
+                    return range_error(ctx, state, "Invalid array length");
+                };
+                return state
+                    .gc
+                    .heap()
+                    .set_array_length(value::decode_handle(*object), length)
+                    .map(|()| *stored)
+                    .unwrap_or_else(|_| fail_dispatch(ctx));
+            }
             if value::is_array(*object)
                 && let Some(index) = array_index(state, *index)
             {
@@ -394,7 +408,7 @@ pub(super) fn dispatch_runtime(
                 return fail_dispatch(ctx);
             };
             if value::is_callable(*object) {
-                if let Some((_, setter)) = state.callable_accessors.get(&(*object, key)).copied() {
+                if let Some((_, setter)) = callable_accessor_on_chain(state, *object, key) {
                     if value::is_callable(setter) {
                         let result = state.invoke_callable(ctx, setter, *object, &[*stored]);
                         return result
@@ -403,12 +417,7 @@ pub(super) fn dispatch_runtime(
                     }
                     return *stored;
                 }
-                state.callable_properties.insert((*object, key), *stored);
-                state
-                    .callable_property_flags
-                    .entry((*object, key))
-                    .or_insert(ASSIGNED_PROPERTY_FLAGS);
-                return *stored;
+                return set_callable_data_property(state, *object, key, *stored);
             }
             if value::is_array(*object) {
                 let handle = value::decode_handle(*object);
@@ -485,7 +494,7 @@ pub(super) fn dispatch_runtime(
             .call_environment()
             .unwrap_or_else(|| fail_dispatch(ctx)),
         NativeRuntimeOp::CollectRestArguments => state
-            .collect_rest_arguments(args)
+            .collect_rest_arguments(ctx, args)
             .unwrap_or_else(|| fail_dispatch(ctx)),
         NativeRuntimeOp::GuardSameFunction => {
             let [callable, function] = args else {
@@ -721,12 +730,7 @@ fn set_property_impl(
             }
             return stored;
         }
-        state.callable_properties.insert((object, key), stored);
-        state
-            .callable_property_flags
-            .entry((object, key))
-            .or_insert(ASSIGNED_PROPERTY_FLAGS);
-        return stored;
+        return set_callable_data_property(state, object, key, stored);
     }
     let receiver = object;
     match ordinary_set(
@@ -867,6 +871,25 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
     }
 }
 
+pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bool {
+    // Proxy 的 [[Construct]] 在 target 可构造时存在（ProxyCreate 10.5.12）。
+    if value::is_proxy(encoded) {
+        return super::proxy::is_constructor_proxy(state, encoded);
+    }
+    if !value::is_callable(encoded) {
+        return false;
+    }
+    match state.native_callable_kind(encoded) {
+        Some(crate::NativeCallableKind::Intl(kind)) => super::intl::is_constructor(kind),
+        Some(crate::NativeCallableKind::DateMethod(_)) => false,
+        Some(crate::NativeCallableKind::FunctionPrototype) => false,
+        Some(_) => true,
+        None => state
+            .callable_function(encoded)
+            .is_some_and(|function| function.needs_prototype),
+    }
+}
+
 pub(super) fn object_handle(encoded: i64) -> Option<u32> {
     (value::is_object(encoded) || value::is_array(encoded)).then(|| value::decode_handle(encoded))
 }
@@ -991,11 +1014,7 @@ fn ordinary_set_key(
     } else if state.non_extensible_objects.contains(&receiver_handle) {
         return Ok(false);
     }
-    state
-        .gc
-        .heap()
-        .set_property(receiver_handle, key, stored as u64)
-        .map_err(|_| fail_dispatch(ctx))?;
+    set_property_or_out_of_memory(ctx, state, receiver_handle, key, stored as u64)?;
     Ok(true)
 }
 
@@ -1157,6 +1176,16 @@ pub(super) fn get_property_with_receiver(
     if let Some(property) = state.global_property(object, key) {
         return Ok(property);
     }
+    // WHATWG URL 全局：惰性加载 node:url，与模块导出共享同一构造器。
+    if state.global_object == Some(object) || super::node_vm::is_context(state, object) {
+        let name = state.string(key).and_then(|text| text.to_utf8());
+        if let Some(name) = name.as_deref()
+            && matches!(name, "URL" | "URLSearchParams")
+            && let Some(property) = super::modules::ensure_url_global(ctx, state, name)
+        {
+            return Ok(property);
+        }
+    }
     if value::is_string(object)
         && let Some(index) = array_index(state, key)
     {
@@ -1180,6 +1209,14 @@ pub(super) fn get_property_with_receiver(
             .string(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
+        if property_name == "buffer"
+            && let Some(buffer) = state
+                .typed_arrays
+                .get(&value::decode_handle(object))
+                .and_then(|array| array.buffer_object)
+        {
+            return Ok(buffer);
+        }
         if let Some(builtin) = super::typedarray::typed_array_builtin(state, object, &property_name)
             && matches!(
                 builtin,
@@ -1356,12 +1393,34 @@ pub(super) fn get_property_with_receiver(
     }
 }
 
+fn set_callable_data_property(
+    state: &mut NativeAgentState,
+    object: i64,
+    key: u32,
+    stored: i64,
+) -> i64 {
+    let object = value::strip_gc_color(object);
+    if state
+        .callable_property_flags
+        .get(&(object, key))
+        .is_some_and(|flags| flags & constants::FLAG_WRITABLE as u32 == 0)
+    {
+        return stored;
+    }
+    state.callable_properties.insert((object, key), stored);
+    state
+        .callable_property_flags
+        .entry((object, key))
+        .or_insert(ASSIGNED_PROPERTY_FLAGS);
+    stored
+}
+
 fn callable_accessor_on_chain(
     state: &NativeAgentState,
     callable: i64,
     key: u32,
 ) -> Option<(i64, i64)> {
-    let mut current = Some(callable);
+    let mut current = Some(value::strip_gc_color(callable));
     while let Some(candidate) = current {
         if let Some(accessor) = state.callable_accessors.get(&(candidate, key)).copied() {
             return Some(accessor);
@@ -1481,6 +1540,20 @@ pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_ke
         || state.primitive_property(object, encoded_key).is_some()
 }
 
+fn primitive_string(state: &NativeAgentState, source: i64) -> Option<i64> {
+    if value::is_string(source) {
+        return Some(source);
+    }
+    if value::is_js_object(source) {
+        return state
+            .boxed_primitives
+            .get(&value::decode_handle(source))
+            .copied()
+            .filter(|value| value::is_string(*value));
+    }
+    None
+}
+
 fn intrinsic_iterator_source(
     state: &NativeAgentState,
     source: i64,
@@ -1496,10 +1569,12 @@ fn intrinsic_iterator_source(
             super::super::NativeIteratorSource::Array(handle),
             super::super::NativeIteratorKind::Values,
         )),
-        wjsm_ir::Builtin::IteratorFrom if value::is_string(source) => Some((
-            super::super::NativeIteratorSource::String(source),
-            super::super::NativeIteratorKind::Values,
-        )),
+        wjsm_ir::Builtin::IteratorFrom if let Some(text) = primitive_string(state, source) => {
+            Some((
+                super::super::NativeIteratorSource::String(text),
+                super::super::NativeIteratorKind::Values,
+            ))
+        }
         wjsm_ir::Builtin::IteratorFrom
             if value::is_js_object(source)
                 && state
@@ -1734,15 +1809,18 @@ pub(super) fn iterator_value(
             };
             (result, width as u32)
         }
-        super::super::NativeIteratorSource::TypedArray(source) => (
-            super::typedarray::get_element(
-                state,
-                value::encode_object_handle(source),
-                iterator.index as usize,
+        super::super::NativeIteratorSource::TypedArray(source) => {
+            let index = usize::try_from(iterator.index).unwrap_or(usize::MAX);
+            (
+                super::typedarray::get_element_intern(
+                    state,
+                    value::encode_object_handle(source),
+                    index,
+                )
+                .unwrap_or_else(value::encode_undefined),
+                1,
             )
-            .unwrap_or_else(value::encode_undefined),
-            1,
-        ),
+        }
         super::super::NativeIteratorSource::Map(source) => {
             let Some((key, stored)) = state
                 .maps
@@ -2006,6 +2084,30 @@ pub(super) fn range_error(
     message: &str,
 ) -> i64 {
     named_error(ctx, state, "RangeError", message)
+}
+
+/// 属性槽扩容会 reserve 新对象；堆页耗尽时先 STW 回收再重试。
+fn set_property_or_out_of_memory(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    handle: u32,
+    key: u32,
+    stored: u64,
+) -> Result<(), i64> {
+    match state.gc.heap().set_property(handle, key, stored) {
+        Ok(()) => Ok(()),
+        Err(HeapAccessV2Error::HeapExhausted { .. }) => {
+            state.collect_garbage(ctx).map_err(|_| fail_dispatch(ctx))?;
+            match state.gc.heap().set_property(handle, key, stored) {
+                Ok(()) => Ok(()),
+                Err(HeapAccessV2Error::HeapExhausted { .. }) => Err(state
+                    .out_of_memory_exception()
+                    .unwrap_or_else(|| fail_dispatch(ctx))),
+                Err(_) => Err(fail_dispatch(ctx)),
+            }
+        }
+        Err(_) => Err(fail_dispatch(ctx)),
+    }
 }
 
 pub(super) fn allocate_object_or_out_of_memory(

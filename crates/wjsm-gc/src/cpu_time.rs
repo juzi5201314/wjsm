@@ -7,11 +7,11 @@
 pub fn thread_cpu_ns() -> u64 {
     #[cfg(target_os = "linux")]
     {
-        return linux_thread_cpu_ns();
+        linux_thread_cpu_ns()
     }
     #[cfg(target_os = "windows")]
     {
-        return windows_thread_cpu_ns();
+        windows_thread_cpu_ns()
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {

@@ -4,6 +4,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use crate::heap::{
     Allocation, AllocatorError, GrowableHeapMemory, HandleGeneration, HandleId, HandleTableError,
     HandleTableV2, HeapAddress, HeapMemoryError, ManagedHeap, ManagedHeapLayout, Nlab, ObjectRef,
@@ -24,6 +26,8 @@ pub struct HeapAccessV2<M: GrowableHeapMemory> {
     barrier: HeapBarrier<M>,
     /// 属性元数据（name_id / flags / 值槽下标）的唯一 owner；堆内只留紧凑值数组。
     shapes: ShapeTable,
+    /// 属性/数组扩容与 mutator 共享同一 bump，避免每次 reserve 都吞掉一整页。
+    nlab: Mutex<Nlab>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,6 +77,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             handles,
             barrier,
             shapes: ShapeTable::new(),
+            nlab: Mutex::new(Nlab::new()),
         })
     }
 
@@ -113,9 +118,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     fn reserve_exact(&self, bytes: u64) -> Result<u64, HeapAccessV2Error> {
-        let mut nlab = Nlab::new();
+        let mut nlab = self.nlab.lock();
         self.allocate(&mut nlab, bytes)
             .map(|allocation| allocation.object().offset())
+    }
+
+    pub fn reset_nlab(&self) {
+        self.nlab.lock().reset();
     }
 
     pub fn free_bytes(&self) -> u64 {
@@ -662,7 +671,9 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             ))
             .map_err(HeapAccessV2Error::Memory)?;
         let length = shape as u32;
-        if index >= length {
+        let capacity = (shape >> 32) as u32;
+        // length 可以超过容量；未分配槽是隐式 hole，不能去读越界地址。
+        if index >= length || index >= capacity {
             return Ok(None);
         }
         let address = array_element_address(object, index)?;
@@ -690,6 +701,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         let capacity = (shape >> 32) as u32;
         if index >= capacity {
             self.grow_array_capacity(handle, index.saturating_add(1))?;
+            // 写入 length 以内、尚未分配的槽：前后仍是隐式 hole。
+            if index < length {
+                self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+            }
             return self.set_element(handle, index, value);
         }
         if index > length {
@@ -737,16 +752,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .load_word(HeapAddress::new(shape_address))
             .map_err(HeapAccessV2Error::Memory)?;
         let capacity = (shape >> 32) as u32;
-        if length > capacity {
-            return Err(HeapAccessV2Error::ElementCapacityExceeded {
-                handle,
-                index: length.saturating_sub(1),
-                capacity,
-            });
-        }
         let old_length = shape as u32;
-        for index in length..old_length {
-            self.set_element(handle, index, value::encode_array_hole() as u64)?;
+        // length 可以超过已分配容量：超出部分是隐式 hole，不必立刻扩容。
+        let fill_end = old_length.min(capacity);
+        if length < fill_end {
+            for index in length..fill_end {
+                self.set_element(handle, index, value::encode_array_hole() as u64)?;
+            }
         }
         self.heap
             .memory()
@@ -795,7 +807,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         }
         let old_object = self.resolve_handle(handle)?;
         let (length, old_capacity) = self.array_shape(handle)?;
-        if new_capacity < length || new_capacity <= old_capacity {
+        // length 可以超过容量（隐式 hole）；扩容只要求新容量严格大于旧容量。
+        if new_capacity <= old_capacity {
             return Err(HeapAccessV2Error::ElementCapacityExceeded {
                 handle,
                 index: length,
@@ -814,11 +827,12 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 old_bytes,
             )
             .map_err(HeapAccessV2Error::Memory)?;
+        let hole = value::encode_array_hole() as u64;
         for index in old_capacity..new_capacity {
             self.heap
                 .store_word(
                     HeapAddress::new(array_element_address(new_object, index)?),
-                    0,
+                    hole,
                 )
                 .map_err(HeapAccessV2Error::Memory)?;
         }

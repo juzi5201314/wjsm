@@ -112,10 +112,11 @@ impl Lowerer {
                         key: key_val,
                     },
                 );
-                let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
+                let mut rhs_block = current_block;
+                let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut rhs_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    current_block,
+                    rhs_block,
                     Instruction::Binary {
                         dest,
                         op: bin_op,
@@ -123,10 +124,9 @@ impl Lowerer {
                         rhs,
                     },
                 );
-                // 写回 env 对象
-                let key_val2 = self.append_env_key_const(current_block, binding);
-                let result = self.emit_set_prop(current_block, env_val, key_val2, dest);
-                self.expr_merge_block = Some(current_block);
+                let key_val2 = self.append_env_key_const(rhs_block, binding);
+                let result = self.emit_set_prop(rhs_block, env_val, key_val2, dest);
+                self.expr_merge_block = Some(rhs_block);
                 Ok(result)
             }
         }

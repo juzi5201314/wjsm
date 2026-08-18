@@ -1,4 +1,8 @@
-exit_code: 2
+exit_code: 1
 --- stdout ---
 --- stderr ---
-Runtime error: SyntaxError: Invalid regular expression flag: 'x'
+Error: error: SyntaxError: Invalid regular expression flag: 'x'
+ --> errors/regexp_flags_invalid.js:1:9
+1 | var r = /test/xx;
+  |         ^^^^^^^^
+

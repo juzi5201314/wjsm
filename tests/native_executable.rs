@@ -48,6 +48,46 @@ fn native_executable_prints_one() {
 }
 
 #[test]
+fn native_executable_string_normalize_uses_stub_icu() {
+    let dir = scratch_dir();
+    let output = dir.join(if cfg!(windows) {
+        "normalize.exe"
+    } else {
+        "normalize"
+    });
+    let wjsm = env!("CARGO_BIN_EXE_wjsm");
+    let stub = env!("CARGO_BIN_EXE_wjsm-exec");
+    let status = Command::new(wjsm)
+        .args([
+            "build",
+            "-e",
+            r#"var decomposed = "e\u0301"; var composed = "\u00e9"; console.log(decomposed.normalize() === composed.normalize()); console.log("\ufb00".normalize("NFKC") === "ff");"#,
+            "--format",
+            "native-executable",
+            "-o",
+        ])
+        .arg(&output)
+        .env("WJSM_EXEC_STUB", stub)
+        .status()
+        .expect("wjsm build should spawn");
+    assert!(
+        status.success(),
+        "wjsm build --format native-executable normalize failed: {status}"
+    );
+
+    let run = Command::new(&output)
+        .output()
+        .expect("packed normalize executable should spawn");
+    assert!(
+        run.status.success(),
+        "packed normalize executable failed: status={} stderr={}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"true\ntrue\n");
+}
+
+#[test]
 fn native_executable_runs_hello_fixture() {
     let dir = scratch_dir();
     let output = dir.join(if cfg!(windows) { "hello.exe" } else { "hello" });

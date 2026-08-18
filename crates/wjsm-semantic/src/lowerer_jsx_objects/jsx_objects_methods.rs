@@ -199,7 +199,36 @@ impl Lowerer {
                 Ok(key_dest)
             }
             swc_ast::PropName::Computed(computed) => self.lower_expr(&computed.expr, block),
-            _ => Err(self.error(key.span(), "unsupported property key kind")),
+            swc_ast::PropName::Num(num) => {
+                let key_str = num
+                    .raw
+                    .as_ref()
+                    .map(|raw| raw.to_string())
+                    .unwrap_or_else(|| js_number_property_key(num.value));
+                let key_const = self.module.add_constant(Constant::String(key_str));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                Ok(key_dest)
+            }
+            swc_ast::PropName::BigInt(bigint) => {
+                let key_str = bigint.value.to_string();
+                let key_const = self.module.add_constant(Constant::String(key_str));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                Ok(key_dest)
+            }
         }
     }
 
@@ -632,4 +661,21 @@ impl Lowerer {
 
         Ok(desc_dest)
     }
+}
+
+fn js_number_property_key(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".into();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity".into()
+        } else {
+            "Infinity".into()
+        };
+    }
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        return format!("{}", value as i64);
+    }
+    format!("{value}")
 }

@@ -447,3 +447,34 @@ fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
     // 5. 缺失属性 → None
     assert!(heap.own_data_property_index(handle, 999).unwrap().is_none());
 }
+
+#[test]
+fn sparse_length_write_grows_only_requested_slots() {
+    let layout = Arc::new(ManagedHeapLayout::new(1024 * 1024, 64 * 1024).unwrap());
+    let memory = TestHeapMemory::for_layout(&layout);
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let heap = HeapAccessV2::with_handles(memory, layout, handles, wjsm_gc::HeapBarrier::Disabled)
+        .unwrap();
+    let handle = heap.allocate_handle().unwrap();
+    let object = allocate(&heap, u64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    heap.publish_array(handle, object, PROTO_NULL_SENTINEL, 0)
+        .unwrap();
+    heap.set_array_length(handle, 100).unwrap();
+    assert_eq!(heap.array_shape(handle).unwrap(), (100, 0));
+
+    heap.set_element(handle, 50, 7).unwrap();
+
+    assert_eq!(heap.array_length(handle).unwrap(), 100);
+    assert_eq!(heap.get_element(handle, 50).unwrap(), Some(7));
+    assert_eq!(
+        heap.get_element(handle, 49).unwrap(),
+        Some(wjsm_ir::value::encode_array_hole() as u64)
+    );
+    assert_eq!(heap.get_element(handle, 99).unwrap(), None);
+    let (_, capacity) = heap.array_shape(handle).unwrap();
+    assert!(capacity > 50 && capacity < 100);
+    assert_eq!(
+        heap.array_kind(handle).unwrap(),
+        constants::ARRAY_KIND_HOLEY
+    );
+}

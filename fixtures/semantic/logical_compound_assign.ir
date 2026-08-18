@@ -187,66 +187,74 @@ module {
     bb25:
       %67 = const c30
       store var $0.sideEffect, %67
-      %68 = const c31
-      store var $0.e, %68
-      jump bb26
+      jump bb27
     bb26:
-      %69 = phi [(bb23, %65), (bb25, %68)]
-      %70 = is_exception %69
-      branch %70, bb28, bb27
+      %71 = phi [(bb23, %65), (bb27, %70)]
+      %72 = is_exception %71
+      branch %72, bb30, bb29
     bb27:
-      %72 = load var $0.sideEffect
-      %73 = call builtin.console.log(%72)
-      %74 = is_exception %73
-      branch %74, bb30, bb29
+      %70 = const c31
+      store var $0.e, %70
+      jump bb26
     bb28:
-      %71 = call builtin.exception_value(%69)
-      throw %71
+      unreachable
     bb29:
-      %76 = load var $0.e
-      %77 = call builtin.console.log(%76)
-      %78 = is_exception %77
-      branch %78, bb32, bb31
+      %74 = load var $0.sideEffect
+      %75 = call builtin.console.log(%74)
+      %76 = is_exception %75
+      branch %76, bb32, bb31
     bb30:
-      %75 = call builtin.exception_value(%73)
-      throw %75
+      %73 = call builtin.exception_value(%71)
+      throw %73
     bb31:
-      %80 = const c32
-      store var $0.f, %80
-      %81 = load var $0.f
-      branch %81, bb33, bb34
+      %78 = load var $0.e
+      %79 = call builtin.console.log(%78)
+      %80 = is_exception %79
+      branch %80, bb34, bb33
     bb32:
-      %79 = call builtin.exception_value(%77)
-      throw %79
+      %77 = call builtin.exception_value(%75)
+      throw %77
     bb33:
-      %83 = const c33
-      store var $0.sideEffect, %83
-      %84 = const c34
-      store var $0.f, %84
-      jump bb34
+      %82 = const c32
+      store var $0.f, %82
+      %83 = load var $0.f
+      branch %83, bb35, bb36
     bb34:
-      %85 = phi [(bb31, %81), (bb33, %84)]
-      %86 = is_exception %85
-      branch %86, bb36, bb35
+      %81 = call builtin.exception_value(%79)
+      throw %81
     bb35:
-      %88 = load var $0.sideEffect
-      %89 = call builtin.console.log(%88)
-      %90 = is_exception %89
-      branch %90, bb38, bb37
+      %85 = const c33
+      store var $0.sideEffect, %85
+      jump bb37
     bb36:
-      %87 = call builtin.exception_value(%85)
-      throw %87
+      %89 = phi [(bb33, %83), (bb37, %88)]
+      %90 = is_exception %89
+      branch %90, bb40, bb39
     bb37:
-      %92 = load var $0.f
+      %88 = const c34
+      store var $0.f, %88
+      jump bb36
+    bb38:
+      unreachable
+    bb39:
+      %92 = load var $0.sideEffect
       %93 = call builtin.console.log(%92)
       %94 = is_exception %93
-      branch %94, bb40, bb39
-    bb38:
+      branch %94, bb42, bb41
+    bb40:
       %91 = call builtin.exception_value(%89)
       throw %91
-    bb39:
-      return
-    bb40:
+    bb41:
+      %96 = load var $0.f
+      %97 = call builtin.console.log(%96)
+      %98 = is_exception %97
+      branch %98, bb44, bb43
+    bb42:
       %95 = call builtin.exception_value(%93)
       throw %95
+    bb43:
+      return
+    bb44:
+      %99 = call builtin.exception_value(%97)
+      throw %99
 }

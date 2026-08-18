@@ -1,40 +1,40 @@
 # 并发阶段、工作线程与 Pacing
 
-ZGC 和 G1 的并发回收需要与 WASM 执行协调。这一章说明工作线程、safepoint 和 pacing 如何配合。
+ZGC 的并发回收需要与 native JS 执行协调。这一章说明工作线程、safepoint 和 pacing 如何配合。
 
 ## 工作线程
 
-ZGC 和 G1 的并发阶段使用工作线程（worker thread）。工作线程是宿主侧的 OS 线程，不是 WASM 线程。它们直接操作 shared memory64 对象堆，通过 atomics 指令同步。
+并发阶段使用宿主 OS 线程，不是独立的 JS agent，也不是 WASM 线程。`NativeGc` 构造 `GenerationalZgc` 时按 `available_parallelism` 取 worker 数（至少 1）。这些线程直接操作 `NativeHeapMemory`，通过宿主原子操作同步。
 
-WASM 执行线程与 GC 工作线程并发运行。WASM 线程在 safepoint 让出 CPU 时，工作线程可以推进标记或转移工作。
+Mutator 是执行用户 JS 的 native 线程（`NativeRuntime` 的 owner thread）。它在 safepoint 暂停时，GC worker 可以推进标记或转移。
 
 ## Safepoint 协调
 
 ```mermaid
 sequenceDiagram
-    participant WASM as WASM 执行线程
-    participant GC as GC 工作线程
-    participant Heap as 对象堆
+    participant Mutator as Native JS 线程
+    participant GC as GC OS 工作线程
+    participant Heap as NativeHeapMemory
 
-    WASM->>WASM: 分配对象
-    WASM->>Heap: bump pointer
-    WASM->>GC: 分配量达到 safepoint 阈值
-    WASM->>WASM: spill 活跃句柄到影子栈
-    WASM->>GC: safepoint 暂停
+    Mutator->>Mutator: 分配对象
+    Mutator->>Heap: NLAB / bump
+    Mutator->>GC: 分配量或回边预算触发 safepoint
+    Mutator->>Mutator: 发布 NativeRootFrame
+    Mutator->>GC: safepoint 暂停
     GC->>Heap: 扫描、标记、转移对象
-    GC-->>WASM: 恢复执行
-    WASM->>WASM: 恢复句柄引用
+    GC-->>Mutator: 恢复执行
+    Mutator->>Mutator: 继续用逻辑地址 / handle
 ```
 
 ## Safepoint
 
-safepoint 是 WASM 执行可以安全暂停的点。后端在分配 fast path 和循环回边插入 safepoint 检查（见[变量活跃性](../backend/liveness-slots-and-spills.md)）。
+safepoint 是 native mutator 可以安全暂停的点。后端在分配 fast path 和循环回边插入检查：回边从 `NativeVmContext::stack_budget_bytes` 扣除 `COOPERATIVE_POLL_STEP_BYTES`，耗尽后调用 `NativeRuntimeOp::CooperativePoll`（重置预算，并做 inspector / GC / 外部事件轮询）。
 
-safepoint 时，WASM 线程把活跃句柄 spill 到影子栈，工作线程可以安全扫描。safepoint 退出后，WASM 线程继续执行。
+暂停时 generated code 发布 `NativeRootFrame`（`slots` + bitmap）。collector 只读 bitmap 置位的槽。
 
 ## Pacing
 
-pacing 控制 GC 工作的推进速度，避免堆增长过快导致 STW。`StepBudget` 记录工作量和截止时间：
+pacing 控制 GC 工作的推进速度，避免堆增长过快导致长时间 STW。`StepBudget` 记录工作量和截止时间：
 
 ```rust
 pub struct StepBudget {

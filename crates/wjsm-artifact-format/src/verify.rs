@@ -113,17 +113,32 @@ fn validate_logical_url_component(component: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(test)]
-fn valid_logical_url(url: &str) -> bool {
-    validate_logical_url(url).is_ok()
-}
-
 fn canonical_hex(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+fn ensure_module_exists(
+    id: ModuleId,
+    ids: &HashSet<ModuleId>,
+    context: &str,
+) -> Result<(), ArtifactFormatError> {
+    if ids.contains(&id) {
+        Ok(())
+    } else {
+        Err(ArtifactFormatError::InvalidManifest(format!(
+            "{context} references missing module id {}",
+            id.0
+        )))
+    }
+}
+
+#[cfg(test)]
+fn valid_logical_url(url: &str) -> bool {
+    validate_logical_url(url).is_ok()
 }
 
 #[cfg(test)]
@@ -142,20 +157,5 @@ mod tests {
         assert!(!valid_logical_url("%2E%2E/main.js"));
         assert!(!valid_logical_url("dir/%2Fetc"));
         assert!(!valid_logical_url("main_%ff.js"));
-    }
-}
-
-fn ensure_module_exists(
-    id: ModuleId,
-    ids: &HashSet<ModuleId>,
-    context: &str,
-) -> Result<(), ArtifactFormatError> {
-    if ids.contains(&id) {
-        Ok(())
-    } else {
-        Err(ArtifactFormatError::InvalidManifest(format!(
-            "{context} references missing module id {}",
-            id.0
-        )))
     }
 }

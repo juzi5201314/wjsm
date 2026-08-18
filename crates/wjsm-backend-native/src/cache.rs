@@ -615,7 +615,7 @@ fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
 /// 原子写入无竞态：已加载进内存的 image 不受影响，删除只影响后续磁盘命中。
 fn maybe_evict_lru(directory: &Path) {
     let counter = WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    if counter % LRU_CHECK_INTERVAL != 0 {
+    if !counter.is_multiple_of(LRU_CHECK_INTERVAL) {
         return;
     }
     let Some(max_bytes) = cache_max_bytes() else {
@@ -796,17 +796,26 @@ mod tests {
         fs::write(path, vec![0_u8; bytes]).expect("test cache entry should be written");
     }
 
+    fn touch_at(path: &Path, bytes: usize, modified_seconds: u64) {
+        touch(path, bytes);
+        let file = OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("test cache entry should reopen");
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified_seconds);
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .expect("test cache mtime should be set");
+    }
+
     #[test]
     fn evict_oldest_removes_oldest_wnat_first() {
         let dir = temp_cache_dir("oldest");
         let oldest = dir.join("oldest.wnat");
         let middle = dir.join("middle.wnat");
         let newest = dir.join("newest.wnat");
-        touch(&oldest, 10);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        touch(&middle, 10);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        touch(&newest, 10);
+        touch_at(&oldest, 10, 1);
+        touch_at(&middle, 10, 2);
+        touch_at(&newest, 10, 3);
 
         // 上限 25：删掉最旧的 10 字节后剩 20 ≤ 25。
         evict_oldest(&dir, 25);
@@ -823,9 +832,8 @@ mod tests {
         fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
         let wnat = dir.join("a.wnat");
         let bin = builtin_ir.join("a.bin");
-        touch(&wnat, 10);
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        touch(&bin, 10);
+        touch_at(&wnat, 10, 1);
+        touch_at(&bin, 10, 2);
 
         // 上限 10：两个条目共 20 字节，按 mtime 删 wnat 后剩 10。
         evict_oldest(&dir, 10);

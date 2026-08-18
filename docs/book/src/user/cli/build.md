@@ -35,4 +35,11 @@ wjsm size /tmp/app.wjsm
 wjsm run /tmp/app.wjsm
 ```
 
-构建产物不含机器码；目标/CPU、Cranelift 版本、native ABI 与 codegen settings 只进入当前宿主的 native cache key。
+默认 `.wjsm` 不含机器码；目标/CPU、Cranelift 版本、native ABI 与 codegen settings 只进入当前宿主的 native cache key。`native-executable` 则额外打入当前宿主的预编译 object，因此不能跨平台携带。
+
+## 深入了解
+
+- [Portable `.wjsm` 制品](../output/portable-artifacts.md)
+- [制品与宿主要求](../output/wasm-artifacts.md)
+- [预编译执行与磁盘缓存](../../internals/tooling/precompiled-execution.md)
+- [编译编排入口](../../internals/pipeline/orchestration.md)

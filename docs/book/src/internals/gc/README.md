@@ -1,39 +1,38 @@
 # GC 算法、对象模型与栈布局
 
-这一章涵盖 ManagedHeap、句柄表、GC 算法（mark-sweep、G1、Zgc），平衡性能与安全的设计与所有权边界。
+这一部分说明统一 ManagedHeap、句柄表，以及 mark-sweep / G1 / ZGC 如何共用同一套堆。
 
 ## ManagedHeap 与 HandleTableV2
 
-`wjsm-gc` 的 `ManagedHeap<T>` 是 64 位对象堆的 owner，内部以 `Vec<u8>` 管理分配，句柄表`HandleTableV2` 按对象类型划分 slot。
+`wjsm-gc` 的 `ManagedHeap` 是对象堆 owner。生产路径用 `NativeHeapMemory`：mmap 保留逻辑容量，按 64 KiB granule 提交物理页。JS 值持有 handle，不持有可跨 safepoint 的裸指针。
 
-句柄是 table index，不是指针——GC 移动对象只需更新表，所有值持 handle 的 i64 不动。
+`HandleTableV2` 把 `Handle` 映射到逻辑堆地址。GC 移动对象时只改表项。
 
-## mark-sweep | G1 | Zgc
+## mark-sweep | G1 | ZGC
 
-三种 GC 算法实现于 `gc_mark_sweep.rs`, `gc_g1.rs`, `gc_zgc.rs`。对外暴露 12 个核心接口（对象分配、回收、屏障、并发/暂停、统计）。宿主通过 trait `GcFlavor` 选择算法，test 确认三套行为都能无缝替换。
+三种算法分别在 `mark_sweep/`、`g1/`、`zgc/`。宿主通过 `GcAlgorithmKind` 选择，由 `wjsm-host-native::NativeGc` 接到同一 `HeapAccessV2<NativeHeapMemory>`。
 
-- **mark-sweep**：极简标记清扫，适合小型实例。
-- **G1**：分区并发收集，region 粒度 remset。
-- **Zgc**：着色指针、并发标记与代际写屏障。
+- **mark-sweep**：标记-清除，行为最可预测。
+- **G1**：分区回收，region remset。
+- **ZGC**（默认）：着色指针、分代并发标记与转移。
 
 > <details><summary>为什么句柄不是裸指针？</summary>
 >
-> 裸指针不能安全移动对象（GC 移动会失效），句柄 index 可以被 GC 重分配，保持引用一致。
+> 裸指针不能安全跨越移动式 GC。句柄是表下标，GC 更新表项后旧 handle 仍然有效。
 >
 > </details>
 
-## Shadow Stack 与 spill
+## Root 帧
 
-GC spill 路径见 backend/liveness-slots-and-spills，影子栈作为 safepoint spill zone，挂在主线性内存或 shadow memory，支持多实例隔离。
-
-异常边界、梯度并发、跨实例引用都通过 shadow stack 管理。
+may-GC 点由 generated code 发布 `NativeRootFrame`（`slots` + bitmap）。collector 只扫描 bitmap 置位的槽。没有独立的影子栈线性内存，也没有 Wasm 导入的 shadow memory。
 
 ## 与 builtins、host runtime 关系
 
-GC 接口与 builtins 统一契约：单态化实现 `GrowableHeapMemory` trait，不绑定具体后端，所有内置能力可无缝复用。
+GC 算法只经 `HeapMemory` / `GrowableHeapMemory` 访问堆，不绑定 Cranelift。`wjsm-builtins` 继续走 `ExecContext`，不直接操作 mmap。
 
 ## 深入了解
 
-- [影子栈溢出与 GC spill](../backend/liveness-slots-and-spills.md)
-- [对象布局与分配相关的 GC 细节](object-layout-and-allocation.md)
-- [多 GC flavor 切换与隔离策略](../startup/embedded-artifacts.md)
+- [NativeHeapMemory 与逻辑堆地址](memory64.md)
+- [活跃性、槽位与 GC Spill](../backend/liveness-slots-and-spills.md)
+- [对象布局与分配](object-layout-and-allocation.md)
+- [GC 选择、配置与不变量](configuration-and-invariants.md)

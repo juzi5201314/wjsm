@@ -241,7 +241,7 @@ impl WorkerCluster {
         if *status != WaiterStatus::Waiting {
             return *status;
         }
-        let result = if let Some(timeout) = timeout {
+        if let Some(timeout) = timeout {
             let (guard, wait_result) = condvar
                 .wait_timeout_while(status, timeout, |status| *status == WaiterStatus::Waiting)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -265,8 +265,7 @@ impl WorkerCluster {
                 .wait_while(status, |status| *status == WaiterStatus::Waiting)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *guard
-        };
-        result
+        }
     }
 
     /// 唤醒指定位置的前 `count` 个 waiter（count=None 表示全部）。
@@ -974,15 +973,8 @@ fn compile_worker_artifact(
             },
             source: Some(Arc::<str>::from(filename)),
         };
-        wjsm_semantic::lower_modules(
-            vec![input],
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-        )
-        .map_err(|error| error.to_string())?
+        wjsm_semantic::lower_modules(vec![input], wjsm_semantic::ModuleLinking::empty())
+            .map_err(|error| error.to_string())?
     } else {
         let path = resolve_worker_entry(filename, store, cwd);
         if !store.is_file(&path) {

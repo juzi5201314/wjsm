@@ -6,7 +6,7 @@
 
 GC 的根集来自三个来源：
 
-1. **栈上活跃句柄**：safepoint spill 写入影子栈的值（见[变量活跃性](../backend/liveness-slots-and-spills.md)）。
+1. **栈上活跃句柄**：safepoint 上 `NativeRootFrame` 里 bitmap 置位的槽（见[变量活跃性](../backend/liveness-slots-and-spills.md)）。
 2. **RuntimeState 显式 root**：`roots.rs` 维护的一组 primordial 句柄（原型对象、全局构造器等）。
 3. **Realm intrinsics**：每个 realm 的 `RealmIntrinsics` 结构里的原型句柄。
 

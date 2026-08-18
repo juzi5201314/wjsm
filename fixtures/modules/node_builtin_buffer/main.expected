@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+true
+function undefined
+true ? 63
+caf?
+195,191
+239,191,189
+233,0
+true
+true
+--- stderr ---

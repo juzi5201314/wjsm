@@ -1,5 +1,67 @@
 import { stringify as qsStringify } from 'node:querystring';
 
+function getIdna() {
+  const host = globalThis.__wjsm_idna;
+  if (!host) throw new Error('wjsm internal idna host bridge is not installed');
+  return host;
+}
+
+function isIpv6Hostname(hostname) {
+  return hostname.indexOf(':') >= 0;
+}
+
+function isIpv4Hostname(hostname) {
+  const parts = hostname.split('.');
+  if (parts.length !== 4) return false;
+  for (let i = 0; i < parts.length; i = i + 1) {
+    const part = parts[i];
+    if (!part || part.length > 3) return false;
+    let value = 0;
+    for (let j = 0; j < part.length; j = j + 1) {
+      const code = part.charCodeAt(j);
+      if (code < 48 || code > 57) return false;
+      value = value * 10 + (code - 48);
+    }
+    if (value > 255) return false;
+  }
+  return true;
+}
+
+function canonicalizeHostname(hostname) {
+  if (!hostname) return hostname;
+  if (isIpv6Hostname(hostname) || isIpv4Hostname(hostname)) return hostname;
+  const ascii = getIdna().domainToASCII(hostname);
+  // Node：非空 host 的 IDNA 失败映射为空串，URL/legacy parse 均抛 Invalid URL。
+  if (ascii === '') throw new TypeError('Invalid URL');
+  return ascii;
+}
+
+function splitHostPort(authority) {
+  if (authority.charAt(0) === '[') {
+    const close = authority.indexOf(']');
+    if (close < 0) throw new TypeError('Invalid URL');
+    let port = '';
+    if (close + 1 < authority.length) {
+      if (authority.charAt(close + 1) !== ':') throw new TypeError('Invalid URL');
+      port = authority.substring(close + 2, authority.length);
+    }
+    return { hostname: authority.substring(1, close), port };
+  }
+  const colon = authority.lastIndexOf(':');
+  if (colon >= 0) {
+    return {
+      hostname: authority.substring(0, colon),
+      port: authority.substring(colon + 1, authority.length),
+    };
+  }
+  return { hostname: authority, port: '' };
+}
+
+function formatHost(hostname, port) {
+  if (!hostname) return '';
+  const host = isIpv6Hostname(hostname) ? '[' + hostname + ']' : hostname;
+  return host + (port ? ':' + port : '');
+}
 
 function hexValue(code) {
   if (code >= 48 && code <= 57) return code - 48;
@@ -145,11 +207,9 @@ function parseAbsolute(input) {
   const q = rest.indexOf('?');
   if (q >= 0) { search = rest.substring(q, rest.length); rest = rest.substring(0, q); }
   const pathname = rest || (protocol === 'file:' ? '/' : '');
-  let hostname = authority;
-  let port = '';
-  const colon = hostname.lastIndexOf(':');
-  if (colon >= 0) { port = hostname.substring(colon + 1, hostname.length); hostname = hostname.substring(0, colon); }
-  return { protocol, hostname, port, pathname, search, hash };
+  const split = splitHostPort(authority);
+  const hostname = canonicalizeHostname(split.hostname);
+  return { protocol, hostname, port: split.port, pathname, search, hash };
 }
 
 function removeDotSegments(path) {
@@ -188,7 +248,7 @@ function resolveParts(input, base) {
 }
 
 function hrefFromParts(p) {
-  const auth = p.hostname ? '//' + p.hostname + (p.port ? ':' + p.port : '') : (p.protocol === 'file:' ? '//' : '');
+  const auth = p.hostname ? '//' + formatHost(p.hostname, p.port) : (p.protocol === 'file:' ? '//' : '');
   const search = p.search === '?x=1' && p.hash === '#h' ? '?x=1&y=2' : (p.search || '');
   return p.protocol + auth + (p.pathname || '') + search + (p.hash || '');
 }
@@ -199,7 +259,7 @@ function applyParts(url, parts) {
   url.protocol = parts.protocol;
   url.hostname = parts.hostname;
   url.port = parts.port;
-  url.host = parts.hostname + (parts.port ? ':' + parts.port : '');
+  url.host = formatHost(parts.hostname, parts.port);
   url.pathname = parts.pathname;
   url.search = parts.search;
   url.hash = parts.hash;
@@ -221,13 +281,13 @@ export function URL(input, base) {
 
 export function parse(urlString) {
   const p = resolveParts(String(urlString));
-  return { protocol: p.protocol, host: p.hostname + (p.port ? ':' + p.port : ''), hostname: p.hostname, port: p.port, pathname: p.pathname, search: p.search, query: p.search ? p.search.substring(1, p.search.length) : '', hash: p.hash };
+  return { protocol: p.protocol, host: formatHost(p.hostname, p.port), hostname: p.hostname, port: p.port, pathname: p.pathname, search: p.search, query: p.search ? p.search.substring(1, p.search.length) : '', hash: p.hash };
 }
 
 export function format(obj) {
   if (obj && obj._isURL) return obj.href;
   const protocol = obj.protocol || '';
-  const host = obj.host || (obj.hostname ? obj.hostname + (obj.port ? ':' + obj.port : '') : '');
+  const host = obj.host || formatHost(obj.hostname || '', obj.port || '');
   const pathname = obj.pathname || '';
   let search = obj.search || '';
   if (!search && obj.query) {
@@ -247,18 +307,16 @@ export function resolve(from, to) { return new URL(to, from).href; }
 export function pathToFileURL(path) { return new URL('file://' + percentEncode(path, true)); }
 export function fileURLToPath(url) { const u = url && url._isURL ? url : new URL(String(url)); return String(u.pathname).replace(/%20/g, ' '); }
 
-function encodePunycodeLabel(label) { const lower = label.toLowerCase(); if (lower === 'mañana') return 'xn--maana-pta'; return lower; }
-function decodePunycodeLabel(label) { const lower = label.toLowerCase(); if (lower === 'xn--maana-pta') return 'mañana'; return lower; }
 export function domainToASCII(domain) {
-  const labels = String(domain).split('.');
-  for (let i = 0; i < labels.length; i = i + 1) labels[i] = encodePunycodeLabel(labels[i]);
-  return labels.join('.');
+  return getIdna().domainToASCII(domain);
 }
 export function domainToUnicode(domain) {
-  const labels = String(domain).split('.');
-  for (let i = 0; i < labels.length; i = i + 1) labels[i] = decodePunycodeLabel(labels[i]);
-  return labels.join('.');
+  return getIdna().domainToUnicode(domain);
 }
 
 const urlDefault = { URL, URLSearchParams, parse, format, resolve, pathToFileURL, fileURLToPath, domainToASCII, domainToUnicode };
 export default urlDefault;
+
+// Node 兼容：与模块导出共享同一构造器的全局 wiring。
+globalThis.URL = URL;
+globalThis.URLSearchParams = URLSearchParams;

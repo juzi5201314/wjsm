@@ -13,4 +13,4 @@ rand = { version = "0.8" }
 thiserror = { workspace = true }
 wjsm-host = { path = "../wjsm-host" }
 wjsm-ir = { path = "../wjsm-ir" }
-icu_normalizer = { version = "2.2", features = ["compiled_data"] }
+wjsm-intl-data = { path = "../wjsm-intl-data" }

@@ -3,7 +3,7 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
     delete_property, fail_dispatch, get_property, get_property_with_receiver, has_property,
-    object_handle, ordinary_set, property_key,
+    is_constructor_value, object_handle, ordinary_set, property_key,
 };
 use crate::{ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind, NativeProxy};
 
@@ -139,6 +139,10 @@ fn revocable(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
         }
     }
     result
+}
+
+pub(super) fn is_constructor_proxy(state: &NativeAgentState, encoded: i64) -> bool {
+    entry(state, encoded).is_some_and(|proxy| is_constructor_value(state, proxy.target))
 }
 
 fn entry(state: &NativeAgentState, encoded: i64) -> Option<NativeProxy> {
@@ -1010,9 +1014,7 @@ pub(crate) fn construct(
                     &[entry.target, args_array, new_target],
                 )
                 .unwrap_or_else(|| fail_dispatch(ctx));
-            if value::is_exception(result) {
-                result
-            } else if value::is_js_object(result) {
+            if value::is_exception(result) || value::is_js_object(result) {
                 result
             } else {
                 super::runtime::type_error(ctx, state, "Proxy construct trap must return an object")
@@ -1040,6 +1042,9 @@ fn reflect_construct(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
         return fail_dispatch(ctx);
     };
     let new_target = rest.first().copied().unwrap_or(*target);
+    if !is_constructor_value(state, *target) || !is_constructor_value(state, new_target) {
+        return super::runtime::type_error(ctx, state, "value is not a constructor");
+    }
     let Some(arguments) = array_arguments(state, *arguments) else {
         return fail_dispatch(ctx);
     };

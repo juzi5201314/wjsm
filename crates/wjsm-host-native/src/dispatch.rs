@@ -17,6 +17,8 @@ mod eval;
 pub(crate) mod fetch;
 mod function;
 pub(crate) mod generator;
+pub(crate) mod idna;
+pub(crate) mod intl;
 mod iterator;
 mod json;
 mod jsx;
@@ -171,10 +173,8 @@ pub(super) unsafe extern "C" fn native_host_operation(
                     | NativeRuntimeOp::PrepareSuperCallForward
             )
         );
-    if record_value_feedback {
-        if let Some(feedback) = feedback {
-            state.record_value_feedback(feedback, operation, args);
-        }
+    if record_value_feedback && let Some(feedback) = feedback {
+        state.record_value_feedback(feedback, operation, args);
     }
 
     let runtime_operation = if operation <= u32::from(Builtin::last_wire_id()) {
@@ -321,7 +321,7 @@ pub(super) fn dispatch_builtin(
             json::dispatch_json => Builtin::JsonParse | Builtin::JsonStringify,
             date::dispatch_date => Builtin::DateConstructor | Builtin::DateConstructorNew | Builtin::DateNow | Builtin::DateParse | Builtin::DateUTC,
             math::dispatch_math => Builtin::MathAbs | Builtin::MathAcos | Builtin::MathAcosh | Builtin::MathAsin | Builtin::MathAsinh | Builtin::MathAtan | Builtin::MathAtan2 | Builtin::MathAtanh | Builtin::MathCbrt | Builtin::MathCeil | Builtin::MathClz32 | Builtin::MathCos | Builtin::MathCosh | Builtin::MathExp | Builtin::MathExpm1 | Builtin::MathFloor | Builtin::MathFround | Builtin::MathHypot | Builtin::MathImul | Builtin::MathLog | Builtin::MathLog10 | Builtin::MathLog1p | Builtin::MathLog2 | Builtin::MathMax | Builtin::MathMaxArray | Builtin::MathMin | Builtin::MathPow | Builtin::MathRandom | Builtin::MathRound | Builtin::MathSign | Builtin::MathSin | Builtin::MathSinh | Builtin::MathSqrt | Builtin::MathTan | Builtin::MathTanh | Builtin::MathTrunc,
-            object::dispatch_object => Builtin::DefineProperty | Builtin::GetOwnPropDesc | Builtin::ObjectAssign | Builtin::ObjectCreate | Builtin::ObjectDefineProperties | Builtin::ObjectEntries | Builtin::ObjectFreeze | Builtin::ObjectFromEntries | Builtin::ObjectGetOwnPropertyDescriptors | Builtin::ObjectGetOwnPropertyNames | Builtin::ObjectGetOwnPropertySymbols | Builtin::ObjectGetPrototypeOf | Builtin::ObjectGroupBy | Builtin::ObjectIs | Builtin::ObjectIsExtensible | Builtin::ObjectIsFrozen | Builtin::ObjectIsSealed | Builtin::ObjectKeys | Builtin::ObjectPreventExtensions | Builtin::ObjectRest | Builtin::ObjectSeal | Builtin::ObjectSetPrototypeOf | Builtin::ObjectValues | Builtin::ObjectProtoToString | Builtin::ObjectProtoValueOf | Builtin::ObjectHasOwn | Builtin::HasOwnProperty | Builtin::CreateGlobalObject,
+            object::dispatch_object => Builtin::DefineProperty | Builtin::GetOwnPropDesc | Builtin::ObjectAssign | Builtin::ObjectCreate | Builtin::ObjectDefineProperties | Builtin::ObjectEntries | Builtin::ObjectFreeze | Builtin::ObjectFromEntries | Builtin::ObjectGetOwnPropertyDescriptors | Builtin::ObjectGetOwnPropertyNames | Builtin::ObjectGetOwnPropertySymbols | Builtin::ObjectGetPrototypeOf | Builtin::ObjectGroupBy | Builtin::ObjectIs | Builtin::ObjectIsExtensible | Builtin::ObjectIsFrozen | Builtin::ObjectIsSealed | Builtin::ObjectKeys | Builtin::ObjectPreventExtensions | Builtin::ObjectRest | Builtin::ObjectSeal | Builtin::ObjectSetPrototypeOf | Builtin::ObjectValues | Builtin::ObjectProtoToString | Builtin::ObjectProtoValueOf | Builtin::ObjectHasOwn | Builtin::HasOwnProperty | Builtin::PropertyIsEnumerable | Builtin::CreateGlobalObject,
             private::dispatch_private => Builtin::PrivateAccessorBind | Builtin::PrivateGet | Builtin::PrivateHas | Builtin::PrivateSet,
             regexp::dispatch_regexp => Builtin::RegExpCreate | Builtin::RegExpExec | Builtin::RegExpProtoMatch | Builtin::RegExpProtoReplace | Builtin::RegExpProtoSearch | Builtin::RegExpProtoSplit | Builtin::RegExpTest,
             proxy::dispatch_proxy => Builtin::ProxyCreate | Builtin::ProxyRevocable | Builtin::ReflectApply | Builtin::ReflectConstruct | Builtin::ReflectDefineProperty | Builtin::ReflectDeleteProperty | Builtin::ReflectGet | Builtin::ReflectGetOwnPropertyDescriptor | Builtin::ReflectGetPrototypeOf | Builtin::ReflectHas | Builtin::ReflectIsExtensible | Builtin::ReflectOwnKeys | Builtin::ReflectPreventExtensions | Builtin::ReflectSet | Builtin::ReflectSetPrototypeOf,

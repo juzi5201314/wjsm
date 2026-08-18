@@ -199,14 +199,13 @@ pub(crate) fn run(module: &mut Module) {
                         true_block,
                         false_block,
                     } => {
-                        if let Some(Instruction::Const { constant, .. }) = defs.get(condition) {
-                            if let Some(Constant::Bool(b)) =
+                        if let Some(Instruction::Const { constant, .. }) = defs.get(condition)
+                            && let Some(Constant::Bool(b)) =
                                 constants_snapshot.get(constant.0 as usize)
-                            {
-                                let target = if *b { *true_block } else { *false_block };
-                                *terminator = Terminator::Jump { target };
-                                branch_folded = true;
-                            }
+                        {
+                            let target = if *b { *true_block } else { *false_block };
+                            *terminator = Terminator::Jump { target };
+                            branch_folded = true;
                         }
                     }
                     Terminator::Switch {
@@ -266,7 +265,7 @@ pub(crate) fn run(module: &mut Module) {
             }
 
             let mut phi_folded = false;
-            for block_idx in 0..block_count {
+            for (block_idx, block_preds) in preds.iter().enumerate() {
                 // 收集（只读借用）→ 应用（可变借用），避免借用冲突。
                 let mut collapses: Vec<(usize, ValueId, ValueId)> = Vec::new();
                 let mut undefs: Vec<(usize, ValueId)> = Vec::new();
@@ -276,10 +275,10 @@ pub(crate) fn run(module: &mut Module) {
                         if let Instruction::Phi { dest, sources } = instr {
                             let live_sources: Vec<wjsm_ir::PhiSource> = sources
                                 .iter()
-                                .filter(|s| preds[block_idx].contains(&s.predecessor))
+                                .filter(|s| block_preds.contains(&s.predecessor))
                                 .cloned()
                                 .collect();
-                            if live_sources.len() >= 1
+                            if !live_sources.is_empty()
                                 && live_sources
                                     .iter()
                                     .all(|s| s.value == live_sources[0].value)

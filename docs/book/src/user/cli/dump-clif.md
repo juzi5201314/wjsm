@@ -17,3 +17,9 @@ dump-ast → dump-ir → dump-clif → disasm
 ```
 
 AST 正确而 IR 错误，问题属于 semantic lowering；IR 正确而 CLIF 错误，问题属于 native lowering；CLIF 正确而机器码/relocation 错误，再看 `disasm` 与 image loader。
+
+## 深入了解
+
+- [IR、AST 与反汇编工具](../../internals/tooling/dump-and-disassembly.md)
+- [Native 编译阶段](../../internals/pipeline/compile.md)
+- [`disasm`](disasm.md)

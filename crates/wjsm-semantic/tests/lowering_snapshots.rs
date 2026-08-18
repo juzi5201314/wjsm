@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use wjsm_parser::parse_module;
 use wjsm_semantic::{
-    LoweringError, ModuleKind, ModuleLoweringInput, ModuleMetadata, lower_module, lower_modules,
+    LoweringError, ModuleKind, ModuleLinking, ModuleLoweringInput, ModuleMetadata, lower_module,
+    lower_modules,
 };
 
 #[test]
@@ -895,11 +896,7 @@ fn require_runtime_cjs_scope_uses_module_local_binding() {
             },
             source: None,
         }],
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
+        ModuleLinking::empty(),
     )
     .expect("CJS runtime require lowering should succeed");
     let text = program.dump_text();
@@ -939,11 +936,7 @@ fn esm_input(id: u32, filename: &str, source: &str) -> ModuleLoweringInput {
 fn lower_single_esm_source(source: &str) -> String {
     lower_modules(
         vec![esm_input(0, "/project/main.js", source)],
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
+        ModuleLinking::empty(),
     )
     .expect("ESM lowering should succeed")
     .dump_text()
@@ -964,11 +957,7 @@ fn module_scope_binding_survives_top_level_await() {
 fn lower_single_esm_error(source: &str) -> LoweringError {
     lower_modules(
         vec![esm_input(0, "/project/main.js", source)],
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>::new(),
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
+        ModuleLinking::empty(),
     )
     .expect_err("ESM lowering should reject this source")
 }
@@ -1147,11 +1136,12 @@ fn dynamic_import_static_literal_keeps_static_fast_path() {
             esm_input(0, "/project/main.js", "import('./dep.js');\n"),
             esm_input(1, "/project/dep.js", "export const value = 1;\n"),
         ],
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>::new(),
-        &dynamic_targets,
-        &export_names,
-        &dynamic_specifiers,
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
+        ModuleLinking {
+            dynamic_import_targets: &dynamic_targets,
+            export_names: &export_names,
+            dynamic_import_specifiers: &dynamic_specifiers,
+            ..ModuleLinking::empty()
+        },
     )
     .expect("static dynamic import lowering should succeed");
     let text = program.dump_text();
@@ -1189,11 +1179,12 @@ fn dynamic_import_static_literal_extra_arg_reports_unsupported_before_fast_path(
             ),
             esm_input(1, "/project/dep.js", "export const value = 1;\n"),
         ],
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>::new(),
-        &dynamic_targets,
-        &export_names,
-        &dynamic_specifiers,
-        &std::collections::HashMap::<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>::new(),
+        ModuleLinking {
+            dynamic_import_targets: &dynamic_targets,
+            export_names: &export_names,
+            dynamic_import_specifiers: &dynamic_specifiers,
+            ..ModuleLinking::empty()
+        },
     )
     .expect_err("extra import() options must be rejected before the static fast path");
 

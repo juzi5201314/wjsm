@@ -12,15 +12,29 @@ wjsm> 1 + 1
 wjsm> .exit
 ```
 
-标准输入是终端时才打印 `wjsm> ` 提示符，所以管道输入不会污染输出：
+stdin 与 stdout 都是终端时（Linux / macOS）进入 raw 行编辑：按 **grapheme cluster** 移动/删除光标，CJK / emoji 按显示列宽占位。管道或非 TTY 仍走原来的 `read_line`，不打印提示符、不发射 CSI：
 
 ```bash
 printf '1+1\n2*3\n' | wjsm repl
 ```
 
+## 行编辑（TTY）
+
+| 键 | 作用 |
+| --- | --- |
+| Left / Right | 按 grapheme 移动 |
+| Home / End，Ctrl-A / Ctrl-E | 行首 / 行尾 |
+| Backspace / Delete | 删除光标前 / 后一个 grapheme |
+| Up / Down | 浏览本会话历史（不落盘） |
+| Ctrl-C | 清空当前行，不退出 |
+| Ctrl-D | 空行退出；否则向前删除 |
+| Enter | 提交一行 |
+
+宽字符（`中`、`👋`）占两列，组合字符（`é`）与 ZWJ emoji 序列各算一个光标单元。
+
 ## 退出
 
-`.exit` 或 `.quit` 结束会话，读到 EOF（终端里按 `Ctrl-D`）同样结束。
+`.exit` 或 `.quit` 结束会话，读到 EOF（空行 `Ctrl-D`）同样结束。
 
 ## 每行都是独立表达式
 

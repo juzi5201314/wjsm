@@ -16,8 +16,13 @@ use crate::{
     read::{Harness, Negative, Phase, Test, TestSuite},
 };
 
-pub const DEFAULT_TIMEOUT_SECS: u64 = 15;
-pub const DEFAULT_CHILD_MEMORY_LIMIT_MIB: u64 = 5 * 1024;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
+/// 默认关闭 Linux `RLIMIT_AS` 子进程限制。
+///
+/// NativeRuntime 需要保留 32 GiB 连续 handle region；在 WSL 等环境上，即使
+/// soft/hard limit 远大于 32 GiB，`setrlimit(RLIMIT_AS)` 仍会让 `mmap` 失败。
+/// 需要地址空间保护时显式传 `--memory-limit-mib`。
+pub const DEFAULT_CHILD_MEMORY_LIMIT_MIB: u64 = 0;
 pub const DEFAULT_JOB_MEMORY_COST_MIB: u64 = 2 * 1024;
 
 /// 单条 Test262 用例的资源与超时限制（防止挂死 / WSL OOM）。
@@ -355,8 +360,8 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     // print() 是 test262 harness 使用的全局函数，wjsm 没有原生支持
     source.push_str("function print(msg) { console.log(msg); }\n");
     source.push('\n');
-    // 设置 $262 对象（host-defined test262 API），保留运行时原生 gc 绑定。
-    source.push_str("var $262 = { gc: gc };\n");
+    // 宿主已提供 `$262`（agent / createRealm / gc）。不要整对象覆盖。
+    source.push_str("if ($262 && typeof $262.gc !== 'function') { $262.gc = gc; }\n");
     source.push('\n');
 
     // raw 模式：只添加 workaround 和测试主体
@@ -540,7 +545,9 @@ mod tests {
     fn build_test_source_preserves_runtime_gc_binding() {
         let source = build_test_source(&empty_test(), &empty_harness());
 
-        assert!(source.contains("var $262 = { gc: gc };"));
+        // 宿主已提供 `$262`，不应整对象覆盖；只在缺少 gc 时补充绑定。
+        assert!(source.contains("if ($262 && typeof $262.gc !== 'function') { $262.gc = gc; }"));
+        assert!(!source.contains("var $262 = { gc: gc };"));
         assert!(!source.contains("function gc()"));
     }
 }

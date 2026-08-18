@@ -32,7 +32,7 @@
 | `known_callee_vars` | 语义层（仅单次赋值的函数声明变量） | callee no-GC 分析，key 是 scope-qualified IR 名如 `$0.foo` |
 | `home_object` | 语义层 | 实现 `super` 属性访问 |
 | `needs_prototype` | 语义层 | 普通函数为 true，箭头/方法/类构造器为 false；决定是否创建 `prototype` 对象 |
-| `source_span` | 语义层从 SWC span 取 | 编码进 WASM custom section，供运行时错误映射行列 |
+| `source_span` | 语义层从 SWC span 取 | 写入 `NativeSourceFrame`，供运行时错误映射行列 |
 
 这些字段的共同点：**信息只在语义层可得，但只在后端有用**。IR 是它们唯一的传递通道，所以字段留在 IR 而不是某一侧的私有结构里。
 
@@ -50,9 +50,9 @@
 >
 > - 后端只读 `Function` 就能拿到所有需要的信息，不用查 side table。
 > - 语义层在 lowering 完就「写完走人」，不保留运行时状态——IR 是它输出的唯一产物。
-> - 跨 crate 边界时，IR 类型的字段是「公开契约」，改动时要先想清楚，注释明确。
+> - 跨 crate 边界时，IR 类型的字段是「公开契约」，改动时要先想清楚。
 >
-> 代价：IR 类型变得复杂（每个 Function 有十几个字段），但这种复杂度是「必要的」——没有它后端会重新做已经做过的分析。
+> 代价：IR 类型更重。没有这些字段，后端会重新做已经做过的分析。
 >
 > </details>
 

@@ -21,25 +21,23 @@
 | --- | --- | --- |
 | `parse` | `wjsm_module::parse_entry_ast_with_options` | 入口 AST |
 | `lower` | `wjsm_module::lower_bundle_with_options` | 合并后的 `Program` |
-| `compile` / `execute` | `compile_bundle` → `lower_bundle_with_debug` + 后端 | WASM 字节 |
+| `compile` / `execute` | `compile_bundle` → `lower_bundle_with_debug` + `NativeCompiler` | portable `.wjsm` + 当前宿主 native image |
 
-三条路径都接收同一个 `ResolutionOptions`，保证 `--browser` / `--condition` 在任意阶段行为一致。
+`--stage compile` 写出 portable artifact。`--stage execute` 再由 `NativeRuntime` 把 artifact 编成（或从 `WJSM_CACHE_DIR` 加载）native image 并执行。verbose 编译提示是 `Compiling portable artifact...`。
 
 ## 合并语义
 
-`wjsm-module` 不生成 WASM，它只产出 IR：图构建 → 解析每个模块的格式（ESM/CJS）→ CJS 转换 → 逐模块 lowering → 合并为单一 `Program`。因此 bundling 的输出与单文件 lowering 的输出是同一种类型，后端无需区分两者。
+`wjsm-module` 不生成机器码，它只产出 IR：图构建 → 解析每个模块的格式（ESM/CJS）→ CJS 转换 → 逐模块 lowering → 合并为单一 `Program`。因此 bundling 的输出与单文件 lowering 的输出是同一种类型，后端无需区分两者。
 
 时间统计上，bundle 分支把整段耗时记入 `parse_us`/`lower_us`/`compile_us` 中对应目标阶段的一格，`--time` 输出因此在 bundle 与单文件之间形态一致。
 
 > <details><summary>为什么 bundle 输出和单文件输出是同一类型？</summary>
 >
-> 设计选择，后端代码因此简单。
+> 替代方案是「bundle 阶段产出一个 `BundleProgram` 类型，包含多个模块；后端要能处理这种类型」。那样函数表要重新编号，ModuleId 全部偏移。
 >
-> 替代方案是「bundle 阶段产出一个 `BundleProgram` 类型，包含多个模块；后端要能处理这种类型」。这样后端要专门写「处理多模块」的代码——比如函数表要重新编号，ModuleId 全部偏移，等等。
+> 当前做法：bundle 阶段把所有模块的 IR 合并成一个 `Program`。后端拿到 `Program` 时不知道「这是 bundle 来的还是单文件」——它就是个普通的 `Program`。
 >
-> 当前做法：bundle 阶段把所有模块的 IR 合并成一个 `Program`，每个模块的函数、常量都按全局顺序排好。后端拿到 `Program` 时根本不知道「这是 bundle 来的还是单文件」——它就是个普通的 `Program`。
->
-> 代价：合并要做 ModuleId 偏移、变量名加作用域前缀等额外工作；好处是后端代码路径只有一条。
+> 代价：合并要做 ModuleId 偏移、变量名加作用域前缀；好处是后端代码路径只有一条。
 >
 > </details>
 

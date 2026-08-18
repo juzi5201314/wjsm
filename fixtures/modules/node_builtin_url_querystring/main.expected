@@ -7,5 +7,11 @@ https://example.com/x?a=1
 https://e/c
 /tmp/a b
 xn--maana-pta.com mañana.com
+xn--fsqu00a.xn--0zwm56d xn--r8jz45g.xn--zckzah
+xn--maana-pta.com xn--maana-pta.com.
+""
+xn--r8jz45g.xn--zckzah https://xn--r8jz45g.xn--zckzah/path
+xn--fsqu00a.xn--0zwm56d
+true
 a=1&a=2&b=x%20y
 --- stderr ---

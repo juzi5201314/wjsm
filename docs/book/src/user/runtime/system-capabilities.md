@@ -97,15 +97,9 @@ WJSM_CHILD_PROCESS_ALLOW='*' wjsm run app.ts
 | `setImmediate` / `clearImmediate` | 立即回调调度 |
 | `atob` / `btoa` | Base64 编解码 |
 | `TextEncoder` / `TextDecoder` | 字符串编码转换 |
+| `URL` / `URLSearchParams` | WHATWG URL（含 IDN）；与 `node:url` 同引用 |
 
 `process.versions` 同时报告 `node: 22.0.0` 和 `wjsm: 0.1.0`，`process.platform` 和 `process.arch` 报告当前宿主信息。
-
-`URL` 和 `URLSearchParams` **不是**全局对象，需要从 `node:url` 导入：
-
-```js
-import { URL } from "node:url";
-const u = new URL("https://example.com/path?q=1");
-```
 
 `fetch` 和 Streams 构造器（`Headers`、`Request`、`Response`、`ReadableStream` 等）在全局名单中，但只能直接调用——取值得到 `undefined`，详见[限制与已知差异](limitations.md)。
 

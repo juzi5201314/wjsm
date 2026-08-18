@@ -173,6 +173,28 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
     match kind {
         NativeCallableKind::Builtin(wjsm_ir::Builtin::ArraySlice, _) => Some(("slice", 2)),
         NativeCallableKind::Builtin(wjsm_ir::Builtin::FuncCall, _) => Some(("call", 1)),
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::PropertyIsEnumerable, _) => {
+            Some(("propertyIsEnumerable", 1))
+        }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, _) => Some(("Error", 1)),
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::EvalErrorConstructor, _) => {
+            Some(("EvalError", 1))
+        }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::RangeErrorConstructor, _) => {
+            Some(("RangeError", 1))
+        }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::ReferenceErrorConstructor, _) => {
+            Some(("ReferenceError", 1))
+        }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::SyntaxErrorConstructor, _) => {
+            Some(("SyntaxError", 1))
+        }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::TypeErrorConstructor, _) => {
+            Some(("TypeError", 1))
+        }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::URIErrorConstructor, _) => {
+            Some(("URIError", 1))
+        }
         NativeCallableKind::ArrayToString | NativeCallableKind::RegExpToString => {
             Some(("toString", 0))
         }
@@ -188,6 +210,8 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
         NativeCallableKind::ProcessMemoryUsage => Some(("memoryUsage", 0)),
         NativeCallableKind::ProcessCpuUsage => Some(("cpuUsage", 1)),
+        NativeCallableKind::Intl(kind) => dispatch::intl::metadata(kind),
+        NativeCallableKind::DateMethod(method) => dispatch::date::method_metadata(method),
         _ => None,
     }
 }
@@ -504,6 +528,7 @@ enum NativeCallableKind {
     AggregateErrorConstructor,
     BufferMethod(dispatch::node_buffer::BufferMethodKind),
     BufferStatic(dispatch::node_buffer::BufferStaticKind),
+    BufferTranscode,
     CjsRequire(u32),
     CjsResolve(u32),
     NodeNet(dispatch::node_net::NodeNetMethod),
@@ -514,6 +539,7 @@ enum NativeCallableKind {
     NodeDgram(dispatch::node_dgram::NodeDgramMethod),
     NodeAsyncHooks(dispatch::node_async_hooks::NodeAsyncHooksCallable),
     NodeOs(dispatch::node_os::NodeOsMethod),
+    Idna(dispatch::idna::IdnaMethod),
     NodeVm(dispatch::node_vm::NodeVmCallable),
     NodeChildProcess(dispatch::node_child_process::NodeChildProcessCallable),
     NodePerfHooks(dispatch::node_perf_hooks::NodePerfHooksCallable),
@@ -550,6 +576,7 @@ enum NativeCallableKind {
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
+    Intl(dispatch::intl::IntlCallable),
 }
 
 fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
@@ -598,9 +625,7 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             "split" => Builtin::StringSplit,
             "startsWith" => Builtin::StringStartsWith,
             "substring" => Builtin::StringSubstring,
-            "toLowerCase" => Builtin::StringToLowerCase,
             "toString" => Builtin::StringToString,
-            "toUpperCase" => Builtin::StringToUpperCase,
             "trim" => Builtin::StringTrim,
             "trimEnd" => Builtin::StringTrimEnd,
             "trimStart" => Builtin::StringTrimStart,
@@ -644,6 +669,7 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             "unshift" => Builtin::ArrayUnshiftVa,
             "with" => Builtin::ArrayWith,
             "hasOwnProperty" => Builtin::HasOwnProperty,
+            "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
             "toString" => Builtin::ObjectProtoToString,
             "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
@@ -661,6 +687,7 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             "apply" => Builtin::FuncApply,
             "call" => Builtin::FuncCall,
             "hasOwnProperty" => Builtin::HasOwnProperty,
+            "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
             "toString" => Builtin::ObjectProtoToString,
             "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
@@ -668,6 +695,7 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
     } else if value::is_js_object(receiver) {
         match key {
             "hasOwnProperty" => Builtin::HasOwnProperty,
+            "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
             "toString" => Builtin::ObjectProtoToString,
             "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
@@ -946,6 +974,11 @@ struct NativeAgentState {
     data_views: HashMap<u32, dispatch::buffers::NativeDataView>,
     typed_arrays: HashMap<u32, dispatch::typedarray::NativeTypedArray>,
     buffers: HashMap<u32, dispatch::node_buffer::NativeBuffer>,
+    text_decoders: HashMap<u32, dispatch::web_encoding::TextDecoderSlot>,
+    text_decoder_prototype: Option<i64>,
+    node_buffer_bridge: Option<i64>,
+    url_constructor: Option<i64>,
+    url_search_params_constructor: Option<i64>,
     promises: HashMap<u32, dispatch::promise::NativePromise>,
     promise_combinators: Vec<dispatch::promise::NativePromiseCombinator>,
     continuations: HashMap<u32, dispatch::promise::NativeContinuation>,
@@ -1010,6 +1043,7 @@ struct NativeAgentState {
     weak_map_prototype: Option<i64>,
     weak_set_prototype: Option<i64>,
     console_object: Option<i64>,
+    intl: dispatch::intl::IntlState,
     native_callables: Vec<NativeCallableKind>,
     node_fs_bridge: Option<i64>,
     regexps: Vec<Option<NativeRegExp>>,
@@ -1021,6 +1055,7 @@ struct NativeAgentState {
     node_tls: dispatch::node_tls::NodeTlsState,
     node_zlib: dispatch::node_zlib::NodeZlibState,
     node_os: dispatch::node_os::NodeOsState,
+    idna: dispatch::idna::IdnaState,
     node_vm: dispatch::node_vm::NodeVmState,
     node_child_process: dispatch::node_child_process::NodeChildProcessState,
     node_perf_hooks: dispatch::node_perf_hooks::NodePerfHooksState,
@@ -1039,7 +1074,7 @@ struct NativeAgentState {
 }
 
 #[derive(Clone, Copy)]
-enum NativeIteratorSource {
+pub(crate) enum NativeIteratorSource {
     Array(u32),
     ArrayLike(u32),
     String(i64),
@@ -1060,6 +1095,8 @@ struct NativeArrayIterator {
 
 impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
+        // 把 ICU4X compiled_data 留在 rustc 链接的 stub 里，避免 DCE 在 Intl API 落地前删掉。
+        wjsm_intl_data::keep_compiled_data();
         let gc = gc::NativeGc::new(config.gc_algorithm, config.max_heap_size)?;
         let compiler = NativeCompiler::new()?;
         let repository = if config.isolate_native_images {
@@ -1125,6 +1162,11 @@ impl NativeAgentState {
             array_iterators: HashMap::new(),
             enumerators: HashMap::new(),
             buffers: HashMap::new(),
+            text_decoders: HashMap::new(),
+            text_decoder_prototype: None,
+            node_buffer_bridge: None,
+            url_constructor: None,
+            url_search_params_constructor: None,
             regexp_iterators: Vec::new(),
             array_buffers: HashMap::new(),
             shared_array_buffers: HashMap::new(),
@@ -1183,6 +1225,7 @@ impl NativeAgentState {
             weak_map_prototype: None,
             weak_set_prototype: None,
             console_object: None,
+            intl: dispatch::intl::IntlState::default(),
             array_constructor: None,
             node_net: dispatch::node_net::NodeNetState::default(),
             node_tls: dispatch::node_tls::NodeTlsState::default(),
@@ -1191,6 +1234,7 @@ impl NativeAgentState {
             node_async_hooks: dispatch::node_async_hooks::NodeAsyncHooksState::default(),
             node_dgram: dispatch::node_dgram::NodeDgramState::default(),
             node_os: dispatch::node_os::NodeOsState::default(),
+            idna: dispatch::idna::IdnaState::default(),
             node_vm: dispatch::node_vm::NodeVmState::default(),
             node_child_process: dispatch::node_child_process::NodeChildProcessState::default(),
             node_perf_hooks: dispatch::node_perf_hooks::NodePerfHooksState::default(),
@@ -1414,6 +1458,7 @@ impl NativeAgentState {
         self.array_constructor = None;
         self.global_object = None;
         self.console_object = None;
+        self.intl = dispatch::intl::IntlState::default();
         self.maps.clear();
         self.sets.clear();
         self.weak.clear();
@@ -1439,6 +1484,11 @@ impl NativeAgentState {
         // 否则 agent 线程 execute 时会丢失 receiveBroadcast 注册。
         self.agent_bridge = None;
         self.buffers.clear();
+        self.text_decoders.clear();
+        self.text_decoder_prototype = None;
+        self.node_buffer_bridge = None;
+        self.url_constructor = None;
+        self.url_search_params_constructor = None;
         self.node_net = dispatch::node_net::NodeNetState::default();
         self.node_tls = dispatch::node_tls::NodeTlsState::default();
         self.node_zlib = dispatch::node_zlib::NodeZlibState::default();
@@ -1446,6 +1496,7 @@ impl NativeAgentState {
         self.node_async_hooks = dispatch::node_async_hooks::NodeAsyncHooksState::default();
         self.node_dgram = dispatch::node_dgram::NodeDgramState::default();
         self.node_os = dispatch::node_os::NodeOsState::default();
+        self.idna = dispatch::idna::IdnaState::default();
         self.node_perf_hooks = dispatch::node_perf_hooks::NodePerfHooksState::default();
         self.streams = dispatch::streams::NativeStreamsState::default();
         self.fetch = dispatch::fetch::NativeFetchState::default();
@@ -1813,7 +1864,15 @@ impl NativeAgentState {
         let index = u32::try_from(self.native_callables.len()).ok()?;
         self.native_callables.push(kind);
         self.native_callable_ids.insert(kind, index);
-        Some(value::encode_native_callable_idx(index))
+        let encoded = value::encode_native_callable_idx(index);
+        if matches!(
+            kind,
+            NativeCallableKind::Intl(_) | NativeCallableKind::DateMethod(_)
+        ) && let Some(prototype) = self.native_callable(NativeCallableKind::FunctionPrototype)
+        {
+            self.callable_prototypes.entry(encoded).or_insert(prototype);
+        }
+        Some(encoded)
     }
 
     fn heap_chain_contains(&self, receiver: i64, prototype: i64) -> bool {
@@ -1901,23 +1960,18 @@ impl NativeAgentState {
             ));
         }
         if value::is_symbol(key) && value::decode_handle(key) == wjsm_ir::wk_symbol::ITERATOR {
+            let handle = value::decode_handle(receiver);
             let builtin = if dispatch::generator::is_generator(self, receiver)
-                || self
-                    .array_iterators
-                    .contains_key(&value::decode_handle(receiver))
-                || self
-                    .iterator_next
-                    .contains_key(&value::decode_handle(receiver))
+                || value::is_js_object(receiver)
+                    && (self.array_iterators.contains_key(&handle)
+                        || self.iterator_next.contains_key(&handle))
             {
                 wjsm_ir::Builtin::ObjectProtoValueOf
-            } else if self.maps.contains_key(&value::decode_handle(receiver)) {
+            } else if value::is_js_object(receiver) && self.maps.contains_key(&handle) {
                 wjsm_ir::Builtin::MapSetEntries
-            } else if self.sets.contains_key(&value::decode_handle(receiver)) {
+            } else if value::is_js_object(receiver) && self.sets.contains_key(&handle) {
                 wjsm_ir::Builtin::MapSetValues
-            } else if self
-                .typed_arrays
-                .contains_key(&value::decode_handle(receiver))
-            {
+            } else if value::is_js_object(receiver) && self.typed_arrays.contains_key(&handle) {
                 wjsm_ir::Builtin::TypedArrayProtoValues
             } else if value::is_array(receiver)
                 || value::is_string(receiver)
@@ -1925,7 +1979,7 @@ impl NativeAgentState {
                     && self
                         .gc
                         .heap()
-                        .object_type(value::decode_handle(receiver))
+                        .object_type(handle)
                         .is_ok_and(|kind| kind == u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
             {
                 wjsm_ir::Builtin::IteratorFrom
@@ -2148,12 +2202,18 @@ impl NativeAgentState {
             return self.native_callable(NativeCallableKind::ErrorToString);
         }
         if (value::is_object(receiver) || value::is_array(receiver))
-            && matches!(key.as_str(), "hasOwnProperty" | "toString" | "valueOf")
+            && matches!(
+                key.as_str(),
+                "hasOwnProperty" | "propertyIsEnumerable" | "toString" | "valueOf"
+            )
             && self
                 .object_prototype
                 .is_none_or(|prototype| !self.heap_chain_contains(receiver, prototype))
         {
             return None;
+        }
+        if let Some(property) = dispatch::intl::primitive_locale_property(self, receiver, &key) {
+            return Some(property);
         }
         let builtin = intrinsic_builtin(receiver, &key)?;
         self.native_callable(NativeCallableKind::Builtin(builtin, true))
@@ -2362,7 +2422,26 @@ impl NativeAgentState {
                 true,
                 value::decode_handle(object_prototype),
             )?;
+            dispatch::intl::install_array_to_locale_string(self, prototype)
+                .map_err(|()| HeapAccessV2Error::AddressOverflow)?;
             self.array_prototype = Some(prototype);
+            let constructor = self
+                .native_callable(NativeCallableKind::ArrayConstructor)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            let prototype_key = self
+                .intern_text("prototype".into(), value::TAG_STRING)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.callable_properties.insert(
+                (constructor, value::decode_handle(prototype_key)),
+                prototype,
+            );
+            self.callable_property_flags.insert(
+                (constructor, value::decode_handle(prototype_key)),
+                FUNCTION_PROTOTYPE_FLAGS,
+            );
+            self.install_prototype_constructor(prototype, constructor)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.array_constructor = Some(constructor);
         }
         if self.regexp_prototype.is_none() {
             let prototype = self.allocate_object_with_prototype(
@@ -2387,6 +2466,7 @@ impl NativeAgentState {
             (constructor, value::decode_handle(prototype_key)),
             FUNCTION_PROTOTYPE_FLAGS,
         );
+        self.install_prototype_constructor(self.object_prototype?, constructor)?;
         Some(constructor)
     }
 
@@ -2405,6 +2485,7 @@ impl NativeAgentState {
             (constructor, value::decode_handle(prototype_key)),
             FUNCTION_PROTOTYPE_FLAGS,
         );
+        self.install_prototype_constructor(self.regexp_prototype?, constructor)?;
         Some(constructor)
     }
 
@@ -2426,6 +2507,7 @@ impl NativeAgentState {
         );
         self.array_prototype = Some(prototype);
         self.array_constructor = Some(constructor);
+        self.install_prototype_constructor(prototype, constructor)?;
         Some(constructor)
     }
 
@@ -2496,7 +2578,31 @@ impl NativeAgentState {
             FUNCTION_PROTOTYPE_FLAGS,
         );
         self.error_prototypes.insert(name.to_owned(), prototype);
+        self.install_prototype_constructor(prototype, constructor)?;
         Some(prototype)
+    }
+
+    fn install_prototype_constructor(&mut self, prototype: i64, constructor: i64) -> Option<()> {
+        let key = self.intern_text("constructor".into(), value::TAG_STRING)?;
+        let flags =
+            wjsm_ir::constants::FLAG_WRITABLE as u32 | wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
+        if value::is_array(prototype) {
+            let handle = value::decode_handle(prototype);
+            let key = value::decode_handle(key);
+            self.note_array_property(handle, key);
+            self.array_properties.insert((handle, key), constructor);
+            self.array_property_flags.insert((handle, key), flags);
+            return Some(());
+        }
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                value::decode_handle(key),
+                constructor as u64,
+                flags,
+            )
+            .ok()
     }
     fn global_property(&mut self, receiver: i64, key: i64) -> Option<i64> {
         let is_realm_global =
@@ -2518,6 +2624,9 @@ impl NativeAgentState {
         }
         if name == "console" {
             return self.ensure_console_object();
+        }
+        if name == "Intl" {
+            return dispatch::intl::ensure_intl_object(self);
         }
         if name == "process" {
             return self.ensure_process_object();
@@ -2557,6 +2666,12 @@ impl NativeAgentState {
         }
         if name == "__wjsm_node_fs" {
             return dispatch::node_fs::ensure_bridge(self);
+        }
+        if name == "__wjsm_node_buffer" {
+            return dispatch::node_buffer::ensure_bridge(self);
+        }
+        if name == "__wjsm_idna" {
+            return dispatch::idna::ensure_bridge(self);
         }
         if name == "__wjsm_node_os" {
             return dispatch::node_os::ensure_bridge(self);
@@ -2691,6 +2806,9 @@ impl NativeAgentState {
     }
 
     fn native_callable_builtin(&self, callee: i64) -> Option<(wjsm_ir::Builtin, bool)> {
+        if !value::is_native_callable(callee) {
+            return None;
+        }
         match self
             .native_callables
             .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)?
@@ -2706,6 +2824,7 @@ impl NativeAgentState {
             | NativeCallableKind::BufferConstructor
             | NativeCallableKind::BufferMethod(_)
             | NativeCallableKind::BufferStatic(_)
+            | NativeCallableKind::BufferTranscode
             | NativeCallableKind::CjsRequire(_)
             | NativeCallableKind::CjsResolve(_)
             | NativeCallableKind::CjsResolvePaths(_)
@@ -2722,6 +2841,7 @@ impl NativeAgentState {
             | NativeCallableKind::NodeAsyncHooks(_)
             | NativeCallableKind::NodeFs(_)
             | NativeCallableKind::NodeOs(_)
+            | NativeCallableKind::Idna(_)
             | NativeCallableKind::NodeVm(_)
             | NativeCallableKind::NodeChildProcess(_)
             | NativeCallableKind::ErrorToString
@@ -2755,11 +2875,15 @@ impl NativeAgentState {
             | NativeCallableKind::Gc
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
-            | NativeCallableKind::Bound(_) => None,
+            | NativeCallableKind::Bound(_)
+            | NativeCallableKind::Intl(_) => None,
         }
     }
 
     fn native_callable_kind(&self, callee: i64) -> Option<NativeCallableKind> {
+        if !value::is_native_callable(callee) {
+            return None;
+        }
         self.native_callables
             .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)
             .copied()
@@ -3039,8 +3163,19 @@ impl NativeAgentState {
                 i64::try_from(native_callable_call as *const () as usize).ok()?,
             )
         } else if value::is_native_callable(callee) {
-            self.native_callables
-                .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)?;
+            let kind = self
+                .native_callables
+                .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)
+                .copied()?;
+            if construct
+                && match kind {
+                    NativeCallableKind::Intl(kind) => !dispatch::intl::is_constructor(kind),
+                    NativeCallableKind::DateMethod(_) => true,
+                    _ => false,
+                }
+            {
+                return None;
+            }
             (
                 None,
                 callee,
@@ -3422,10 +3557,11 @@ impl NativeAgentState {
                 native_function_metadata(self.native_callable_kind(callable)?)
                     .map(|(name, _)| name.to_owned())?
             };
+            let stored = self.intern_text(name, value::TAG_STRING)?;
+            self.callable_properties.insert((callable, key), stored);
             self.callable_property_flags
-                .entry((callable, key))
-                .or_insert(FUNCTION_METADATA_FLAGS);
-            return self.intern_text(name, value::TAG_STRING);
+                .insert((callable, key), FUNCTION_METADATA_FLAGS);
+            return Some(stored);
         }
         if self.text_matches(value::encode_handle(value::TAG_STRING, key), "length") {
             let length = if let Some(function) = self.callable_function(callable) {
@@ -3443,10 +3579,11 @@ impl NativeAgentState {
                 native_function_metadata(self.native_callable_kind(callable)?)
                     .map(|(_, length)| length)?
             };
+            let stored = value::encode_f64(f64::from(length));
+            self.callable_properties.insert((callable, key), stored);
             self.callable_property_flags
-                .entry((callable, key))
-                .or_insert(FUNCTION_METADATA_FLAGS);
-            return Some(value::encode_f64(f64::from(length)));
+                .insert((callable, key), FUNCTION_METADATA_FLAGS);
+            return Some(stored);
         }
         if self.native_callable_kind(callable) == Some(NativeCallableKind::FunctionConstructor)
             && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
@@ -3539,6 +3676,50 @@ impl NativeAgentState {
             self.callable_property_flags
                 .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
             return Some(prototype);
+        }
+        if let Some(NativeCallableKind::Intl(kind)) = self.native_callable_kind(callable)
+            && dispatch::intl::is_constructor(kind)
+            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+        {
+            let prototype = dispatch::intl::ensure_constructor_prototype(self, callable, kind)?;
+            self.callable_properties.insert((callable, key), prototype);
+            // 内置构造器 `prototype`：{ writable: false, enumerable: false, configurable: false }
+            self.callable_property_flags.insert((callable, key), 0);
+            return Some(prototype);
+        }
+        if self.native_callable_kind(callable)
+            == Some(NativeCallableKind::WebEncoding(
+                dispatch::web_encoding::WebEncodingCallable::TextDecoderConstructor,
+            ))
+            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+        {
+            let prototype = dispatch::web_encoding::ensure_text_decoder_prototype(self)?;
+            self.callable_properties.insert((callable, key), prototype);
+            self.callable_property_flags.insert((callable, key), 0);
+            return Some(prototype);
+        }
+        if self.native_callable_kind(callable) == Some(NativeCallableKind::StringConstructor)
+            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+        {
+            return dispatch::intl::ensure_string_prototype(self);
+        }
+        if self
+            .native_callable_builtin(callable)
+            .is_some_and(|(builtin, _)| {
+                builtin == wjsm_ir::Builtin::NumberConstructor
+                    && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            })
+        {
+            return dispatch::intl::ensure_number_prototype(self);
+        }
+        if self
+            .native_callable_builtin(callable)
+            .is_some_and(|(builtin, _)| {
+                builtin == wjsm_ir::Builtin::BigIntFromLiteral
+                    && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            })
+        {
+            return dispatch::intl::ensure_bigint_prototype(self);
         }
         if self
             .native_callable_builtin(callable)
@@ -3742,13 +3923,18 @@ impl NativeAgentState {
         }
         self.call_arena.get(base.checked_add(index)?).copied()
     }
-    fn collect_rest_arguments(&self, args: &[i64]) -> Option<i64> {
+    fn collect_rest_arguments(&self, ctx: &NativeVmContext, args: &[i64]) -> Option<i64> {
         let [skip] = args else {
             return None;
         };
         let skip = u32::try_from(*skip).ok()?;
         let activation = self.activations.last()?;
-        let length = activation.argument_count.saturating_sub(skip);
+        let arena_len = ctx
+            .call_arena_active_len
+            .saturating_sub(activation.active_len);
+        let length = arena_len
+            .min(activation.argument_count)
+            .saturating_sub(skip);
         let array = self.allocate_object(length, true).ok()?;
         let handle = value::decode_handle(array);
         let base = usize::try_from(activation.active_len.checked_add(skip)?).ok()?;
@@ -4000,6 +4186,7 @@ impl NativeAgentState {
         self.data_views.retain(|handle, _| is_live(handle));
         self.typed_arrays.retain(|handle, _| is_live(handle));
         self.buffers.retain(|handle, _| is_live(handle));
+        self.text_decoders.retain(|handle, _| is_live(handle));
         self.promises.retain(|handle, _| is_live(handle));
         self.continuations.retain(|handle, _| is_live(handle));
         self.generators.retain(|handle, _| is_live(handle));
@@ -4024,6 +4211,7 @@ impl NativeAgentState {
         self.async_generator_resume_completions
             .retain(|handle, _| is_live(handle));
         self.promise_reactions.retain(|handle, _| is_live(handle));
+        self.intl.slots.retain(|handle, _| is_live(handle));
     }
     fn drain_gc_cycle(&mut self, ctx: &NativeVmContext) -> Result<(), NativeRuntimeError> {
         while self.gc.cycle_active() {
@@ -4118,6 +4306,25 @@ fn process_numeric_object(state: &mut NativeAgentState, fields: &[(&str, f64)]) 
     Some(object)
 }
 
+fn box_or_return_string(
+    state: &mut NativeAgentState,
+    this_value: i64,
+    text: String,
+) -> Option<i64> {
+    let primitive = state.intern_text(text, value::TAG_STRING)?;
+    let constructing = state
+        .activations
+        .last()
+        .is_some_and(|activation| !value::is_undefined(activation.new_target));
+    if constructing && value::is_js_object(this_value) {
+        state
+            .boxed_primitives
+            .insert(value::decode_handle(this_value), primitive);
+        return Some(this_value);
+    }
+    Some(primitive)
+}
+
 unsafe extern "C" fn native_callable_call(
     ctx: *mut NativeVmContext,
     callee: i64,
@@ -4203,6 +4410,9 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::WebEncoding(callable) => {
             dispatch::web_encoding::call(ctx, state, callable, this_value, &arguments)
         }
+        NativeCallableKind::Intl(callable) => {
+            dispatch::intl::call(ctx, state, callable, this_value, &arguments)
+        }
         NativeCallableKind::ArrayConstructor => dispatch::construct_array(ctx, state, &arguments),
         NativeCallableKind::ObjectConstructor => dispatch::construct_object(ctx, state, &arguments),
         NativeCallableKind::RealmArrayConstructor(context) => {
@@ -4241,6 +4451,9 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::BufferStatic(kind) => {
             dispatch::node_buffer::call_static(ctx, state, kind, &arguments)
         }
+        NativeCallableKind::BufferTranscode => {
+            dispatch::node_buffer::transcode(ctx, state, &arguments)
+        }
         NativeCallableKind::NodeAsyncHooks(callable) => {
             dispatch::node_async_hooks::call(ctx, state, callable, this_value, &arguments)
         }
@@ -4260,6 +4473,7 @@ unsafe extern "C" fn native_callable_call(
             dispatch::node_zlib::call(ctx, state, method, &arguments)
         }
         NativeCallableKind::NodeOs(method) => dispatch::node_os::call(ctx, state, method),
+        NativeCallableKind::Idna(method) => dispatch::idna::call(ctx, state, method, &arguments),
         NativeCallableKind::NodeVm(callable) => {
             dispatch::node_vm::call(ctx, state, callable, &arguments)
         }
@@ -4387,8 +4601,7 @@ unsafe extern "C" fn native_callable_call(
         }
         NativeCallableKind::StringConstructor => {
             let Some(argument) = arguments.first().copied() else {
-                return state
-                    .intern_text(String::new(), value::TAG_STRING)
+                return box_or_return_string(state, this_value, String::new())
                     .unwrap_or_else(|| dispatch::fail_dispatch(ctx));
             };
             let text = if value::is_symbol(argument) {
@@ -4399,8 +4612,7 @@ unsafe extern "C" fn native_callable_call(
                     Err(exception) => return exception,
                 }
             };
-            state
-                .intern_text(text, value::TAG_STRING)
+            box_or_return_string(state, this_value, text)
                 .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
         }
         NativeCallableKind::ProcessCwd => state
@@ -4515,7 +4727,22 @@ unsafe extern "C" fn native_callable_call(
                 call_args.push(this_value);
             }
             call_args.extend_from_slice(&arguments);
-            dispatch::dispatch_builtin(ctx, state, builtin, &call_args)
+            let result = dispatch::dispatch_builtin(ctx, state, builtin, &call_args);
+            if builtin == wjsm_ir::Builtin::NumberConstructor
+                && !value::is_exception(result)
+                && value::is_f64(result)
+                && state
+                    .activations
+                    .last()
+                    .is_some_and(|activation| !value::is_undefined(activation.new_target))
+                && value::is_js_object(this_value)
+            {
+                state
+                    .boxed_primitives
+                    .insert(value::decode_handle(this_value), result);
+                return this_value;
+            }
+            result
         }
     }
 }
@@ -4525,6 +4752,16 @@ pub struct NativeRuntime {
     vmctx: Pin<Box<NativeVmContext>>,
     owner_thread: std::thread::ThreadId,
     not_send_sync: PhantomData<Rc<()>>,
+}
+
+/// builtin / user 两段 image 及其槽表，供 split install 一次装入。
+struct SplitProgramImages {
+    builtin_program: wjsm_ir::Program,
+    user_program: wjsm_ir::Program,
+    builtin_slots: HashMap<String, u32>,
+    user_slots: HashMap<String, u32>,
+    builtin_image: Arc<CompiledImage>,
+    user_image: Arc<CompiledImage>,
 }
 
 impl NativeRuntime {
@@ -4703,12 +4940,14 @@ impl NativeRuntime {
                 self.install_split_images(
                     artifact,
                     store,
-                    builtin_program,
-                    user_program,
-                    builtin_slots,
-                    user_slots,
-                    builtin_image,
-                    user_image,
+                    SplitProgramImages {
+                        builtin_program,
+                        user_program,
+                        builtin_slots,
+                        user_slots,
+                        builtin_image,
+                        user_image,
+                    },
                 )
             }
             None => {
@@ -4748,12 +4987,14 @@ impl NativeRuntime {
                 self.install_split_images(
                     artifact,
                     store,
-                    builtin_program,
-                    user_program,
-                    builtin_slots,
-                    user_slots,
-                    builtin_image,
-                    user_image,
+                    SplitProgramImages {
+                        builtin_program,
+                        user_program,
+                        builtin_slots,
+                        user_slots,
+                        builtin_image,
+                        user_image,
+                    },
                 )
             }
             (None, PrecompiledNativeImages::Whole(object)) => {
@@ -4774,13 +5015,16 @@ impl NativeRuntime {
         &mut self,
         artifact: &PortableArtifact,
         store: &ModuleSourceStore,
-        builtin_program: wjsm_ir::Program,
-        user_program: wjsm_ir::Program,
-        builtin_slots: HashMap<String, u32>,
-        user_slots: HashMap<String, u32>,
-        builtin_image: Arc<CompiledImage>,
-        user_image: Arc<CompiledImage>,
+        images: SplitProgramImages,
     ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        let SplitProgramImages {
+            builtin_program,
+            user_program,
+            builtin_slots,
+            user_slots,
+            builtin_image,
+            user_image,
+        } = images;
         self.state
             .install_shared_variables(&builtin_slots, &user_slots);
         let builtin_image_id = builtin_image.image_id();

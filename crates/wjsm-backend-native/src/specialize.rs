@@ -22,10 +22,10 @@ use wjsm_native_abi::{NativeFeedbackTag, NativeFunctionEntry, NativeVmContext};
 
 use crate::f64_analysis::{infer_f64_values, infer_f64_values_with_param_seeds};
 use crate::lower::{
-    DeclaredBarrierThunks, DeclaredData, DeclaredFunction, allocate_feedback_slots,
-    allocate_ic_slots, boxed_frame_local_names, compile_one_function, declare_barrier_thunks,
-    declare_host_dispatcher, declare_math_thunks, declare_root_bitmaps, emit_feedback_tag_code,
-    gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
+    DeclaredBarrierThunks, DeclaredData, DeclaredFunction, FunctionCompileInput,
+    allocate_feedback_slots, allocate_ic_slots, boxed_frame_local_names, compile_one_function,
+    declare_barrier_thunks, declare_host_dispatcher, declare_math_thunks, declare_root_bitmaps,
+    emit_feedback_tag_code, gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
 };
 use crate::root_plan::RootPlan;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
@@ -78,11 +78,7 @@ pub(crate) fn compile_specialized(
             "profile tags exceed the parameter count",
         ));
     }
-    if !profile
-        .argument_tags
-        .iter()
-        .any(|tag| *tag == NativeFeedbackTag::Number)
-    {
+    if !profile.argument_tags.contains(&NativeFeedbackTag::Number) {
         return Err(SpecializationError::NoBenefit(
             "profile has no number argument",
         ));
@@ -200,29 +196,29 @@ pub(crate) fn compile_specialized(
     let (ic_slots, _) = allocate_ic_slots(program);
     let feedback_plan = allocate_feedback_slots(program);
 
-    let body = compile_one_function(
-        &isa,
+    let body = compile_one_function(&FunctionCompileInput {
+        isa: &isa,
         target_config,
         program,
         ir_function,
-        target_index,
-        &signature,
-        body_id,
-        &dispatcher_decl,
-        &barrier_thunks,
-        &math_thunk_decls,
-        &bitmap_decls,
-        &seeded_values,
+        index: target_index,
+        signature: &signature,
+        function_id: body_id,
+        dispatcher: &dispatcher_decl,
+        barrier_thunks: &barrier_thunks,
+        math_thunks: &math_thunk_decls,
+        root_bitmaps: &bitmap_decls,
+        f64_values: &seeded_values,
         variable_slots,
-        &root_plan,
+        root_plan: &root_plan,
         root_capacity,
-        &frame_locals,
-        &boxed_frame_locals,
-        &ic_slots[target_index],
-        feedback_plan.function_slots(target_index),
-        Some(profile.argument_tags.as_ref()),
+        frame_local_names: &frame_locals,
+        boxed_local_names: &boxed_frame_locals,
+        ic_slots: &ic_slots[target_index],
+        feedback_slots: feedback_plan.function_slots(target_index),
+        specialized_tags: Some(profile.argument_tags.as_ref()),
         collect_diagnostics,
-    )?;
+    })?;
     let wrapper = compile_wrapper(
         &isa,
         &signature,

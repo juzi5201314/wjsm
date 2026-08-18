@@ -302,10 +302,10 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
                 );
             }
         }
-        if !relocated.is_empty() {
-            if let HeapBarrier::Zgc(barrier) = heap.barrier() {
-                barrier.relocator().select_page(u64::from(page.page.get()));
-            }
+        if !relocated.is_empty()
+            && let HeapBarrier::Zgc(barrier) = heap.barrier()
+        {
+            barrier.relocator().select_page(u64::from(page.page.get()));
         }
         drop(heap);
         self.remembered_owners
@@ -1230,7 +1230,6 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
                 heap.scan_references(owner, &mut route)?;
             }
         }
-        drop(route);
         drop(heap);
         if !main_pending.is_empty() {
             self.shared.state.lock().pending.extend(main_pending);

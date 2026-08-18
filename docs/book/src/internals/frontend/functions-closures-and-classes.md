@@ -8,15 +8,19 @@
 
 | 字段 | 填充方 | 后端用途 |
 | --- | --- | --- |
-| `params` | 语义层 | WASM 调用约定的形参顺序 |
+| `params` | 语义层 | Native ABI 形参顺序（含 `$env`、`$this`） |
 | `captured_names` | 语义层逃逸分析 | env 对象的属性名 |
 | `has_eval` | 语义层 | 函数体含 direct eval 时降低局部变量优化强度 |
 | `known_callee_vars` | 语义层 | callee no-GC 分析，key 是 scope-qualified IR 名 |
 | `home_object` | 语义层 | `super` 属性访问的 `[[HomeObject]]` |
 | `needs_prototype` | 语义层 | 是否创建 `prototype` 对象 |
-| `source_span` | 语义层 | 编码进 custom section，供运行时错误映射 |
+| `source_span` | 语义层 | 写入 `NativeSourceFrame`，供运行时错误映射 |
 
 这些字段是单向的：语义层写入，后端只读。后端不回填，也不重新推导。
+
+## Native 调用约定
+
+生成代码入口是 `NativeSlowEntry`：`(ctx, env, this_value, args_base, args_count) -> i64`。实参落在 vmctx 的 call arena 上，用 `CallArgs { base, len }` 描述一段连续槽。IR 里普通函数的形参始终带 `$N.$env` 和 `$N.$this`：约定统一传入 env 与 this，即使函数体不用它们。
 
 ## 闭包捕获在语义层决定
 
@@ -28,13 +32,11 @@
 wjsm dump-ir -e 'function outer(){ let a = 1; return () => a }'
 ```
 
-普通函数的形参里能看到 `$N.$env` 和 `$N.$this`：调用约定统一传入 env 与 this，即使函数不使用它们。
-
 ## 箭头函数
 
 `lower_arrow_expr`（`lowerer_arrows.rs`）与普通函数的差别集中在 `this` 和 `super`：
 
-- 箭头函数声明 `$this` 形参占位以满足 WASM 调用约定，但函数体内的 `this` 通过 env 捕获读取，不用形参值。
+- 箭头函数仍声明 `$this` 形参以符合 Native ABI，但函数体内的 `this` 通过 env 捕获读取，不用形参值。
 - `lexical_home_object`、`super_allowed`、`super_call_allowed` 从外层继承，因此箭头函数体内的 `super` 沿用外层方法的绑定。
 - 名字形如 `arrow_<index>`，index 取当前已生成函数数量。
 
@@ -44,17 +46,15 @@ wjsm dump-ir -e 'function outer(){ let a = 1; return () => a }'
 >
 > 这是 ECMAScript 规范明确的行为：箭头函数不绑定自己的 `this`，而是捕获外层词法 this。如果外层是函数方法，this 就是调用者；如果是普通函数或模块，this 是 `undefined`（严格模式）。
 >
-> 实现上的难点是：WASM 调用约定要求函数接受 env 和 this 作为参数。如果箭头函数用「词法 this」，它需要从 env 里读，而不是从 this 形参读。
+> Native ABI 要求每个函数入口都接收 env 和 this。箭头函数仍然声明 `$this` 形参，但函数体内不读这个形参——它通过 `env.$this` 读取捕获的词法 this。
 >
-> wjsm 的做法：箭头函数仍然声明 `$this` 形参（满足调用约定），但函数体内不读这个形参——它通过 `env.$this` 字段读取捕获的词法 this。
->
-> 性能上看，每次调用箭头函数都要走 env 查 this，比普通函数的「直接传 this 形参」多一次读。但词法 this 是规范要求，没法绕开。
+> 每次调用箭头函数都要走 env 读 this，比普通函数的「直接用 this 形参」多一次读。词法 this 是规范要求，不能改成动态 this。
 >
 > </details>
 
 ## 类
 
-类降级位于 `lowerer_classes_ts/`（`mod.rs` 约 914 行，`class_body.rs` 约 716 行）。要点：
+类降级位于 `lowerer_classes_ts/`。要点：
 
 - 方法是独立的 IR 函数，`home_object` 指向 `prototype` 或构造器本体，`needs_prototype` 为 false。
 - 构造器名形如 `<Class>.constructor`，可在 `dump-ir` 中直接看到。

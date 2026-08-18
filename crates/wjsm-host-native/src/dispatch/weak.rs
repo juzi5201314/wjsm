@@ -557,6 +557,22 @@ fn root_values(
     queue.extend(state.weak_map_prototype);
     queue.extend(state.weak_set_prototype);
     queue.extend(state.console_object);
+    queue.extend(state.intl.object);
+    queue.extend(state.intl.locale_prototype);
+    queue.extend(state.intl.collator_prototype);
+    queue.extend(state.intl.number_format_prototype);
+    queue.extend(state.intl.datetime_format_prototype);
+    queue.extend(state.intl.plural_rules_prototype);
+    queue.extend(state.intl.list_format_prototype);
+    queue.extend(state.intl.relative_time_prototype);
+    queue.extend(state.intl.display_names_prototype);
+    queue.extend(state.intl.segmenter_prototype);
+    queue.extend(state.intl.segments_prototype);
+    queue.extend(state.intl.segment_iterator_prototype);
+    queue.extend(state.intl.duration_format_prototype);
+    queue.extend(state.intl.string_prototype);
+    queue.extend(state.intl.number_prototype);
+    queue.extend(state.intl.bigint_prototype);
     queue.extend(state.process_object);
     queue.extend(state.process_env_object);
     queue.extend(state.agent_bridge);
@@ -604,6 +620,11 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
     for (handle, values) in &state.sets {
         for value in values {
             add(owner(*handle), *value);
+        }
+    }
+    for (handle, slot) in &state.intl.slots {
+        for bound in slot.bound_roots() {
+            add(owner(*handle), bound);
         }
     }
     for (handle, array) in &state.typed_arrays {
@@ -813,14 +834,30 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         }
         queue.extend(generator.resume_promise);
     }
+    for iterator in state.array_iterators.values() {
+        match iterator.source {
+            crate::NativeIteratorSource::String(encoded)
+            | crate::NativeIteratorSource::Custom(encoded) => queue.push_back(encoded),
+            crate::NativeIteratorSource::Array(handle) => {
+                queue.push_back(value::encode_handle(value::TAG_ARRAY, handle));
+            }
+            crate::NativeIteratorSource::ArrayLike(handle)
+            | crate::NativeIteratorSource::TypedArray(handle)
+            | crate::NativeIteratorSource::Map(handle)
+            | crate::NativeIteratorSource::Set(handle) => {
+                queue.push_back(value::encode_object_handle(handle));
+            }
+        }
+        if let Some(current) = iterator.current {
+            queue.push_back(current);
+        }
+    }
     queue.extend(state.async_from_sync_iterators.values().copied());
     queue.extend(state.fatal_exception);
     state.node_perf_hooks.extend_gc_roots(queue);
     queue.extend(state.node_async_hooks.defaults.values().copied());
-    for frame in &state.node_async_hooks.captured_frames {
-        if let Some(stores) = frame {
-            queue.extend(stores.values().copied());
-        }
+    for stores in state.node_async_hooks.captured_frames.iter().flatten() {
+        queue.extend(stores.values().copied());
     }
     queue.push_back(state.node_async_hooks.top_resource);
     if let Some(stores) = &state.node_async_hooks.current.stores {

@@ -1,7 +1,7 @@
 //! String.prototype 方法（同步路径）。
 
-use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 use wjsm_host::{ExecContext, RuntimeString, Value};
+use wjsm_intl_data::{NormalizationForm, normalize};
 use wjsm_ir::value;
 
 pub const INVALID_NORMALIZATION_FORM_MESSAGE: &str =
@@ -17,21 +17,8 @@ fn decode_surrogate_pair(high: u16, low: u16) -> u32 {
 }
 
 fn normalize_string_by_form(s: &str, form: &str) -> Result<String, &'static str> {
-    match form {
-        "NFC" => Ok(ComposingNormalizerBorrowed::new_nfc()
-            .normalize(s)
-            .into_owned()),
-        "NFD" => Ok(DecomposingNormalizerBorrowed::new_nfd()
-            .normalize(s)
-            .into_owned()),
-        "NFKC" => Ok(ComposingNormalizerBorrowed::new_nfkc()
-            .normalize(s)
-            .into_owned()),
-        "NFKD" => Ok(DecomposingNormalizerBorrowed::new_nfkd()
-            .normalize(s)
-            .into_owned()),
-        _ => Err(INVALID_NORMALIZATION_FORM_MESSAGE),
-    }
+    let form = NormalizationForm::parse(form).map_err(|_| INVALID_NORMALIZATION_FORM_MESSAGE)?;
+    Ok(normalize(s, form))
 }
 
 fn flush_transformed_run<F>(out: &mut Vec<u16>, run: &mut String, transform: &mut F)
@@ -74,7 +61,7 @@ where
     RuntimeString::from_utf16_units(out)
 }
 
-fn normalize_runtime_string_by_form(
+pub fn normalize_runtime_string_by_form(
     input: &RuntimeString,
     form: &str,
 ) -> Result<RuntimeString, &'static str> {

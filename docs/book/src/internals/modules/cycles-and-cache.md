@@ -29,25 +29,25 @@
 - 模块 id 缓存：同一 canonical 路径只解析一次，重复 import 复用同一 `ModuleId`。
 - `package_cache`：按 canonical 包目录缓存 `PackageInfo`，避免重复读 `package.json`。
 
-这两个缓存的生命周期是单次 bundle。编译产物级缓存是另一回事，由运行时侧的 wasm 缓存负责。
+这两个缓存的生命周期是单次 bundle。编译产物级缓存是另一回事：native image 落在 `${WJSM_CACHE_DIR}/*.wnat`，builtin IR 段落在 `${WJSM_CACHE_DIR}/builtin_ir/*.bin`。未设置 `WJSM_CACHE_DIR` 时两者都不落盘。
 
 > <details><summary>为什么「循环依赖」不报错？</summary>
 >
-> 严格说，循环依赖是 ESM 规范明确允许的——只要有绑定就位，使用方在调用时能拿到值。V8、Node、浏览器都按规范处理，wjsm 沿用相同行为。
+> 循环依赖是 ESM 规范明确允许的——只要有绑定就位，使用方在调用时能拿到值。V8、Node、浏览器都按规范处理，wjsm 沿用相同行为。
 >
-> 「报错」会破坏真实项目的兼容性。npm 生态里很多包有循环依赖（特别是互相 import 类型的包），如果 wjsm 拒绝编译，这些包就用不了。
+> 「报错」会破坏真实项目的兼容性。npm 生态里很多包有循环依赖，如果 wjsm 拒绝编译，这些包就用不了。
 >
 > 当前选择「不报错 + 暴露 TDZ 行为」是规范一致 + 用户可控：
 >
 > - 合法循环（互相只在函数内引用）正常工作。
-> - 不合法循环（在初始化时序里直接读未初始化绑定）会读到 0（NaN-box undefined），用户能立刻发现并改写。
+> - 不合法循环（在初始化时序里直接读未初始化绑定）会读到 NaN-box undefined，用户能立刻发现并改写。
 >
-> 不在编译期拒绝的理由是：编译期静态判定无法精确分辨「读绑定 vs 调用读绑定的函数」——后者是合法的，前者可能踩雷。
+> 编译期静态判定无法精确分辨「读绑定 vs 调用读绑定的函数」——后者是合法的，前者可能踩雷。
 >
 > </details>
 
 ## 深入了解
 
 - [循环依赖的用户可观察行为](../../user/projects/multi-file-builds.md)
-- [WASM 编译缓存的键与目录](../tooling/cache.md)
+- [Native image 与 builtin IR 缓存](../tooling/cache.md)
 - [模块图构建与解析器](graph-and-resolution.md)

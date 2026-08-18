@@ -7,7 +7,7 @@ use wjsm_native_abi::NativeVmContext;
 use super::{fail_dispatch, modules};
 use crate::NativeAgentState;
 
-pub(crate) use super::date_methods::{DateMethodKind, call_method, method};
+pub(crate) use super::date_methods::{DateMethodKind, call_method, method, method_metadata};
 pub(crate) fn install_prototype_methods(
     state: &mut NativeAgentState,
     prototype: i64,

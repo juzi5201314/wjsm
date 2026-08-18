@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+de-DE-u-ca-gregory-hc-h23
+de DE de-DE
+gregory h23
+de-Latn-DE-u-ca-gregory-hc-h23
+zh
+true
+ltr
+true
+0
+TypeError
+RangeError
+--- stderr ---

@@ -1,6 +1,22 @@
 use super::*;
 
 impl Lowerer {
+    /// 按求值顺序降低 `new` 参数，并推进到可能的异常继续块。
+    pub(crate) fn lower_construct_args(
+        &mut self,
+        args: Option<&[swc_ast::ExprOrSpread]>,
+        block: &mut BasicBlockId,
+    ) -> Result<Vec<ValueId>, LoweringError> {
+        let Some(args) = args else {
+            return Ok(Vec::new());
+        };
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.lower_expr_then_continue(&arg.expr, block)?);
+        }
+        Ok(values)
+    }
+
     /// ECMAScript [[Construct]] step 12：构造器返回值若为 Object 则作为 `new` 的结果，否则用 `this`。
     pub(crate) fn select_construct_result(
         &mut self,

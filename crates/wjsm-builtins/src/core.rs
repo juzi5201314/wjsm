@@ -241,14 +241,13 @@ pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
     // 快路径：任一操作数是原始字符串且两者都能廉价转 UTF-16 时，
     // 直接在 UTF-16 空间单次分配拼接——避免 concat_operand_bytes 的
     // UTF-8 往返 + 多次分配（`s += x` 累积拼接的 O(n²) 常量因子）。
-    if value::is_string(a) || value::is_string(b) {
-        if let Some(mut units_a) = concat_operand_units(ctx, a)
-            && let Some(units_b) = concat_operand_units(ctx, b)
-        {
-            units_a.reserve(units_b.len());
-            units_a.extend_from_slice(&units_b);
-            return ctx.store_runtime_string(RuntimeString::from_utf16_units(units_a));
-        }
+    if (value::is_string(a) || value::is_string(b))
+        && let Some(mut units_a) = concat_operand_units(ctx, a)
+        && let Some(units_b) = concat_operand_units(ctx, b)
+    {
+        units_a.reserve(units_b.len());
+        units_a.extend_from_slice(&units_b);
+        return ctx.store_runtime_string(RuntimeString::from_utf16_units(units_a));
     }
     if !value::is_string(a) && !value::is_string(b) {
         // 无原始字符串操作数：ToPrimitive 后仍可能产生字符串（String 对象、数组等）。

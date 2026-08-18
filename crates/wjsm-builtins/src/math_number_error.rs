@@ -324,7 +324,7 @@ pub fn math_hypot<E: ExecContext>(ctx: &mut E, args_base: i32, args_count: i32) 
     );
     for index in 0..args_count {
         let value = ctx.read_call_arg(
-            wjsm_host::CallArgs::new(args_base as u32, args_count as u32),
+            wjsm_host::CallArgs::new(args_base as u32, args_count),
             index,
         );
         let number = match math_decode_f64_arg(ctx, value) {

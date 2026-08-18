@@ -105,7 +105,7 @@ pub(super) fn dispatch_sab(
         Builtin::SharedArrayBufferSpecies => args
             .first()
             .copied()
-            .unwrap_or_else(|| value::encode_undefined()),
+            .unwrap_or_else(value::encode_undefined),
         _ => return None,
     })
 }
@@ -130,10 +130,10 @@ fn constructor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         })
         .and_then(|encoded| to_number(state, encoded))
         .and_then(|number| number.to_usize());
-    if let Some(max) = max_byte_length {
-        if length > max {
-            return fail_dispatch(ctx);
-        }
+    if let Some(max) = max_byte_length
+        && length > max
+    {
+        return fail_dispatch(ctx);
     }
     let Ok(object) = state.allocate_object(1, false) else {
         return fail_dispatch(ctx);

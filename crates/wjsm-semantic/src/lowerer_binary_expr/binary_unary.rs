@@ -34,6 +34,7 @@ impl Lowerer {
                         || self.expr_can_throw(bin.right.as_ref())
                 }
             },
+            swc_ast::Expr::Seq(seq) => seq.exprs.iter().any(|expr| self.expr_can_throw(expr)),
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
             swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),

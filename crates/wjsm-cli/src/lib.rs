@@ -32,6 +32,7 @@ mod cli_lint;
 mod cli_scripts;
 mod ir_output;
 mod native_exec;
+mod repl;
 
 use cli_args::*;
 use cli_config::parse_cli;
@@ -80,6 +81,55 @@ struct PipelineTimings {
     lower_us: u64,
     compile_us: u64,
     execute_us: u64,
+}
+
+/// `build` 子命令的输出与输入选项。
+struct BuildArgs<'a> {
+    input: &'a Option<PathBuf>,
+    eval: &'a Option<String>,
+    output: &'a Path,
+    format: BuildFormat,
+    stage: Option<Stage>,
+    root: Option<&'a Path>,
+    script: bool,
+    include: &'a [PathBuf],
+}
+
+/// 源码身份：路径、逻辑 URL 与模块根。
+struct SourceIdentity<'a> {
+    source: &'a str,
+    filename: Option<&'a str>,
+    logical_url: &'a str,
+    module_root: PathBuf,
+}
+
+impl<'a> SourceIdentity<'a> {
+    fn from_source(source: &'a str, filename: Option<&'a str>) -> Self {
+        Self {
+            source,
+            filename,
+            logical_url: filename.unwrap_or("input.js"),
+            module_root: source_module_root(filename),
+        }
+    }
+}
+
+/// 各 pipeline 阶段共享的编译开关。
+#[derive(Clone, Copy, Default)]
+struct PipelineFlags {
+    script: bool,
+    verify_ir: bool,
+    debug_codegen: bool,
+}
+
+impl PipelineFlags {
+    fn from_cli(cli: &Cli, script: bool) -> Self {
+        Self {
+            script,
+            verify_ir: cli.should_verify_ir(),
+            debug_codegen: cli.wants_debug_codegen(),
+        }
+    }
 }
 
 impl PipelineTimings {
@@ -155,14 +205,16 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref include,
         } => cmd_build(
             &cli,
-            input,
-            eval,
-            output,
-            format,
-            stage,
-            root.as_deref(),
-            script,
-            include,
+            BuildArgs {
+                input,
+                eval,
+                output,
+                format,
+                stage,
+                root: root.as_deref(),
+                script,
+                include,
+            },
         ),
 
         Commands::Run {
@@ -308,17 +360,18 @@ fn resolve_auto_colors() -> bool {
     io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
-fn cmd_build(
-    cli: &Cli,
-    input: &Option<PathBuf>,
-    eval: &Option<String>,
-    output: &Path,
-    format: BuildFormat,
-    stage: Option<Stage>,
-    root: Option<&Path>,
-    script: bool,
-    include: &[PathBuf],
-) -> Result<ExitCode> {
+fn cmd_build(cli: &Cli, args: BuildArgs<'_>) -> Result<ExitCode> {
+    let BuildArgs {
+        input,
+        eval,
+        output,
+        format,
+        stage,
+        root,
+        script,
+        include,
+    } = args;
+    let flags = PipelineFlags::from_cli(cli, script);
     let stage = stage.unwrap_or(Stage::Compile);
     if format != BuildFormat::NativeExecutable && !include.is_empty() {
         bail!("`--include` is only valid with `--format native-executable`");
@@ -349,16 +402,9 @@ fn cmd_build(
     match stage {
         Stage::Parse | Stage::Lower => {
             let result = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => run_pipeline(
-                    &code,
-                    None,
-                    stage,
-                    cli.effective_verbose(),
-                    cli.time,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
-                )?,
+                InputSource::Inline(code) => {
+                    run_pipeline(&code, None, stage, cli.effective_verbose(), cli.time, flags)?
+                }
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, filename) = read_input_for_parse(&path)?;
@@ -368,9 +414,7 @@ fn cmd_build(
                             stage,
                             cli.effective_verbose(),
                             cli.time,
-                            script,
-                            cli.should_verify_ir(),
-                            cli.wants_debug_codegen(),
+                            flags,
                         )?
                     } else {
                         run_file_input_pipeline(&path, root, stage, cli, script)?
@@ -431,34 +475,25 @@ fn cmd_build(
                 );
             }
             let result = match resolve_input(input, eval)? {
-                InputSource::Inline(code) => compile_source_to_pipeline_result(
-                    &code,
-                    None,
-                    script,
-                    cli.verbose_enabled(1),
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
-                )?,
+                InputSource::Inline(code) => {
+                    compile_source_to_pipeline_result(&code, None, flags, cli.verbose_enabled(1))?
+                }
                 InputSource::File(path) => {
                     if path_is_stdin(&path) {
                         let (source, _) = read_input_for_parse(&path)?;
                         compile_source_to_pipeline_result(
                             &source,
                             None,
-                            script,
+                            flags,
                             cli.verbose_enabled(1),
-                            cli.should_verify_ir(),
-                            cli.wants_debug_codegen(),
                         )?
                     } else {
                         compile_file_input_to_pipeline_result(
                             &path,
                             root,
                             None,
-                            script,
+                            flags,
                             cli.verbose_enabled(1),
-                            cli.should_verify_ir(),
-                            cli.wants_debug_codegen(),
                             &module_resolution_options(cli),
                         )?
                     }
@@ -505,13 +540,7 @@ fn compile_cli_artifact_with_root(
     match resolve_input(input, eval)? {
         InputSource::Inline(code) => {
             let module_root = resolved_module_root(source_module_root(None));
-            let bytes = compile_source(
-                &code,
-                None,
-                script,
-                cli.should_verify_ir(),
-                cli.wants_debug_codegen(),
-            )?;
+            let bytes = compile_source(&code, None, PipelineFlags::from_cli(cli, script))?;
             Ok((bytes, module_root))
         }
         InputSource::File(path) => {
@@ -528,21 +557,13 @@ fn compile_cli_artifact_with_root(
             } else if path_is_stdin(&path) {
                 let (source, _) = read_input_for_parse(&path)?;
                 let module_root = resolved_module_root(source_module_root(None));
-                let bytes = compile_source(
-                    &source,
-                    None,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
-                )?;
+                let bytes = compile_source(&source, None, PipelineFlags::from_cli(cli, script))?;
                 Ok((bytes, module_root))
             } else {
                 compile_from_file_input(
                     &path,
                     root,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
+                    PipelineFlags::from_cli(cli, script),
                     &module_resolution_options(cli),
                 )
             }
@@ -554,6 +575,8 @@ fn resolved_module_root(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
+type NativeExecutableOutput = (Vec<u8>, BTreeMap<String, Vec<u8>>);
+
 fn compile_native_executable_artifact(
     cli: &Cli,
     input: &Option<PathBuf>,
@@ -561,20 +584,24 @@ fn compile_native_executable_artifact(
     root: Option<&Path>,
     script: bool,
     include: &[PathBuf],
-) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>)> {
+) -> Result<NativeExecutableOutput> {
     let options = module_resolution_options(cli);
     let verify_ir = cli.should_verify_ir();
     let debug_codegen = cli.wants_debug_codegen();
     match resolve_input(input, eval)? {
         InputSource::Inline(code) => {
             let bytes = compile_source_with_identity(
-                &code,
-                Some("/wjsm-exec/eval.js"),
-                "eval.js",
-                PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
-                script,
-                verify_ir,
-                debug_codegen,
+                SourceIdentity {
+                    source: &code,
+                    filename: Some("/wjsm-exec/eval.js"),
+                    logical_url: "eval.js",
+                    module_root: PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
+                },
+                PipelineFlags {
+                    script,
+                    verify_ir,
+                    debug_codegen,
+                },
             )?;
             let files = snapshot_inline_source(
                 "eval.js",
@@ -604,13 +631,17 @@ fn compile_native_executable_artifact(
             } else if path_is_stdin(&path) {
                 let (source, _) = read_input_for_parse(&path)?;
                 let bytes = compile_source_with_identity(
-                    &source,
-                    Some("/wjsm-exec/eval.js"),
-                    "eval.js",
-                    PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
-                    script,
-                    verify_ir,
-                    debug_codegen,
+                    SourceIdentity {
+                        source: &source,
+                        filename: Some("/wjsm-exec/eval.js"),
+                        logical_url: "eval.js",
+                        module_root: PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
+                    },
+                    PipelineFlags {
+                        script,
+                        verify_ir,
+                        debug_codegen,
+                    },
                 )?;
                 let files = snapshot_inline_source(
                     "eval.js",
@@ -716,7 +747,7 @@ fn compile_native_executable_from_file(
     debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
     include: &[PathBuf],
-) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>)> {
+) -> Result<NativeExecutableOutput> {
     let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
@@ -753,13 +784,17 @@ fn compile_native_executable_from_file(
             let (filename, _, _) = store.module_identity(&source_path)?;
             let logical_url = store.logical_url(&source_path)?;
             let bytes = compile_source_with_identity(
-                &source,
-                Some(filename.as_str()),
-                &logical_url,
-                PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
-                script,
-                verify_ir,
-                debug_codegen,
+                SourceIdentity {
+                    source: &source,
+                    filename: Some(filename.as_str()),
+                    logical_url: &logical_url,
+                    module_root: PathBuf::from(wjsm_module::SNAPSHOT_VIRTUAL_ROOT),
+                },
+                PipelineFlags {
+                    script,
+                    verify_ir,
+                    debug_codegen,
+                },
             )?;
             apply_snapshot_includes(&store, include)?;
             wjsm_module::include_static_runtime_entries(&store)?;
@@ -927,20 +962,16 @@ fn cmd_run(
         compile_source_to_pipeline_result(
             &source,
             None,
-            script,
+            PipelineFlags::from_cli(cli, script),
             verbose_compile,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
         )?
     } else {
         compile_file_input_to_pipeline_result(
             input,
             root,
             None,
-            script,
+            PipelineFlags::from_cli(cli, script),
             verbose_compile,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
             &module_resolution_options(cli),
         )?
     };
@@ -958,10 +989,8 @@ fn cmd_run_eval(
     let result = compile_source_to_pipeline_result(
         code,
         None,
-        script,
+        PipelineFlags::from_cli(cli, script),
         cli.verbose_enabled(1),
-        cli.should_verify_ir(),
-        cli.wants_debug_codegen(),
     )?;
     run_compile_then_execute_with_args(cli, result, _script_args)
 }
@@ -1063,9 +1092,7 @@ fn cmd_lint(
             Stage::Parse,
             cli.effective_verbose(),
             cli.time,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
+            PipelineFlags::from_cli(cli, script),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1076,9 +1103,7 @@ fn cmd_lint(
                     Stage::Parse,
                     cli.effective_verbose(),
                     cli.time,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
+                    PipelineFlags::from_cli(cli, script),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
@@ -1101,41 +1126,13 @@ fn cmd_lint(
 }
 
 fn cmd_repl(cli: &Cli, eval: Option<&str>, script: bool) -> Result<ExitCode> {
-    if let Some(code) = eval {
-        return if script {
-            cmd_run_eval(cli, code, true, "[repl]", &[])
-        } else {
-            cmd_eval(cli, code)
-        };
-    }
-
-    let mut line = String::new();
-    loop {
-        if io::stdin().is_terminal() {
-            print!("wjsm> ");
-            io::stdout().flush()?;
-        }
-        line.clear();
-        if io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
-        let source = line.trim();
-        if source.is_empty() {
-            continue;
-        }
-        if matches!(source, ".exit" | ".quit") {
-            break;
-        }
-        let result = if script {
+    crate::repl::run(eval, |source| {
+        if script {
             cmd_run_eval(cli, source, true, "[repl]", &[])
         } else {
             cmd_eval(cli, source)
-        };
-        if let Err(error) = result {
-            eprintln!("Error: {error:#}");
         }
-    }
-    Ok(ExitCode::from(EXIT_SUCCESS))
+    })
 }
 
 fn cmd_run_watch(
@@ -1244,9 +1241,7 @@ fn cmd_check(
             Stage::Lower,
             cli.effective_verbose(),
             cli.time,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
+            PipelineFlags::from_cli(cli, script),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1257,9 +1252,7 @@ fn cmd_check(
                     Stage::Lower,
                     cli.effective_verbose(),
                     cli.time,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
+                    PipelineFlags::from_cli(cli, script),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
@@ -1303,9 +1296,7 @@ fn cmd_dump_ir(
             Stage::Lower,
             cli.effective_verbose(),
             cli.time,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
+            PipelineFlags::from_cli(cli, script),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1316,9 +1307,7 @@ fn cmd_dump_ir(
                     Stage::Lower,
                     cli.effective_verbose(),
                     cli.time,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
+                    PipelineFlags::from_cli(cli, script),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Lower, cli, script)?
@@ -1354,9 +1343,7 @@ fn cmd_dump_ast(
             Stage::Parse,
             cli.effective_verbose(),
             cli.time,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
+            PipelineFlags::from_cli(cli, script),
         )?,
         InputSource::File(path) => {
             if path_is_stdin(&path) {
@@ -1367,9 +1354,7 @@ fn cmd_dump_ast(
                     Stage::Parse,
                     cli.effective_verbose(),
                     cli.time,
-                    script,
-                    cli.should_verify_ir(),
-                    cli.wants_debug_codegen(),
+                    PipelineFlags::from_cli(cli, script),
                 )?
             } else {
                 run_file_input_pipeline(&path, root, Stage::Parse, cli, script)?
@@ -1504,44 +1489,41 @@ fn verify_ir_for_pipeline(program: &Program, verify_ir: bool) -> Result<()> {
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments, reason = "pipeline stages share CLI flags")]
 fn run_pipeline(
     source: &str,
     filename: Option<&str>,
     stop_at: Stage,
     verbose: u8,
     time: bool,
-    script: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
+    flags: PipelineFlags,
 ) -> Result<PipelineResult> {
     run_pipeline_with_identity(
-        source,
-        filename,
-        filename.unwrap_or("input.js"),
-        source_module_root(filename),
+        SourceIdentity::from_source(source, filename),
         stop_at,
         verbose,
         time,
-        script,
-        verify_ir,
-        debug_codegen,
+        flags,
     )
 }
 
-#[expect(clippy::too_many_arguments, reason = "pipeline stages share CLI flags")]
 fn run_pipeline_with_identity(
-    source: &str,
-    filename: Option<&str>,
-    logical_url: &str,
-    module_root: PathBuf,
+    identity: SourceIdentity<'_>,
     stop_at: Stage,
     verbose: u8,
     time: bool,
-    script: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
+    flags: PipelineFlags,
 ) -> Result<PipelineResult> {
+    let SourceIdentity {
+        source,
+        filename,
+        logical_url,
+        module_root,
+    } = identity;
+    let PipelineFlags {
+        script,
+        verify_ir,
+        debug_codegen,
+    } = flags;
     let mut result = PipelineResult {
         ast: None,
         program: None,
@@ -1693,16 +1675,16 @@ fn run_file_input_pipeline(
             source_path: _,
             module_root,
         } => run_pipeline_with_identity(
-            &source,
-            Some(filename.as_str()),
-            &logical_url,
-            module_root,
+            SourceIdentity {
+                source: &source,
+                filename: Some(filename.as_str()),
+                logical_url: &logical_url,
+                module_root,
+            },
             stop_at,
             cli.effective_verbose(),
             cli.time,
-            script,
-            cli.should_verify_ir(),
-            cli.wants_debug_codegen(),
+            PipelineFlags::from_cli(cli, script),
         ),
     }
 }
@@ -1943,37 +1925,32 @@ fn print_native_cache_stats(execution: &wjsm_host_native::NativeExecution) {
 fn compile_source_to_pipeline_result(
     source: &str,
     filename: Option<&str>,
-    script: bool,
+    flags: PipelineFlags,
     verbose: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
 ) -> Result<PipelineResult> {
     compile_source_to_pipeline_result_with_identity(
-        source,
-        filename,
-        filename.unwrap_or("input.js"),
-        source_module_root(filename),
-        script,
+        SourceIdentity::from_source(source, filename),
+        flags,
         verbose,
-        verify_ir,
-        debug_codegen,
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "source identity and pipeline flags are explicit"
-)]
 fn compile_source_to_pipeline_result_with_identity(
-    source: &str,
-    filename: Option<&str>,
-    logical_url: &str,
-    module_root: PathBuf,
-    script: bool,
+    identity: SourceIdentity<'_>,
+    flags: PipelineFlags,
     verbose: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
 ) -> Result<PipelineResult> {
+    let SourceIdentity {
+        source,
+        filename,
+        logical_url,
+        module_root,
+    } = identity;
+    let PipelineFlags {
+        script,
+        verify_ir,
+        debug_codegen,
+    } = flags;
     let mut result = PipelineResult {
         ast: None,
         program: None,
@@ -2033,10 +2010,8 @@ fn compile_file_input_to_pipeline_result(
     input: &Path,
     root: Option<&Path>,
     logical_root: Option<&Path>,
-    script: bool,
+    flags: PipelineFlags,
     verbose: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<PipelineResult> {
     let plan = build_compile_plan(input, root)?;
@@ -2053,8 +2028,12 @@ fn compile_file_input_to_pipeline_result(
                 module_root: root.clone(),
                 timings: PipelineTimings::default(),
             };
-            let input =
-                lower_bundle_artifact_input(&entry, &root, resolution_options, debug_codegen)?;
+            let input = lower_bundle_artifact_input(
+                &entry,
+                &root,
+                resolution_options,
+                flags.debug_codegen,
+            )?;
             result.artifact =
                 Some(PortableArtifact::from_input(&input).map_err(|error| {
                     anyhow::anyhow!("portable artifact encoding failed: {error}")
@@ -2085,14 +2064,14 @@ fn compile_file_input_to_pipeline_result(
                 (logical_url, module_root)
             };
             compile_source_to_pipeline_result_with_identity(
-                &source,
-                Some(filename.as_str()),
-                &logical_url,
-                module_root,
-                script,
+                SourceIdentity {
+                    source: &source,
+                    filename: Some(filename.as_str()),
+                    logical_url: &logical_url,
+                    module_root,
+                },
+                flags,
                 verbose,
-                verify_ir,
-                debug_codegen,
             )
         }
     }
@@ -2101,16 +2080,18 @@ fn compile_file_input_to_pipeline_result(
 fn compile_from_file_input(
     input: &Path,
     root: Option<&Path>,
-    script: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
+    flags: PipelineFlags,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<(Vec<u8>, PathBuf)> {
     let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
-            let input =
-                lower_bundle_artifact_input(&entry, &root, resolution_options, debug_codegen)?;
+            let input = lower_bundle_artifact_input(
+                &entry,
+                &root,
+                resolution_options,
+                flags.debug_codegen,
+            )?;
             let bytes = PortableArtifact::from_input(&input)
                 .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))?
                 .bytes()
@@ -2125,13 +2106,13 @@ fn compile_from_file_input(
             module_root,
         } => {
             let bytes = compile_source_with_identity(
-                &source,
-                Some(filename.as_str()),
-                &logical_url,
-                module_root.clone(),
-                script,
-                verify_ir,
-                debug_codegen,
+                SourceIdentity {
+                    source: &source,
+                    filename: Some(filename.as_str()),
+                    logical_url: &logical_url,
+                    module_root: module_root.clone(),
+                },
+                flags,
             )?;
             Ok((bytes, resolved_module_root(module_root)))
         }
@@ -2160,24 +2141,10 @@ fn lower_bundle_artifact_input(
 }
 
 fn compile_source_with_identity(
-    source: &str,
-    filename: Option<&str>,
-    logical_url: &str,
-    module_root: PathBuf,
-    script: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
+    identity: SourceIdentity<'_>,
+    flags: PipelineFlags,
 ) -> Result<Vec<u8>> {
-    let result = compile_source_to_pipeline_result_with_identity(
-        source,
-        filename,
-        logical_url,
-        module_root,
-        script,
-        false,
-        verify_ir,
-        debug_codegen,
-    )?;
+    let result = compile_source_to_pipeline_result_with_identity(identity, flags, false)?;
     Ok(result
         .artifact
         .context("compile stage produced no portable artifact")?
@@ -2185,22 +2152,8 @@ fn compile_source_with_identity(
         .to_vec())
 }
 
-fn compile_source(
-    source: &str,
-    filename: Option<&str>,
-    script: bool,
-    verify_ir: bool,
-    debug_codegen: bool,
-) -> Result<Vec<u8>> {
-    compile_source_with_identity(
-        source,
-        filename,
-        filename.unwrap_or("input.js"),
-        source_module_root(filename),
-        script,
-        verify_ir,
-        debug_codegen,
-    )
+fn compile_source(source: &str, filename: Option<&str>, flags: PipelineFlags) -> Result<Vec<u8>> {
+    compile_source_with_identity(SourceIdentity::from_source(source, filename), flags)
 }
 thread_local! {
     /// Thread-local runtime 实例，供所有 in-process 测试路径共享。
@@ -2234,24 +2187,23 @@ pub fn run_file_in_process_with_root(input: &Path, root: &Path) -> (i32, Vec<u8>
 
 /// 在测试进程内执行一段 source，使用与 CLI 相同的 portable artifact/native runtime 路径。
 pub fn run_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
-    let (artifact, module_root) = match compile_source_to_pipeline_result(
-        source, None, false, false, false, false,
-    )
-    .and_then(|result| {
-        let artifact = result
-            .artifact
-            .context("compile stage produced no portable artifact")?;
-        Ok((artifact, result.module_root))
-    }) {
-        Ok(compiled) => compiled,
-        Err(error) => {
-            return (
-                EXIT_COMPILE_ERROR as i32,
-                Vec::new(),
-                format!("Error: {error:#}\n").into_bytes(),
-            );
-        }
-    };
+    let (artifact, module_root) =
+        match compile_source_to_pipeline_result(source, None, PipelineFlags::default(), false)
+            .and_then(|result| {
+                let artifact = result
+                    .artifact
+                    .context("compile stage produced no portable artifact")?;
+                Ok((artifact, result.module_root))
+            }) {
+            Ok(compiled) => compiled,
+            Err(error) => {
+                return (
+                    EXIT_COMPILE_ERROR as i32,
+                    Vec::new(),
+                    format!("Error: {error:#}\n").into_bytes(),
+                );
+            }
+        };
     execute_artifact_in_process(&artifact, &module_root)
 }
 
@@ -2353,9 +2305,7 @@ fn run_file_in_process_with_options_and_root(
         input,
         None,
         root,
-        false,
-        false,
-        false,
+        PipelineFlags::default(),
         false,
         &wjsm_module::ResolutionOptions::default(),
     )
@@ -2630,8 +2580,15 @@ mod tests {
         let artifact = root.join("input.wjsm");
         fs::write(
             &artifact,
-            compile_source("console.log(1)", None, false, true, false)
-                .expect("source should compile"),
+            compile_source(
+                "console.log(1)",
+                None,
+                PipelineFlags {
+                    verify_ir: true,
+                    ..PipelineFlags::default()
+                },
+            )
+            .expect("source should compile"),
         )
         .expect("artifact should be writable");
         let input = artifact.to_str().expect("artifact path should be UTF-8");

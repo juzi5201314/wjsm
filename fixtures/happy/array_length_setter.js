@@ -18,3 +18,8 @@ for (const length of [-1, 1.5, NaN, Infinity]) {
     console.log(error.name);
   }
 }
+
+const sparse = [];
+sparse.length = 100;
+sparse[50] = 7;
+console.log(sparse.length, sparse[50], 50 in sparse, 49 in sparse, 99 in sparse, sparse[49]);

@@ -29,7 +29,7 @@ IEEE 754 双精度浮点数的 NaN 空间是 `0x7FF8_0000_0000_0000` 到 `0x7FFF
 
 ## 值类型推断
 
-后端在 `analysis_value_ty.rs` 中做值类型推断，用于省掉部分 NaN-box 解包。如果编译器能静态确定某个值是 number（例如 `Binary::Add` 的两个操作数都是 `Const(Number)`），生成的代码可以直接用 `f64` 运算，不需要在运行时检查标签。
+后端在 `wjsm-backend-native` 的 `f64_analysis` 与特化路径中做值类型推断，用于省掉部分 NaN-box 解包。如果编译器能静态确定某个值是 number（例如 `Binary::Add` 的两个操作数都是 `Const(Number)`），生成的代码可以直接用 `f64` 运算，不需要在运行时检查标签。
 
 推断是保守的：不确定时退回到运行时标签检查。
 
@@ -40,7 +40,6 @@ IEEE 754 双精度浮点数的 NaN 空间是 `0x7FF8_0000_0000_0000` 到 `0x7FFF
 | `BOX_BASE` | `wjsm-ir/src/value.rs` | NaN-box 基址 |
 | `TAG_*` | `wjsm-ir/src/value.rs` | 值标签 |
 | `NULL_HANDLE_REL` | `wjsm-ir` | `u32::MAX`，空句柄哨兵 |
-| `JS_FUNC_TYPE_INDEX` | `wjsm-ir` | `12`，函数调用约定类型索引 |
 
 ## 深入了解
 

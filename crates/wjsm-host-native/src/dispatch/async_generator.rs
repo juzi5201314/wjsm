@@ -58,7 +58,7 @@ pub(super) fn dispatch_async_generator(
 }
 
 pub(crate) fn method(state: &NativeAgentState, receiver: i64, key: &str) -> Option<Builtin> {
-    is_async_generator(state, receiver).then(|| match key {
+    is_async_generator(state, receiver).then_some(match key {
         "next" => Some(Builtin::AsyncGeneratorNext),
         "return" => Some(Builtin::AsyncGeneratorReturn),
         "throw" => Some(Builtin::AsyncGeneratorThrow),

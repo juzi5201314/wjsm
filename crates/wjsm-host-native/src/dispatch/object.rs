@@ -70,6 +70,7 @@ pub(super) fn dispatch_object(
         Builtin::ObjectProtoToString => object_proto_to_string(ctx, state, args),
         Builtin::ObjectProtoValueOf => object_proto_value_of(ctx, state, args),
         Builtin::ObjectHasOwn | Builtin::HasOwnProperty => has_own(ctx, state, args),
+        Builtin::PropertyIsEnumerable => property_is_enumerable(ctx, state, args),
         Builtin::CreateGlobalObject => create_global_object(ctx, state),
         _ => return None,
     })
@@ -179,16 +180,34 @@ fn object_proto_value_of(
 
 /// `Object.hasOwn` / `hasOwnProperty`：区分可调用对象的属性表与普通堆对象。
 fn has_own(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let [object, key] = args else {
+    let [object, encoded_key] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(key) = property_key(state, *key) else {
+    let Some(key) = property_key(state, *encoded_key) else {
         return fail_dispatch(ctx);
     };
     if value::is_callable(*object) {
+        let object = value::strip_gc_color(*object);
         return value::encode_bool(
-            state.callable_properties.contains_key(&(*object, key))
-                || state.callable_accessors.contains_key(&(*object, key)),
+            state.callable_properties.contains_key(&(object, key))
+                || state.callable_accessors.contains_key(&(object, key)),
+        );
+    }
+    if value::is_array(*object) {
+        let handle = value::decode_handle(*object);
+        if let Some(index) = super::runtime::array_index(state, *encoded_key) {
+            return match state.gc.heap().get_element(handle, index) {
+                Ok(Some(element)) => value::encode_bool(!value::is_array_hole(element as i64)),
+                Ok(None) => value::encode_bool(false),
+                Err(_) => fail_dispatch(ctx),
+            };
+        }
+        if state.text_matches(*encoded_key, "length") {
+            return value::encode_bool(true);
+        }
+        return value::encode_bool(
+            state.array_properties.contains_key(&(handle, key))
+                || state.array_accessors.contains_key(&(handle, key)),
         );
     }
     let Some(object) = object_handle(*object) else {
@@ -200,6 +219,60 @@ fn has_own(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         .get_property(object, key)
         .map(|property| value::encode_bool(property.is_some()))
         .unwrap_or_else(|_| fail_dispatch(ctx))
+}
+
+/// `Object.prototype.propertyIsEnumerable`：自有且 [[Enumerable]] 的属性才为 true。
+fn property_is_enumerable(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [object, encoded_key] = args else {
+        return fail_dispatch(ctx);
+    };
+    let Some(key) = property_key(state, *encoded_key) else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_callable(*object) {
+        let object = value::strip_gc_color(*object);
+        let own = state.callable_properties.contains_key(&(object, key))
+            || state.callable_accessors.contains_key(&(object, key));
+        return value::encode_bool(
+            own && state
+                .callable_property_flags
+                .get(&(object, key))
+                .is_some_and(|flags| flags & ENUMERABLE != 0),
+        );
+    }
+    if value::is_array(*object) {
+        let handle = value::decode_handle(*object);
+        if let Some(index) = super::runtime::array_index(state, *encoded_key) {
+            let enumerable = match state.gc.heap().get_element(handle, index) {
+                Ok(Some(element)) => !value::is_array_hole(element as i64),
+                Ok(None) => false,
+                Err(_) => return fail_dispatch(ctx),
+            };
+            return value::encode_bool(enumerable);
+        }
+        if state.text_matches(*encoded_key, "length") {
+            return value::encode_bool(false);
+        }
+        if let Some(flags) = state.array_property_flags.get(&(handle, key)) {
+            return value::encode_bool(flags & ENUMERABLE != 0);
+        }
+        return value::encode_bool(
+            state.array_properties.contains_key(&(handle, key))
+                || state.array_accessors.contains_key(&(handle, key)),
+        );
+    }
+    let Some(handle) = object_handle(*object) else {
+        return fail_dispatch(ctx);
+    };
+    match state.gc.heap().get_property_slot(handle, key) {
+        Ok(Some(property)) => value::encode_bool(property.flags & ENUMERABLE != 0),
+        Ok(None) => value::encode_bool(false),
+        Err(_) => fail_dispatch(ctx),
+    }
 }
 
 /// 创建（或复用缓存的）全局对象，惰性初始化内置原型。
@@ -250,11 +323,75 @@ enum EnumerationKind {
     Values,
 }
 
+/// 可调用对象的自有键：先物化 `length`/`name`，顺序与 CreateBuiltinFunction 一致。
+fn callable_own_keys(
+    state: &mut NativeAgentState,
+    encoded: i64,
+    enumerable_only: bool,
+) -> Option<Vec<(i64, i64)>> {
+    let callable = value::strip_gc_color(encoded);
+    let length_key = state
+        .intern_text("length".into(), value::TAG_STRING)
+        .map(value::decode_handle)?;
+    let name_key = state
+        .intern_text("name".into(), value::TAG_STRING)
+        .map(value::decode_handle)?;
+    let _ = state.callable_property(callable, length_key);
+    let _ = state.callable_property(callable, name_key);
+    let mut properties = Vec::new();
+    for key in [length_key, name_key] {
+        push_callable_own(state, callable, key, enumerable_only, &mut properties)?;
+    }
+    let extras: Vec<u32> = state
+        .callable_properties
+        .keys()
+        .chain(state.callable_accessors.keys())
+        .filter_map(|(owner, key)| {
+            (*owner == callable && *key != length_key && *key != name_key).then_some(*key)
+        })
+        .collect();
+    let mut extras = extras;
+    extras.sort_unstable();
+    extras.dedup();
+    for key in extras {
+        push_callable_own(state, callable, key, enumerable_only, &mut properties)?;
+    }
+    Some(properties)
+}
+
+fn push_callable_own(
+    state: &mut NativeAgentState,
+    callable: i64,
+    key: u32,
+    enumerable_only: bool,
+    properties: &mut Vec<(i64, i64)>,
+) -> Option<()> {
+    let flags = state
+        .callable_property_flags
+        .get(&(callable, key))
+        .copied()
+        .unwrap_or(0);
+    if enumerable_only && flags & ENUMERABLE == 0 {
+        return Some(());
+    }
+    let stored = if let Some((getter, _)) = state.callable_accessors.get(&(callable, key)).copied()
+    {
+        getter
+    } else {
+        state.callable_properties.get(&(callable, key)).copied()?
+    };
+    properties.push((super::runtime::encoded_property_key(key), stored));
+    Some(())
+}
+
 pub(crate) fn own_keys(
     state: &mut NativeAgentState,
     encoded: i64,
     enumerable_only: bool,
 ) -> Option<Vec<(i64, i64)>> {
+    if value::is_callable(encoded) {
+        return callable_own_keys(state, encoded, enumerable_only);
+    }
     if value::is_string(encoded) {
         let units = state.string(encoded)?.as_utf16_units().to_vec();
         let mut properties = Vec::with_capacity(units.len());
@@ -919,6 +1056,19 @@ pub(crate) fn get_own_property_descriptor(
                 getter: value::encode_undefined() as u64,
                 setter: value::encode_undefined() as u64,
             })
+        } else if let Some(index) = super::runtime::array_index(state, encoded_key) {
+            match state.gc.heap().get_element(handle, index) {
+                Ok(Some(element)) if !value::is_array_hole(element as i64) => {
+                    Some(wjsm_gc::HeapAccessV2Property {
+                        flags: WRITABLE | ENUMERABLE | CONFIGURABLE,
+                        value: element,
+                        getter: value::encode_undefined() as u64,
+                        setter: value::encode_undefined() as u64,
+                    })
+                }
+                Ok(_) => None,
+                Err(_) => return fail_dispatch(ctx),
+            }
         } else if state.array_prototype == Some(*object) {
             state
                 .primitive_property(*object, encoded_key)
@@ -1156,16 +1306,16 @@ pub(crate) fn descriptor_is_compatible(
         {
             return false;
         }
-        if current.is_data() && current.writable == Some(false) {
-            if descriptor.writable == Some(true)
+        if current.is_data()
+            && current.writable == Some(false)
+            && (descriptor.writable == Some(true)
                 || descriptor.value.is_some_and(|stored| {
                     current
                         .value
                         .is_none_or(|current| !same_value(state, stored, current))
-                })
-            {
-                return false;
-            }
+                }))
+        {
+            return false;
         }
         if current.is_accessor()
             && (descriptor.getter.is_some_and(|getter| {
@@ -1220,14 +1370,14 @@ fn define_ordinary_property(
         {
             return incompatible_descriptor(ctx, state);
         }
-        if current.flags & ACCESSOR == 0 && current.flags & WRITABLE == 0 {
-            if descriptor.writable == Some(true)
+        if current.flags & ACCESSOR == 0
+            && current.flags & WRITABLE == 0
+            && (descriptor.writable == Some(true)
                 || descriptor
                     .value
-                    .is_some_and(|stored| !same_value(state, stored, current.value as i64))
-            {
-                return incompatible_descriptor(ctx, state);
-            }
+                    .is_some_and(|stored| !same_value(state, stored, current.value as i64)))
+        {
+            return incompatible_descriptor(ctx, state);
         }
         if current.flags & ACCESSOR != 0
             && (descriptor
@@ -1337,9 +1487,9 @@ pub(crate) fn define_property(
         .is_some_and(|value| super::runtime::is_truthy(state, value));
     let writable = descriptor_field(state, descriptor, "writable")
         .is_some_and(|value| super::runtime::is_truthy(state, value));
-    let flags = u32::from(configurable) * CONFIGURABLE
-        | u32::from(enumerable) * ENUMERABLE
-        | u32::from(writable) * WRITABLE;
+    let flags = (u32::from(configurable) * CONFIGURABLE)
+        | (u32::from(enumerable) * ENUMERABLE)
+        | (u32::from(writable) * WRITABLE);
     let getter = descriptor_field(state, descriptor, "get");
     let setter = descriptor_field(state, descriptor, "set");
     if getter.is_some_and(|getter| !value::is_undefined(getter) && !value::is_callable(getter)) {
@@ -1523,6 +1673,9 @@ fn is_extensible(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     };
     if value::is_proxy(object) {
         return super::proxy::is_extensible(ctx, state, object);
+    }
+    if value::is_callable(object) {
+        return value::encode_bool(true);
     }
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);

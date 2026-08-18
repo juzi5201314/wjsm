@@ -18,7 +18,7 @@
 
 ## 启用方式
 
-`--inspect` / `--inspect-brk` CLI 选项启用 inspector。`InspectConfig` 记录配置（端口、是否首次暂停等）。`guest_debug = true` 时 engine 强制 Cranelift（Winch 不支持调试）。
+`wjsm run` 用 `--inspect` / `--inspect-brk` 启用 inspector。packed exe 没有 clap，改读 `WJSM_INSPECT` / `WJSM_INSPECT_BRK` 或 `NODE_OPTIONS`。启用后走 debug lowering（插入 `DebugCheck`），packed 路径会忽略预编译 object、从制品内源码快照重新编译。
 
 ## CDP 协议
 

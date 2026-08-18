@@ -192,8 +192,10 @@ pub fn slot_card_index(object_heap_start: usize, slot_addr: usize) -> Option<usi
 
 pub fn decode_buffer(input: &[u8]) -> impl Iterator<Item = BarrierEvent> + '_ {
     input
-        .chunks_exact(BARRIER_EVENT_SIZE)
-        .filter_map(BarrierEvent::decode)
+        .as_chunks::<BARRIER_EVENT_SIZE>()
+        .0
+        .iter()
+        .filter_map(|chunk| BarrierEvent::decode(chunk))
 }
 
 fn needs_rset_edge(owner_kind: RegionKind, new_kind: Option<RegionKind>) -> bool {

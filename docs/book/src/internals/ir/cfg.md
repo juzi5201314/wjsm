@@ -24,10 +24,12 @@ pub struct BasicBlock {
 | `Jump { target }` | 一个 |
 | `Branch { condition, true_block, false_block }` | 两个 |
 | `Switch { value, cases, default_block, exit_block }` | cases + default |
-| `Throw { value }` | 无（异常沿宿主栈传播） |
+| `Throw { value }` | 无（异常沿 `TAG_EXCEPTION` 返回值传播） |
 | `Unreachable` | 无 |
 
 `Switch` 额外带 `exit_block`。JS 的 switch 有 fallthrough 语义，case 体之间可以顺序流下去，`exit_block` 记录 `break` 的目标，让后端不必从 case 列表反推汇合点。`SwitchCaseTarget { constant, target }` 用 `ConstantId` 而非 `ValueId` 做标签，因为 case 值在 lowering 期已知是常量。
+
+Cranelift 消费的是这张非结构化 CFG：每个 IR 块对应一个 CLIF block，终结器变成 `jump` / `brif` / `br_table` / `return`。历史上 WASM 后端曾把同一张图压成结构化 `block`/`loop`/`if`；当前生产路径不再做这一步。
 
 ## Phi
 
@@ -39,9 +41,9 @@ pub struct BasicBlock {
 >
 > IR 是「几乎 SSA」：`ValueId` 唯一一次定义（函数内），但变量通过 `StoreVar`/`LoadVar` 走作用域槽（不是 SSA）。这种半 SSA 模式的优势是 lowering 简单——不用为每条控制流路径维护单独的变量版本。
 >
-> Phi 节点专门处理「需要根据前驱选值」的场景。常见的是「try 块的完成值」：try 体执行成功返回一个值，catch 也返回一个值，块外要根据是正常完成还是异常完成选不同的值。这种「选值」用 Phi 表达。
+> Phi 节点专门处理「需要根据前驱选值」的场景。常见的是「try 块的完成值」：try 体执行成功返回一个值，catch 也返回一个值，块外要根据是正常完成还是异常完成选不同的值。
 >
-> 物理上 Phi 由后端在 codegen 阶段展开为「前驱块尾写入、目标块头读取」——见[控制流代码生成](../backend/control-flow-codegen.md)。
+> 物理上 Phi 由后端展开为 CLIF block parameters——见[控制流代码生成](../backend/control-flow-codegen.md)。
 >
 > </details>
 
@@ -60,5 +62,5 @@ pub struct BasicBlock {
 ## 深入了解
 
 - [语义层如何构造这些块](../frontend/control-flow-and-exceptions.md)
-- [后端如何把 CFG 还原成 WASM 结构化控制流](../backend/control-flow-codegen.md)
+- [后端如何把 CFG 编成 CLIF](../backend/control-flow-codegen.md)
 - [`verify()` 的完整不变量清单](validation-and-invariants.md)

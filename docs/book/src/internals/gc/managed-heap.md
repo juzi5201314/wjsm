@@ -4,13 +4,13 @@
 
 ## 统一路径
 
-ADR 0010 确立了统一 ManagedHeap：mark-sweep、G1、ZGC 三种回收器都跑在 shared memory64 对象堆上，使用 8 字节句柄。旧设计的 memory32 对象堆、4 字节句柄和 dual-heap fallback 已完全移除。
+ADR 0010 确立了统一 ManagedHeap：mark-sweep、G1、ZGC 三种回收器共用同一对象堆和 8 字节句柄。旧设计的 memory32 对象堆、4 字节句柄、dual-heap fallback 和 Wasmtime 线性内存都已删除。生产后备是 `NativeHeapMemory`。
 
 ## 堆的组成
 
 ManagedHeap 由几个部分组成：
 
-- **对象堆**：shared memory64 线性内存，对象数据按布局分配。
+- **对象堆**：`NativeHeapMemory` 上的已提交对象区，按布局分配。
 - **Handle Table**（`HandleTableV2`）：句柄到堆指针的映射表，`obj_table[handle] → heap_ptr`。
 - **页面元数据**：每页的 mark bitmap、remset 等元数据。
 - **分配器**：bump pointer 分配 + 空闲列表。
@@ -25,7 +25,7 @@ JavaScript 值持有的是句柄（`Handle = u32`），不是裸指针。句柄�
 
 ## 深入了解
 
-- [Memory64 与共享内存模型](memory64.md)
+- [NativeHeapMemory 与逻辑堆地址](memory64.md)
 - [Handle Table 的结构与重映射](handle-table.md)
 - [对象布局与分配](object-layout-and-allocation.md)
 - [ADR 0010 的决策记录](../reference/adr-index.md)

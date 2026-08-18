@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+function function
+true
+xn--r8jz45g.xn--zckzah https://xn--r8jz45g.xn--zckzah/x
+::1 [::1]:8080 http://[::1]:8080/x
+--- stderr ---

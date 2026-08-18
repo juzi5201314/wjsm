@@ -4,7 +4,7 @@
 
 ## 入口
 
-`lower_modules` / `lower_modules_with_debug`（`crates/wjsm-semantic/src/lowerer_modules.rs`，约 1195 行）接收 `ModuleLoweringInput` 列表，每项带 `ModuleMetadata` 与 `ModuleKind`（ESM 或 CommonJS）。所有模块共用一个 `Lowerer`，因此共用一棵作用域树和一个常量池。
+`lower_modules` / `lower_modules_with_debug`（`crates/wjsm-semantic/src/lowerer_modules.rs`）接收 `ModuleLoweringInput` 列表，每项带 `ModuleMetadata` 与 `ModuleKind`（ESM 或 CommonJS）。所有模块共用一个 `Lowerer`，因此共用一棵作用域树和一个常量池。
 
 ## 阶段顺序
 
@@ -36,13 +36,11 @@ CJS 模块的 `module`、`exports`、`__dirname`、`__filename` 等不是运行�
 
 > <details><summary>为什么 CommonJS 绑定是降级期注入而不是运行时？</summary>
 >
-> 运行时注入意味着：每个 CJS 模块的实例都要在执行时创建这批变量，并保证在模块体执行时可见。这是解释型引擎的做法——V8 在执行 CJS 模块前会创建 `module`、`exports`、`require` 等局部变量。
+> 解释型引擎可以在执行 CJS 模块前当场创建 `module`、`exports`、`require` 等局部变量。AOT 路径里 IR 只有「指令读写作用域槽 / ManagedHeap」，没有「运行时突然冒出一组变量」。
 >
-> AOT 编译没办法这么做：IR 里没有「运行时变量」概念，只有「指令操作 WASM 内存」。要在 IR 层面让 `module.exports = ...` 翻译成「写内存某处」，必须先在 lowering 期建立 `module` 这个绑定。
+> 因此 `emit_cjs_host_bindings` 在模块顶层注入这批 binding，模块体 lowering 写这些槽。CJS 写起来像动态变量，实际是降级期固定好的名字。
 >
-> 所以 wjsm 的做法是：低层期的 `emit_cjs_host_bindings` 在模块顶层注入这批 binding（指向栈上预留位置），模块体的 lowering 写这些位置。CJS 写起来像动态变量，实际是降级期固定好的内存槽位。
->
-> 副作用：在 `.mjs`（ESM）里写 `module.exports` 会报 `undeclared identifier`——因为 ESM 路径不注入这批 binding。这是正确的，不应该兼容。
+> 在 `.mjs`（ESM）里写 `module.exports` 会报 `undeclared identifier`——ESM 路径不注入这批 binding。这是正确行为。
 >
 > </details>
 

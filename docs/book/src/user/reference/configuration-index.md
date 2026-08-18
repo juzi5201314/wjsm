@@ -16,7 +16,7 @@
 | `--browser` | 启用 browser 解析条件 | 关闭 |
 | `--condition <NAME>` | 自定义解析条件 | 无 |
 | `--gc <mark-sweep\|g1\|zgc>` | GC 算法 | `zgc` |
-| `--max-heap-size <SIZE>` | 堆内存上限 | 无限制 |
+| `--max-heap-size <SIZE>` | 堆内存上限 | `64M` |
 | `--inspect[=HOST:PORT]` | CDP 调试器 | 关闭 |
 | `--inspect-brk[=HOST:PORT]` | CDP 调试器，入口暂停 | 关闭 |
 | `--root <DIR>` | 模块解析根目录 | 入口所在目录 |
@@ -35,17 +35,15 @@
 | --- | --- | --- |
 | `WJSM_GC` | GC 算法 | `zgc` |
 | `WJSM_TEST_GC` | 测试专用 GC 覆盖 | 未设置 |
-| `WJSM_GC_LOG` | GC 回收日志（仅认 `1`） | 关闭 |
 | `WJSM_CACHE_DIR` | native / builtin 缓存目录 | 未设置（关闭） |
+| `WJSM_CACHE_MAX_BYTES` | 磁盘缓存 LRU 上限 | `268435456` |
 | `WJSM_NO_BUILTIN_CACHE` | 禁用 builtin IR 段缓存 | 未设置 |
-| `WJSM_STARTUP_SNAPSHOT` | 启动快照（`0`/`false`/`off` 禁用） | 开启 |
-| `WJSM_STARTUP_SNAPSHOT_DEBUG` | 快照调试诊断 | 关闭 |
-| `WJSM_OPT_LEVEL` | Cranelift 优化等级 | `default` |
-| `WJSM_DISABLE_LICM` | 关闭循环不变量提升 | 启用 |
+| `WJSM_OPT_LEVEL` | Cranelift 优化等级 | `speed` |
+| `WJSM_VERIFY_CLIF` | CLIF verifier | 开启 |
 | `WJSM_DISABLE_SPECIALIZATION` | 关闭热函数特化 | 启用 |
+| `WJSM_EXEC_STUB` | `wjsm-exec` stub 路径 | 同目录 |
 | `WJSM_INSPECT` / `WJSM_INSPECT_BRK` | packed exe 启用 CDP | 关闭 |
 | `WJSM_CHILD_PROCESS_ALLOW` | child_process 命令白名单 | 禁用 |
-| `WJSM_WORKER_THREADS_MAX` | worker_threads 上限 | `32` |
 | `WJSM_UPDATE_FIXTURES` | 更新 fixture 期望输出 | 未设置 |
 | `WJSM_UPDATE_SNAPSHOTS` | 更新 IR 快照 | 未设置 |
 
@@ -57,9 +55,10 @@
 
 | 字段 | 用途 |
 | --- | --- |
-| `browser` | 启用 browser 解析条件 |
-| `condition` | 自定义解析条件列表 |
-| `root` | 模块解析根目录 |
+| `quiet` / `verbose` / `time` / `stats` / `verify-ir` | 诊断与校验 |
+| `color` / `no-color` | 颜色输出 |
+| `browser` / `condition` | 包解析条件 |
+| `root` / `script` | 模块解析根与脚本模式 |
 
 配置文件不能包含 `--gc`、`--max-heap-size`、`--inspect` 等运行时选项——这些只能通过命令行或环境变量设置。完整说明见[`wjsm.toml` 与 `wjsm.json`](../configuration/project-files.md)。
 

@@ -1,0 +1,29 @@
+exit_code: 0
+--- stdout ---
+function true
+de
+1.234,5
+true
+true
+100
+RangeError
+RangeError
+RangeError
+UTC numeric
+true
+true
+true
+17 12 02 12
+one other
+a, b, and c
+yesterday
+Mandarin Chinese
+Simplified Mandarin Chinese
+US dollar
+a 0
+b 1
+2
+hello true
+TypeError
+TypeError
+--- stderr ---

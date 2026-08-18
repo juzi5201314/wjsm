@@ -6,6 +6,8 @@
 
 `GcAlgorithmKind` 枚举三种算法：`MarkSweep`、`G1`、`Zgc`。算法名是稳定字符串：`mark-sweep`、`g1`、`zgc`。`FromStr` 实现要求精确匹配，不接受大小写或分隔符变体。
 
+生产默认是 `zgc`：并发分代 ZGC（`GenerationalZgc`）。`wjsm-host-native::NativeGc` 是唯一接合层——它拥有 `HeapAccessV2<NativeHeapMemory>`、mutator 与 collector 生命周期。`mark-sweep` / `g1` 走 `StopTheWorldCollector`；`zgc` 走 `GenerationalZgc`。
+
 ## 选择优先级
 
 GC 算法的选择优先级（从高到低）：
@@ -15,7 +17,7 @@ GC 算法的选择优先级（从高到低）：
 3. `WJSM_GC` 环境变量
 4. 默认值：`zgc`
 
-`WJSM_TEST_GC` 优先级高于 `WJSM_GC`，让测试能强制指定 GC 而不受用户配置干扰。
+`WJSM_TEST_GC` 优先级高于 `WJSM_GC`，让测试能强制指定 GC 而不受用户配置干扰。算法在 `NativeRuntime` 初始化后不可切换。
 
 ## 不变量
 
@@ -45,10 +47,10 @@ GC 算法的选择优先级（从高到低）：
 
 ## 后端无关
 
-GC 算法实现在 `wjsm-gc` crate，不依赖 wasmtime。host-wasm 通过 `GcContext` / `RootProvider` 接合层把 wasmtime 的内存访问能力暴露给 GC。这是 ADR 0011–0013 的边界约束。
+GC 算法实现在 `wjsm-gc` crate，不依赖 Cranelift。`wjsm-host-native` 的 `NativeGc` 把 `NativeHeapMemory`、`NativeRootFrame` 扫描和屏障状态接到 `NativeVmContext`。`wjsm-builtins`、`wjsm-host`、`wjsm-module` 不拥有堆。这是 ADR 0011–0014 的边界：Cranelift / 平台依赖只留在 `wjsm-backend-native` 与 `wjsm-host-native`。
 
 ## 深入了解
 
 - [用户侧的 GC 配置选项](../../user/configuration/gc.md)
 - [Workspace crate 地图与依赖边界](../foundations/crate-map.md)
-- [ADR 0010–0013 的决策记录](../reference/adr-index.md)
+- [ADR 0010–0014 的决策记录](../reference/adr-index.md)

@@ -101,6 +101,11 @@ impl Lowerer {
         let mut last = self.alloc_value();
         for expr in &seq.exprs {
             last = self.lower_expr_then_continue(expr, &mut block)?;
+            // 逗号左侧的 Call/New 必须在求值后检查 TAG_EXCEPTION，否则
+            // `f(), "msg"` 会把宿主抛出的异常当成普通值丢掉。
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+                block = self.lower_value_exception_branch(block, last)?;
+            }
         }
         self.expr_merge_block = Some(block);
         Ok(last)
@@ -120,10 +125,16 @@ impl Lowerer {
             }
             swc_ast::Lit::Bool(b) => Constant::Bool(b.value),
             swc_ast::Lit::BigInt(b) => Constant::BigInt(b.value.to_str_radix(10)),
-            swc_ast::Lit::Regex(regex) => Constant::RegExp {
-                pattern: regex.exp.to_string(),
-                flags: regex.flags.to_string(),
-            },
+            swc_ast::Lit::Regex(regex) => {
+                let pattern = regex.exp.to_string();
+                let flags = regex.flags.to_string();
+                // 字面量 early error：非法 property escape / flag 在 lower 期失败（exit 1）。
+                if let Err(message) = crate::regexp_early::validate_regexp_literal(&pattern, &flags)
+                {
+                    return Err(self.error(lit.span(), format!("SyntaxError: {message}")));
+                }
+                Constant::RegExp { pattern, flags }
+            }
             swc_ast::Lit::Null(_) => Constant::Null,
             _ => {
                 return Err(self.error(

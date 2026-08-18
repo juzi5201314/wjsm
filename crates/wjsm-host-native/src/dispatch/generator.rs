@@ -34,7 +34,7 @@ pub(super) fn dispatch_generator(
 }
 
 pub(crate) fn method(state: &NativeAgentState, receiver: i64, key: &str) -> Option<Builtin> {
-    is_generator(state, receiver).then(|| match key {
+    is_generator(state, receiver).then_some(match key {
         "next" => Some(Builtin::GeneratorNext),
         "return" => Some(Builtin::GeneratorReturn),
         "throw" => Some(Builtin::GeneratorThrow),

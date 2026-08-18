@@ -245,6 +245,7 @@ impl Lowerer {
         for blk in blocks {
             ir_function.push_block(blk);
         }
+        ir_function.set_needs_prototype(true);
         let ctor_function_id = self.module.push_function(ir_function);
         if let Some(function) = self.module.function_mut(ctor_function_id) {
             function.home_object = Some(HomeObject::Prototype(ctor_function_id));
@@ -751,11 +752,12 @@ impl Lowerer {
                 let key_dest = self.emit_string_const(block, &name);
                 Ok((name, key_dest))
             }
-            swc_ast::PropName::Computed(_) => {
+            swc_ast::PropName::Computed(_)
+            | swc_ast::PropName::Num(_)
+            | swc_ast::PropName::BigInt(_) => {
                 let key_dest = self.lower_prop_name(key, block)?;
                 Ok(("<computed>".to_string(), key_dest))
             }
-            other => Err(self.error(other.span(), "unsupported property key kind")),
         }
     }
 }

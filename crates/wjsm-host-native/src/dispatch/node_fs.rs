@@ -508,9 +508,10 @@ fn chown(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         };
         // SAFETY: CString guarantees a NUL-terminated path and chown retains no pointer.
         if unsafe { libc::chown(path_bytes.as_ptr(), uid, gid) } == 0 {
-            return value::encode_undefined();
+            value::encode_undefined()
+        } else {
+            io_exception(ctx, state, std::io::Error::last_os_error(), "chown", &path)
         }
-        return io_exception(ctx, state, std::io::Error::last_os_error(), "chown", &path);
     }
     #[cfg(not(unix))]
     {

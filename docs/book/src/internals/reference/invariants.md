@@ -17,7 +17,7 @@ ADR 0010 确立：
 
 - 统一 ManagedHeap，三种回收器共用。
 - 8 字节句柄（V2），不用 4 字节句柄（V1）。
-- shared memory64 对象堆，不用 memory32。
+- 逻辑 memory64 对象堆（生产 `NativeHeapMemory`），不用 memory32。
 - 不引入 dual-heap fallback 或第二个运行时 owner。
 
 ## 后端边界
@@ -25,9 +25,13 @@ ADR 0010 确立：
 ADR 0014：
 
 - Cranelift 依赖只在 `wjsm-backend-native` 和 `wjsm-host-native`。
-- `wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 后端无关。
+- `wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module`、`wjsm-intl-data` 后端无关。
 - 包装层（host call）只做类型转换，不做语义决策。
 - GC 算法通过 `GcContext` / `RootProvider` 接合层访问内存。
+
+## 国际化数据
+
+ADR 0020：CLDR/Unicode 数据由 `wjsm-intl-data` 以 ICU4X compiled_data 嵌入 rustc 链接的 `wjsm` / `wjsm-exec` stub。不读宿主 ICU，不进 portable `.wjsm` 或 startup snapshot。
 
 ## Cranelift ISA owner
 

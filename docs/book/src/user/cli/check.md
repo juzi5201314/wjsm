@@ -1,6 +1,6 @@
 # `check`
 
-只做解析和语义检查，不生成 WASM、不执行程序。
+只做解析和语义检查，不编码 portable artifact、不编译 native image、不执行程序。
 
 ```text
 wjsm check [OPTIONS] [INPUT]

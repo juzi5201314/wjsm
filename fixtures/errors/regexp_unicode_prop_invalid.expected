@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: SyntaxError: Invalid regular expression: Invalid property name
+ --> errors/regexp_unicode_prop_invalid.js:2:1
+2 | /\p{NotARealProperty}/u;
+  | ^^^^^^^^^^^^^^^^^^^^^^^
+

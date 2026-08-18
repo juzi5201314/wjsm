@@ -10,7 +10,7 @@
 
 **后端可替换。** ADR 0013 定义了 `JsBackend` + `ExecContext` 契约：JS 语义算法在 `wjsm-builtins`（泛型 `<E: ExecContext>` 单态化），对象模型 `HeapAccessV2<M>` 在 `wjsm-gc`（泛型 `M: GrowableHeapMemory`）。新后端只需实现三个 trait，不需要碰语义代码。
 
-**GC 可插拔且统一。** `mark-sweep`、`g1`、`zgc` 共用一个 ManagedHeap，跑在 shared memory64 上（ADR 0010）。默认 `zgc`。
+**GC 可插拔且统一。** `mark-sweep`、`g1`、`zgc` 共用一个 ManagedHeap，生产后备是 `NativeHeapMemory`。默认 `zgc`。
 
 **启动成本压到构建期。** Native cache 按 artifact hash + ABI + codegen source hash + target 计算键，运行时按需编译或命中缓存，不依赖用户机器上的预编译工件。
 
@@ -21,7 +21,7 @@
 > 新加一个后端（比如 native code、V8 嵌入、JIT 编译器），只需要实现 `HeapMemory` / `GrowableHeapMemory`、`ExecContext`、`JsBackend` 三组 trait。语义代码、GC 算法、对象布局、IR 数据结构全部复用。
 > 反过来想：没有这个边界，每个新后端都要重写一遍 2.8 万行代码，或者把后端专有类型泄漏到每个文件里。前者成本爆炸，后者让代码绑定特定执行引擎。
 >
-> 现实中 Cranelift native 是唯一生产后端——`JitBackend` 是个 stub，证明契约可行。但这个 stub 的存在本身有价值：编译器会强制检查 `JsBackend` trait 的所有方法都被 stub 满足，未来真后端的接入路径是清晰的。
+> 现实中 Cranelift native 是唯一生产后端。`JsBackend` 契约仍在，用来卡住语义层与宿主的边界；没有 JIT / Wasm stub 可以回退。
 >
 > </details>
 
@@ -33,7 +33,7 @@
 
 **`.wjsm` 不是独立可执行文件。** 默认 `build` 输出的 portable 制品依赖 wjsm 宿主 runtime。`--format native-executable` 在当前宿主上打包预链 stub 与预编译 object，得到可直接运行的 ELF/PE；它不是跨平台制品，也不调用系统 linker。
 
-**不引入完整 ICU。** locale 敏感方法不实现，`Intl` 只在全局名单占位。Unicode 归一化通过 `icu_normalizer` 单点提供。
+**不引入 ICU4C / 宿主 ICU。** 国际化数据由 ICU4X compiled_data 嵌入 `wjsm` / `wjsm-exec` stub，覆盖为 full locale，不读 system ICU、`NODE_ICU_DATA` 或联网下载。JS `Intl` 与 locale 敏感方法消费同一 crate；数据契约见 [国际化数据契约](intl-data.md)。
 
 **不为兼容而保留旧路径。** 切换实现时直接迁移全部调用方，不留 shim、别名或双写。ManagedHeap 取代 memory32 对象堆后，旧堆路径已完全移除。
 

@@ -53,9 +53,29 @@ threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }
 
 # native-executable 集成测试每次都打包 stub+payload，再冷启动 packed exe；
-# worker 用例还会在子线程二次编译。3s 报慢，连续三个周期才终止。
+# worker 用例还会在子线程二次编译。当前 Intl 数据体积下冷启动约 10s，3s 报慢、15s 才终止。
 [[profile.default.overrides]]
 filter = 'binary(/native_executable/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 5 }
+
+# r1_accessor_slots：20000 次分配后再读 accessor；单独约 1s，全量并行时
+# 堆与 debug `wjsm` 启动抖动会越过 3s。独占 CPU，3s 报慢、9s 才终止。
+[[profile.default.overrides]]
+filter = 'test(/happy__r1_accessor_slots/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
+# large_array_churn：GC 协作回收压力。单独约 2.4s，调度抖动会越过 3s。
+[[profile.default.overrides]]
+filter = 'test(/large_array_churn_collects_before_cooperative_poll/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
+# GC 压力与 live-set 耗尽用例会执行多轮完整回收；全量并发时 CPU 争用可越过 3s。
+# 每例独占 CPU，保留 3s 慢测信号并以 9s 捕获真实卡死。
+[[profile.default.overrides]]
+filter = 'test(/(allocation_pressure_collects_with_each_runtime_algorithm|live_set_exhaustion_is_observable_range_error_)/)'
 threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }
 
@@ -64,5 +84,11 @@ slow-timeout = { period = '3s', terminate-after = 3 }
 # 三周期门禁：3s 报慢、9s 才终止，仍能捕获卡死或资源未释放。
 [[profile.default.overrides]]
 filter = 'test(/host_table_reclaim::/)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }
+
+# REPL PTY：冷启动 debug `wjsm` + 首次 eval 编译。3s 报慢，连续三个周期才终止。
+[[profile.default.overrides]]
+filter = 'binary(repl_line_edit)'
 threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }

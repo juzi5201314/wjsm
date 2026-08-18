@@ -37,6 +37,7 @@ pub(crate) enum Test262Method {
     Sleep,
     MonotonicNow,
     Leaving,
+    CreateRealm,
 }
 
 /// agent 线程内的 `$262.agent` 状态。
@@ -90,7 +91,7 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
                 )
                 .ok()?;
         }
-        let bridge = state.allocate_object(1, false).ok()?;
+        let bridge = state.allocate_object(3, false).ok()?;
         let agent_key = state.intern_text("agent".into(), value::TAG_STRING)?;
         state
             .gc
@@ -101,6 +102,26 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
                 agent as u64,
             )
             .ok()?;
+        let create_realm =
+            state.native_callable(NativeCallableKind::Test262Agent(Test262Method::CreateRealm))?;
+        let create_key = state.intern_text("createRealm".into(), value::TAG_STRING)?;
+        state
+            .gc
+            .heap()
+            .set_property(
+                value::decode_handle(bridge),
+                value::decode_handle(create_key),
+                create_realm as u64,
+            )
+            .ok()?;
+        if let Some(gc) = state.native_callable(NativeCallableKind::Gc) {
+            let gc_key = state.intern_text("gc".into(), value::TAG_STRING)?;
+            let _ = state.gc.heap().set_property(
+                value::decode_handle(bridge),
+                value::decode_handle(gc_key),
+                gc as u64,
+            );
+        }
         if let Some(test262) = state.test262_agent.as_mut() {
             test262.bridge = Some(bridge);
         } else {
@@ -126,7 +147,34 @@ pub(crate) fn call(
         Test262Method::Sleep => sleep(ctx, state, args),
         Test262Method::MonotonicNow => monotonic_now(state),
         Test262Method::Leaving => value::encode_undefined(),
+        Test262Method::CreateRealm => create_realm(ctx, state),
     }
+}
+
+/// `$262.createRealm()`：返回 `{ global }`。当前与主 realm 共享同一全局（同 agent）。
+fn create_realm(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+    let Some(global) = state.global_object else {
+        return fail_dispatch(ctx);
+    };
+    let Ok(record) = state.allocate_object(1, false) else {
+        return fail_dispatch(ctx);
+    };
+    let Some(key) = state.intern_text("global".into(), value::TAG_STRING) else {
+        return fail_dispatch(ctx);
+    };
+    if state
+        .gc
+        .heap()
+        .set_property(
+            value::decode_handle(record),
+            value::decode_handle(key),
+            global as u64,
+        )
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    record
 }
 
 /// `$262.agent.start(script)`：编译 script 并在独立线程执行。
@@ -297,15 +345,8 @@ fn compile_agent_artifact(
         },
         source: Some(Arc::<str>::from(script)),
     };
-    let program = wjsm_semantic::lower_modules(
-        vec![input],
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
-    .map_err(|error| error.to_string())?;
+    let program = wjsm_semantic::lower_modules(vec![input], wjsm_semantic::ModuleLinking::empty())
+        .map_err(|error| error.to_string())?;
     wjsm_artifact_format::PortableArtifact::from_input(
         &wjsm_artifact_format::ArtifactBuildInput::new(
             program,

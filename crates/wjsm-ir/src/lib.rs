@@ -86,8 +86,8 @@ impl Module {
     ///     `wjsm_function_{i}` 从 0 编号；
     ///   - `id.0 < split`：改写成 `FunctionId(user_count + id.0)`，让跨 image 引用
     ///     落在 `function_index >= user_function_count`，runtime 再映射回 builtin image。
-    ///   用户段常量表仍是合并 Program 的全量常量拷贝，这样 `MaterializeString` 等
-    ///   下标不用重映射。
+    ///     用户段常量表仍是合并 Program 的全量常量拷贝，这样 `MaterializeString` 等
+    ///     下标不用重映射。
     pub fn split_builtin_segment(&self) -> Option<(Program, Program)> {
         let entry_id = self.builtin_entry_function_id()?;
         let entry_index = usize::try_from(entry_id.0).ok()?;

@@ -279,9 +279,9 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
     let body = alloc_block();
     let call_blk = alloc_block();
     let ok_blk = alloc_block();
-    let push_blk = (cand.kind == Kind::Filter).then(|| alloc_block());
-    let found_blk = cand.kind.exits_on_truthy().then(|| alloc_block());
-    let fail_blk = (cand.kind == Kind::Every).then(|| alloc_block());
+    let push_blk = (cand.kind == Kind::Filter).then(&mut alloc_block);
+    let found_blk = cand.kind.exits_on_truthy().then(&mut alloc_block);
+    let fail_blk = (cand.kind == Kind::Every).then(&mut alloc_block);
     let next_blk = matches!(
         cand.kind,
         Kind::Filter
@@ -292,7 +292,7 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
             | Kind::Some
             | Kind::Every
     )
-    .then(|| alloc_block());
+    .then(&mut alloc_block);
     let skip_blk = alloc_block();
     let exc_blk = alloc_block();
     let next = alloc_block();

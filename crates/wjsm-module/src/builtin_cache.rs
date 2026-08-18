@@ -226,16 +226,9 @@ pub(crate) fn build_builtin_segment(
             source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
         });
     }
-    let (mut program, metadata) = wjsm_semantic::lower_modules_with_debug_meta(
-        modules,
-        &link.import_map,
-        &link.dynamic_import_targets,
-        &link.export_names,
-        &link.dynamic_import_specifiers,
-        &link.re_export_map,
-        emit_debug_checks,
-    )
-    .with_context(|| format!("lower builtin 闭包段 {frontier:?}"))?;
+    let (mut program, metadata) =
+        wjsm_semantic::lower_modules_with_debug_meta(modules, link.as_linking(), emit_debug_checks)
+            .with_context(|| format!("lower builtin 闭包段 {frontier:?}"))?;
 
     // 4) 入口函数：多模块共同降级进 $module_main（wjsm_ir::MODULE_ENTRY_IR_NAME），
     //    改名为 $builtin_main 避免与用户段入口同名冲突。

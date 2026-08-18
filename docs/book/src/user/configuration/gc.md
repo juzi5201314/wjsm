@@ -44,11 +44,7 @@ Error: unknown GC algorithm `bogus`; expected one of: mark-sweep, g1, zgc
 
 ## 观察 GC 行为
 
-设置 `WJSM_GC_LOG=1` 输出回收日志。该变量只认字面值 `1`，`true` 或 `on` 都不会启用。
-
-```bash
-WJSM_GC_LOG=1 wjsm --gc g1 run app.js
-```
+当前没有面向用户的 `WJSM_GC_LOG`。比较回收器时用 `--time`、`--stats` 和 `wjsm-gc-bench`；调试 GC 语义时用 `--gc mark-sweep`。
 
 ## 与堆预算的关系
 

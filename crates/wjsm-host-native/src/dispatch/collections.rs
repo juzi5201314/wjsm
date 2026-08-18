@@ -213,13 +213,13 @@ pub(crate) fn next(
             }
         }
         CollectionIteratorSource::TypedArray(handle) => {
-            let Some(array) = state.typed_arrays.get(&handle) else {
+            let Some(length) = state.typed_arrays.get(&handle).map(|array| array.length) else {
                 return fail_dispatch(ctx);
             };
-            if iterator.index >= array.length {
+            if iterator.index >= length {
                 (value::encode_undefined(), true)
             } else {
-                let stored = super::typedarray::get_element(
+                let stored = super::typedarray::get_element_intern(
                     state,
                     value::encode_object_handle(handle),
                     iterator.index,
@@ -243,13 +243,12 @@ pub(crate) fn next(
             }
         }
     };
-    if !done {
-        if let Some(iterator) = state
+    if !done
+        && let Some(iterator) = state
             .collection_iterators
             .get_mut(usize::try_from(iterator_id).unwrap_or(usize::MAX))
-        {
-            iterator.index = iterator.index.saturating_add(1);
-        }
+    {
+        iterator.index = iterator.index.saturating_add(1);
     }
     let Ok(result) = state.allocate_object(2, false) else {
         return fail_dispatch(ctx);
@@ -461,7 +460,7 @@ fn map_get(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) ->
                 .iter()
                 .find(|(candidate, _)| same_value_zero(state, *candidate, *key))
         })
-        .map_or_else(|| value::encode_undefined(), |(_, stored)| *stored)
+        .map_or_else(value::encode_undefined, |(_, stored)| *stored)
 }
 
 fn set_add(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {

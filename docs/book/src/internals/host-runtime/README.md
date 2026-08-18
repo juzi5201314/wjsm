@@ -17,7 +17,7 @@ builtins crate 只依赖 ExecContext 种类，不绑定后端。所有内建算�
 
 ## engine 配置
 
-engine 统一管理 GC flavor、shadow memory、artifact 路径，启动时一次性注入。所有 config 设计见 startup/README。
+`NativeRuntimeConfig` 在启动时固定 GC 算法、堆上限和可选 `cache_dir`。没有独立的 shadow memory 配置项。
 
 ## 深入了解
 

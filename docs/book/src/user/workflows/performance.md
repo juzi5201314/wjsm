@@ -32,7 +32,7 @@ wjsm --max-heap-size 256M run app.ts
 
 ## 观察编译与执行开销
 
-`--time` 打印各阶段耗时，`--stats` 打印 IR 与 artifact 规模：
+`--time` 打印各阶段耗时，`--stats` 打印 IR 规模：
 
 ```bash
 wjsm run --time -e 'console.log(1)'
@@ -46,7 +46,7 @@ Timing: parse=6ms, lower=10ms, compile=6ms, execute=67ms
 
 `-v` 让计时用微秒单位，同时打印阶段进入信息。`execute` 只在实际执行的命令里出现；`build --stage compile --time` 只会看到前三段。
 
-`--stats` 输出常量数、函数数、基本块数、指令数和 artifact 字节数，用于判断 IR 规模是否膨胀。若设置了 `WJSM_CACHE_DIR`，还会额外打印 native cache 的 entries / hits / misses。
+`--stats` 输出常量数、函数数、基本块数和指令数。对已编码的 `.wjsm` 还会打印 artifact 字节数。若设置了 `WJSM_CACHE_DIR`，执行后还会打印 native cache 的 entries / bytes / hits / misses / invalidated。
 
 ## 打开磁盘缓存
 
@@ -58,17 +58,9 @@ wjsm run app.ts
 wjsm cache stats
 ```
 
-测试套件默认也不设这个变量。空值不会回落到 `$HOME/.cache/wjsm`。
+测试套件默认也不设这个变量。空值不会回落到 `$HOME/.cache/wjsm`。打开后默认 256 MiB LRU，可用 `WJSM_CACHE_MAX_BYTES` 调整。
 
-## Benchmark 时的 LICM 禁用
-
-wjsm 会把循环内的纯调用提升到循环外（Loop Invariant Code Motion）。这对生产性能有益，但 benchmark 里会让循环内只剩空转开销，测不到真实调用成本：
-
-```bash
-WJSM_DISABLE_LICM=1 wjsm run bench.js
-```
-
-设为 `1` 禁用 LICM。`0` / `false` / `off` / 空 / 未设置都保持启用。wjsm 自带的 bench runner 会自动给子进程设这个变量。
+对比特化前后用 `WJSM_DISABLE_SPECIALIZATION=1`。对比 Cranelift 优化档位用 `WJSM_OPT_LEVEL=none`。
 
 ## 临时文件
 
@@ -80,11 +72,11 @@ wjsm validate /tmp/app.wjsm
 wjsm run /tmp/app.wjsm
 ```
 
-bench 报告默认写到 `/tmp/wjsm-bench-<unix秒>.json`，冷缓存固定在 `/tmp/wjsm-bench-cold-cache`。不要并发跑 `--cold`，两个进程会互相清空缓存目录。
+bench 报告默认写到 `/tmp/wjsm-bench-<unix秒>.json`，`--cold` 把磁盘缓存固定在 `/tmp/wjsm-bench-cold-cache` 并每轮清空。启动快照仍恢复。不要并发跑 `--cold`。
 
 ## 深入了解
 
 - [垃圾回收器](../configuration/gc.md)
-- [堆、影子栈与内存预留](../configuration/memory.md)
+- [堆、root 帧与内存预留](../configuration/memory.md)
 - [性能分析与回归证据](../../internals/testing/performance.md)
 - [跨运行时基准](../../internals/testing/cross-runtime-benchmarks.md)

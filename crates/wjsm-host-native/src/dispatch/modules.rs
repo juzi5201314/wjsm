@@ -1053,6 +1053,55 @@ pub(crate) fn named_property(state: &mut NativeAgentState, object: i64, name: &s
         .map(|slot| slot.value as i64)
 }
 
+/// 惰性加载 `node:url`（副作用安装全局），缓存并返回 `URL` / `URLSearchParams`。
+pub(crate) fn ensure_url_global(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    name: &str,
+) -> Option<i64> {
+    if let (Some(url), Some(params)) = (state.url_constructor, state.url_search_params_constructor)
+    {
+        return match name {
+            "URL" => Some(url),
+            "URLSearchParams" => Some(params),
+            _ => None,
+        };
+    }
+    let global = state.global_object?;
+    // 已由 `node_url.js` 副作用安装时，直接读自有属性，保持与 `import` 同引用。
+    if let (Some(url), Some(params)) = (
+        named_property(state, global, "URL").filter(|value| value::is_callable(*value)),
+        named_property(state, global, "URLSearchParams").filter(|value| value::is_callable(*value)),
+    ) {
+        state.url_constructor = Some(url);
+        state.url_search_params_constructor = Some(params);
+        return match name {
+            "URL" => Some(url),
+            "URLSearchParams" => Some(params),
+            _ => None,
+        };
+    }
+    let resolved = resolve_runtime_specifier_with_store(
+        "node:url",
+        Path::new("."),
+        &state.runtime_modules.store,
+        &state.runtime_modules.options,
+        RuntimeResolveKind::Import,
+    )
+    .ok()?;
+    let _namespace = load_resolved_module(ctx, state, &resolved, true).ok()?;
+    let url = named_property(state, global, "URL").filter(|value| value::is_callable(*value))?;
+    let params = named_property(state, global, "URLSearchParams")
+        .filter(|value| value::is_callable(*value))?;
+    state.url_constructor = Some(url);
+    state.url_search_params_constructor = Some(params);
+    match name {
+        "URL" => Some(url),
+        "URLSearchParams" => Some(params),
+        _ => None,
+    }
+}
+
 pub(crate) fn set_named_property(
     state: &mut NativeAgentState,
     object: i64,
@@ -1083,11 +1132,13 @@ fn register_manifest(
     Ok(())
 }
 
+type ManifestKeyEntry = ((u64, ModuleId), RuntimeModuleKey);
+
 fn manifest_entries(
     root: &Path,
     image_id: u64,
     manifest: &ModuleManifest,
-) -> Result<Vec<((u64, ModuleId), RuntimeModuleKey)>, String> {
+) -> Result<Vec<ManifestKeyEntry>, String> {
     manifest
         .modules
         .iter()
@@ -1399,6 +1450,12 @@ pub(crate) fn exception_text(state: &mut NativeAgentState, exception: i64) -> St
         .and_then(|name| state.string(name))
         .and_then(|name| name.to_utf8())
     else {
+        if let Some(message) = named_property(state, value, "message")
+            .and_then(|message| state.string(message))
+            .and_then(|message| message.to_utf8())
+        {
+            return message;
+        }
         return super::runtime::render_value(state, value);
     };
     if let Some(stack) = named_property(state, value, "stack")

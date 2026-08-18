@@ -290,6 +290,8 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         // quasis (静态文本段) + exprs (动态表达式) 交错: quasi[0] expr[0] quasi[1] expr[1] ... quasi[n]
+        // 插值读取捕获绑定会走共享 env 分支，StringConcatVa 必须落在延续块上。
+        let mut current = block;
         let mut parts = Vec::with_capacity(tpl.quasis.len() + tpl.exprs.len());
         for (i, quasi) in tpl.quasis.iter().enumerate() {
             let cooked_str = quasi.cooked.as_ref().ok_or_else(|| {
@@ -302,7 +304,7 @@ impl Lowerer {
             let const_id = self.module.add_constant(Constant::String(cooked_s));
             let val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                current,
                 Instruction::Const {
                     dest: val,
                     constant: const_id,
@@ -310,13 +312,16 @@ impl Lowerer {
             );
             parts.push(val);
             if i < tpl.exprs.len() {
-                let expr_val = self.lower_expr(&tpl.exprs[i], block)?;
+                let expr_val = self.lower_expr_then_continue(&tpl.exprs[i], &mut current)?;
                 parts.push(expr_val);
             }
         }
         let dest = self.alloc_value();
         self.current_function
-            .append_instruction(block, Instruction::StringConcatVa { dest, parts });
+            .append_instruction(current, Instruction::StringConcatVa { dest, parts });
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
         Ok(dest)
     }
 
