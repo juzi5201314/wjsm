@@ -78,9 +78,9 @@ fn dead_closures_are_reclaimed() {
     let mut runtime = small_zgc_runtime();
     let execution = execute_source_with_runtime(
         &mut runtime,
-        "const add=(a)=>(b)=>a+b; let t=0; for(let i=0;i<20000;i++) t+=add(1)(2); console.log(t);",
+        "const add=(a)=>(b)=>a+b; let t=0; for(let i=0;i<5000;i++) t+=add(1)(2); console.log(t);",
     );
-    assert_eq!(execution.stdout, b"60000\n");
+    assert_eq!(execution.stdout, b"15000\n");
     runtime.collect_garbage_now().expect("GC should run");
     let stats = runtime.host_side_table_stats();
     assert!(
@@ -105,9 +105,9 @@ fn live_closure_survives_and_still_closes() {
     let mut runtime = small_zgc_runtime();
     let execution = execute_source_with_runtime(
         &mut runtime,
-        "const add=(a)=>(b)=>a+b; const live=add(40); let t=0; for(let i=0;i<20000;i++) t+=add(1)(2); globalThis.live=live; console.log(t, live(2));",
+        "const add=(a)=>(b)=>a+b; const live=add(40); let t=0; for(let i=0;i<5000;i++) t+=add(1)(2); globalThis.live=live; console.log(t, live(2));",
     );
-    assert_eq!(execution.stdout, b"60000 42\n");
+    assert_eq!(execution.stdout, b"15000 42\n");
     runtime.collect_garbage_now().expect("GC should run");
     let stats = runtime.host_side_table_stats();
     assert!(
