@@ -84,7 +84,7 @@ pub fn locale_text_direction(tag: &str) -> &'static str {
 }
 
 pub fn locale_week_info(tag: &str) -> WeekInfo {
-    let locale = parse_locale(tag).unwrap_or_else(|_| icu::locale::locale!("und"));
+    let locale = parse_locale(tag).unwrap_or(icu::locale::locale!("und"));
     let info = WeekInformation::try_new((&locale).into()).ok();
     let first_day = info
         .map(|info| weekday_number(info.first_weekday))

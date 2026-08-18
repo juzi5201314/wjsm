@@ -150,7 +150,7 @@ impl OwnedDateTimeFormatter {
             }
             parts.push(FormatPart {
                 type_name: "timeZoneName".into(),
-                value: name.into(),
+                value: name,
                 source: None,
                 unit: None,
             });

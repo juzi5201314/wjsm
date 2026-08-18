@@ -147,7 +147,7 @@ fn offset_minutes(time_zone: &str) -> Option<i32> {
 
 fn offset_label(seconds: i32, long: bool) -> String {
     if seconds == 0 {
-        return if long { "GMT".into() } else { "GMT".into() };
+        return "GMT".into();
     }
     let sign = if seconds >= 0 { '+' } else { '-' };
     let abs = seconds.unsigned_abs();

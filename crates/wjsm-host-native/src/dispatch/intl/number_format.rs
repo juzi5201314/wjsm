@@ -368,10 +368,11 @@ fn radix_digits(text: &str) -> Option<(u32, &str)> {
             (16, rest)
         } else if let Some(rest) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
             (2, rest)
-        } else if let Some(rest) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
-            (8, rest)
         } else {
-            return None;
+            let rest = text
+                .strip_prefix("0o")
+                .or_else(|| text.strip_prefix("0O"))?;
+            (8, rest)
         };
     (!rest.is_empty()).then_some((radix, rest))
 }
