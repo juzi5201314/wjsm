@@ -2608,6 +2608,90 @@ mod tests {
     }
 
     #[test]
+    fn native_executable_worker_file_collection_contracts() {
+        let root = TestProject::new("native_executable_worker_files");
+        let main = root.join("main.js");
+        let worker_source = "console.log('worker');\n";
+        write_file(
+            &root,
+            "main.js",
+            "const { Worker } = require('worker_threads');\nnew Worker('./worker.js');\n",
+        );
+        write_file(&root, "worker.js", worker_source);
+
+        let cli = parse_cli_for_test(&["wjsm", "build", "-e", "0"]);
+        let eval = None;
+        let (artifact, source_files) =
+            compile_native_executable_artifact(&cli, &Some(main), &eval, Some(&root), false, &[])
+                .expect("source input should compile for native executable");
+        assert!(
+            source_files
+                .values()
+                .any(|content| content.as_slice() == worker_source.as_bytes()),
+            "static worker source should be collected from source input"
+        );
+
+        let portable = root.join("app.wjsm");
+        fs::write(&portable, artifact).expect("portable artifact should be writable");
+        let (_, portable_files) = compile_native_executable_artifact(
+            &cli,
+            &Some(portable),
+            &eval,
+            Some(&root),
+            false,
+            &[],
+        )
+        .expect("portable input should compile for native executable");
+        assert!(
+            portable_files
+                .values()
+                .any(|content| content.as_slice() == worker_source.as_bytes()),
+            "static worker source should survive the portable artifact roundtrip"
+        );
+
+        let dynamic_main = root.join("dynamic-main.js");
+        let dynamic_worker = root.join("dynamic-worker.js");
+        let dynamic_worker_source = "console.log('dynamic worker');\n";
+        write_file(
+            &root,
+            "dynamic-main.js",
+            "const { Worker } = require('worker_threads');\nconst path = require('path');\nnew Worker(path.join(__dirname, 'dynamic-worker.js'));\n",
+        );
+        write_file(&root, "dynamic-worker.js", dynamic_worker_source);
+        let (_, dynamic_files) = compile_native_executable_artifact(
+            &cli,
+            &Some(dynamic_main.clone()),
+            &eval,
+            Some(&root),
+            false,
+            &[],
+        )
+        .expect("dynamic worker input should compile");
+        assert!(
+            dynamic_files
+                .values()
+                .all(|content| content.as_slice() != dynamic_worker_source.as_bytes()),
+            "dynamic worker source must require an explicit include"
+        );
+
+        let (_, included_files) = compile_native_executable_artifact(
+            &cli,
+            &Some(dynamic_main),
+            &eval,
+            Some(&root),
+            false,
+            &[dynamic_worker],
+        )
+        .expect("explicit worker include should compile");
+        assert!(
+            included_files
+                .values()
+                .any(|content| content.as_slice() == dynamic_worker_source.as_bytes()),
+            "explicit worker source should be collected"
+        );
+    }
+
+    #[test]
     fn native_executable_failure_preserves_existing_target() {
         let root = TestProject::new("native_executable_rejection");
         let output = root.join("output");
