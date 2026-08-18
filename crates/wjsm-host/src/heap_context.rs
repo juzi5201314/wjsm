@@ -1,18 +1,17 @@
 //! 后端无关的堆/侧表上下文。
 //!
-//! 这是多后端解耦的核心接缝：`HostRuntime` 的各能力域（console/object/gc/async）
-//! 不直接操作后端状态，而是经 [`HeapContext`] 的最小操作集完成。native 后端用其
-//! 原生堆/侧表实现本 trait。
+//! builtins 的语义算法不直接操作后端状态，而是经 [`HeapContext`] 的最小操作集完成；
+//! native 后端用其原生堆/侧表实现本 trait。
 //!
 //! # 设计约束
 //!
 //! - **后端无关**：签名只出现 `CallArgs`、`Value`/`Handle`/字节/`usize`，禁止后端特化类型。
-//! - **最小集**：只覆盖 HostRuntime 能力域真正需要的操作，不做全量 builtins 抽象。
-//! - **对象安全**：方法不泛型，可经 `&mut dyn HeapContext` 使用（HostRuntime 据此委托）。
+//! - **最小集**：只覆盖 builtins 真正需要的操作，不做全量抽象。
+//! - **对象安全**：方法不泛型，可经 `&mut dyn HeapContext` 使用（`ExecContext` 继承本 trait）。
 //! - **全 `&mut self`**：堆读取可能触发惰性加载或 GC，统一 `&mut self` 让后端无需
 //!   unsafe/内部可变性即可实现。
 
-use crate::{CallArgs, GcOutcome, Handle, Value};
+use crate::{CallArgs, Handle, Value};
 
 /// async_hooks 生命周期事件类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +21,21 @@ pub enum AsyncHookEvent {
     After,
     Destroy,
     PromiseResolve,
+}
+
+/// 一轮 GC 的后端无关结果投影。
+///
+/// GC 算法内部的完整可观测性结构（碎片、暂停、迁移等指标）与具体堆布局耦合；
+/// 本类型是**有意简化**的后端无关投影，只保留跨后端可比的指标，后端实现时把
+/// 内部统计投影为该结果。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GcOutcome {
+    /// 累计完成的 GC 轮数（含本轮）。
+    pub cycle_count: u64,
+    /// 本轮回收的字节数。
+    pub bytes_collected: usize,
+    /// 本轮耗时（微秒）。
+    pub duration_us: u64,
 }
 
 /// 后端无关的堆/侧表操作上下文。

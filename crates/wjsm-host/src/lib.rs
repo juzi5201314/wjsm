@@ -5,10 +5,6 @@
 //! # 分层
 //!
 //! ```text
-//! HostRuntime (组合 marker)
-//!   ConsoleHost / ObjectHost / GcHost / AsyncHost   ← 纯语义 API，带 ctx
-//!        │ 方法接收 &mut dyn HeapContext
-//!        ▼
 //! HeapContext                                       ← 堆/侧表最小操作集（解耦接缝）
 //!        │
 //! ExecContext: HeapContext                          ← builtins 完整能力（泛型单态化）
@@ -21,29 +17,19 @@
 //!
 //! - **后端无关**：trait 中不出现执行引擎特化类型。
 //! - **NaN-boxing 单一来源**：值编码常量与编解码函数来自 `wjsm-ir`，本 crate 复用。
-//! - **按需拆分**：`HostRuntime` 由多个 sub-trait 组合，便于后端按能力子集实现。
 //! - **零 vtable builtins**：`wjsm-builtins` 以 `<E: ExecContext>` 泛型实例化，编译期单态化。
 
-mod async_host;
-pub mod backend;
 mod call_args;
-mod console_host;
 mod exec_context;
 mod fetch_types;
-mod gc_host;
 mod heap_context;
 mod json_value;
 mod module_types;
-mod object_host;
 pub mod property_key;
 mod runtime_string;
-mod runtime_trait;
 mod stream_types;
 
-pub use async_host::AsyncHost;
-pub use backend::JsBackend;
 pub use call_args::CallArgs;
-pub use console_host::ConsoleHost;
 pub use exec_context::{
     AtomicsRmwOp, BoundEntry, CapturedScope, ClosureEntry, ExecContext, IteratorNextStep,
     NativeCallableRef, PreparedCallback, PromiseCombinatorReactionKind, PromiseEntry,
@@ -57,8 +43,7 @@ pub use fetch_types::{
     RequestCredentials, RequestMethodKind, RequestMode, ResponseMethodKind, ResponseType,
     SharedFetchResourceTiming,
 };
-pub use gc_host::{GcHost, GcOutcome};
-pub use heap_context::{AsyncHookEvent, HeapContext};
+pub use heap_context::{AsyncHookEvent, GcOutcome, HeapContext};
 pub use json_value::JsonValue;
 pub use module_types::{
     CjsRequireCacheTrapKind, RuntimeInstantiatedModule, RuntimeInstantiationEnv,
@@ -66,14 +51,12 @@ pub use module_types::{
     RuntimeModuleLoadErrorCode, RuntimeModuleReferrer, RuntimeModuleRequireResult,
     RuntimeModuleResolutionKind, RuntimeRequireCacheEntry, RuntimeResolvedModule,
 };
-pub use object_host::ObjectHost;
 pub use property_key::{
     DecodedNameId, decode_name_id, encode_runtime_string_name_id, encode_string_name_id,
     encode_symbol_name_id, is_symbol_name_id, name_id_to_property_key_value,
     symbol_value_to_name_id,
 };
 pub use runtime_string::RuntimeString;
-pub use runtime_trait::HostRuntime;
 pub use stream_types::{
     ByobRequestEntry, ControllerKind, ReadableStreamByobRequestMethodKind,
     ReadableStreamDefaultControllerMethodKind, ReadableStreamDefaultReaderMethodKind,
