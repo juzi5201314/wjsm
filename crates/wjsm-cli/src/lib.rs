@@ -32,6 +32,7 @@ mod cli_lint;
 mod cli_scripts;
 mod ir_output;
 mod native_exec;
+mod repl;
 
 use cli_args::*;
 use cli_config::parse_cli;
@@ -1101,41 +1102,13 @@ fn cmd_lint(
 }
 
 fn cmd_repl(cli: &Cli, eval: Option<&str>, script: bool) -> Result<ExitCode> {
-    if let Some(code) = eval {
-        return if script {
-            cmd_run_eval(cli, code, true, "[repl]", &[])
-        } else {
-            cmd_eval(cli, code)
-        };
-    }
-
-    let mut line = String::new();
-    loop {
-        if io::stdin().is_terminal() {
-            print!("wjsm> ");
-            io::stdout().flush()?;
-        }
-        line.clear();
-        if io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
-        let source = line.trim();
-        if source.is_empty() {
-            continue;
-        }
-        if matches!(source, ".exit" | ".quit") {
-            break;
-        }
-        let result = if script {
+    crate::repl::run(eval, |source| {
+        if script {
             cmd_run_eval(cli, source, true, "[repl]", &[])
         } else {
             cmd_eval(cli, source)
-        };
-        if let Err(error) = result {
-            eprintln!("Error: {error:#}");
         }
-    }
-    Ok(ExitCode::from(EXIT_SUCCESS))
+    })
 }
 
 fn cmd_run_watch(

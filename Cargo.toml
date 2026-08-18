@@ -101,6 +101,7 @@ default = []
 
 [dev-dependencies]
 anyhow = { workspace = true }
+libc = { workspace = true }
 proptest = { workspace = true }
 tokio = { workspace = true }
 wjsm-exec-format = { path = "crates/wjsm-exec-format" }

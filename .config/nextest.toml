@@ -79,3 +79,9 @@ slow-timeout = { period = '3s', terminate-after = 3 }
 filter = 'test(/host_table_reclaim::/)'
 threads-required = 'num-cpus'
 slow-timeout = { period = '3s', terminate-after = 3 }
+
+# REPL PTY：冷启动 debug `wjsm` + 首次 eval 编译。3s 报慢，连续三个周期才终止。
+[[profile.default.overrides]]
+filter = 'binary(repl_line_edit)'
+threads-required = 'num-cpus'
+slow-timeout = { period = '3s', terminate-after = 3 }

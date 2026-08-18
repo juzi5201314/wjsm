@@ -20,6 +20,8 @@ wjsm-gc = { path = "../wjsm-gc" }
 wjsm-runtime = { path = "../wjsm-runtime" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-module = { path = "../wjsm-module" }
+wjsm-intl-data = { path = "../wjsm-intl-data" }
+libc = { workspace = true }
 colored = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }

@@ -4425,6 +4425,7 @@ name = "wjsm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "proptest",
  "tokio",
  "wjsm-cli",
@@ -4504,6 +4505,7 @@ dependencies = [
  "clap_complete",
  "colored",
  "flate2",
+ "libc",
  "notify",
  "regex",
  "reqwest",
@@ -4518,6 +4520,7 @@ dependencies = [
  "wjsm-exec-format",
  "wjsm-gc",
  "wjsm-host-native",
+ "wjsm-intl-data",
  "wjsm-ir",
  "wjsm-module",
  "wjsm-parser",
