@@ -1282,7 +1282,7 @@ mod tests {
     #[test]
     fn worker_file_uses_cached_builtin_segment() {
         let fixture_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/modules/async_local_worker");
+            .join("../../fixtures/modules/node_builtin_worker_threads_basic");
         let worker = fixture_root.join("worker.js");
         let artifact = compile_worker_artifact(
             worker.to_str().expect("fixture 路径必须是 UTF-8"),

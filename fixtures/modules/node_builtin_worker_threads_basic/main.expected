@@ -1,5 +1,5 @@
 exit_code: 0
 --- stdout ---
-wjsm
+wjsm true true parent-context
 exit 1
 --- stderr ---

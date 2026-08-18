@@ -5,7 +5,7 @@ use std::path::Path;
 fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    let suites = ["happy", "errors", "modules"];
+    let suites = ["happy", "errors", "modules", "slow"];
     let output_path = manifest_dir
         .join("tests")
         .join("gen")

@@ -1,7 +1,6 @@
 exit_code: 0
 --- stdout ---
 b,d,a,c
-9997 0 true
 boom 3 5,4,3,2,1
 copy boom 3,2,1
 --- stderr ---

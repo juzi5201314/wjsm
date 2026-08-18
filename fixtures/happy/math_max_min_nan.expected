@@ -1,10 +1,14 @@
 exit_code: 0
 --- stdout ---
-NaN
-NaN
-NaN
 3
 1
+0
+-5
 -Infinity
 Infinity
+NaN
+NaN
+NaN
+true
+true
 --- stderr ---

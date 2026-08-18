@@ -1,13 +1,21 @@
 nextest-version = "0.9.122"
 
-# 默认测试必须在 3s 内完成；超过即视为死锁、未关闭资源或性能回归。
+# 默认 profile 只运行无独占资源、无压力负载的快速正确性测试。
+# `full` profile 恢复全部测试，`slow` profile 只运行进程、网络、PTY、GC、Loom
+# 与复杂度压力测试；三者都保留 3s 单例硬超时。
 #
-# codegen 相关的环境开关（均不在此设默认值，测试跑的就是生产配置）：
-# - `WJSM_VERIFY_CLIF=0` 关闭 CLIF verifier（约省 20% codegen，但失去 lowering 门禁）。
-# - `WJSM_OPT_LEVEL=none` 关闭 Cranelift egraph 中端（GVN / alias analysis / LICM）。
-#   并行 codegen 落地后两档在全量套件上量不出差异，因此保持 speed 以覆盖优化后端。
+# codegen 开关不在此设默认值，测试始终覆盖生产配置。
 
 [profile.default]
+default-filter = '''
+not (
+  binary(/^(cluster_ipc|gc_concurrency_model|gc_loom_model|handle_table|native_executable|native_executable_contract|node_vm_timeout_isolation|perf_hooks_fetch_resource|repl_line_edit)$/)
+  | test(/(^|::)slow__/)
+  | test(/happy__(async_hooks_|async_resource_|atomics_agent_notify|gc_|node_builtin_perf_hooks_|node_net_fetch_failure_chain|r1_accessor_slots|r2_ic_proto_and_gc|runtime_string_gc_roots|streams_byob_gc_pending_view)/)
+  | test(/modules__(async_local_(dgram|net|tls)|node_builtin_(cluster|dgram|http|https|net|perf_hooks|tls|worker_threads)_)/)
+  | test(/(allocation_pressure_collects_with_each_runtime_algorithm|host_table_reclaim::|large_array_churn_collects_before_cooperative_poll|live_set_exhaustion_is_observable_range_error_|lower_bundle_cached_perf_hooks_layout_and_cache_hit|native_executable_worker_file_collection_contracts)/)
+)
+'''
 test-threads = "num-cpus"
 failure-output = "immediate-final"
 success-output = "never"
@@ -16,6 +24,18 @@ final-status-level = "all"
 fail-fast = false
 # 3s 全局硬超时。
 slow-timeout = { period = "3s", terminate-after = 1 }
+
+[profile.full]
+default-filter = 'all()'
+
+[profile.slow]
+default-filter = '''
+binary(/^(cluster_ipc|gc_concurrency_model|gc_loom_model|handle_table|native_executable|native_executable_contract|node_vm_timeout_isolation|perf_hooks_fetch_resource|repl_line_edit)$/)
+| test(/(^|::)slow__/)
+| test(/happy__(async_hooks_|async_resource_|atomics_agent_notify|gc_|node_builtin_perf_hooks_|node_net_fetch_failure_chain|r1_accessor_slots|r2_ic_proto_and_gc|runtime_string_gc_roots|streams_byob_gc_pending_view)/)
+| test(/modules__(async_local_(dgram|net|tls)|node_builtin_(cluster|dgram|http|https|net|perf_hooks|tls|worker_threads)_)/)
+| test(/(allocation_pressure_collects_with_each_runtime_algorithm|host_table_reclaim::|large_array_churn_collects_before_cooperative_poll|live_set_exhaustion_is_observable_range_error_|lower_bundle_cached_perf_hooks_layout_and_cache_hit|native_executable_worker_file_collection_contracts)/)
+'''
 
 [test-groups]
 # 资源隔离（端口 / 共享 cache 路径），与执行耗时无关。
@@ -33,11 +53,11 @@ threads-required = "num-cpus"
 filter = 'test(/modules__runtime_loading.*cjs_require_cache_delete/)'
 test-group = 'runtime-cache-delete'
 
-# worker_threads / async_local_worker 会在同进程内起第二个 NativeRuntime，
-# node_builtin_perf_hooks 模块 fixture 会初始化大型 builtin 闭包；独占 CPU
-# 避免初始化阶段互相争用，仍继承全局 3s 硬门禁。
+# worker_threads 会在同进程内起第二个 NativeRuntime，node_builtin_perf_hooks 模块
+# fixture 会初始化大型 builtin 闭包；独占 CPU 避免初始化阶段互相争用，仍继承
+# 全局 3s 硬门禁。
 [[profile.default.overrides]]
-filter = 'test(/modules__(async_local_worker|node_builtin_perf_hooks|node_builtin_worker_threads)_/)'
+filter = 'test(/modules__(node_builtin_perf_hooks|node_builtin_worker_threads)_/)'
 threads-required = 'num-cpus'
 
 # perf_hooks 每例都会编译较大的 builtin 闭包；整组独占 CPU，避免冷缓存

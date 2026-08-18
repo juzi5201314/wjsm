@@ -125,9 +125,13 @@ Direct native code 不提供 Wasm memory/control-flow sandbox。artifact verifie
 
 ```bash
 cargo build
-cargo nextest run --workspace
+cargo nextest run --workspace            # 默认：快速正确性套件
+cargo nextest run --workspace -P full    # 完整正确性与资源测试
+cargo nextest run --workspace -P slow    # 仅进程、网络、PTY 与压力测试
 cargo nextest run -E 'test(happy__)'
 ```
+
+默认 profile 用于日常快速回归；提交前或跨 crate 改动应运行 `full`。`slow` 与默认集合互斥，便于独立定位资源、并发和压力回归。
 
 Test262 仅在运行一致性测试时需要：
 

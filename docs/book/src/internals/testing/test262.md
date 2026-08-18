@@ -8,20 +8,22 @@ test262 是 ECMAScript 官方一致性测试套件，覆盖语言的全部规范
 
 ## crate 组织
 
-`crates/wjsm-test262/` 是 test262 集成 crate：
+`crates/wjsm-test262/` 提供独立的一致性测试 runner：
 
-- `build.rs`：构建时处理 test262 测试用例。
-- `src/`：测试 harness 和运行器。
+- `src/read.rs` 读取 test262 元数据、harness 和测试树。
+- `src/exec.rs` 为每个用例启动独立 wjsm 子进程，执行超时和内存限制并汇总结果。
+- `src/main.rs` 提供套件、单文件、并行度和报告选项。
 
-crate 在构建期下载或引用 test262 测试用例，生成对应的 Rust 测试函数。每个 test262 用例变成一个独立的测试。
+test262 用例不会由 `build.rs` 转换成 nextest 测试函数；runner 直接遍历已检出的 `test262/` 子模块。
 
 ## 运行方式
 
 ```bash
-cargo nextest run -p wjsm-test262
+git submodule update --init test262
+cargo run --release -p wjsm-test262 -- run --suite test/built-ins --plain
 ```
 
-test262 测试通常较慢，nextest 的并行执行和超时配置帮助管理运行时间。
+runner 默认给每个独立子进程 60s 超时，并按内存预算限制并发；可用 `--timeout-secs` 或 `WJSM_TEST262_TIMEOUT_SECS` 调整。`cargo nextest run -p wjsm-test262` 只运行 runner 自身的 Rust 单元测试，不执行 test262 套件。
 
 ## 覆盖范围
 

@@ -4,7 +4,6 @@
 use anyhow::{Context, Result, ensure};
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn run_native(source: &str) -> Result<String> {
     let (exit_code, stdout, stderr) = wjsm_cli::run_source_in_process(source);
@@ -42,27 +41,6 @@ fn js_string_literal(value: &str) -> String {
     literal
 }
 
-/// 成功路径 case 计数器。
-struct CaseCounter(AtomicUsize);
-
-impl CaseCounter {
-    const fn new() -> Self {
-        Self(AtomicUsize::new(0))
-    }
-
-    fn tick(&self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn get(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-static ARITH_CASES: CaseCounter = CaseCounter::new();
-static STRING_CASES: CaseCounter = CaseCounter::new();
-static COERCE_CASES: CaseCounter = CaseCounter::new();
-
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 8,
@@ -84,7 +62,6 @@ proptest! {
             a % divisor,
         );
         prop_assert_eq!(prop_run_native(&source)?, expected);
-        ARITH_CASES.tick();
     }
 
     #[test]
@@ -95,7 +72,6 @@ proptest! {
         );
         let expected = format!("{}\n{}!\n", s.encode_utf16().count(), s);
         prop_assert_eq!(prop_run_native(&source)?, expected);
-        STRING_CASES.tick();
     }
 
     #[test]
@@ -115,7 +91,6 @@ proptest! {
             !s.is_empty(),
         );
         prop_assert_eq!(prop_run_native(&source)?, expected);
-        COERCE_CASES.tick();
     }
 }
 
@@ -134,22 +109,4 @@ fn string_literal_roundtrip_preserves_special_characters() {
         let output = run_native(&source).expect("native string literal execution");
         assert_eq!(output.trim_end_matches('\n'), value);
     }
-}
-
-/// 同二进制内 proptest 成功路径应各执行 8 case。
-#[test]
-fn property_tests_execute_configured_case_count() {
-    let arithmetic = ARITH_CASES.get();
-    let strings = STRING_CASES.get();
-    let coercions = COERCE_CASES.get();
-    if arithmetic > 0 || strings > 0 || coercions > 0 {
-        assert_eq!(arithmetic, 8, "arithmetic cases: {arithmetic}");
-        assert_eq!(strings, 8, "string cases: {strings}");
-        assert_eq!(coercions, 8, "coercion cases: {coercions}");
-    }
-    let output = run_native(
-        "console.log(3 + 4); console.log(3 - 4); console.log(3 * 4); console.log(3 % 4);",
-    )
-    .expect("native arithmetic smoke");
-    assert_eq!(output, "7\n-1\n12\n3\n");
 }

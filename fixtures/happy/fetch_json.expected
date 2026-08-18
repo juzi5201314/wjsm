@@ -1,5 +1,0 @@
-exit_code: 0
---- stdout ---
-json type: string
-json value: "hello"
---- stderr ---

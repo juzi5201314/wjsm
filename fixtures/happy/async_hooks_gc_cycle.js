@@ -5,10 +5,9 @@ const hook = createHook({ init() { count++; } }).enable();
 let completed = 0;
 let restored = true;
 
-// 正确性验证：AsyncLocalStorage 上下文在同步循环与 promise 回调中不丢失。
-// 迭代次数对语义是任意的（上下文保持与次数无关），取足以驱动 init hook
-// 与一次 GC 的量即可；高负载稳定性由 Rust 侧单测覆盖。
-const ITERATIONS = 1000;
+// 验证 AsyncLocalStorage 上下文经重复同步读取、Promise 回调与 GC 后仍保持。
+// 重复次数只覆盖状态累积，不承担吞吐或压力测试职责。
+const ITERATIONS = 64;
 
 als.enterWith('load-context');
 for (let i = 0; i < ITERATIONS; i++) {

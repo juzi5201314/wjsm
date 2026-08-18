@@ -96,13 +96,6 @@ impl FixtureRunner {
     }
 
     fn run_fixture(&self, fixture: &FixtureCase) -> Result<()> {
-        // 检查 KNOWN-NETWORK 注释
-        if let Ok(content) = fs::read_to_string(&fixture.input_path)
-            && content.contains("KNOWN-NETWORK")
-            && env::var("WJSM_SKIP_NETWORK").unwrap_or_default() == "1"
-        {
-            return Ok(());
-        }
         let (exit_code, stdout, stderr) =
             wjsm_cli::run_file_in_process_with_root(&fixture.input_path, &self.fixtures_root);
         let actual = FixtureOutput {
