@@ -73,7 +73,7 @@ fn construct(
             Err(exception) => return exception,
         }
     };
-    let _ = match get_option_string(
+    if let Err(exception) = get_option_string(
         ctx,
         state,
         options,
@@ -81,9 +81,8 @@ fn construct(
         &["lookup", "best fit"],
         Some("best fit"),
     ) {
-        Ok(_) => {}
-        Err(exception) => return exception,
-    };
+        return exception;
+    }
     let numbering_system =
         match super::js::require_unicode_type(ctx, state, options, "numberingSystem") {
             Ok(value) => value,

@@ -464,8 +464,11 @@ fn time_of_day(millis_of_day: f64) -> Result<Time, String> {
     Time::try_new(hour, minute, second, nano).map_err(err)
 }
 
+/// ISO 年月日时分秒与纳秒。
+pub type IsoDateTimeComponents = (i32, u8, u8, u8, u8, u8, u32);
+
 /// TimeClip + 拆出 ISO 字段。越界返回错误，供 host 抛 RangeError。
-pub fn components_from_millis(millis: f64) -> Result<(i32, u8, u8, u8, u8, u8, u32), String> {
+pub fn components_from_millis(millis: f64) -> Result<IsoDateTimeComponents, String> {
     let (days, millis_of_day) = split_days(millis)?;
     let date = Date::from_rata_die(unix_epoch_rd() + days, Iso);
     let time = time_of_day(millis_of_day)?;
@@ -476,7 +479,7 @@ pub fn components_from_millis(millis: f64) -> Result<(i32, u8, u8, u8, u8, u8, u
         time.hour.number(),
         time.minute.number(),
         time.second.number(),
-        u32::from(time.subsecond.number()),
+        time.subsecond.number(),
     ))
 }
 

@@ -173,10 +173,8 @@ pub(super) unsafe extern "C" fn native_host_operation(
                     | NativeRuntimeOp::PrepareSuperCallForward
             )
         );
-    if record_value_feedback {
-        if let Some(feedback) = feedback {
-            state.record_value_feedback(feedback, operation, args);
-        }
+    if record_value_feedback && let Some(feedback) = feedback {
+        state.record_value_feedback(feedback, operation, args);
     }
 
     let runtime_operation = if operation <= u32::from(Builtin::last_wire_id()) {

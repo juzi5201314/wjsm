@@ -33,9 +33,7 @@ pub const DATA_MANIFEST: DataManifest = DataManifest {
 };
 
 /// 字段按字母序排列的紧凑 JSON，作为稳定 hash 输入。
-pub const CANONICAL_JSON: &str = concat!(
-    r#"{"cldr":"48.2","coverage":"full","encoding":"WHATWG Encoding Standard (encoding_rs 0.8.35)","icu4x":"2.2.0","iso4217":"CLDR 48.2","regexp":"regress 0.11.1 (Unicode 17.0.0 property escapes)","smoke_locales":["en-US","zh-CN","de-DE","es-ES","ar","th","tr","ja-JP"],"tzdb":"2026a","unicode":"17.0.0","uts46":"Unicode 17.0 UTS #46 (idna 1.1.0 / WHATWG URL)"}"#
-);
+pub const CANONICAL_JSON: &str = r#"{"cldr":"48.2","coverage":"full","encoding":"WHATWG Encoding Standard (encoding_rs 0.8.35)","icu4x":"2.2.0","iso4217":"CLDR 48.2","regexp":"regress 0.11.1 (Unicode 17.0.0 property escapes)","smoke_locales":["en-US","zh-CN","de-DE","es-ES","ar","th","tr","ja-JP"],"tzdb":"2026a","unicode":"17.0.0","uts46":"Unicode 17.0 UTS #46 (idna 1.1.0 / WHATWG URL)"}"#;
 
 pub const DATA_MANIFEST_SHA256: &str =
     "ab4855fe416ff1264b388ce52a40ff0f238944846eeccfdad114c723cfe219df";

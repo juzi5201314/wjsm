@@ -1014,9 +1014,7 @@ pub(crate) fn construct(
                     &[entry.target, args_array, new_target],
                 )
                 .unwrap_or_else(|| fail_dispatch(ctx));
-            if value::is_exception(result) {
-                result
-            } else if value::is_js_object(result) {
+            if value::is_exception(result) || value::is_js_object(result) {
                 result
             } else {
                 super::runtime::type_error(ctx, state, "Proxy construct trap must return an object")

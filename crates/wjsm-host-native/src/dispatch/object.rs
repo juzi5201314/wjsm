@@ -1061,7 +1061,7 @@ pub(crate) fn get_own_property_descriptor(
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => {
                     Some(wjsm_gc::HeapAccessV2Property {
                         flags: WRITABLE | ENUMERABLE | CONFIGURABLE,
-                        value: element as u64,
+                        value: element,
                         getter: value::encode_undefined() as u64,
                         setter: value::encode_undefined() as u64,
                     })
@@ -1306,16 +1306,16 @@ pub(crate) fn descriptor_is_compatible(
         {
             return false;
         }
-        if current.is_data() && current.writable == Some(false) {
-            if descriptor.writable == Some(true)
+        if current.is_data()
+            && current.writable == Some(false)
+            && (descriptor.writable == Some(true)
                 || descriptor.value.is_some_and(|stored| {
                     current
                         .value
                         .is_none_or(|current| !same_value(state, stored, current))
-                })
-            {
-                return false;
-            }
+                }))
+        {
+            return false;
         }
         if current.is_accessor()
             && (descriptor.getter.is_some_and(|getter| {
@@ -1370,14 +1370,14 @@ fn define_ordinary_property(
         {
             return incompatible_descriptor(ctx, state);
         }
-        if current.flags & ACCESSOR == 0 && current.flags & WRITABLE == 0 {
-            if descriptor.writable == Some(true)
+        if current.flags & ACCESSOR == 0
+            && current.flags & WRITABLE == 0
+            && (descriptor.writable == Some(true)
                 || descriptor
                     .value
-                    .is_some_and(|stored| !same_value(state, stored, current.value as i64))
-            {
-                return incompatible_descriptor(ctx, state);
-            }
+                    .is_some_and(|stored| !same_value(state, stored, current.value as i64)))
+        {
+            return incompatible_descriptor(ctx, state);
         }
         if current.flags & ACCESSOR != 0
             && (descriptor
@@ -1487,9 +1487,9 @@ pub(crate) fn define_property(
         .is_some_and(|value| super::runtime::is_truthy(state, value));
     let writable = descriptor_field(state, descriptor, "writable")
         .is_some_and(|value| super::runtime::is_truthy(state, value));
-    let flags = u32::from(configurable) * CONFIGURABLE
-        | u32::from(enumerable) * ENUMERABLE
-        | u32::from(writable) * WRITABLE;
+    let flags = (u32::from(configurable) * CONFIGURABLE)
+        | (u32::from(enumerable) * ENUMERABLE)
+        | (u32::from(writable) * WRITABLE);
     let getter = descriptor_field(state, descriptor, "get");
     let setter = descriptor_field(state, descriptor, "set");
     if getter.is_some_and(|getter| !value::is_undefined(getter) && !value::is_callable(getter)) {

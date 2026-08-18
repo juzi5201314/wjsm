@@ -1059,7 +1059,8 @@ pub(crate) fn ensure_url_global(
     state: &mut NativeAgentState,
     name: &str,
 ) -> Option<i64> {
-    if let (Some(url), Some(params)) = (state.url_constructor, state.url_search_params_constructor) {
+    if let (Some(url), Some(params)) = (state.url_constructor, state.url_search_params_constructor)
+    {
         return match name {
             "URL" => Some(url),
             "URLSearchParams" => Some(params),
@@ -1090,8 +1091,8 @@ pub(crate) fn ensure_url_global(
     .ok()?;
     let _namespace = load_resolved_module(ctx, state, &resolved, true).ok()?;
     let url = named_property(state, global, "URL").filter(|value| value::is_callable(*value))?;
-    let params =
-        named_property(state, global, "URLSearchParams").filter(|value| value::is_callable(*value))?;
+    let params = named_property(state, global, "URLSearchParams")
+        .filter(|value| value::is_callable(*value))?;
     state.url_constructor = Some(url);
     state.url_search_params_constructor = Some(params);
     match name {
@@ -1131,11 +1132,13 @@ fn register_manifest(
     Ok(())
 }
 
+type ManifestKeyEntry = ((u64, ModuleId), RuntimeModuleKey);
+
 fn manifest_entries(
     root: &Path,
     image_id: u64,
     manifest: &ModuleManifest,
-) -> Result<Vec<((u64, ModuleId), RuntimeModuleKey)>, String> {
+) -> Result<Vec<ManifestKeyEntry>, String> {
     manifest
         .modules
         .iter()

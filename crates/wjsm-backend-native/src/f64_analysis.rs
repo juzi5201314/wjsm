@@ -137,13 +137,13 @@ fn collect_direct_calls(program: &Program) -> DirectCallInfo {
                     }
                     _ => None,
                 };
-                if let Some((target, args)) = direct_callee {
-                    if let Some(calls) = calls_by_target.get_mut(target.0 as usize) {
-                        calls.push(DirectCallSite {
-                            caller,
-                            args: args.clone(),
-                        });
-                    }
+                if let Some((target, args)) = direct_callee
+                    && let Some(calls) = calls_by_target.get_mut(target.0 as usize)
+                {
+                    calls.push(DirectCallSite {
+                        caller,
+                        args: args.clone(),
+                    });
                 }
                 for (value, target) in &targets {
                     if !instruction_uses_value(instruction, *value) {
@@ -155,9 +155,7 @@ fn collect_direct_calls(program: &Program) -> DirectCallInfo {
                             | Instruction::ConstructCall { callee, .. }
                             if callee == value
                     );
-                    if !used_as_callee {
-                        escaped_target[target.0 as usize] = true;
-                    } else if instruction_uses_other_than_callee(instruction, *value) {
+                    if !used_as_callee || instruction_uses_other_than_callee(instruction, *value) {
                         escaped_target[target.0 as usize] = true;
                     }
                 }

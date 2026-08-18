@@ -198,6 +198,7 @@ pub fn lower_modules_with_debug_meta(
 ///
 /// `modules` 只含用户模块；`builtin` 段必须无 TLA（builtin 段构建时保证）。
 /// 生产路径遇用户 TLA 会回退整包 lower，不会走进本函数。
+#[allow(clippy::too_many_arguments)]
 pub fn lower_modules_with_builtin_seed(
     modules: Vec<ModuleLoweringInput>,
     import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,

@@ -94,10 +94,10 @@ fn can_forward_var(
 fn find_store_pos(function: &wjsm_ir::Function, name: &str) -> Option<(BasicBlockId, usize)> {
     for block in function.blocks() {
         for (idx, ins) in block.instructions().iter().enumerate() {
-            if let Instruction::StoreVar { name: n, .. } = ins {
-                if n == name {
-                    return Some((block.id(), idx));
-                }
+            if let Instruction::StoreVar { name: n, .. } = ins
+                && n == name
+            {
+                return Some((block.id(), idx));
             }
         }
     }
@@ -137,15 +137,17 @@ fn is_new_object_value(function: &wjsm_ir::Function, value: ValueId) -> bool {
     })
 }
 
+type ObjectFamily = (
+    HashSet<ValueId>,
+    HashSet<String>,
+    Vec<(BasicBlockId, usize)>,
+);
+
 fn collect_object_family(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
     dom: &[HashSet<BasicBlockId>],
-) -> Option<(
-    HashSet<ValueId>,
-    HashSet<String>,
-    Vec<(BasicBlockId, usize)>,
-)> {
+) -> Option<ObjectFamily> {
     let mut family = HashSet::from([candidate_dest]);
     let mut forwarded_vars = HashSet::new();
     let mut delete_targets = Vec::new();
@@ -160,10 +162,7 @@ fn collect_object_family(
                         if is_host_shared_variable(name) {
                             return None;
                         }
-                        let Some((store_block, store_index)) = find_store_pos(function, name)
-                        else {
-                            return None;
-                        };
+                        let (store_block, store_index) = find_store_pos(function, name)?;
                         if !can_forward_var(function, name, store_block, store_index, dom) {
                             return None;
                         }
@@ -508,9 +507,7 @@ fn resolve_property_replacements(
                         .any(|(index, _)| write_at.contains_key(&(*predecessor, index)));
                     (!has_write).then(|| entry_phis.get(predecessor).copied())?
                 });
-                let Some(value) = value else {
-                    return None;
-                };
+                let value = value?;
                 sources.push(wjsm_ir::PhiSource {
                     predecessor: *predecessor,
                     value,
@@ -525,11 +522,8 @@ fn resolve_property_replacements(
 
         for read in analysis.reads.iter().filter(|read| read.key == key) {
             let state = state_before_read(read.block, read.index, &entry, &write_at);
-            let Some(value) =
-                reaching_value(&state, &writes).or_else(|| entry_phis.get(&read.block).copied())
-            else {
-                return None;
-            };
+            let value =
+                reaching_value(&state, &writes).or_else(|| entry_phis.get(&read.block).copied())?;
             replacements.insert(read.dest, value);
         }
     }

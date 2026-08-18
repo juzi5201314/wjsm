@@ -43,9 +43,7 @@ impl History {
     }
 
     pub(super) fn down(&mut self) -> Option<String> {
-        let Some(index) = self.cursor else {
-            return None;
-        };
+        let index = self.cursor?;
         if index + 1 < self.entries.len() {
             let index = index + 1;
             self.cursor = Some(index);

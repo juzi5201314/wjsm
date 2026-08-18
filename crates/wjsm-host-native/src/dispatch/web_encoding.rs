@@ -5,15 +5,13 @@
 
 use base64::Engine;
 use wjsm_host::RuntimeString;
-use wjsm_intl_data::encoding_rs::{Decoder, DecoderResult, Encoding};
 use wjsm_intl_data::encoding_for_label;
+use wjsm_intl_data::encoding_rs::{Decoder, DecoderResult, Encoding};
 use wjsm_ir::{constants, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::modules;
-use super::runtime::{
-    fail_dispatch, get_property, to_string_coerced, type_error,
-};
+use super::runtime::{fail_dispatch, get_property, to_string_coerced, type_error};
 use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
 const CONFIGURABLE: u32 = constants::FLAG_CONFIGURABLE as u32;
@@ -276,7 +274,11 @@ fn decode(
 ) -> i64 {
     let handle = value::decode_handle(receiver);
     if !state.text_decoders.contains_key(&handle) {
-        return type_error(ctx, state, "TextDecoder.prototype.decode called on incompatible receiver");
+        return type_error(
+            ctx,
+            state,
+            "TextDecoder.prototype.decode called on incompatible receiver",
+        );
     }
 
     let bytes = match args.first().copied() {
@@ -371,7 +373,8 @@ fn decode_chunk(
 
 fn decode_with_replacement(decoder: &mut Decoder, bytes: &[u8], last: bool) -> String {
     use wjsm_intl_data::encoding_rs::CoderResult;
-    let mut output = String::with_capacity(decoder.max_utf8_buffer_length(bytes.len()).unwrap_or(0));
+    let mut output =
+        String::with_capacity(decoder.max_utf8_buffer_length(bytes.len()).unwrap_or(0));
     let mut input = bytes;
     loop {
         let (result, read, _) = decoder.decode_to_string(input, &mut output, last);
@@ -398,8 +401,7 @@ fn decode_without_replacement(
     );
     let mut input = bytes;
     loop {
-        let (result, read) =
-            decoder.decode_to_string_without_replacement(input, &mut output, last);
+        let (result, read) = decoder.decode_to_string_without_replacement(input, &mut output, last);
         input = &input[read..];
         match result {
             DecoderResult::InputEmpty => return Ok(output),

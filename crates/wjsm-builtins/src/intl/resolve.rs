@@ -20,9 +20,7 @@ pub fn best_available_locale(locale: &str) -> Option<String> {
         if is_available_locale(&candidate) {
             return Some(candidate);
         }
-        let Some(pos) = candidate.rfind('-') else {
-            return None;
-        };
+        let pos = candidate.rfind('-')?;
         let cut = if pos >= 2 && candidate.as_bytes().get(pos - 2) == Some(&b'-') {
             pos - 2
         } else {
@@ -218,7 +216,7 @@ mod tests {
         )
         .expect("resolve");
         assert_eq!(resolved.locale, "en-US");
-        assert!(resolved.extensions.get("co").is_none());
+        assert!(!resolved.extensions.contains_key("co"));
     }
 
     #[test]

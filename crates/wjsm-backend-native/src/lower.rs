@@ -758,7 +758,7 @@ fn compile_program_inner(
                         u32::try_from(index).expect("function index fits u32"),
                     ))
                     .expect("analysis covers every function"),
-                &variable_slots,
+                variable_slots,
                 &root_plans[index],
                 root_capacities[index],
                 &frame_locals[index],
@@ -1254,6 +1254,7 @@ pub(crate) fn lower_function(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_function_parameters(
     builder: &mut FunctionBuilder<'_>,
     function: &wjsm_ir::Function,
@@ -1377,6 +1378,7 @@ fn lower_function_parameters(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_instruction(
     builder: &mut FunctionBuilder<'_>,
     instruction: &Instruction,
@@ -2176,6 +2178,7 @@ fn lower_instruction(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_call_instruction(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
@@ -2262,6 +2265,7 @@ fn lower_call_instruction(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_optional_call_instruction(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
@@ -2328,6 +2332,7 @@ fn lower_optional_call_instruction(
     builder.seal_block(continuation);
     Ok(())
 }
+#[allow(clippy::too_many_arguments)]
 fn lower_builtin_operation(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
@@ -2358,6 +2363,7 @@ fn lower_builtin_operation(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_dynamic_binary(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
@@ -2454,13 +2460,12 @@ fn lower_dynamic_binary(
     Ok(())
 }
 
-/// 计算一个 boxed 值的反馈 tag 码：number → `0x1f`，NaN-box 值 → 自身 tag。
-
 /// 反馈槽字段 offset（`wjsm-ir::constants` 的 u32）转 CLIF 用的 i32。
 pub(crate) fn feedback_offset_i32(offset: u32) -> i32 {
     i32::try_from(offset).expect("feedback slot offset fits i32")
 }
 
+/// 计算一个 boxed 值的反馈 tag 码：number → `0x1f`，NaN-box 值 → 自身 tag。
 pub(crate) fn emit_feedback_tag_code(
     builder: &mut FunctionBuilder<'_>,
     input: ir::Value,
@@ -2636,6 +2641,7 @@ fn lower_get_prop_ic(
 /// - PROTO_DATA：接收者 shape + proto 世代命中后，从 holder 值槽 load；
 /// - ACCESSOR：接收者 shape + proto 世代命中后 load getter，并直接
 ///   `invoke_callable(getter, receiver)`（不查属性表）。
+///
 /// 其余情况 miss 到 `GetPropIc` 走完整宿主 [[Get]] 并回填。
 #[expect(
     clippy::too_many_arguments,
@@ -3486,6 +3492,7 @@ fn lower_optional_get_prop_ic(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_value_operation(
     builder: &mut FunctionBuilder<'_>,
     variables: &HashMap<ValueId, Variable>,
@@ -3605,6 +3612,7 @@ fn call_dispatcher(
         .context("host dispatcher returned no result")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_terminator(
     builder: &mut FunctionBuilder<'_>,
     predecessor: BasicBlockId,

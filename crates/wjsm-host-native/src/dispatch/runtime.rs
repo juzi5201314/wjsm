@@ -75,12 +75,10 @@ pub(super) fn dispatch_runtime(
             let [slot] = args else {
                 return fail_dispatch(ctx);
             };
-            let result = usize::try_from(*slot)
+            usize::try_from(*slot)
                 .ok()
                 .and_then(|slot| state.variables.get(slot).copied())
-                .unwrap_or_else(|| fail_dispatch(ctx));
-
-            result
+                .unwrap_or_else(|| fail_dispatch(ctx))
         }
         NativeRuntimeOp::IsTruthy => args
             .first()
@@ -304,12 +302,11 @@ pub(super) fn dispatch_runtime(
             if value::is_proxy(*object) {
                 return super::proxy::get(ctx, state, *object, *index, *object);
             }
-            if let Some(index) = array_index(state, *index) {
-                if let Some(stored) =
+            if let Some(index) = array_index(state, *index)
+                && let Some(stored) =
                     super::typedarray::get_element_intern(state, *object, index as usize)
-                {
-                    return stored;
-                }
+            {
+                return stored;
             }
             if value::is_array(*object)
                 && let Some(index) = array_index(state, *index)

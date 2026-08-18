@@ -212,7 +212,7 @@ fn socket_from_fd(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
             return fail_dispatch(ctx);
         };
         state.node_net.sockets.insert(socket, stream);
-        return value::encode_f64(f64::from(socket));
+        value::encode_f64(f64::from(socket))
     }
     #[cfg(not(unix))]
     {

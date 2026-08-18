@@ -295,7 +295,7 @@ impl ShapeTable {
     /// 属性不存在时返回 `None`（调用方语义上仍算删除成功）。
     pub fn remove_prop(&self, shape_id: u32, name_id: u32) -> Option<(u32, (u32, u32))> {
         let mut inner = self.inner.write();
-        let dictionary_id = inner.to_dictionary(shape_id);
+        let dictionary_id = inner.ensure_dictionary(shape_id);
         let shape = inner.shapes.get_mut(dictionary_id as usize)?;
         let slot = shape.find(name_id)?;
         let prop = shape.props.remove(slot);
@@ -306,7 +306,7 @@ impl ShapeTable {
 
     /// 强制把对象转为字典 shape（`Object.setPrototypeOf` 之外的去优化入口）。
     pub fn to_dictionary(&self, shape_id: u32) -> u32 {
-        self.inner.write().to_dictionary(shape_id)
+        self.inner.write().ensure_dictionary(shape_id)
     }
 
     // ── 原型链 IC 失效协议 ──────────────────────────────────────────────────
@@ -448,7 +448,7 @@ impl ShapeTableInner {
         if shape.props.len() >= DICTIONARY_THRESHOLD as usize
             || self.shapes.len() >= SHAPE_TABLE_BUDGET as usize
         {
-            let dictionary_id = self.to_dictionary(shape_id);
+            let dictionary_id = self.ensure_dictionary(shape_id);
             return self.transition_in_dictionary(dictionary_id, name_id, flags);
         }
 
@@ -540,7 +540,7 @@ impl ShapeTableInner {
     }
 
     /// 复制出一个独占的字典 shape；已是字典则原样返回。
-    fn to_dictionary(&mut self, shape_id: u32) -> u32 {
+    fn ensure_dictionary(&mut self, shape_id: u32) -> u32 {
         match self.shapes.get(shape_id as usize) {
             Some(shape) if shape.dictionary => shape_id,
             Some(shape) => {

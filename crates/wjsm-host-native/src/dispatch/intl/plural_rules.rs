@@ -59,7 +59,7 @@ fn construct(
         Ok(options) => options,
         Err(exception) => return exception,
     };
-    let _ = match get_option_string(
+    if let Err(exception) = get_option_string(
         ctx,
         state,
         options,
@@ -67,9 +67,8 @@ fn construct(
         &["lookup", "best fit"],
         Some("best fit"),
     ) {
-        Ok(_) => {}
-        Err(exception) => return exception,
-    };
+        return exception;
+    }
     let type_name = match get_option_string(
         ctx,
         state,
@@ -247,24 +246,23 @@ fn select(
     intern(ctx, state, category.unwrap_or_else(|| "other".into()))
 }
 
+type PluralDigitOptions = (
+    u32,
+    u32,
+    u32,
+    Option<u32>,
+    Option<u32>,
+    u32,
+    String,
+    String,
+    String,
+);
+
 fn read_plural_digits(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     options: i64,
-) -> Result<
-    (
-        u32,
-        u32,
-        u32,
-        Option<u32>,
-        Option<u32>,
-        u32,
-        String,
-        String,
-        String,
-    ),
-    i64,
-> {
+) -> Result<PluralDigitOptions, i64> {
     let min_int = get_number_option(
         ctx,
         state,
@@ -296,7 +294,7 @@ fn read_plural_digits(
     let (min_frac, max_frac) = match (min_frac, max_frac) {
         (None, None) => (0, 3),
         (Some(min), None) => (min as u32, 3u32.max(min as u32)),
-        (None, Some(max)) => (0u32.min(max as u32), max as u32),
+        (None, Some(max)) => (0, max as u32),
         (Some(min), Some(max)) if (max as u32) < (min as u32) => {
             return Err(range_error(
                 ctx,

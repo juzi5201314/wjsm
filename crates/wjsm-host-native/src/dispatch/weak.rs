@@ -856,10 +856,8 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
     queue.extend(state.fatal_exception);
     state.node_perf_hooks.extend_gc_roots(queue);
     queue.extend(state.node_async_hooks.defaults.values().copied());
-    for frame in &state.node_async_hooks.captured_frames {
-        if let Some(stores) = frame {
-            queue.extend(stores.values().copied());
-        }
+    for stores in state.node_async_hooks.captured_frames.iter().flatten() {
+        queue.extend(stores.values().copied());
     }
     queue.push_back(state.node_async_hooks.top_resource);
     if let Some(stores) = &state.node_async_hooks.current.stores {

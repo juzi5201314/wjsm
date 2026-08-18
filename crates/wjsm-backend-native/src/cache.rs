@@ -615,7 +615,7 @@ fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
 /// 原子写入无竞态：已加载进内存的 image 不受影响，删除只影响后续磁盘命中。
 fn maybe_evict_lru(directory: &Path) {
     let counter = WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    if counter % LRU_CHECK_INTERVAL != 0 {
+    if !counter.is_multiple_of(LRU_CHECK_INTERVAL) {
         return;
     }
     let Some(max_bytes) = cache_max_bytes() else {

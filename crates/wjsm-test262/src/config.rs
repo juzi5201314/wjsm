@@ -282,7 +282,10 @@ mod tests {
         assert!(should_run_test(&test, true, &include_features));
 
         // 路径不含 Temporal 段、无 feature → 基础语法测试照常运行
-        let test = make_test("test262/test/language/expressions/addition/S11.6.1_A1.js", &[]);
+        let test = make_test(
+            "test262/test/language/expressions/addition/S11.6.1_A1.js",
+            &[],
+        );
         assert!(should_run_test(&test, false, &include_features));
     }
 }

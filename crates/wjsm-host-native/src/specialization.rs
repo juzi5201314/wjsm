@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 
 use wjsm_backend_native::image::CompiledImage;
@@ -172,17 +172,12 @@ impl SpecializationCoordinator {
         let Some(receiver) = &self.result_rx else {
             return results;
         };
-        loop {
-            match receiver.try_recv() {
-                Ok(result) => {
-                    self.pending.remove(&result.request.key);
-                    if result.object.is_none() {
-                        self.disabled.insert(result.request.key);
-                    }
-                    results.push(result);
-                }
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+        while let Ok(result) = receiver.try_recv() {
+            self.pending.remove(&result.request.key);
+            if result.object.is_none() {
+                self.disabled.insert(result.request.key);
             }
+            results.push(result);
         }
         results
     }

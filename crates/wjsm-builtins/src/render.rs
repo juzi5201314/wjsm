@@ -501,7 +501,7 @@ fn serialize_json_property<E: ExecContext>(
             let elem = ctx
                 .array_elem_at(value, i)
                 .unwrap_or_else(value::encode_undefined);
-            let s = match serialize_json_property(
+            let s = serialize_json_property(
                 ctx,
                 &i.to_string(),
                 elem,
@@ -512,10 +512,7 @@ fn serialize_json_property<E: ExecContext>(
                 stack,
                 gap,
                 &next_indent,
-            ) {
-                Ok(s) => s,
-                Err(exc) => return Err(exc),
-            };
+            )?;
             parts.push(if s == "undefined" {
                 "null".to_string()
             } else {
@@ -550,7 +547,7 @@ fn serialize_json_property<E: ExecContext>(
                     if value::is_undefined(prop_val) {
                         continue;
                     }
-                    let s = match serialize_json_property(
+                    let s = serialize_json_property(
                         ctx,
                         name,
                         prop_val,
@@ -561,10 +558,7 @@ fn serialize_json_property<E: ExecContext>(
                         stack,
                         gap,
                         &next_indent,
-                    ) {
-                        Ok(s) => s,
-                        Err(exc) => return Err(exc),
-                    };
+                    )?;
                     if s != "undefined" {
                         let colon = if gap.is_empty() { ":" } else { ": " };
                         pairs.push(format!("{}{}{}", json_escape_string(name), colon, s));
@@ -577,7 +571,7 @@ fn serialize_json_property<E: ExecContext>(
                     // Symbol 键或不可反查的 name_id：跳过
                     continue;
                 };
-                let s = match serialize_json_property(
+                let s = serialize_json_property(
                     ctx,
                     &name,
                     prop_val,
@@ -588,10 +582,7 @@ fn serialize_json_property<E: ExecContext>(
                     stack,
                     gap,
                     &next_indent,
-                ) {
-                    Ok(s) => s,
-                    Err(exc) => return Err(exc),
-                };
+                )?;
                 if s != "undefined" {
                     let colon = if gap.is_empty() { ":" } else { ": " };
                     pairs.push(format!("{}{}{}", json_escape_string(&name), colon, s));

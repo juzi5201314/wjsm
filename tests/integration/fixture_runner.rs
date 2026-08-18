@@ -72,19 +72,18 @@ impl FixtureRunner {
         let js_path = self.fixtures_root.join(format!("{name}.js"));
         let ts_path = self.fixtures_root.join(format!("{name}.ts"));
         let tsx_path = self.fixtures_root.join(format!("{name}.tsx"));
-        let input_path;
-        if js_path.exists() {
-            input_path = js_path;
+        let input_path = if js_path.exists() {
+            js_path
         } else if ts_path.exists() {
-            input_path = ts_path;
+            ts_path
         } else if tsx_path.exists() {
-            input_path = tsx_path;
+            tsx_path
         } else {
             bail!(
                 "Fixture not found: {name}.js or {name}.ts or {name}.tsx (searched in {})",
                 self.fixtures_root.display()
             );
-        }
+        };
 
         let expected_path = input_path.with_extension("expected");
 

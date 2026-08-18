@@ -400,7 +400,7 @@ fn decode_directory(bytes: &[u8], limits: &SnapshotLimits) -> Result<Vec<(u16, S
     let mut expected_offset = directory_end;
     let mut previous_id = None;
     let mut sections = Vec::with_capacity(SECTION_COUNT as usize);
-    for entry in directory.chunks_exact(DIRECTORY_ENTRY_BYTES) {
+    for entry in directory.as_chunks::<DIRECTORY_ENTRY_BYTES>().0 {
         let mut reader = Reader::new(entry);
         let id = reader.u16()?;
         if reader.u16()? != 0 {
@@ -466,7 +466,7 @@ fn decode_handles(bytes: &[u8], maximum: u32) -> Result<Vec<SnapshotHandle>> {
         bail!("native snapshot handle count exceeds limit")
     }
     let mut handles = Vec::with_capacity(count);
-    for entry in bytes.chunks_exact(HANDLE_BYTES) {
+    for entry in bytes.as_chunks::<HANDLE_BYTES>().0 {
         handles.push(SnapshotHandle {
             handle: u32::from_le_bytes(entry[..4].try_into()?),
             address: u64::from_le_bytes(entry[4..12].try_into()?),

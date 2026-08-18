@@ -229,7 +229,11 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
 }
 
 /// `import { transcode } from 'node:buffer'`：受限编码集合上的再编码。
-pub(crate) fn transcode(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+pub(crate) fn transcode(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
     let Some(source) = args.first().copied() else {
         return type_error(
             ctx,
@@ -324,16 +328,20 @@ fn decode_for_transcode(bytes: &[u8], encoding: TranscodeEncoding) -> String {
             if bytes.len() % 2 == 1 {
                 // 奇数长度：末字节无法组成完整 code unit，按 Node/ICU 替换处理。
                 let mut units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair))
                     .collect();
                 units.push(0xfffd);
                 String::from_utf16_lossy(&units)
             } else {
                 String::from_utf16_lossy(
                     &bytes
-                        .chunks_exact(2)
-                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| u16::from_le_bytes(*pair))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -347,22 +355,14 @@ fn encode_for_transcode(text: &str, encoding: TranscodeEncoding) -> Vec<u8> {
             .chars()
             .map(|character| {
                 let code = character as u32;
-                if code <= 0x7f {
-                    code as u8
-                } else {
-                    b'?'
-                }
+                if code <= 0x7f { code as u8 } else { b'?' }
             })
             .collect(),
         TranscodeEncoding::Latin1 => text
             .chars()
             .map(|character| {
                 let code = character as u32;
-                if code <= 0xff {
-                    code as u8
-                } else {
-                    b'?'
-                }
+                if code <= 0xff { code as u8 } else { b'?' }
             })
             .collect(),
         TranscodeEncoding::Utf8 => text.as_bytes().to_vec(),
@@ -1096,7 +1096,9 @@ fn encode_text(text: &str, encoding: Encoding) -> Vec<u8> {
         Encoding::Base64Url => URL_SAFE_NO_PAD.decode(text.as_bytes()).unwrap_or_default(),
         Encoding::Hex => text
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map_while(|pair| {
                 let high = (pair[0] as char).to_digit(16)?;
                 let low = (pair[1] as char).to_digit(16)?;
@@ -1126,8 +1128,10 @@ fn decode_text(bytes: &[u8], encoding: Encoding) -> String {
         Encoding::Utf8 => String::from_utf8_lossy(bytes).into_owned(),
         Encoding::Utf16Le => String::from_utf16_lossy(
             &bytes
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|pair| u16::from_le_bytes(*pair))
                 .collect::<Vec<_>>(),
         ),
     }

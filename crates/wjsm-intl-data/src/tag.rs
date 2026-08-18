@@ -230,18 +230,18 @@ fn apply_language_id_aliases(language: &mut LanguageId) {
             language.language = "xtg".into();
             language
                 .variants
-                .retain(|item| item.to_ascii_lowercase() != "gaulish");
+                .retain(|item| !item.eq_ignore_ascii_case("gaulish"));
         }
         ("hy", vars) if vars.iter().any(|item| item == "arevela") => {
             language
                 .variants
-                .retain(|item| item.to_ascii_lowercase() != "arevela");
+                .retain(|item| !item.eq_ignore_ascii_case("arevela"));
         }
         ("hy", vars) if vars.iter().any(|item| item == "arevmda") => {
             language.language = "hyw".into();
             language
                 .variants
-                .retain(|item| item.to_ascii_lowercase() != "arevmda");
+                .retain(|item| !item.eq_ignore_ascii_case("arevmda"));
         }
         _ => {}
     }

@@ -178,7 +178,7 @@ fn stub_candidates(current_exe: &Path) -> Vec<PathBuf> {
 }
 
 /// 若 `bytes` 已带合法 footer，返回去掉 overlay 后的 stub 前缀。
-pub fn stub_prefix<'a>(bytes: &'a [u8]) -> &'a [u8] {
+pub fn stub_prefix(bytes: &[u8]) -> &[u8] {
     match read_footer(bytes) {
         Ok(footer) => bytes
             .get(..usize::try_from(footer.payload_offset).unwrap_or(0))

@@ -538,7 +538,7 @@ fn histogram_kind(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
 fn integer_value(state: &NativeAgentState, encoded: i64) -> Option<u64> {
     if value::is_f64(encoded) {
         let number = value::decode_f64(encoded);
-        (number.is_finite() && number >= 0.0).then(|| number as u64)
+        (number.is_finite() && number >= 0.0).then_some(number as u64)
     } else {
         bigint::read(state, encoded)?.to_u64()
     }

@@ -5,6 +5,7 @@ use wjsm_intl_data::{
     OwnedRelativeTimeFormatter, OwnedSegmenter,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum IntlSlot {
     Locale(LocaleSlot),
     Collator(CollatorSlot),

@@ -435,6 +435,7 @@ fn optional(ctx: &mut NativeVmContext, state: &mut NativeAgentState, value: Opti
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn slot_from_canonical(
     tag: String,
     calendar: Option<String>,

@@ -256,12 +256,7 @@ fn read_options(
         has_style,
         has_date_fields,
         has_time_fields,
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
+        (year, month, day, hour, minute, second),
     );
     let hour12_present = hour12.is_some();
     let mut ext = BTreeMap::new();
@@ -601,26 +596,24 @@ fn date_millis(
     to_number_coerced(ctx, state, input)
 }
 
+type DateTimeFields = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 fn apply_to_date_time_options(
     required: DateTimeRequired,
     defaults: DateTimeDefaults,
     has_style: bool,
     has_date_fields: bool,
     has_time_fields: bool,
-    year: Option<String>,
-    month: Option<String>,
-    day: Option<String>,
-    hour: Option<String>,
-    minute: Option<String>,
-    second: Option<String>,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+    fields: DateTimeFields,
+) -> DateTimeFields {
+    let (year, month, day, hour, minute, second) = fields;
     let date_counts = matches!(required, DateTimeRequired::Date | DateTimeRequired::Any);
     let time_counts = matches!(required, DateTimeRequired::Time | DateTimeRequired::Any);
     let need_defaults =

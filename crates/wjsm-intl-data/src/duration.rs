@@ -106,9 +106,11 @@ impl DurationFormatSpec {
                     &unit.style,
                     &raw,
                     sign_display,
-                    min_frac,
-                    max_frac,
-                    rounding,
+                    UnitFraction {
+                        min: min_frac,
+                        max: max_frac,
+                        rounding,
+                    },
                 )?;
                 if need_separator {
                     if let Some(last) = groups.last_mut() {
@@ -171,15 +173,19 @@ fn flatten_list(
     Ok(flattened)
 }
 
+struct UnitFraction<'a> {
+    min: u32,
+    max: u32,
+    rounding: &'a str,
+}
+
 fn format_unit_number(
     spec: &DurationFormatSpec,
     name: &str,
     style: &str,
     raw: &str,
     sign_display: &str,
-    min_frac: u32,
-    max_frac: u32,
-    rounding: &str,
+    fraction: UnitFraction<'_>,
 ) -> Result<Vec<FormatPart>, String> {
     let singular = name.trim_end_matches('s');
     let numeric = matches!(style, "numeric" | "2-digit" | "fractional");
@@ -209,11 +215,11 @@ fn format_unit_number(
             "auto".into()
         },
         minimum_integer_digits: if style == "2-digit" { 2 } else { 1 },
-        minimum_fraction_digits: min_frac,
-        maximum_fraction_digits: max_frac,
+        minimum_fraction_digits: fraction.min,
+        maximum_fraction_digits: fraction.max,
         minimum_significant_digits: None,
         maximum_significant_digits: None,
-        rounding_mode: rounding.into(),
+        rounding_mode: fraction.rounding.into(),
         rounding_increment: 1,
         rounding_priority: "auto".into(),
         trailing_zero_display: "auto".into(),

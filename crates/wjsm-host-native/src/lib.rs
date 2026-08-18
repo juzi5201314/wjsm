@@ -4467,9 +4467,7 @@ unsafe extern "C" fn native_callable_call(
             dispatch::node_zlib::call(ctx, state, method, &arguments)
         }
         NativeCallableKind::NodeOs(method) => dispatch::node_os::call(ctx, state, method),
-        NativeCallableKind::Idna(method) => {
-            dispatch::idna::call(ctx, state, method, &arguments)
-        }
+        NativeCallableKind::Idna(method) => dispatch::idna::call(ctx, state, method, &arguments),
         NativeCallableKind::NodeVm(callable) => {
             dispatch::node_vm::call(ctx, state, callable, &arguments)
         }
@@ -4993,6 +4991,7 @@ impl NativeRuntime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn install_split_images(
         &mut self,
         artifact: &PortableArtifact,

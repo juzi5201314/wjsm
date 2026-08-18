@@ -164,7 +164,7 @@ pub(crate) fn build_range(
             "{}{}{sep}{}{}",
             start_affix.prefix, start_affix.number, end_affix.number, start_affix.suffix
         );
-        let parts = range_parts_shared_suffix(&start_parts, &end_parts, &sep, &start_affix.suffix);
+        let parts = range_parts_shared_suffix(&start_parts, &end_parts, &sep, start_affix.suffix);
         (text, parts)
     } else if collapse_prefix {
         let text = format!(
@@ -172,7 +172,7 @@ pub(crate) fn build_range(
             start_affix.prefix, start_affix.number, end_affix.number, start_affix.suffix
         );
         let parts =
-            range_parts_collapsed_prefix(&start_parts, &end_parts, &sep, &start_affix.prefix);
+            range_parts_collapsed_prefix(&start_parts, &end_parts, &sep, start_affix.prefix);
         (text, parts)
     } else {
         let text = format!("{start_text}{sep}{end_text}");

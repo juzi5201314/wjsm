@@ -82,7 +82,7 @@ fn construct(
         Ok(value) => value.unwrap_or_else(|| "sort".into()),
         Err(exception) => return exception,
     };
-    let locale_matcher = match get_option_string(
+    if let Err(exception) = get_option_string(
         ctx,
         state,
         options,
@@ -90,10 +90,8 @@ fn construct(
         &["lookup", "best fit"],
         Some("best fit"),
     ) {
-        Ok(_) => {}
-        Err(exception) => return exception,
-    };
-    let _ = locale_matcher;
+        return exception;
+    }
     let numeric = match get_option_bool_opt(ctx, state, options, "numeric") {
         Ok(value) => value,
         Err(exception) => return exception,
@@ -117,13 +115,7 @@ fn construct(
         &["base", "accent", "case", "variant"],
         None,
     ) {
-        Ok(value) => value.unwrap_or_else(|| {
-            if usage == "search" {
-                "variant".into()
-            } else {
-                "variant".into()
-            }
-        }),
+        Ok(value) => value.unwrap_or_else(|| "variant".into()),
         Err(exception) => return exception,
     };
     let ignore_punctuation = match get_option_bool_opt(ctx, state, options, "ignorePunctuation") {

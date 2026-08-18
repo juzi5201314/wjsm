@@ -309,6 +309,7 @@ fn resolve_auto_colors() -> bool {
     io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_build(
     cli: &Cli,
     input: &Option<PathBuf>,
@@ -555,6 +556,8 @@ fn resolved_module_root(path: PathBuf) -> PathBuf {
     path.canonicalize().unwrap_or(path)
 }
 
+type NativeExecutableOutput = (Vec<u8>, BTreeMap<String, Vec<u8>>);
+
 fn compile_native_executable_artifact(
     cli: &Cli,
     input: &Option<PathBuf>,
@@ -562,7 +565,7 @@ fn compile_native_executable_artifact(
     root: Option<&Path>,
     script: bool,
     include: &[PathBuf],
-) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>)> {
+) -> Result<NativeExecutableOutput> {
     let options = module_resolution_options(cli);
     let verify_ir = cli.should_verify_ir();
     let debug_codegen = cli.wants_debug_codegen();
@@ -717,7 +720,7 @@ fn compile_native_executable_from_file(
     debug_codegen: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
     include: &[PathBuf],
-) -> Result<(Vec<u8>, BTreeMap<String, Vec<u8>>)> {
+) -> Result<NativeExecutableOutput> {
     let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
@@ -2002,6 +2005,7 @@ fn compile_source_to_pipeline_result_with_identity(
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_file_input_to_pipeline_result(
     input: &Path,
     root: Option<&Path>,

@@ -40,7 +40,7 @@ pub(super) fn stable_sort_by<T: Copy, E>(
     loop {
         let mut next = Vec::with_capacity(runs.len().div_ceil(2));
         let mut write = 0;
-        for pair in runs.chunks_exact(2) {
+        for pair in runs.as_chunks::<2>().0 {
             let (left, right) = (pair[0].clone(), pair[1].clone());
             merge_into(
                 values,
@@ -52,11 +52,11 @@ pub(super) fn stable_sort_by<T: Copy, E>(
             write += left.len() + right.len();
             next.push(write - left.len() - right.len()..write);
         }
-        if let Some(last) = runs.last() {
-            if runs.len() % 2 == 1 {
-                scratch[write..write + last.len()].copy_from_slice(&values[last.clone()]);
-                next.push(write..write + last.len());
-            }
+        if let Some(last) = runs.last()
+            && !runs.len().is_multiple_of(2)
+        {
+            scratch[write..write + last.len()].copy_from_slice(&values[last.clone()]);
+            next.push(write..write + last.len());
         }
         values.copy_from_slice(&scratch);
         runs = next;
@@ -227,7 +227,8 @@ mod tests {
     #[test]
     fn arbitrary_comparators_never_panic() {
         let input: Vec<u32> = (0..1000).collect();
-        let cases: [(&str, fn(u32, u32) -> Ordering, Vec<u32>); 3] = [
+        type ComparatorCase = (&'static str, fn(u32, u32) -> Ordering, Vec<u32>);
+        let cases: [ComparatorCase; 3] = [
             ("all equal", |_, _| Ordering::Equal, input.clone()),
             ("reverse", |a, b| b.cmp(&a), (0..1000).rev().collect()),
             ("identity", |a, b| a.cmp(&b), input.clone()),

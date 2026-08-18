@@ -16,9 +16,7 @@ use icu::decimal::DecimalFormatter;
 use icu::decimal::input::Decimal;
 use icu::decimal::options::GroupingStrategy;
 use icu::experimental::duration::options::DurationFormatterOptions;
-use icu::experimental::duration::{
-    Duration, DurationFormatter, DurationSign, ValidatedDurationFormatterOptions,
-};
+use icu::experimental::duration::{Duration, DurationFormatter, ValidatedDurationFormatterOptions};
 use icu::experimental::relativetime::options::Numeric;
 use icu::experimental::relativetime::{RelativeTimeFormatter, RelativeTimeFormatterOptions};
 use icu::list::ListFormatter;
@@ -280,39 +278,11 @@ impl OwnedDurationFormatter {
     }
 
     pub fn format_hms(&self, hours: u64, minutes: u64, seconds: u64) -> String {
-        self.format_fields(false, 0, 0, 0, 0, hours, minutes, seconds, 0, 0, 0)
-    }
-
-    pub fn format_fields(
-        &self,
-        negative: bool,
-        years: u64,
-        months: u64,
-        weeks: u64,
-        days: u64,
-        hours: u64,
-        minutes: u64,
-        seconds: u64,
-        milliseconds: u64,
-        microseconds: u64,
-        nanoseconds: u64,
-    ) -> String {
         let duration = Duration {
-            sign: if negative {
-                DurationSign::Negative
-            } else {
-                DurationSign::Positive
-            },
-            years,
-            months,
-            weeks,
-            days,
             hours,
             minutes,
             seconds,
-            milliseconds,
-            microseconds,
-            nanoseconds,
+            ..Duration::default()
         };
         self.inner.format(&duration).to_string()
     }

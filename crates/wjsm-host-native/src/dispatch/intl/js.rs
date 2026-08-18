@@ -32,10 +32,7 @@ pub(super) fn canonicalize_locales(
         if value::is_exception(key) {
             return Err(key);
         }
-        let present = match has_property_js(ctx, state, locales, key) {
-            Ok(present) => present,
-            Err(exception) => return Err(exception),
-        };
+        let present = has_property_js(ctx, state, locales, key)?;
         if !present {
             continue;
         }

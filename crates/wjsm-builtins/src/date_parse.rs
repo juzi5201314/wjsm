@@ -201,10 +201,8 @@ fn parse_es_offset(s: &str) -> Option<Option<i32>> {
     }
     let (sign, rest) = if let Some(rest) = s.strip_prefix('+') {
         (1i32, rest)
-    } else if let Some(rest) = s.strip_prefix('-') {
-        (-1, rest)
     } else {
-        return None;
+        (-1, s.strip_prefix('-')?)
     };
     let (hours, minutes, consumed) = if rest.len() >= 5 && rest.as_bytes().get(2) == Some(&b':') {
         (

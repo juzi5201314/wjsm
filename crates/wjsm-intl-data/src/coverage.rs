@@ -188,7 +188,7 @@ mod tests {
 
         let zh = probe_locale("zh-CN").expect("zh-CN");
         assert!(
-            zh.month.chars().any(|ch| !ch.is_ascii()) || zh.number.chars().any(|ch| !ch.is_ascii()),
+            !zh.month.is_ascii() || !zh.number.is_ascii(),
             "zh-CN should use non-ASCII data: month={} number={}",
             zh.month,
             zh.number
@@ -196,7 +196,7 @@ mod tests {
 
         let ar = probe_locale("ar").expect("ar");
         assert!(
-            ar.number.chars().any(|ch| !ch.is_ascii()) || ar.month.chars().any(|ch| !ch.is_ascii()),
+            !ar.number.is_ascii() || !ar.month.is_ascii(),
             "ar should use non-ASCII data: month={} number={}",
             ar.month,
             ar.number
@@ -204,7 +204,7 @@ mod tests {
 
         let th = probe_locale("th").expect("th");
         assert!(
-            th.month.chars().any(|ch| !ch.is_ascii()) || th.number.chars().any(|ch| !ch.is_ascii()),
+            !th.month.is_ascii() || !th.number.is_ascii(),
             "th should use non-ASCII data: month={} number={}",
             th.month,
             th.number
@@ -212,8 +212,7 @@ mod tests {
 
         let ja = probe_locale("ja-JP").expect("ja-JP");
         assert!(
-            ja.month.chars().any(|ch| !ch.is_ascii())
-                || ja.region_name.chars().any(|ch| !ch.is_ascii()),
+            !ja.month.is_ascii() || !ja.region_name.is_ascii(),
             "ja-JP should use non-ASCII data: month={} region={}",
             ja.month,
             ja.region_name

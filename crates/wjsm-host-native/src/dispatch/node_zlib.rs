@@ -11,6 +11,7 @@ use super::runtime::fail_dispatch;
 use crate::{NativeAgentState, NativeCallableKind};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum NodeZlibMethod {
     GzipSync,
     GunzipSync,

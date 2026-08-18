@@ -78,11 +78,7 @@ pub(crate) fn compile_specialized(
             "profile tags exceed the parameter count",
         ));
     }
-    if !profile
-        .argument_tags
-        .iter()
-        .any(|tag| *tag == NativeFeedbackTag::Number)
-    {
+    if !profile.argument_tags.contains(&NativeFeedbackTag::Number) {
         return Err(SpecializationError::NoBenefit(
             "profile has no number argument",
         ));
