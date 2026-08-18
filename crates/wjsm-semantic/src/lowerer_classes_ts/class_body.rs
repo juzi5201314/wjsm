@@ -245,6 +245,7 @@ impl Lowerer {
         for blk in blocks {
             ir_function.push_block(blk);
         }
+        ir_function.set_needs_prototype(true);
         let ctor_function_id = self.module.push_function(ir_function);
         if let Some(function) = self.module.function_mut(ctor_function_id) {
             function.home_object = Some(HomeObject::Prototype(ctor_function_id));

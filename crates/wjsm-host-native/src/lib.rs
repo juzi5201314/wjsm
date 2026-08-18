@@ -2806,6 +2806,9 @@ impl NativeAgentState {
     }
 
     fn native_callable_builtin(&self, callee: i64) -> Option<(wjsm_ir::Builtin, bool)> {
+        if !value::is_native_callable(callee) {
+            return None;
+        }
         match self
             .native_callables
             .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)?
@@ -2878,6 +2881,9 @@ impl NativeAgentState {
     }
 
     fn native_callable_kind(&self, callee: i64) -> Option<NativeCallableKind> {
+        if !value::is_native_callable(callee) {
+            return None;
+        }
         self.native_callables
             .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)
             .copied()

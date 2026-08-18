@@ -1809,15 +1809,18 @@ pub(super) fn iterator_value(
             };
             (result, width as u32)
         }
-        super::super::NativeIteratorSource::TypedArray(source) => (
-            super::typedarray::get_element(
-                state,
-                value::encode_object_handle(source),
-                iterator.index as usize,
+        super::super::NativeIteratorSource::TypedArray(source) => {
+            let index = usize::try_from(iterator.index).unwrap_or(usize::MAX);
+            (
+                super::typedarray::get_element_intern(
+                    state,
+                    value::encode_object_handle(source),
+                    index,
+                )
+                .unwrap_or_else(value::encode_undefined),
+                1,
             )
-            .unwrap_or_else(value::encode_undefined),
-            1,
-        ),
+        }
         super::super::NativeIteratorSource::Map(source) => {
             let Some((key, stored)) = state
                 .maps

@@ -213,7 +213,7 @@ module {
       %2 = get_prop %0, %1
       return %2
 
-  fn @PrivateClosure.constructor [home_object=@7.prototype] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @PrivateClosure.constructor [home_object=@7.prototype] [needs_prototype] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = load var $9.$this
       %1 = load var $env

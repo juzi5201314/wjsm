@@ -749,7 +749,7 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         relative_index(state, Some(*encoded), array.length)
     });
     let values = (start.min(end)..end.min(array.length))
-        .filter_map(|index| get_element(state, receiver, index))
+        .filter_map(|index| get_element_intern(state, receiver, index))
         .collect::<Vec<_>>();
     construct_values(ctx, state, array.kind, &values)
 }
@@ -835,8 +835,8 @@ fn reverse(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
     for index in 0..length / 2 {
         let right = length - index - 1;
         let (Some(left), Some(right_value)) = (
-            get_element(state, receiver, index),
-            get_element(state, receiver, right),
+            get_element_intern(state, receiver, index),
+            get_element_intern(state, receiver, right),
         ) else {
             return fail_dispatch(ctx);
         };
@@ -851,7 +851,7 @@ fn reverse(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
 
 fn index_of(
     ctx: &mut NativeVmContext,
-    state: &NativeAgentState,
+    state: &mut NativeAgentState,
     args: &[i64],
     reverse: bool,
 ) -> i64 {
@@ -890,12 +890,12 @@ fn index_of(
     let found = if reverse {
         (0..length).rev().find(|index| {
             *index <= start
-                && get_element(state, receiver, *index)
+                && get_element_intern(state, receiver, *index)
                     .is_some_and(|stored| strict_equal(state, stored, needle))
         })
     } else {
         (start..length).find(|index| {
-            get_element(state, receiver, *index)
+            get_element_intern(state, receiver, *index)
                 .is_some_and(|stored| strict_equal(state, stored, needle))
         })
     };
@@ -905,16 +905,20 @@ fn index_of(
     )
 }
 
-fn includes(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn includes(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(array) = state.typed_arrays.get(&value::decode_handle(receiver)) else {
+    let Some(length) = state
+        .typed_arrays
+        .get(&value::decode_handle(receiver))
+        .map(|array| array.length)
+    else {
         return fail_dispatch(ctx);
     };
     let needle = args.get(1).copied().unwrap_or_else(value::encode_undefined);
-    value::encode_bool((0..array.length).any(|index| {
-        get_element(state, receiver, index).is_some_and(|stored| {
+    value::encode_bool((0..length).any(|index| {
+        get_element_intern(state, receiver, index).is_some_and(|stored| {
             if value::is_f64(stored) && value::is_f64(needle) {
                 let left = value::decode_f64(stored);
                 let right = value::decode_f64(needle);
@@ -930,18 +934,28 @@ fn join(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(array) = state.typed_arrays.get(&value::decode_handle(receiver)) else {
+    let Some(length) = state
+        .typed_arrays
+        .get(&value::decode_handle(receiver))
+        .map(|array| array.length)
+    else {
         return fail_dispatch(ctx);
     };
     let separator = args
         .get(1)
-        .map(|encoded| render_value(state, *encoded))
-        .unwrap_or_else(|| ",".into());
-    let output = (0..array.length)
-        .filter_map(|index| get_element(state, receiver, index))
-        .map(|stored| render_value(state, stored))
-        .collect::<Vec<_>>()
-        .join(&separator);
+        .map_or_else(|| ",".into(), |encoded| render_value(state, *encoded));
+
+    let mut output = String::new();
+    for index in 0..length {
+        if index > 0 {
+            output.push_str(&separator);
+        }
+        let Some(stored) = get_element_intern(state, receiver, index) else {
+            return fail_dispatch(ctx);
+        };
+        output.push_str(&render_value(state, stored));
+    }
+
     state
         .intern_text(output, value::TAG_STRING)
         .unwrap_or_else(|| fail_dispatch(ctx))
@@ -965,7 +979,7 @@ fn copy_within(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     });
     let count = end.saturating_sub(start).min(length.saturating_sub(target));
     let values = (0..count)
-        .filter_map(|index| get_element(state, receiver, start + index))
+        .filter_map(|index| get_element_intern(state, receiver, start + index))
         .collect::<Vec<_>>();
     for (index, stored) in values.into_iter().enumerate() {
         if set_element(state, receiver, target + index, stored).is_none() {
@@ -975,11 +989,15 @@ fn copy_within(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     receiver
 }
 
-fn at(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(array) = state.typed_arrays.get(&value::decode_handle(receiver)) else {
+    let Some(length) = state
+        .typed_arrays
+        .get(&value::decode_handle(receiver))
+        .map(|array| array.length)
+    else {
         return fail_dispatch(ctx);
     };
     let Some(index) = args
@@ -989,14 +1007,12 @@ fn at(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 
     else {
         return value::encode_undefined();
     };
-    let index = if index < 0 {
-        array.length as isize + index
-    } else {
-        index
-    };
+    let length = isize::try_from(length).unwrap_or(isize::MAX);
+    let index = if index < 0 { length + index } else { index };
+
     usize::try_from(index)
         .ok()
-        .and_then(|index| get_element(state, receiver, index))
+        .and_then(|index| get_element_intern(state, receiver, index))
         .unwrap_or_else(value::encode_undefined)
 }
 
@@ -1036,7 +1052,7 @@ fn callback_iterate(
     };
     let mut output_values = Vec::new();
     for index in 0..length {
-        let Some(stored) = get_element(state, receiver, index) else {
+        let Some(stored) = get_element_intern(state, receiver, index) else {
             return fail_dispatch(ctx);
         };
         let callback_result = state
@@ -1116,10 +1132,10 @@ fn reduce(
         let Some(index) = iter.next() else {
             return type_error(ctx, state, "Reduce of empty array with no initial value");
         };
-        get_element(state, receiver, index).unwrap_or_else(value::encode_undefined)
+        get_element_intern(state, receiver, index).unwrap_or_else(value::encode_undefined)
     };
     for index in iter {
-        let Some(stored) = get_element(state, receiver, index) else {
+        let Some(stored) = get_element_intern(state, receiver, index) else {
             return fail_dispatch(ctx);
         };
         accumulator = state
@@ -1161,7 +1177,7 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
         return super::runtime::type_error(ctx, state, "compare function must be callable");
     }
     let mut values = (0..length)
-        .filter_map(|index| get_element(state, receiver, index))
+        .filter_map(|index| get_element_intern(state, receiver, index))
         .collect::<Vec<_>>();
     let mut exception = None;
     values.sort_by(|left, right| {
@@ -1286,7 +1302,7 @@ fn relative_index(state: &NativeAgentState, encoded: Option<i64>, length: usize)
     }
 }
 
-fn array_values(state: &NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
+fn array_values(state: &mut NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
     if value::is_array(encoded) {
         let handle = value::decode_handle(encoded);
         let length = state.gc.heap().array_length(handle).ok()?;
@@ -1298,14 +1314,17 @@ fn array_values(state: &NativeAgentState, encoded: i64) -> Option<Vec<i64>> {
                     .get_element(handle, index)
                     .ok()
                     .flatten()
-                    .map(|stored| stored as i64)
+                    .map(|stored| i64::from_ne_bytes(stored.to_ne_bytes()))
             })
             .collect();
     }
     if value::is_js_object(encoded) {
-        let typed = state.typed_arrays.get(&value::decode_handle(encoded))?;
-        return (0..typed.length)
-            .map(|index| get_element(state, encoded, index))
+        let length = state
+            .typed_arrays
+            .get(&value::decode_handle(encoded))?
+            .length;
+        return (0..length)
+            .map(|index| get_element_intern(state, encoded, index))
             .collect();
     }
     None

@@ -246,7 +246,7 @@ module {
       %10 = add %8, %9
       return %10
 
-  fn @Pair.constructor [home_object=@3.prototype] [direct_callable] [params: $5.$env, $5.$this, $5.a, $5.b] [entry=bb0]:
+  fn @Pair.constructor [home_object=@3.prototype] [needs_prototype] [direct_callable] [params: $5.$env, $5.$this, $5.a, $5.b] [entry=bb0]:
     bb0:
       %0 = load var $5.$this
       %1 = const c49
@@ -568,7 +568,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @Base.constructor [home_object=@10.prototype] [direct_callable] [params: $13.$env, $13.$this, $13.a, $13.b] [entry=bb0]:
+  fn @Base.constructor [home_object=@10.prototype] [needs_prototype] [direct_callable] [params: $13.$env, $13.$this, $13.a, $13.b] [entry=bb0]:
     bb0:
       %0 = load var $13.$this
       %1 = const c173
@@ -584,7 +584,7 @@ module {
       %7 = call builtin.exception_value(%5)
       throw %7
 
-  fn @Derived.constructor [home_object=@11.prototype] [direct_callable] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @Derived.constructor [home_object=@11.prototype] [needs_prototype] [direct_callable] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       store var $15.args, %0

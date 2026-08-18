@@ -213,13 +213,13 @@ pub(crate) fn next(
             }
         }
         CollectionIteratorSource::TypedArray(handle) => {
-            let Some(array) = state.typed_arrays.get(&handle) else {
+            let Some(length) = state.typed_arrays.get(&handle).map(|array| array.length) else {
                 return fail_dispatch(ctx);
             };
-            if iterator.index >= array.length {
+            if iterator.index >= length {
                 (value::encode_undefined(), true)
             } else {
-                let stored = super::typedarray::get_element(
+                let stored = super::typedarray::get_element_intern(
                     state,
                     value::encode_object_handle(handle),
                     iterator.index,
