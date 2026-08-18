@@ -1,0 +1,21 @@
+exit_code: 0
+--- stdout ---
+function true
+de
+1.234,5
+true
+true
+UTC numeric
+true
+true
+one other
+a, b, and c
+yesterday
+Chinese
+a 0
+b 1
+2
+hello true
+TypeError
+TypeError
+--- stderr ---

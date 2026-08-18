@@ -29,7 +29,7 @@ ADR 0003 的 startup snapshot 是强制 restore 的最小种子，不是 ICU 数
 
 生产数据是 ICU4X 发布的 compiled_data，经 rustc 链进 `wjsm` 与预链 `wjsm-exec` stub。不跑 icu4x-datagen，不裁非英语 locale。
 
-`NativeAgentState::new` 调用 `wjsm_intl_data::keep_compiled_data()`。发行构建通过 `#[used]` constructor 指针把各类数据入口留在 rustc 链接图里，避免 DCE 在 `Intl` JS API 落地前把 locale 数据从 stub 删掉；它不在启动路径上真正构造全部 formatter。debug / test 构建不强制保留未引用的 locale 数据，以免 debug `wjsm` 体积拖垮 3s fixture 门禁。
+`NativeAgentState::new` 调用 `wjsm_intl_data::keep_compiled_data()`。发行构建通过 `#[used]` constructor 指针把尚未被 JS 路径引用的实验数据留在 rustc 链接图里。Phase 2/3 的 `Intl` 与 locale 敏感方法会直接引用 `locale` / `format` / `text` 模块，因此这些模块在 debug 与发行构建中都编译；`keep_compiled_data()` 仍只在发行构建强制留住尚未被引用的入口。
 
 禁止：
 
@@ -53,9 +53,11 @@ ADR 0003 的 startup snapshot 是强制 restore 的最小种子，不是 ICU 数
 
 本阶段基线：ICU4X **2.2.0**、CLDR **48.2**、Unicode **17.0.0**、tzdb **2026a**、`idna` 1.1.0、`encoding_rs` 0.8.35。
 
-### 5. 本阶段不实现 `Intl` JS API
+### 5. Phase 2/3 消费本 crate，不另起数据 owner
 
-ECMA-402 对象、`localeCompare`、`toLocaleString`、URL IDN 接线、非 UTF-8 `TextDecoder` 属于后续阶段。它们必须消费本 crate，不得另起数据 owner。
+ECMA-402 `Intl` 对象与 ECMA-262 locale 敏感方法（`localeCompare`、`toLocale*`、`normalize` 的大小写映射）由 `wjsm-builtins` 抽象操作 + `wjsm-host-native` 安装/分派实现，ICU 包装只留在本 crate。URL IDN 接线与非 UTF-8 `TextDecoder` 仍属后续阶段，同样必须消费本 crate。
+
+对象模型沿用现有 console / Date / Map 模式（普通对象、lazy prototype、侧表内部槽），不新开架构 ADR。
 
 ## Consequences
 
@@ -67,7 +69,9 @@ ECMA-402 对象、`localeCompare`、`toLocaleString`、URL IDN 接线、非 UTF-
 
 - `wjsm-intl-data` smoke matrix（8 locale × 数据类别）与 manifest hash 测试。
 - `NODE_ICU_DATA` 不影响探测结果。
-- `happy/string_normalize*` 与 packed `wjsm-exec` 的 `String.prototype.normalize`。
+- `happy/string_normalize*`、`happy/intl_*`、`errors/intl_*` 与 packed `wjsm-exec` 的 `String.prototype.normalize`。
+- test262 allowlist 含本阶段用到的 ECMA-402 feature；不含光秃 `"Intl"`（以免前缀误选 Temporal）、`canonical-tz`、`intl-normative-optional`。
+- 构造器与 locale 方法目录套件作为实现期回归；全量 `test/intl402` 非 Temporal 子集仍是后续合入门槛，不作为本阶段关闭条件。
 - workspace 测试作为合入门槛。
 
 ## References

@@ -22,7 +22,7 @@ typeof fetch         // "undefined"，但 fetch(url) 正常工作
 
 ## String 原型方法
 
-`slice`、`concat`、`includes`、`startsWith`、`indexOf` 可取值传递。其余方法（`replace`、`split`、`match`、`trim` 等）取值得到 `undefined`，只能在调用点使用：
+`slice`、`concat`、`includes`、`startsWith`、`indexOf` 以及 locale 相关的 `normalize` / `toLowerCase` / `toUpperCase` / `toLocaleLowerCase` / `toLocaleUpperCase` / `localeCompare` 可取值传递。其余方法（`replace`、`split`、`match`、`trim` 等）取值得到 `undefined`，只能在调用点使用：
 
 ```js
 "hello".replace("l", "L")      // 可用：直接调用
@@ -73,9 +73,11 @@ set.forEach((value) => console.log(typeof value)); // "object"
 及既有限制处理。这不是完整的运行时 TDZ 支持；类名仍使用独立的延迟方法体规则，
 类定义期求值位置保持严格 TDZ。
 
-## Intl 未实现
+## Intl 与 locale 敏感方法
 
-`Intl` 对象未实现，依赖它的方法会 trap。`Date.prototype.toLocaleString`、`Number.prototype.toLocaleString` 等 locale 敏感方法不提供 locale 定制，返回默认格式。CLDR/Unicode 数据已经嵌入 `wjsm` / `wjsm-exec` stub（见内部手册「国际化数据契约」），供后续阶段接线。
+`Intl` 命名空间、ECMA-402 构造器与 `String`/`Number`/`BigInt`/`Date`/`Array` 的 locale 敏感方法已实现，数据来自 `wjsm-intl-data`（ICU4X compiled_data）。默认 locale 读 `LC_ALL`/`LANG`，非法则 `en`。fixture 与可复现测试应显式传 locale。
+
+实现定义差异（ILD/ILND）按规范允许，不把 Node full-icu 当作逐字符 oracle。Temporal 的 intl402 测试不在当前范围内。`intl-normative-optional` 的 legacy constructor 未实现。
 
 ## URL / URLSearchParams 不是全局
 

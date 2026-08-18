@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+object
+[object Intl]
+1 1
+false
+function function function
+function function function
+function function function
+function
+["de-DE"]
+["en-US","zh-CN"]
+true
+true
+[]
+RangeError
+RangeError
+["en"]
+--- stderr ---

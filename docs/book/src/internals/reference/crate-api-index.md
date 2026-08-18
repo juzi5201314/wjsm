@@ -110,7 +110,7 @@ Cranelift 后端实现。
 
 ## wjsm-builtins
 
-JavaScript builtins 算法。按域组织：object、collections、array、typedarray、string、promise、async、proxy、json、date、fetch、weakref、modules、inspector、render、core。
+JavaScript builtins 算法。按域组织：object、collections、array、typedarray、string、promise、async、proxy、json、date、intl、fetch、weakref、modules、inspector、render、core。`intl` 只消费已规约的 Rust 类型，不持有 `NativeVmContext`。
 
 ## wjsm-intl-data
 
@@ -119,9 +119,11 @@ ICU4X compiled_data、UTS #46 与 WHATWG Encoding 标签的唯一入口。
 | 导出 | 用途 |
 | --- | --- |
 | `DATA_MANIFEST` / `manifest_sha256` | 版本契约与稳定 hash |
-| `normalize` | Unicode NFC/NFD/NFKC/NFKD |
+| `normalize` / `case_map` / `locale_case_map` | Unicode 正规化与大小写映射 |
+| `canonicalize_locale` / `supported_values` | 语言标签与 `supportedValuesOf` 数据 |
+| `Owned*Formatter` / `OwnedDisplayNames` / `OwnedSegmenter` | Collator、Number、DateTime、Plural、List、RelativeTime、DisplayNames、Segmenter、Duration |
 | `probe_locale` / `keep_compiled_data` | smoke 覆盖与发行 stub 链接保活 |
-| `icu` / `idna` / `encoding_rs` | 测试与发行构建 re-export；debug `wjsm` 只链 normalize |
+| `icu` / `idna` / `encoding_rs` | 测试与发行构建 re-export；debug `wjsm` 经 `Intl` 路径链接 locale 数据 |
 
 ## wjsm-gc
 

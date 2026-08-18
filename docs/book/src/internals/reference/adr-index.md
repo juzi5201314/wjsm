@@ -13,7 +13,7 @@
 | 0017 | native-executable 以制品内源码快照为运行时源码 owner | Accepted；修正 0016 §2 |
 | 0018 | native-executable overlay payload 整层 zstd | Accepted；修正 0016 §1 |
 | 0019 | native-executable 的 packed 应用合同 | Accepted；修正 0016 §5 与 0017 |
-| 0020 | ICU4X compiled_data 嵌入 rustc 链接的 stub | Accepted；Intl Phase 1 数据契约 |
+| 0020 | ICU4X compiled_data 嵌入 rustc 链接的 stub | Accepted；Intl Phase 1 数据契约，Phase 2/3 已消费 |
 
 ## 当前基线
 

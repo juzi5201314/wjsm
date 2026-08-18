@@ -2,7 +2,7 @@
 
 wjsm 把 CLDR / Unicode 数据 rustc 链接进 `wjsm` 与 `wjsm-exec` stub。数据 owner 是 `wjsm-intl-data`。portable `.wjsm` 与 startup snapshot 不含 ICU 数据。
 
-本阶段只提供数据与 `String.prototype.normalize`。JS `Intl` 对象仍未实现，见后续 ECMA-402 阶段。
+Phase 2/3 已把 JS `Intl` 与 ECMA-262 locale 敏感方法接到本 crate。ICU 类型不泄漏给 host；抽象操作在 `wjsm-builtins`，安装与分派在 `wjsm-host-native`。
 
 ## 版本清单
 
@@ -25,7 +25,7 @@ smoke locales：`en-US`、`zh-CN`、`de-DE`、`es-ES`、`ar`、`th`、`tr`、`ja
 
 | 类别 | 入口 | 备注 |
 | --- | --- | --- |
-| locale / likely subtags / fallback | `locale.rs` | ICU4X 2.2 无独立 LocaleMatcher；negotiation 算法在 Phase 2 |
+| locale / likely subtags / fallback | `locale.rs` | ICU4X 2.2 无独立 LocaleMatcher；`ResolveLocale` 在 `wjsm-builtins` |
 | calendar | `AnyCalendar` | 含 Gregorian / Japanese / Chinese / Buddhist / Hijri |
 | collation | `Collator` | |
 | numbering | `DecimalFormatter` | |
@@ -35,7 +35,7 @@ smoke locales：`en-US`、`zh-CN`、`de-DE`、`es-ES`、`ar`、`th`、`tr`、`ja
 | list | `ListFormatter` | |
 | display name | `RegionDisplayNames` / `LanguageDisplayNames` | `icu::experimental` |
 | segmenter | `WordSegmenter` / grapheme / sentence | 含泰文、日文分词数据 |
-| duration | `DurationFormatter` | experimental |
+| duration | `duration.rs` | JS `Intl.DurationFormat` 走规范 `PartitionDurationFormatPattern`，不直接用 ICU `DurationFormatter` 输出 |
 | unit | `UnitsFormatter` | experimental |
 | IDNA | `idna::domain_to_ascii` | UTS #46 |
 | encoding labels | `encoding_rs::Encoding::for_label` | 供 Phase 4 TextDecoder 消费；当前 JS `TextDecoder` 仍是 UTF-8-only |
@@ -51,7 +51,7 @@ icu 2.2 compiled_data + idna + encoding_rs
 
 - `wjsm run`、当前宿主执行 portable `.wjsm`、native image cache、packed `native-executable` 共用这份 stub 数据。
 - 不读 system ICU、`NODE_ICU_DATA` 或宿主 CLDR 目录，也不联网下载。
-- debug `wjsm` 只链 `String.prototype.normalize` 所需 normalizer；发行 stub 用 `keep_compiled_data` 保留 full compiled_data。
+- debug `wjsm` 因 JS `Intl` 路径引用而链接 locale / format / text 数据；发行 stub 仍用 `keep_compiled_data` 留住尚未被引用的实验入口。
 
 ## 体积
 

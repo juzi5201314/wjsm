@@ -52,21 +52,22 @@
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
-| `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性 |
-| `String` 方法 | 多数仅调用点 | `slice`/`concat`/`includes`/`startsWith`/`indexOf` 可取值传递，其余方法取值得到 `undefined` |
+| `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性；`toLocaleString` 委托元素的 locale 方法 |
+| `String` 方法 | 多数仅调用点 | `normalize` / `toLowerCase` / `toUpperCase` / `toLocale*` / `localeCompare` 是真实原型方法；`slice`/`concat`/`includes`/`startsWith`/`indexOf` 可取值传递，其余方法取值得到 `undefined` |
 | `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 同构造器与跨构造器的 `instanceof` 返回布尔；其他构造器的 `instanceof` 边界仍以 fixture/test262 覆盖为准 |
 | `Promise` 及组合子 | 可用 | 含 `allSettled`、`withResolvers` |
 | `Proxy` / `Reflect` | 可用 | |
-| `BigInt` | 可用 | |
+| `Number` | 可用 | `toLocaleString` 委托 `Intl.NumberFormat` |
+| `BigInt` | 可用 | `toLocaleString` 委托 `Intl.NumberFormat` |
 | `Symbol` | 可用 | |
 | `RegExp`（含命名捕获组） | 可用 | 由 `regress` 提供 |
 | `JSON` | 可用 | |
-| TypedArray、`ArrayBuffer`、`SharedArrayBuffer` | 可用 | 原型方法仅调用点可用 |
+| TypedArray、`ArrayBuffer`、`SharedArrayBuffer` | 可用 | 原型方法多数仅调用点可用；TypedArray `toLocaleString` 委托与 Array 相同的 Intl 路径 |
 | `DataView` | 可用 | 访问器取值得到 `undefined` |
 | `Atomics` | 可用 | |
 | `WeakRef`、`FinalizationRegistry` | 可用 | |
-| `Date` | 可用 | locale 定制不可用 |
-| `Intl` | 未实现 | 依赖它的方法会 trap |
+| `Date` | 可用 | `toLocale*` 委托 `Intl.DateTimeFormat` |
+| `Intl` | 可用 | ECMA-402 核心构造器与 `getCanonicalLocales` / `supportedValuesOf`；不含 Temporal intl402、`intl-normative-optional` 遗留构造器 |
 | `URL` / `URLSearchParams` | 未提供 | 用 `node:url`、`node:querystring` |
 
 ## TypeScript
