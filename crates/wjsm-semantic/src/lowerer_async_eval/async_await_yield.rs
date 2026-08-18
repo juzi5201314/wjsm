@@ -634,23 +634,19 @@ impl Lowerer {
             }
             if ident.sym == "Proxy" && self.scopes.lookup(&ident.sym).is_err() {
                 // new Proxy(target, handler) → CallBuiltin(ProxyCreate, [target, handler])
-                let mut arg_vals = Vec::new();
-                if let Some(args) = &new_expr.args {
-                    for arg in args {
-                        let arg_val = self.lower_expr(&arg.expr, block)?;
-                        arg_vals.push(arg_val);
-                    }
-                }
+                let mut call_block = block;
+                let arg_vals =
+                    self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    call_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::ProxyCreate,
                         args: arg_vals,
                     },
                 );
-                return Ok((dest, block));
+                return Ok((dest, call_block));
             }
             if ident.sym == "RegExp" && self.scopes.lookup(&ident.sym).is_err() {
                 let mut call_block = block;
@@ -738,25 +734,23 @@ impl Lowerer {
                         | Builtin::ByteLengthQueuingStrategyConstructor
                 )
             {
-                let mut arg_vals = Vec::new();
-                if let Some(args) = &new_expr.args {
-                    for arg in args {
-                        let arg_val = self.lower_expr(&arg.expr, block)?;
-                        arg_vals.push(arg_val);
-                    }
-                }
+                let mut call_block = block;
+                let mut arg_vals =
+                    self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
                 if arg_vals.is_empty() {
                     arg_vals.push({
                         let c = self.module.add_constant(Constant::Undefined);
                         let dest = self.alloc_value();
-                        self.current_function
-                            .append_instruction(block, Instruction::Const { dest, constant: c });
+                        self.current_function.append_instruction(
+                            call_block,
+                            Instruction::Const { dest, constant: c },
+                        );
                         dest
                     });
                 }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    call_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin,
@@ -766,7 +760,7 @@ impl Lowerer {
                 // Exception check
                 let is_exc = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    call_block,
                     Instruction::IsException {
                         dest: is_exc,
                         value: dest,
@@ -775,7 +769,7 @@ impl Lowerer {
                 let continue_block = self.current_function.new_block();
                 let exc_block = self.current_function.new_block();
                 self.current_function.set_terminator(
-                    block,
+                    call_block,
                     Terminator::Branch {
                         condition: is_exc,
                         true_block: exc_block,
@@ -822,25 +816,23 @@ impl Lowerer {
                         | Builtin::BigUint64ArrayConstructor
                 )
             {
-                let mut arg_vals = Vec::new();
-                if let Some(args) = &new_expr.args {
-                    for arg in args {
-                        let arg_val = self.lower_expr(&arg.expr, block)?;
-                        arg_vals.push(arg_val);
-                    }
-                }
+                let mut call_block = block;
+                let mut arg_vals =
+                    self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
                 if arg_vals.is_empty() {
                     arg_vals.push({
                         let c = self.module.add_constant(Constant::Undefined);
                         let dest = self.alloc_value();
-                        self.current_function
-                            .append_instruction(block, Instruction::Const { dest, constant: c });
+                        self.current_function.append_instruction(
+                            call_block,
+                            Instruction::Const { dest, constant: c },
+                        );
                         dest
                     });
                 }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    call_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: if builtin == Builtin::DateConstructor {
@@ -851,7 +843,7 @@ impl Lowerer {
                         args: arg_vals,
                     },
                 );
-                return Ok((dest, block));
+                return Ok((dest, call_block));
             }
         }
 

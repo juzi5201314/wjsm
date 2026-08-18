@@ -66,7 +66,7 @@ mod exec;
 mod process;
 mod read;
 
-use config::should_run_test;
+use config::{include_features_from_harness, should_run_test};
 use exec::{
     DEFAULT_CHILD_MEMORY_LIMIT_MIB, DEFAULT_JOB_MEMORY_COST_MIB, DEFAULT_TIMEOUT_SECS, RunLimits,
     Statistics, SuiteResults, TestResult,
@@ -342,8 +342,9 @@ fn run_test262(
         );
     }
 
+    let include_features = include_features_from_harness(&harness);
     let results = exec::run_suite(&suite, &harness, parallel, limits, &|test| {
-        should_run_test(test, all)
+        should_run_test(test, all, &include_features)
     });
 
     // 输出结果

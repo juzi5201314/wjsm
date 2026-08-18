@@ -122,6 +122,15 @@ pub(super) fn install_prototype_methods(
     Ok(())
 }
 
+pub(crate) fn method_metadata(kind: DateMethodKind) -> Option<(&'static str, u32)> {
+    Some(match kind {
+        DateMethodKind::ToLocaleString => ("toLocaleString", 0),
+        DateMethodKind::ToLocaleDateString => ("toLocaleDateString", 0),
+        DateMethodKind::ToLocaleTimeString => ("toLocaleTimeString", 0),
+        _ => return None,
+    })
+}
+
 pub(crate) fn method(
     state: &mut NativeAgentState,
     receiver: i64,
@@ -171,9 +180,9 @@ pub(crate) fn call_method(
         DateMethodKind::GetUTCDay => utc_component(milliseconds, |date| {
             f64::from(date.weekday().num_days_from_sunday())
         }),
-        DateMethodKind::GetUTCFullYear => {
-            utc_component(milliseconds, |date| f64::from(date.year()))
-        }
+        DateMethodKind::GetUTCFullYear => value::encode_f64(
+            wjsm_builtins::utc_year_from_ms(milliseconds).map_or(f64::NAN, f64::from),
+        ),
         DateMethodKind::GetUTCHours => utc_component(milliseconds, |date| f64::from(date.hour())),
         DateMethodKind::GetUTCMilliseconds => utc_component(milliseconds, |date| {
             f64::from(date.nanosecond() / 1_000_000)
@@ -188,15 +197,27 @@ pub(crate) fn call_method(
         DateMethodKind::ToString => string_value(ctx, state, date::render_local_date(milliseconds)),
         DateMethodKind::ToDateString => string_value(ctx, state, format_local_date(milliseconds)),
         DateMethodKind::ToTimeString => string_value(ctx, state, format_local_time(milliseconds)),
-        DateMethodKind::ToLocaleString => {
-            string_value(ctx, state, format_local_datetime(milliseconds))
-        }
-        DateMethodKind::ToLocaleDateString => {
-            string_value(ctx, state, format_local_date(milliseconds))
-        }
-        DateMethodKind::ToLocaleTimeString => {
-            string_value(ctx, state, format_local_time(milliseconds))
-        }
+        DateMethodKind::ToLocaleString => super::intl::date_to_locale(
+            ctx,
+            state,
+            milliseconds,
+            args,
+            super::intl::DateLocaleKind::DateTime,
+        ),
+        DateMethodKind::ToLocaleDateString => super::intl::date_to_locale(
+            ctx,
+            state,
+            milliseconds,
+            args,
+            super::intl::DateLocaleKind::Date,
+        ),
+        DateMethodKind::ToLocaleTimeString => super::intl::date_to_locale(
+            ctx,
+            state,
+            milliseconds,
+            args,
+            super::intl::DateLocaleKind::Time,
+        ),
         DateMethodKind::ToISOString => to_iso_string(ctx, state, milliseconds),
         DateMethodKind::ToUTCString => to_utc_string(ctx, state, milliseconds),
         DateMethodKind::ToJSON => {
@@ -435,12 +456,5 @@ fn format_local_time(milliseconds: f64) -> String {
     wjsm_builtins::ms_to_datetime_local(milliseconds).map_or_else(
         || "Invalid Date".to_owned(),
         |date| date.format("%H:%M:%S GMT%:z").to_string(),
-    )
-}
-
-fn format_local_datetime(milliseconds: f64) -> String {
-    wjsm_builtins::ms_to_datetime_local(milliseconds).map_or_else(
-        || "Invalid Date".to_owned(),
-        |date| date.format("%a %b %e %Y %H:%M:%S").to_string(),
     )
 }

@@ -78,6 +78,10 @@ impl Lowerer {
             let (args_array, end_block) = self.lower_call_args_to_array(&call.args, call_block)?;
             call_block = end_block;
             (Builtin::MathMaxArray, vec![args_array])
+        } else if Self::call_args_have_spread(&call.args) {
+            // `Reflect.has(...arguments)` 等不能把 spread 表达式当成单个 CallBuiltin
+            // 实参，否则 `let [target, key] = args` 只收到 arguments 对象并 InternalInvariant。
+            return self.lower_host_builtin_spread_apply(call, call_block);
         } else {
             let mut args = Vec::with_capacity(call.args.len().max(1));
             for arg in &call.args {
@@ -130,6 +134,56 @@ impl Lowerer {
         }
         self.expr_merge_block = Some(call_block);
         Ok(dest)
+    }
+
+    /// 静态宿主 API 的 spread 调用：物化实参数组后 FuncApply。
+    fn lower_host_builtin_spread_apply(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let mut call_block = block;
+        let (callee_val, this_val) = self.lower_host_apply_callee(call, &mut call_block)?;
+        let (args_array, end_block) = self.lower_call_args_to_array(&call.args, call_block)?;
+        call_block = end_block;
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            call_block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::FuncApply,
+                args: vec![callee_val, this_val, args_array],
+            },
+        );
+        self.expr_merge_block = Some(call_block);
+        Ok(dest)
+    }
+
+    fn lower_host_apply_callee(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: &mut BasicBlockId,
+    ) -> Result<(ValueId, ValueId), LoweringError> {
+        let swc_ast::Callee::Expr(expr) = &call.callee else {
+            return Err(self.error(call.span, "spread apply requires a callable expression"));
+        };
+        if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
+            let this_val = self.lower_expr_then_continue(member_expr.obj.as_ref(), block)?;
+            let callee_val =
+                self.lower_member_expr_from_object(member_expr, this_val, block, false)?;
+            return Ok((callee_val, this_val));
+        }
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            *block,
+            Instruction::Const {
+                dest: this_val,
+                constant: undef_const,
+            },
+        );
+        let callee_val = self.lower_expr_then_continue(expr, block)?;
+        Ok((callee_val, this_val))
     }
 
     /// 处理动态 import() 调用

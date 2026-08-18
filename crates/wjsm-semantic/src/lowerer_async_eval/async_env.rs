@@ -23,7 +23,11 @@ impl Lowerer {
             .collect::<Vec<_>>();
         let _ = self.ensure_function_shared_env(block, &stable_captures, span)?;
         let current_block = self.resolve_store_block(block);
-        Ok(self.load_current_iteration_env(current_block))
+        let env = self.load_current_iteration_env(current_block);
+        // 内层 resolve 会 take 掉 `$shared_env` 慢路径的 merge；调用方还要用
+        // 同一 continuation，否则 CreateClosure 会写回已终止的 branch block。
+        self.expr_merge_block = Some(current_block);
+        Ok(env)
     }
 
     /// 获取或创建当前函数调用帧的稳定共享环境。

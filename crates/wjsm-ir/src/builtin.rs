@@ -516,6 +516,8 @@ pub enum Builtin {
     ArrayHasElement,
     /// JS truthiness → bool。
     ToBoolean,
+    /// `Object.prototype.propertyIsEnumerable`
+    PropertyIsEnumerable,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -551,7 +553,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::ToBoolean as u16
+        Self::PropertyIsEnumerable as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1034,6 +1036,7 @@ impl Builtin {
             Self::ArrayAllocate => "array.allocate",
             Self::ArrayHasElement => "array.has_element",
             Self::ToBoolean => "to_boolean",
+            Self::PropertyIsEnumerable => "property_is_enumerable",
         }
     }
 }

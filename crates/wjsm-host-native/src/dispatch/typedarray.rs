@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::buffers::NativeArrayBuffer;
+use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
@@ -356,6 +357,45 @@ pub(crate) fn typed_array_builtin(
 }
 
 pub(crate) fn get_element(state: &NativeAgentState, object: i64, index: usize) -> Option<i64> {
+    get_element_from(state, object, index)
+}
+
+/// 读取元素；BigInt 视图需要 intern，因此走可变状态。
+pub(crate) fn get_element_intern(
+    state: &mut NativeAgentState,
+    object: i64,
+    index: usize,
+) -> Option<i64> {
+    let array = state
+        .typed_arrays
+        .get(&value::decode_handle(object))?
+        .clone();
+    if index >= array.length {
+        return None;
+    }
+    if let Some(storage) = &array.storage {
+        let encoded = storage.borrow()[array.offset + index];
+        if array.kind.is_bigint() && !value::is_bigint(encoded) {
+            return super::bigint::store(state, BigInt::from(0));
+        }
+        return Some(encoded);
+    }
+    if !array.kind.is_bigint() {
+        return get_element(state, object, index);
+    }
+    let size = array.kind.element_size();
+    let start = (array.offset + index).checked_mul(size)?;
+    let raw = if let Some(shared) = &array.shared_buffer {
+        let bytes = shared.lock().ok()?;
+        bytes.get(start..start + size)?.to_vec()
+    } else {
+        let buffer = array.buffer.as_ref()?;
+        buffer.borrow().get(start..start + size)?.to_vec()
+    };
+    decode_bigint_element(state, &raw, array.kind)
+}
+
+fn get_element_from(state: &NativeAgentState, object: i64, index: usize) -> Option<i64> {
     let array = state.typed_arrays.get(&value::decode_handle(object))?;
     if index >= array.length {
         return None;
@@ -484,6 +524,20 @@ fn construct(
     } else {
         0
     };
+    let byte_length = match length.checked_mul(kind.element_size()) {
+        Some(byte_length) => byte_length,
+        None => return range_error(ctx, state, "Invalid typed array length"),
+    };
+    let Some(buffer_object) = super::buffers::allocate_array_buffer(state, byte_length) else {
+        return fail_dispatch(ctx);
+    };
+    let Some(buffer) = state
+        .array_buffers
+        .get(&value::decode_handle(buffer_object))
+        .cloned()
+    else {
+        return fail_dispatch(ctx);
+    };
     let Ok(object) = state.allocate_object(2, false) else {
         return fail_dispatch(ctx);
     };
@@ -491,9 +545,9 @@ fn construct(
         value::decode_handle(object),
         NativeTypedArray {
             kind,
-            storage: Some(Rc::new(RefCell::new(vec![value::encode_f64(0.0); length]))),
-            buffer: None,
-            buffer_object: None,
+            storage: None,
+            buffer: Some(buffer.bytes),
+            buffer_object: Some(buffer_object),
             shared_buffer: None,
             shared_backing_id: None,
             is_shared: false,
@@ -1320,6 +1374,21 @@ fn signed_integer(number: f64, bits: u32) -> f64 {
         unsigned
     }
 }
+fn decode_bigint_element(
+    state: &mut NativeAgentState,
+    bytes: &[u8],
+    kind: TypedArrayKind,
+) -> Option<i64> {
+    let raw: [u8; 8] = bytes.try_into().ok()?;
+    let bits = u64::from_ne_bytes(raw);
+    let value = match kind {
+        TypedArrayKind::BigInt64 => BigInt::from(bits as i64),
+        TypedArrayKind::BigUint64 => BigInt::from(bits),
+        _ => return None,
+    };
+    super::bigint::store(state, value)
+}
+
 fn decode_buffer_element(bytes: &[u8], kind: TypedArrayKind) -> Option<i64> {
     let value = match kind {
         TypedArrayKind::Int8 => i8::from_ne_bytes([bytes[0]]) as f64,
@@ -1341,11 +1410,12 @@ fn encode_buffer_element(
     kind: TypedArrayKind,
     encoded: i64,
 ) -> Option<()> {
-    let number = if kind.is_bigint() {
-        super::bigint::read(state, encoded)?.to_i64()? as f64
-    } else {
-        value::decode_f64(encoded)
-    };
+    if kind.is_bigint() {
+        let bigint = super::bigint::read(state, encoded)?;
+        destination.copy_from_slice(&bigint_element_bits(&bigint).to_ne_bytes());
+        return Some(());
+    }
+    let number = value::decode_f64(encoded);
     match kind {
         TypedArrayKind::Int8 => destination.copy_from_slice(&(number as i8).to_ne_bytes()),
         TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
@@ -1357,12 +1427,18 @@ fn encode_buffer_element(
         TypedArrayKind::Uint32 => destination.copy_from_slice(&(number as u32).to_ne_bytes()),
         TypedArrayKind::Float32 => destination.copy_from_slice(&(number as f32).to_ne_bytes()),
         TypedArrayKind::Float64 => destination.copy_from_slice(&number.to_ne_bytes()),
-        TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => {
-            let bigint = super::bigint::read(state, encoded)?.to_i64()? as u64;
-            destination.copy_from_slice(&bigint.to_ne_bytes());
-        }
+        TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => unreachable!(),
     }
     Some(())
+}
+
+fn bigint_element_bits(value: &BigInt) -> u64 {
+    let modulus = BigInt::from(1u128 << 64);
+    let mut normalized = value % &modulus;
+    if normalized.sign() == Sign::Minus {
+        normalized += &modulus;
+    }
+    normalized.to_u64().unwrap_or(0)
 }
 
 fn range_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, message: &str) -> i64 {

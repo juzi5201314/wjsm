@@ -355,8 +355,8 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     // print() 是 test262 harness 使用的全局函数，wjsm 没有原生支持
     source.push_str("function print(msg) { console.log(msg); }\n");
     source.push('\n');
-    // 设置 $262 对象（host-defined test262 API），保留运行时原生 gc 绑定。
-    source.push_str("var $262 = { gc: gc };\n");
+    // 宿主已提供 `$262`（agent / createRealm / gc）。不要整对象覆盖。
+    source.push_str("if ($262 && typeof $262.gc !== 'function') { $262.gc = gc; }\n");
     source.push('\n');
 
     // raw 模式：只添加 workaround 和测试主体

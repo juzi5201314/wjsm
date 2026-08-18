@@ -42,15 +42,32 @@ pub(super) fn dispatch_string(
         Builtin::StringTrim => string_trim(ctx, state, args, true, true),
         Builtin::StringTrimEnd => string_trim(ctx, state, args, false, true),
         Builtin::StringTrimStart => string_trim(ctx, state, args, true, false),
-        Builtin::StringToString | Builtin::StringValueOf => args
-            .first()
-            .filter(|value| value::is_string(**value))
-            .copied()
-            .unwrap_or_else(|| fail_dispatch(ctx)),
+        Builtin::StringToString | Builtin::StringValueOf => this_string_value(ctx, state, args),
         Builtin::StringFromCharCode => string_from_char_code(ctx, state, args),
         Builtin::StringFromCodePoint => string_from_code_point(ctx, state, args),
         _ => return None,
     })
+}
+
+fn this_string_value(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_string(receiver) {
+        return receiver;
+    }
+    if value::is_js_object(receiver)
+        && let Some(&primitive) = state.boxed_primitives.get(&value::decode_handle(receiver))
+        && value::is_string(primitive)
+    {
+        return primitive;
+    }
+    type_error(
+        ctx,
+        state,
+        "String.prototype.toString requires that 'this' be a String",
+    )
 }
 
 fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {

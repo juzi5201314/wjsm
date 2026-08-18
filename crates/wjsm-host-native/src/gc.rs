@@ -125,6 +125,7 @@ impl NativeGc {
 
     pub(super) fn reset_nlab(&self) {
         self.nlab.borrow_mut().reset();
+        self.heap.reset_nlab();
         self.pacing_poll_requested.set(false);
     }
 

@@ -1399,6 +1399,12 @@ pub(crate) fn exception_text(state: &mut NativeAgentState, exception: i64) -> St
         .and_then(|name| state.string(name))
         .and_then(|name| name.to_utf8())
     else {
+        if let Some(message) = named_property(state, value, "message")
+            .and_then(|message| state.string(message))
+            .and_then(|message| message.to_utf8())
+        {
+            return message;
+        }
         return super::runtime::render_value(state, value);
     };
     if let Some(stack) = named_property(state, value, "stack")

@@ -255,7 +255,7 @@ pub fn read_test(path: &Path) -> Result<Test> {
 }
 
 /// 从测试代码中解析 YAML frontmatter。
-fn read_metadata(code: &str) -> Result<MetaData> {
+pub(crate) fn read_metadata(code: &str) -> Result<MetaData> {
     let (_, metadata) = code
         .split_once("/*---")
         .ok_or_else(|| anyhow::anyhow!("invalid test metadata: missing /*---"))?;

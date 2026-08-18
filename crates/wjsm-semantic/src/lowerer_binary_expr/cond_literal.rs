@@ -101,6 +101,11 @@ impl Lowerer {
         let mut last = self.alloc_value();
         for expr in &seq.exprs {
             last = self.lower_expr_then_continue(expr, &mut block)?;
+            // 逗号左侧的 Call/New 必须在求值后检查 TAG_EXCEPTION，否则
+            // `f(), "msg"` 会把宿主抛出的异常当成普通值丢掉。
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+                block = self.lower_value_exception_branch(block, last)?;
+            }
         }
         self.expr_merge_block = Some(block);
         Ok(last)

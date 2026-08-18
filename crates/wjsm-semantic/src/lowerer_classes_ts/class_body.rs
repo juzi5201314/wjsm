@@ -751,11 +751,12 @@ impl Lowerer {
                 let key_dest = self.emit_string_const(block, &name);
                 Ok((name, key_dest))
             }
-            swc_ast::PropName::Computed(_) => {
+            swc_ast::PropName::Computed(_)
+            | swc_ast::PropName::Num(_)
+            | swc_ast::PropName::BigInt(_) => {
                 let key_dest = self.lower_prop_name(key, block)?;
                 Ok(("<computed>".to_string(), key_dest))
             }
-            other => Err(self.error(other.span(), "unsupported property key kind")),
         }
     }
 }

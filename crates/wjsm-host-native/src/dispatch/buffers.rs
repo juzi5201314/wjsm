@@ -89,6 +89,17 @@ pub(crate) fn buffer_builtin(
     None
 }
 
+pub(crate) fn allocate_array_buffer(state: &mut NativeAgentState, length: usize) -> Option<i64> {
+    let object = state.allocate_object(1, false).ok()?;
+    state.array_buffers.insert(
+        value::decode_handle(object),
+        NativeArrayBuffer {
+            bytes: Rc::new(RefCell::new(vec![0; length])),
+        },
+    );
+    Some(object)
+}
+
 fn array_buffer_constructor(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -101,16 +112,7 @@ fn array_buffer_constructor(
     else {
         return fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(1, false) else {
-        return fail_dispatch(ctx);
-    };
-    state.array_buffers.insert(
-        value::decode_handle(object),
-        NativeArrayBuffer {
-            bytes: Rc::new(RefCell::new(vec![0; length])),
-        },
-    );
-    object
+    allocate_array_buffer(state, length).unwrap_or_else(|| fail_dispatch(ctx))
 }
 
 fn array_buffer_byte_length(

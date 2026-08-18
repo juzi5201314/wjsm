@@ -17,6 +17,7 @@ pub mod generator;
 pub mod get_builtin_global;
 pub mod get_method;
 pub mod inspector_host;
+pub mod intl;
 pub mod iterable_collect;
 pub mod json;
 pub mod math_number_error;
@@ -44,7 +45,9 @@ pub mod timers_arrays;
 pub mod typedarray_methods;
 pub mod weakref_finalization;
 
-pub use date_parse::{ms_to_datetime_local, ms_to_datetime_utc, parse_date_string};
+pub use date_parse::{
+    ms_to_datetime_local, ms_to_datetime_utc, parse_date_string, utc_year_from_ms,
+};
 pub use number_format::{
     format_number_js, format_number_to_exponential_js, format_number_to_fixed_js,
     format_number_to_precision_js, normalize_exponent, number_proto_to_string_radix,
