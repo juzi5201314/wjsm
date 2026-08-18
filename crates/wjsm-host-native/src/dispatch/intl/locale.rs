@@ -2,8 +2,9 @@
 
 use wjsm_builtins::intl::canonicalize_unicode_locale_id;
 use wjsm_intl_data::{
-    available_calendars, available_collations, available_numbering_systems, available_time_zones,
-    expand_likely_subtags, minimize_likely_subtags,
+    expand_likely_subtags, locale_calendars, locale_collations, locale_hour_cycles,
+    locale_numbering_systems, locale_text_direction, locale_time_zones, locale_week_info,
+    minimize_likely_subtags,
 };
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
@@ -42,16 +43,16 @@ pub(super) fn call(
         IntlCallable::LocaleFirstDayOfWeek => field(ctx, state, receiver, Field::FirstDayOfWeek),
         IntlCallable::LocaleVariants => field(ctx, state, receiver, Field::Variants),
         IntlCallable::LocaleGetCalendars => {
-            string_list(ctx, state, receiver, available_calendars())
+            locale_values(ctx, state, receiver, InfoKind::Calendars)
         }
         IntlCallable::LocaleGetCollations => {
-            string_list(ctx, state, receiver, available_collations())
+            locale_values(ctx, state, receiver, InfoKind::Collations)
         }
         IntlCallable::LocaleGetHourCycles => {
-            string_list(ctx, state, receiver, &["h12", "h23", "h11", "h24"])
+            locale_values(ctx, state, receiver, InfoKind::HourCycles)
         }
         IntlCallable::LocaleGetNumberingSystems => {
-            string_list(ctx, state, receiver, available_numbering_systems())
+            locale_values(ctx, state, receiver, InfoKind::Numbering)
         }
         IntlCallable::LocaleGetTimeZones => time_zones(ctx, state, receiver),
         IntlCallable::LocaleGetTextInfo => text_info(ctx, state, receiver),
@@ -336,57 +337,61 @@ fn create_from_tag(ctx: &mut NativeVmContext, state: &mut NativeAgentState, tag:
     )
 }
 
-fn string_list(
+enum InfoKind {
+    Calendars,
+    Collations,
+    HourCycles,
+    Numbering,
+}
+
+fn locale_values(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     receiver: i64,
-    items: &[&str],
+    kind: InfoKind,
 ) -> i64 {
-    if !is_locale_receiver(state, receiver) {
+    let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
-    }
-    super::js::string_array(
-        ctx,
-        state,
-        &items
-            .iter()
-            .map(|item| (*item).to_owned())
-            .collect::<Vec<_>>(),
-    )
+    };
+    let Some(IntlSlot::Locale(slot)) = state.intl.slots.get(&handle) else {
+        return incompatible(ctx, state);
+    };
+    let items = match kind {
+        InfoKind::Calendars => locale_calendars(&slot.tag),
+        InfoKind::Collations => locale_collations(&slot.tag),
+        InfoKind::HourCycles => locale_hour_cycles(&slot.tag),
+        InfoKind::Numbering => locale_numbering_systems(&slot.tag),
+    };
+    super::js::string_array(ctx, state, &items)
 }
 
 fn time_zones(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) -> i64 {
     let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
     };
-    let has_region = match state.intl.slots.get(&handle) {
-        Some(IntlSlot::Locale(slot)) => slot.region.is_some(),
+    let region = match state.intl.slots.get(&handle) {
+        Some(IntlSlot::Locale(slot)) => slot.region.clone(),
         _ => return incompatible(ctx, state),
     };
-    if !has_region {
+    let Some(region) = region else {
         return value::encode_undefined();
-    }
-    super::js::string_array(ctx, state, available_time_zones())
+    };
+    super::js::string_array(ctx, state, &locale_time_zones(&region))
 }
 
 fn text_info(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) -> i64 {
     let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
     };
-    let rtl = match state.intl.slots.get(&handle) {
-        Some(IntlSlot::Locale(slot)) => {
-            matches!(
-                slot.language.as_str(),
-                "ar" | "fa" | "he" | "ur" | "ps" | "yi"
-            )
-        }
+    let direction = match state.intl.slots.get(&handle) {
+        Some(IntlSlot::Locale(slot)) => locale_text_direction(&slot.tag),
         _ => return incompatible(ctx, state),
     };
     let object = match state.allocate_object(1, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };
-    let direction = intern(ctx, state, if rtl { "rtl" } else { "ltr" });
+    let direction = intern(ctx, state, direction);
     if let Err(exception) = super::common::set_data(ctx, state, object, "direction", direction) {
         return exception;
     }
@@ -394,40 +399,43 @@ fn text_info(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: 
 }
 
 fn week_info(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) -> i64 {
-    if !is_locale_receiver(state, receiver) {
+    let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
+    };
+    let Some(IntlSlot::Locale(slot)) = state.intl.slots.get(&handle) else {
+        return incompatible(ctx, state);
+    };
+    let mut info = locale_week_info(&slot.tag);
+    if let Some(first) = slot.first_day_of_week.as_deref() {
+        info.first_day = weekday_number(first) as u8;
     }
-    let first_day = slot_handle(receiver)
-        .and_then(|handle| state.intl.slots.get(&handle))
-        .and_then(|slot| match slot {
-            IntlSlot::Locale(slot) => slot.first_day_of_week.as_deref(),
-            _ => None,
-        })
-        .map(weekday_number)
-        .unwrap_or(1.0);
-    let object = match state.allocate_object(2, false) {
+    let object = match state.allocate_object(3, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };
-    let weekend =
-        match state.allocate_array_values(&[value::encode_f64(6.0), value::encode_f64(7.0)]) {
-            Ok(weekend) => weekend,
-            Err(_) => return fail_dispatch(ctx),
-        };
+    let weekend = match state.allocate_array_values(
+        &info
+            .weekend
+            .iter()
+            .map(|day| value::encode_f64(f64::from(*day)))
+            .collect::<Vec<_>>(),
+    ) {
+        Ok(weekend) => weekend,
+        Err(_) => return fail_dispatch(ctx),
+    };
     for (name, stored) in [
-        ("firstDay", value::encode_f64(first_day)),
+        ("firstDay", value::encode_f64(f64::from(info.first_day))),
         ("weekend", weekend),
+        (
+            "minimalDays",
+            value::encode_f64(f64::from(info.minimal_days)),
+        ),
     ] {
         if let Err(exception) = super::common::set_data(ctx, state, object, name, stored) {
             return exception;
         }
     }
     object
-}
-
-fn is_locale_receiver(state: &NativeAgentState, receiver: i64) -> bool {
-    slot_handle(receiver)
-        .is_some_and(|handle| matches!(state.intl.slots.get(&handle), Some(IntlSlot::Locale(_))))
 }
 
 fn optional(ctx: &mut NativeVmContext, state: &mut NativeAgentState, value: Option<&str>) -> i64 {
@@ -569,7 +577,9 @@ fn require_subtag(
 }
 
 fn is_language_subtag(value: &str) -> bool {
-    (2..=8).contains(&value.len()) && value.chars().all(|ch| ch.is_ascii_alphabetic())
+    let len = value.len();
+    ((2..=3).contains(&len) || (5..=8).contains(&len))
+        && value.chars().all(|ch| ch.is_ascii_alphabetic())
 }
 
 fn is_script_subtag(value: &str) -> bool {

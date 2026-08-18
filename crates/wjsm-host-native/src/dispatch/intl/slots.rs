@@ -79,7 +79,6 @@ pub(crate) struct DateTimeFormatSlot {
     pub calendar: String,
     pub numbering_system: String,
     pub time_zone: String,
-    pub implicit_local: bool,
     pub hour_cycle: Option<String>,
     pub date_style: Option<String>,
     pub time_style: Option<String>,
@@ -148,12 +147,14 @@ pub(crate) struct SegmentsSlot {
     pub text: String,
     pub granularity: String,
     pub breaks: Vec<u32>,
+    pub word_likes: Vec<bool>,
 }
 
 pub(crate) struct SegmentIterSlot {
     pub text: String,
     pub granularity: String,
     pub breaks: Vec<u32>,
+    pub word_likes: Vec<bool>,
     pub index: usize,
 }
 

@@ -49,6 +49,7 @@ pub struct OwnedDateTimeFormatter {
     date_style: Option<String>,
     time_style: Option<String>,
     time_zone: String,
+    time_zone_name: Option<String>,
     hour: Option<String>,
     minute: Option<String>,
     second: Option<String>,
@@ -71,6 +72,7 @@ impl OwnedDateTimeFormatter {
             date_style: spec.date_style.clone(),
             time_style: spec.time_style.clone(),
             time_zone: spec.time_zone.clone(),
+            time_zone_name: spec.time_zone_name.clone(),
             hour: spec.hour.clone(),
             minute: spec.minute.clone(),
             second: spec.second.clone(),
@@ -137,7 +139,7 @@ impl OwnedDateTimeFormatter {
                 }
             }
         }
-        if let Some(name) = utc_zone_name(self.time_style.as_deref(), &self.time_zone) {
+        if let Some(name) = zone_display_name(self, millis) {
             if !parts.is_empty() {
                 parts.push(FormatPart {
                     type_name: "literal".into(),
@@ -169,15 +171,16 @@ impl OwnedDateTimeFormatter {
     }
 }
 
-fn utc_zone_name(time_style: Option<&str>, time_zone: &str) -> Option<&'static str> {
-    if time_zone != "UTC" {
-        return None;
-    }
-    match time_style {
-        Some("full") => Some("Coordinated Universal Time"),
-        Some("long") => Some("UTC"),
-        _ => None,
-    }
+fn zone_display_name(formatter: &OwnedDateTimeFormatter, millis: f64) -> Option<String> {
+    let style = formatter
+        .time_zone_name
+        .as_deref()
+        .or(match formatter.time_style.as_deref() {
+            Some("full") => Some("long"),
+            Some("long") => Some("short"),
+            _ => None,
+        })?;
+    crate::time_zone_display_name(&formatter.time_zone, style, millis).ok()
 }
 
 fn format_locale(spec: &DateTimeFormatSpec) -> Result<Locale, String> {

@@ -77,11 +77,11 @@ set.forEach((value) => console.log(typeof value)); // "object"
 
 `Intl` 命名空间、ECMA-402 构造器与 `String`/`Number`/`BigInt`/`Date`/`Array` 的 locale 敏感方法已实现，数据来自 `wjsm-intl-data`（ICU4X compiled_data）。默认 locale 读 `LC_ALL`/`LANG`，非法则 `en`。fixture 与可复现测试应显式传 locale。
 
-实现定义差异（ILD/ILND）按规范允许，不把 Node full-icu 当作逐字符 oracle。Temporal 的 intl402 测试不在当前范围内。`intl-normative-optional` 的 legacy constructor 未实现。
+实现定义差异（ILD/ILND）按规范允许，不把 Node full-icu 当作逐字符 oracle。Temporal 的 intl402 测试不在当前范围内。`intl-normative-optional` 的 legacy constructor 未实现。`localeMatcher: "best fit"` 当前与 Lookup 相同（规范允许实现定义）。`Intl.DisplayNames` 的 `calendar` / `dateTimeField` 目前只有英文表，其他 locale 回退为 code。`timeZoneName` 用 GMT 偏移与城市名，不是完整 ICU zone fieldset。
 
 ## URL / URLSearchParams 全局与 IDN
 
-`URL` / `URLSearchParams` 可作为全局使用，也与 `import { URL } from "node:url"` 共享同一构造器。hostname 走 UTS #46（`wjsm-intl-data` / `idna`），例如 `new URL("https://例え.テスト/")` 的 hostname 为 punycode。
+`URL` / `URLSearchParams` 可作为全局使用，也与 `import { URL } from "node:url"` 共享同一构造器。域名 hostname 走 UTS #46（`wjsm-intl-data` / `idna`），例如 `new URL("https://例え.テスト/")` 的 hostname 为 punycode。IPv4 / IPv6 字面量不跑 IDNA；`http://[::1]:8080/` 的 hostname 为 `::1`，host / href 带方括号。
 
 ```js
 console.log(typeof globalThis.URL); // "function"

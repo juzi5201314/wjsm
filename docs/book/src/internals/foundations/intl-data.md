@@ -31,7 +31,7 @@ smoke locales：`en-US`、`zh-CN`、`de-DE`、`es-ES`、`ar`、`th`、`tr`、`ja
 | collation | `Collator` | |
 | numbering | `DecimalFormatter` | |
 | date/time | `DateTimeFormatter` | |
-| time zone | `IanaParser` | tzdb 2026a |
+| time zone | `IanaParser` + `zone.rs` | IANA 标识来自 ICU；UTC↔墙钟 / DST 由本 crate 的 `chrono-tz` 换算，host 不得另持一份 tzdb |
 | plural | `PluralRules` | |
 | list | `ListFormatter` | |
 | display name | `RegionDisplayNames` / `LanguageDisplayNames` | `icu::experimental` |

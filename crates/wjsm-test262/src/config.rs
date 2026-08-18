@@ -165,7 +165,6 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "Intl.DateTimeFormat-fractionalSecondDigits",
     "Intl.DateTimeFormat-extend-timezonename",
     "Intl-enumeration",
-    "Intl.Era-monthcode",
 ];
 
 /// 需要忽略的 flags（wjsm 当前不支持或不适用的测试模式）。

@@ -16,6 +16,7 @@ pub mod duration;
 pub mod enumeration;
 pub mod format;
 pub mod locale;
+pub mod locale_info;
 pub mod manifest;
 pub mod normalize;
 pub mod number;
@@ -24,6 +25,7 @@ mod number_round;
 pub mod number_symbols;
 pub mod tag;
 pub mod text;
+pub mod zone;
 
 pub use encoding_rs;
 pub use icu;
@@ -49,14 +51,23 @@ pub use locale::{
     expand_likely_subtags, fallback_steps, is_available_locale, is_structurally_valid_language_tag,
     is_unicode_language_id, minimize_likely_subtags, parse_locale, unicode_extensions,
 };
+pub use locale_info::{
+    WeekInfo, default_hour_cycle, hour_cycle_12, locale_calendars, locale_collations,
+    locale_hour_cycles, locale_numbering_systems, locale_text_direction, locale_time_zones,
+    locale_week_info,
+};
 pub use manifest::{DATA_MANIFEST, DataManifest, canonical_json, manifest_sha256};
 pub use normalize::{NormalizationForm, normalize};
-pub use number::{NumberFormatSpec, OwnedNumberFormatter};
+pub use number::{NumberFormatSpec, OwnedNumberFormatter, compare_math_strings};
 pub use number_symbols::{currency_digits, locale_nan, substitute_digits};
 pub use text::{
-    DisplayNameType, OwnedDisplayNames, OwnedSegmenter, SegmentGranularity, domain_to_ascii_uts46,
-    domain_to_unicode_uts46, encoding_for_label, language_display_name, region_display_name,
-    word_segment_count,
+    DisplayNameType, OwnedDisplayNames, OwnedSegmenter, SegmentGranularity, TextSegment,
+    domain_to_ascii_uts46, domain_to_unicode_uts46, encoding_for_label, language_display_name,
+    region_display_name, word_segment_count,
+};
+pub use zone::{
+    default_time_zone, ensure_zone_convertible, time_zone_display_name, utc_offset_seconds,
+    utc_to_wall_millis,
 };
 
 /// smoke matrix 使用的 locale；发行清单与测试共用。

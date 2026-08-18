@@ -7,6 +7,22 @@ console.log(number.format(1234.5));
 const parts = number.formatToParts(1234.5);
 console.log(parts.some((part) => part.type === "group" || part.type === "integer"));
 console.log(number.formatRange(1, 2).includes("1"));
+console.log(new Intl.NumberFormat("en").format("1e2"));
+try {
+  new Intl.NumberFormat("en").formatRange(2, 1);
+} catch (error) {
+  console.log(error.name);
+}
+try {
+  new Intl.NumberFormat("en", { useGrouping: "true" });
+} catch (error) {
+  console.log(error.name);
+}
+try {
+  new Intl.Collator("en", { collation: "x" });
+} catch (error) {
+  console.log(error.name);
+}
 
 const date = new Date(Date.UTC(2024, 0, 15, 12, 0, 0));
 const dtf = new Intl.DateTimeFormat("zh-CN", {
@@ -16,6 +32,8 @@ const dtf = new Intl.DateTimeFormat("zh-CN", {
   day: "numeric",
 });
 console.log(dtf.resolvedOptions().timeZone, dtf.resolvedOptions().year);
+const defaultZone = new Intl.DateTimeFormat("en").resolvedOptions().timeZone;
+console.log(typeof defaultZone === "string" && defaultZone.length > 0);
 console.log(String(dtf.format(date)).length > 0);
 console.log(dtf.formatToParts(date).some((part) => part.type === "year"));
 
@@ -47,6 +65,9 @@ console.log(relative.format(-1, "day"));
 
 const names = new Intl.DisplayNames("en", { type: "language" });
 console.log(names.of("zh"));
+console.log(names.of("zh-Hans"));
+const currencyNames = new Intl.DisplayNames("en", { type: "currency" });
+console.log(currencyNames.of("USD"));
 
 const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
 let count = 0;

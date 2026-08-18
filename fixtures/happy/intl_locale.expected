@@ -7,6 +7,8 @@ de-Latn-DE-u-ca-gregory-hc-h23
 zh
 true
 ltr
+true
+0
 TypeError
 RangeError
 --- stderr ---

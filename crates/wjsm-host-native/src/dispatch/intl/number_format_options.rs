@@ -293,9 +293,6 @@ fn grouping_option(
         return Ok(("false".into(), false));
     }
     let text = to_string_coerced(ctx, state, value)?;
-    if matches!(text.as_str(), "true" | "false") {
-        return Ok(("auto".into(), false));
-    }
     if matches!(text.as_str(), "min2" | "auto" | "always") {
         return Ok((text, false));
     }

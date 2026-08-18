@@ -80,7 +80,8 @@ pub fn default_locale() -> String {
         .clone()
 }
 
-/// `zxx` 与没有 likely subtags 的未知语言（如 `xyz`）不进入 availableLocales。
+/// `zxx` 与没有 likely subtags 的未知语言（如 `xyz` / `xyz-US`）不进入 availableLocales。
+/// 可用性看 language 是否有 CLDR 数据，不因 script/region 附件放行。
 pub fn is_available_locale(id: &str) -> bool {
     let Ok(locale) = parse_locale(id) else {
         return false;
@@ -88,10 +89,7 @@ pub fn is_available_locale(id: &str) -> bool {
     if locale.id.language.as_str() == "zxx" {
         return false;
     }
-    if locale.id.script.is_some() || locale.id.region.is_some() {
-        return true;
-    }
-    match expand_likely_subtags(id) {
+    match expand_likely_subtags(locale.id.language.as_str()) {
         Ok(maximized) => maximized.id.script.is_some() || maximized.id.region.is_some(),
         Err(_) => false,
     }
@@ -226,8 +224,11 @@ mod tests {
     fn zxx_is_not_available() {
         assert!(!is_available_locale("zxx"));
         assert!(!is_available_locale("xyz"));
+        assert!(!is_available_locale("xyz-US"));
         assert!(is_available_locale("en"));
+        assert!(is_available_locale("en-US"));
         assert!(is_available_locale("sr"));
+        assert!(is_available_locale("zh-Hans"));
     }
 
     #[test]

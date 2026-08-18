@@ -12,7 +12,7 @@ use wjsm_native_abi::NativeVmContext;
 use super::common::{create_instance, intern, resolved_object, slot_handle, throw_intl};
 use super::js::{
     canonicalize_locales, get_option_bool_opt, get_option_string, get_options_object,
-    supported_locales_of,
+    require_unicode_type, supported_locales_of,
 };
 use super::slots::{CollatorSlot, IntlSlot};
 use super::{IntlCallable, incompatible};
@@ -122,7 +122,7 @@ fn construct(
         Ok(value) => value,
         Err(exception) => return exception,
     };
-    let collation = match get_option_string(ctx, state, options, "collation", &[], None) {
+    let collation = match require_unicode_type(ctx, state, options, "collation") {
         Ok(value) => value,
         Err(exception) => return exception,
     };

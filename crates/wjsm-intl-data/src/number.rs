@@ -292,6 +292,64 @@ enum NumberKind {
     Finite(Decimal),
 }
 
+/// `formatRange`：NaN 或无法比较返回 Err；start > end 由调用方看 `Greater`。
+pub fn compare_math_strings(start: &str, end: &str) -> Result<std::cmp::Ordering, String> {
+    match (classify(start)?, classify(end)?) {
+        (NumberKind::Nan, _) | (_, NumberKind::Nan) => Err("NaN".into()),
+        (NumberKind::Infinity { negative: true }, NumberKind::Infinity { negative: true })
+        | (NumberKind::Infinity { negative: false }, NumberKind::Infinity { negative: false }) => {
+            Ok(std::cmp::Ordering::Equal)
+        }
+        (NumberKind::Infinity { negative: true }, _) => Ok(std::cmp::Ordering::Less),
+        (_, NumberKind::Infinity { negative: true }) => Ok(std::cmp::Ordering::Greater),
+        (NumberKind::Infinity { negative: false }, _) => Ok(std::cmp::Ordering::Greater),
+        (_, NumberKind::Infinity { negative: false }) => Ok(std::cmp::Ordering::Less),
+        (NumberKind::Finite(left), NumberKind::Finite(right)) => {
+            Ok(compare_decimals(&left, &right))
+        }
+    }
+}
+
+fn compare_decimals(left: &Decimal, right: &Decimal) -> std::cmp::Ordering {
+    if left.is_zero() && right.is_zero() {
+        return std::cmp::Ordering::Equal;
+    }
+    let left_neg = matches!(left.sign(), fixed_decimal::Sign::Negative);
+    let right_neg = matches!(right.sign(), fixed_decimal::Sign::Negative);
+    match (left_neg, right_neg) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        (true, true) => compare_abs(left, right).reverse(),
+        (false, false) => compare_abs(left, right),
+    }
+}
+
+fn compare_abs(left: &Decimal, right: &Decimal) -> std::cmp::Ordering {
+    if left.is_zero() {
+        return if right.is_zero() {
+            std::cmp::Ordering::Equal
+        } else {
+            std::cmp::Ordering::Less
+        };
+    }
+    if right.is_zero() {
+        return std::cmp::Ordering::Greater;
+    }
+    let high = left
+        .nonzero_magnitude_start()
+        .max(right.nonzero_magnitude_start());
+    let low = left
+        .nonzero_magnitude_end()
+        .min(right.nonzero_magnitude_end());
+    for magnitude in (low..=high).rev() {
+        match left.digit_at(magnitude).cmp(&right.digit_at(magnitude)) {
+            std::cmp::Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 fn classify(raw: &str) -> Result<NumberKind, String> {
     match raw {
         "NaN" => Ok(NumberKind::Nan),
@@ -570,5 +628,18 @@ mod tests {
             rendered.contains('$') || rendered.contains("USD"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn compare_math_strings_orders_and_rejects_nan() {
+        assert_eq!(
+            super::compare_math_strings("1", "2").unwrap(),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            super::compare_math_strings("2", "1").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert!(super::compare_math_strings("NaN", "1").is_err());
     }
 }

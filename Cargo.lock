@@ -4622,7 +4622,6 @@ dependencies = [
  "base64",
  "brotli",
  "chrono",
- "chrono-tz",
  "flate2",
  "hmac",
  "libc",
@@ -4664,6 +4663,8 @@ dependencies = [
 name = "wjsm-intl-data"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "encoding_rs",
  "fixed_decimal",
  "icu",

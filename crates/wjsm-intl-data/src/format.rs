@@ -781,22 +781,22 @@ fn map_part_type(part: Part) -> String {
     .to_owned()
 }
 
-/// CLDR German search 把变音字母展开成 base+e；ICU4X 默认数据没有 search tailoring。
+/// usage=search：NFKD + 去掉组合记号 + 大小写折叠。不限于德语 umlaut。
 fn search_fold(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            'Ä' => out.push_str("AE"),
-            'ä' => out.push_str("ae"),
-            'Ö' => out.push_str("OE"),
-            'ö' => out.push_str("oe"),
-            'Ü' => out.push_str("UE"),
-            'ü' => out.push_str("ue"),
-            'ß' => out.push_str("ss"),
-            other => out.push(other),
+    use icu::properties::CodePointMapData;
+    use icu::properties::props::CanonicalCombiningClass;
+
+    let decomposed = crate::normalize(text, crate::NormalizationForm::Nfkd);
+    let combining = CodePointMapData::<CanonicalCombiningClass>::new();
+    let mut stripped = String::with_capacity(decomposed.len());
+    for ch in decomposed.chars() {
+        if combining.get(ch) == CanonicalCombiningClass::NotReordered {
+            stripped.push(ch);
         }
     }
-    out
+    icu::casemap::CaseMapper::new()
+        .fold_string(&stripped)
+        .into_owned()
 }
 
 fn collation_type(collation: Option<&str>) -> Option<CollationType> {
@@ -829,12 +829,12 @@ mod tests {
     use super::{CollatorSensitivity, OwnedCollator};
 
     #[test]
-    fn german_search_orders_ae_before_a_umlaut() {
+    fn search_folds_marks_beyond_german() {
         let sort =
             OwnedCollator::try_new("de", CollatorSensitivity::Variant, false, None, false, None)
                 .expect("sort");
         let search = OwnedCollator::try_new(
-            "de",
+            "en",
             CollatorSensitivity::Variant,
             false,
             None,
@@ -843,7 +843,9 @@ mod tests {
         )
         .expect("search");
         assert!(sort.compare("Ä", "AE") < 0);
-        assert_eq!(search.compare("AE", "Ä"), 0);
+        assert_eq!(search.compare("cafe", "café"), 0);
+        assert_eq!(search.compare("Ä", "A"), 0);
+        assert_eq!(search.compare("STRASSE", "straße"), 0);
     }
 
     #[test]

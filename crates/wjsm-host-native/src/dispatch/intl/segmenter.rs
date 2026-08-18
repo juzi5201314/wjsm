@@ -13,7 +13,7 @@ use super::js::{
 use super::slots::{IntlSlot, SegmentIterSlot, SegmenterSlot, SegmentsSlot};
 use super::{IntlCallable, incompatible};
 use crate::dispatch::runtime::{
-    SYMBOL_PROPERTY_KEY_BIT, fail_dispatch, to_number_coerced, to_string_coerced,
+    SYMBOL_PROPERTY_KEY_BIT, fail_dispatch, range_error, to_number_coerced, to_string_coerced,
 };
 use crate::{NativeAgentState, NativeCallableKind};
 
@@ -98,9 +98,12 @@ fn construct(
         state,
         IntlCallable::SegmenterConstructor,
         IntlSlot::Segmenter(SegmenterSlot {
-            locale: resolved.locale,
+            locale: resolved.locale.clone(),
             granularity,
-            formatter: OwnedSegmenter::new(kind),
+            formatter: match OwnedSegmenter::try_new(&resolved.locale, kind) {
+                Ok(formatter) => formatter,
+                Err(error) => return range_error(ctx, state, &error),
+            },
         }),
         this_value,
     )
@@ -129,8 +132,12 @@ fn segment(
     let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
     };
-    let (granularity, breaks_for) = match state.intl.slots.get(&handle) {
-        Some(IntlSlot::Segmenter(slot)) => (slot.granularity.clone(), slot.formatter),
+    let formatter = match state.intl.slots.get(&handle) {
+        Some(IntlSlot::Segmenter(slot)) => slot.formatter.clone(),
+        _ => return incompatible(ctx, state),
+    };
+    let granularity = match state.intl.slots.get(&handle) {
+        Some(IntlSlot::Segmenter(slot)) => slot.granularity.clone(),
         _ => return incompatible(ctx, state),
     };
     let input = args
@@ -141,7 +148,9 @@ fn segment(
         Ok(text) => text,
         Err(exception) => return exception,
     };
-    let breaks = breaks_for.break_utf16_offsets(&text);
+    let segments = formatter.segments_utf16(&text);
+    let breaks = formatter.break_utf16_offsets(&text);
+    let word_likes = segments.iter().map(|segment| segment.word_like).collect();
     let prototype = match ensure_segments_prototype(state) {
         Some(prototype) => prototype,
         None => return fail_dispatch(ctx),
@@ -157,6 +166,7 @@ fn segment(
             text,
             granularity,
             breaks,
+            word_likes,
         }),
     );
     object
@@ -171,11 +181,12 @@ fn containing(
     let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
     };
-    let (text, granularity, breaks) = match state.intl.slots.get(&handle) {
+    let (text, granularity, breaks, word_likes) = match state.intl.slots.get(&handle) {
         Some(IntlSlot::Segments(slot)) => (
             slot.text.clone(),
             slot.granularity.clone(),
             slot.breaks.clone(),
+            slot.word_likes.clone(),
         ),
         _ => return incompatible(ctx, state),
     };
@@ -207,18 +218,27 @@ fn containing(
     }
     let index = index as u32;
     let (start, end) = segment_at(&breaks, index, utf16_len as u32);
-    segment_object(ctx, state, &text, start, end, Some(granularity.as_str()))
+    let word_like = word_like_at(&breaks, &word_likes, start);
+    segment_object(
+        ctx,
+        state,
+        &text,
+        start,
+        end,
+        (granularity == "word").then_some(word_like),
+    )
 }
 
 fn iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) -> i64 {
     let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
     };
-    let (text, granularity, breaks) = match state.intl.slots.get(&handle) {
+    let (text, granularity, breaks, word_likes) = match state.intl.slots.get(&handle) {
         Some(IntlSlot::Segments(slot)) => (
             slot.text.clone(),
             slot.granularity.clone(),
             slot.breaks.clone(),
+            slot.word_likes.clone(),
         ),
         _ => return incompatible(ctx, state),
     };
@@ -237,6 +257,7 @@ fn iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i
             text,
             granularity,
             breaks,
+            word_likes,
             index: 0,
         }),
     );
@@ -247,11 +268,11 @@ fn next(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) 
     let Some(handle) = slot_handle(receiver) else {
         return incompatible(ctx, state);
     };
-    let (done, text, granularity, start, end) = match state.intl.slots.get_mut(&handle) {
+    let (done, text, granularity, start, end, word_like) = match state.intl.slots.get_mut(&handle) {
         Some(IntlSlot::SegmentIterator(slot)) => {
             let utf16_len = slot.text.encode_utf16().count() as u32;
             if slot.index + 1 >= slot.breaks.len() {
-                (true, String::new(), String::new(), 0, 0)
+                (true, String::new(), String::new(), 0, 0, false)
             } else {
                 let start = slot.breaks[slot.index];
                 let end = slot
@@ -259,6 +280,7 @@ fn next(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) 
                     .get(slot.index + 1)
                     .copied()
                     .unwrap_or(utf16_len);
+                let word_like = slot.word_likes.get(slot.index).copied().unwrap_or(false);
                 slot.index += 1;
                 (
                     false,
@@ -266,6 +288,7 @@ fn next(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) 
                     slot.granularity.clone(),
                     start,
                     end,
+                    word_like,
                 )
             }
         }
@@ -274,7 +297,14 @@ fn next(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) 
     if done {
         return iterator_result(ctx, state, value::encode_undefined(), true);
     }
-    let segment = segment_object(ctx, state, &text, start, end, Some(granularity.as_str()));
+    let segment = segment_object(
+        ctx,
+        state,
+        &text,
+        start,
+        end,
+        (granularity == "word").then_some(word_like),
+    );
     if value::is_exception(segment) {
         return segment;
     }
@@ -292,20 +322,27 @@ fn segment_at(breaks: &[u32], index: u32, utf16_len: u32) -> (u32, u32) {
     (start, utf16_len)
 }
 
+fn word_like_at(breaks: &[u32], word_likes: &[bool], start: u32) -> bool {
+    breaks
+        .iter()
+        .position(|offset| *offset == start)
+        .and_then(|index| word_likes.get(index).copied())
+        .unwrap_or(false)
+}
+
 fn segment_object(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     text: &str,
     start: u32,
     end: u32,
-    granularity: Option<&str>,
+    word_like: Option<bool>,
 ) -> i64 {
     let units: Vec<u16> = text.encode_utf16().collect();
     let start_i = start as usize;
     let end_i = (end as usize).min(units.len());
     let slice = units.get(start_i..end_i).unwrap_or(&[]);
     let segment = String::from_utf16_lossy(slice);
-    let word_like = granularity == Some("word") && segment.chars().any(|ch| ch.is_alphanumeric());
     let object = match state.allocate_object(4, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
@@ -321,7 +358,7 @@ fn segment_object(
             return exception;
         }
     }
-    if granularity == Some("word")
+    if let Some(word_like) = word_like
         && let Err(exception) = super::common::set_data(
             ctx,
             state,

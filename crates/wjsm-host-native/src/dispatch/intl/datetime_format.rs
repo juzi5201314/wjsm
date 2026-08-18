@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use wjsm_builtins::intl::resolve_locale_filtered;
 use wjsm_intl_data::{
     DateTimeFormatSpec, OwnedDateTimeFormatter, available_calendars, available_numbering_systems,
-    canonicalize_time_zone, canonicalize_unicode_keyword,
+    canonicalize_time_zone, canonicalize_unicode_keyword, default_hour_cycle, default_time_zone,
+    ensure_zone_convertible, hour_cycle_12, utc_to_wall_millis,
 };
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
@@ -165,10 +166,11 @@ fn read_options(
     )?;
     let time_zone = match get_option_string(ctx, state, options, "timeZone", &[], None)? {
         Some(name) => {
-            Some(canonicalize_time_zone(&name).map_err(|error| range_error(ctx, state, &error))?)
+            canonicalize_time_zone(&name).map_err(|error| range_error(ctx, state, &error))?
         }
-        None => None,
+        None => default_time_zone(),
     };
+    ensure_zone_convertible(&time_zone).map_err(|error| range_error(ctx, state, &error))?;
     let weekday = named_style_field(ctx, state, options, "weekday")?;
     let era = named_style_field(ctx, state, options, "era")?;
     let year = field(ctx, state, options, "year")?;
@@ -312,8 +314,7 @@ fn read_options(
             .get("nu")
             .cloned()
             .unwrap_or_else(|| "latn".into()),
-        time_zone: time_zone.clone().unwrap_or_else(|| "UTC".into()),
-        implicit_local: time_zone.is_none(),
+        time_zone,
         hour_cycle,
         date_style,
         time_style,
@@ -491,7 +492,10 @@ fn format_value(
     let Some(IntlSlot::DateTimeFormat(slot)) = state.intl.slots.get(&handle) else {
         return incompatible(ctx, state);
     };
-    let millis = zone_millis(millis, &slot.time_zone, slot.implicit_local);
+    let millis = match utc_to_wall_millis(millis, &slot.time_zone) {
+        Ok(millis) => millis,
+        Err(error) => return range_error(ctx, state, &error),
+    };
     let Some(formatter) = slot.formatter.as_ref() else {
         return fail_dispatch(ctx);
     };
@@ -505,25 +509,6 @@ fn format_value(
         Ok(text) => intern(ctx, state, text),
         Err(error) => range_error(ctx, state, &error),
     }
-}
-
-fn wall_millis(millis: f64, tz: impl chrono::TimeZone) -> f64 {
-    use chrono::{Datelike, TimeZone, Timelike, Utc};
-    let Some(local) = tz.timestamp_millis_opt(millis as i64).single() else {
-        return millis;
-    };
-    let millis_of_second = f64::from(local.nanosecond() / 1_000_000);
-    Utc.with_ymd_and_hms(
-        local.year(),
-        local.month(),
-        local.day(),
-        local.hour(),
-        local.minute(),
-        local.second(),
-    )
-    .single()
-    .map(|utc| utc.timestamp_millis() as f64 + millis_of_second)
-    .unwrap_or(millis)
 }
 
 fn format_range(
@@ -561,8 +546,14 @@ fn format_range(
     let Some(IntlSlot::DateTimeFormat(slot)) = state.intl.slots.get(&handle) else {
         return incompatible(ctx, state);
     };
-    let start = zone_millis(start_ms, &slot.time_zone, slot.implicit_local);
-    let end = zone_millis(end_ms, &slot.time_zone, slot.implicit_local);
+    let start = match utc_to_wall_millis(start_ms, &slot.time_zone) {
+        Ok(millis) => millis,
+        Err(error) => return range_error(ctx, state, &error),
+    };
+    let end = match utc_to_wall_millis(end_ms, &slot.time_zone) {
+        Ok(millis) => millis,
+        Err(error) => return range_error(ctx, state, &error),
+    };
     let Some(formatter) = slot.formatter.as_ref() else {
         return fail_dispatch(ctx);
     };
@@ -655,59 +646,6 @@ fn strip_unicode_key(tag: &str, key: &str) -> String {
     }
 }
 
-fn zone_millis(millis: f64, time_zone: &str, implicit_local: bool) -> f64 {
-    if implicit_local {
-        return wall_millis(millis, chrono::Local);
-    }
-    if let Some(minutes) = offset_minutes(time_zone) {
-        return millis + f64::from(minutes) * 60_000.0;
-    }
-    // ICU compiled_data 只提供 IANA 标识与显示名，不含 DST 转换表；墙钟换算走 tzdb。
-    match time_zone.parse::<chrono_tz::Tz>() {
-        Ok(tz) => wall_millis(millis, tz),
-        Err(_) => millis,
-    }
-}
-
-fn offset_minutes(time_zone: &str) -> Option<i32> {
-    if let Some(rest) = time_zone
-        .strip_prefix("Etc/GMT")
-        .or_else(|| time_zone.strip_prefix("etc/gmt"))
-    {
-        if rest.is_empty() {
-            return Some(0);
-        }
-        let hours: i32 = rest.parse().ok()?;
-        return hours.checked_mul(-60);
-    }
-    let rest = time_zone
-        .strip_prefix('+')
-        .or_else(|| time_zone.strip_prefix('-'))?;
-    let (hours, minutes) = rest.split_once(':')?;
-    let hours: i32 = hours.parse().ok()?;
-    let minutes: i32 = minutes.parse().ok()?;
-    let total = hours.checked_mul(60)?.checked_add(minutes)?;
-    Some(if time_zone.starts_with('-') {
-        -total
-    } else {
-        total
-    })
-}
-
-fn default_hour_cycle(locale: &str) -> &'static str {
-    match locale.split(['-', '_']).next().unwrap_or(locale) {
-        "en" | "es" | "ar" | "zh" | "ko" | "fil" | "hi" => "h12",
-        _ => "h23",
-    }
-}
-
-fn hour_cycle_12(locale: &str) -> &'static str {
-    match locale.split(['-', '_']).next().unwrap_or(locale) {
-        "ja" => "h11",
-        _ => "h12",
-    }
-}
-
 fn ensure_formatter(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -745,54 +683,4 @@ fn ensure_formatter(
         slot.formatter = Some(formatter);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::{TimeZone, Timelike, Utc};
-
-    use super::{offset_minutes, zone_millis};
-
-    fn utc_millis(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> f64 {
-        Utc.with_ymd_and_hms(year, month, day, hour, minute, 0)
-            .single()
-            .expect("utc instant")
-            .timestamp_millis() as f64
-    }
-
-    fn wall_hour_minute(millis: f64) -> (u32, u32) {
-        let wall = Utc
-            .timestamp_millis_opt(millis as i64)
-            .single()
-            .expect("wall instant");
-        (wall.hour(), wall.minute())
-    }
-
-    #[test]
-    fn iana_zone_converts_utc_instant_to_wall_clock() {
-        let utc = utc_millis(2024, 1, 15, 17, 0);
-        assert_eq!(
-            wall_hour_minute(zone_millis(utc, "America/New_York", false)),
-            (12, 0)
-        );
-        assert_eq!(
-            wall_hour_minute(zone_millis(utc, "Asia/Tokyo", false)),
-            (2, 0)
-        );
-    }
-
-    #[test]
-    fn iana_zone_applies_daylight_saving() {
-        let utc = utc_millis(2024, 7, 15, 16, 0);
-        assert_eq!(
-            wall_hour_minute(zone_millis(utc, "America/New_York", false)),
-            (12, 0)
-        );
-    }
-
-    #[test]
-    fn numeric_offset_still_applies() {
-        assert_eq!(offset_minutes("+05:00"), Some(5 * 60));
-        assert_eq!(zone_millis(0.0, "+01:00", false), 3_600_000.0);
-    }
 }

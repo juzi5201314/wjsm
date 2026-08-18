@@ -1,6 +1,6 @@
 //! `Intl.NumberFormat`。
 
-use wjsm_intl_data::{FormatPart, NumberFormatSpec, OwnedNumberFormatter};
+use wjsm_intl_data::{NumberFormatSpec, OwnedNumberFormatter, compare_math_strings};
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
@@ -226,25 +226,16 @@ fn format_value(
     let Some(formatter) = slot.formatter.as_ref() else {
         return fail_dispatch(ctx);
     };
-    let rendered = match formatter.format_str(&text) {
-        Ok(rendered) => rendered,
-        Err(_) => text.clone(),
-    };
     if parts {
-        return super::common::parts_array(
-            ctx,
-            state,
-            formatter.format_parts_str(&text).unwrap_or_else(|_| {
-                vec![FormatPart {
-                    type_name: "integer".into(),
-                    value: rendered.clone(),
-                    source: None,
-                    unit: None,
-                }]
-            }),
-        );
+        return match formatter.format_parts_str(&text) {
+            Ok(parts) => super::common::parts_array(ctx, state, parts),
+            Err(_) => fail_dispatch(ctx),
+        };
     }
-    intern(ctx, state, rendered)
+    match formatter.format_str(&text) {
+        Ok(rendered) => intern(ctx, state, rendered),
+        Err(_) => fail_dispatch(ctx),
+    }
 }
 
 fn format_range(
@@ -281,6 +272,12 @@ fn format_range(
         Ok(text) => text,
         Err(exception) => return exception,
     };
+    match compare_math_strings(&start, &end) {
+        Ok(std::cmp::Ordering::Greater) | Err(_) => {
+            return range_error(ctx, state, "formatRange start is after end");
+        }
+        Ok(_) => {}
+    }
     if let Err(exception) = ensure_formatter(ctx, state, handle) {
         return exception;
     }
@@ -291,13 +288,10 @@ fn format_range(
         return fail_dispatch(ctx);
     };
     if parts {
-        return super::common::parts_array(
-            ctx,
-            state,
-            formatter
-                .format_range_parts_str(&start, &end)
-                .unwrap_or_default(),
-        );
+        return match formatter.format_range_parts_str(&start, &end) {
+            Ok(parts) => super::common::parts_array(ctx, state, parts),
+            Err(_) => fail_dispatch(ctx),
+        };
     }
     match formatter.format_range_str(&start, &end) {
         Ok(rendered) => intern(ctx, state, rendered),
@@ -331,49 +325,118 @@ fn numeric_text(
     Ok(format!("{number}"))
 }
 
+/// `StringNumericLiteral`：十进制（含指数）与 `0x` / `0b` / `0o`。
 fn intl_math_string(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.eq_ignore_ascii_case("nan") {
         return "NaN".into();
     }
-    if trimmed.eq_ignore_ascii_case("infinity") {
-        return "Infinity".into();
-    }
-    if trimmed.eq_ignore_ascii_case("+infinity") {
+    if trimmed.eq_ignore_ascii_case("infinity") || trimmed.eq_ignore_ascii_case("+infinity") {
         return "Infinity".into();
     }
     if trimmed.eq_ignore_ascii_case("-infinity") {
         return "-Infinity".into();
     }
-    if is_decimal_string(trimmed) {
-        return trimmed.to_owned();
-    }
-    "NaN".into()
+    parse_numeric_literal(trimmed).unwrap_or_else(|| "NaN".into())
 }
 
-fn is_decimal_string(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.is_empty() {
-        return false;
+fn parse_numeric_literal(text: &str) -> Option<String> {
+    let (negative, rest) = strip_sign(text);
+    if let Some((radix, digits)) = radix_digits(rest) {
+        return format_radix_integer(negative, digits, radix);
     }
-    let mut index = 0;
-    if matches!(bytes[0], b'+' | b'-') {
-        index = 1;
+    let (mantissa, exponent) = split_exponent(rest)?;
+    if !is_decimal_mantissa(mantissa) {
+        return None;
     }
-    if index >= bytes.len() {
+    Some(apply_exponent(negative, mantissa, exponent))
+}
+
+fn strip_sign(text: &str) -> (bool, &str) {
+    if let Some(rest) = text.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = text.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, text)
+    }
+}
+
+fn radix_digits(text: &str) -> Option<(u32, &str)> {
+    let (radix, rest) =
+        if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            (16, rest)
+        } else if let Some(rest) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+            (2, rest)
+        } else if let Some(rest) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+            (8, rest)
+        } else {
+            return None;
+        };
+    (!rest.is_empty()).then_some((radix, rest))
+}
+
+fn format_radix_integer(negative: bool, digits: &str, radix: u32) -> Option<String> {
+    let parsed = i128::from_str_radix(digits, radix).ok()?;
+    let value = if negative { -parsed } else { parsed };
+    Some(value.to_string())
+}
+
+fn split_exponent(text: &str) -> Option<(&str, i32)> {
+    let Some(index) = text.find(['e', 'E']) else {
+        return Some((text, 0));
+    };
+    let mantissa = &text[..index];
+    let exponent = text[index + 1..].parse().ok()?;
+    Some((mantissa, exponent))
+}
+
+fn is_decimal_mantissa(text: &str) -> bool {
+    if text.is_empty() {
         return false;
     }
     let mut saw_digit = false;
     let mut saw_dot = false;
-    while index < bytes.len() {
-        match bytes[index] {
+    for byte in text.bytes() {
+        match byte {
             b'0'..=b'9' => saw_digit = true,
             b'.' if !saw_dot => saw_dot = true,
             _ => return false,
         }
-        index += 1;
     }
     saw_digit
+}
+
+fn apply_exponent(negative: bool, mantissa: &str, exponent: i32) -> String {
+    let digits: String = mantissa.chars().filter(|ch| *ch != '.').collect();
+    let frac = mantissa
+        .find('.')
+        .map(|index| mantissa.len() - index - 1)
+        .unwrap_or(0) as i32;
+    let scale = frac - exponent;
+    let mut body = shift_decimal(&digits, scale);
+    if negative && body != "0" {
+        body.insert(0, '-');
+    }
+    body
+}
+
+fn shift_decimal(digits: &str, scale: i32) -> String {
+    if scale <= 0 {
+        let mut body = digits.to_owned();
+        body.extend(std::iter::repeat_n('0', (-scale) as usize));
+        return body;
+    }
+    let scale = scale as usize;
+    if scale >= digits.len() {
+        let mut body = String::from("0.");
+        body.extend(std::iter::repeat_n('0', scale - digits.len()));
+        body.push_str(digits);
+        body
+    } else {
+        let split = digits.len() - scale;
+        format!("{}.{}", &digits[..split], &digits[split..])
+    }
 }
 
 fn ensure_formatter(

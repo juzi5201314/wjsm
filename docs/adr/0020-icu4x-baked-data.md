@@ -4,6 +4,8 @@
 
 Accepted（2026-08-17）
 
+**Amended**: 2026-08-18（墙钟换算收进 `wjsm-intl-data`；IANA 标识仍以 ICU 为准）
+
 ## Context
 
 Node.js v24 默认 full-icu：CLDR/Unicode 数据打进官方二进制，不依赖宿主机 ICU，也不是英文-only 的 small-icu。wjsm 要对齐这条分发合同，作为后续 ECMA-402 `Intl`、locale 敏感方法与 URL IDN 的数据地基。
@@ -59,9 +61,16 @@ ECMA-402 `Intl` 对象与 ECMA-262 locale 敏感方法（`localeCompare`、`toLo
 
 对象模型沿用现有 console / Date / Map 模式（普通对象、lazy prototype、侧表内部槽），不新开架构 ADR。
 
+### 6. 墙钟时区换算只在数据 crate
+
+IANA 标识的解析、规范化与可用性仍走 ICU `IanaParser` / compiled_data。UTC↔墙钟与 DST 换算由 `wjsm-intl-data` 拥有（`chrono` + `chrono-tz`），`wjsm-host-native` 不得再依赖 `chrono-tz` 或用 `chrono::Local` 冒充 resolved `timeZone`。
+
+未知 IANA 名 fail-closed，不得静默当 UTC。默认 `timeZone` 是宿主 IANA 标识（`TZ` / `/etc/localtime`），`resolvedOptions().timeZone` 与 `format` 使用同一值。
+
 ## Consequences
 
 - 生产 `String.prototype.normalize` 与 builtins 算法共用 ICU4X normalizer；`unicode-normalization` 从 workspace 删除。
+- 墙钟换算与 IANA 标识分属同一数据 crate 的两层：ICU 认标识，`chrono-tz` 做 DST；host-native 只调用 `wjsm-intl-data` 的 zone API。
 - `wjsm-exec` stub 体积随 full compiled_data 增加；packed exe 继承 stub，overlay 不再重复带 ICU。x86_64 Linux release（thin LTO、strip symbols）测得 29.8 MiB（31,266,392 字节）；引入前 ADR 0018 记录约 27 MiB。
 - 手册非目标改为「不引入 ICU4C / 宿主 ICU」，不再把 ICU4X 当成否决项。
 

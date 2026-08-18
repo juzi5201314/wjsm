@@ -171,9 +171,10 @@ fn of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64, ar
     let Some(IntlSlot::DisplayNames(slot)) = state.intl.slots.get(&handle) else {
         return incompatible(ctx, state);
     };
-    if let Err(error) = canonical_code_for_display_names(&slot.type_name, &code) {
-        return range_error(ctx, state, &error);
-    }
+    let canonical = match canonical_code_for_display_names(&slot.type_name, &code) {
+        Ok(canonical) => canonical,
+        Err(error) => return range_error(ctx, state, &error),
+    };
     if let Err(exception) = ensure(ctx, state, handle) {
         return exception;
     }
@@ -183,12 +184,12 @@ fn of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64, ar
     match slot
         .formatter
         .as_ref()
-        .and_then(|formatter| formatter.of(&code).ok())
+        .and_then(|formatter| formatter.of(&canonical).ok())
         .flatten()
     {
         Some(name) => intern(ctx, state, name),
         None if slot.fallback == "none" => value::encode_undefined(),
-        None => intern(ctx, state, code),
+        None => intern(ctx, state, canonical),
     }
 }
 
@@ -208,7 +209,9 @@ fn ensure(ctx: &mut NativeVmContext, state: &mut NativeAgentState, handle: u32) 
         _ => DisplayNameType::DateTimeField,
     };
     let locale = slot.locale.clone();
-    let formatter = OwnedDisplayNames::try_new(&locale, kind)
+    let style = slot.style.clone();
+    let language_display = slot.language_display.clone();
+    let formatter = OwnedDisplayNames::try_new(&locale, kind, &style, &language_display)
         .map_err(|error| range_error(ctx, state, &error))?;
     if let Some(IntlSlot::DisplayNames(slot)) = state.intl.slots.get_mut(&handle) {
         slot.formatter = Some(formatter);
