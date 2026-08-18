@@ -252,15 +252,7 @@ fn create_typedarray_object<E: ExecContext>(
     view: TypedArrayView,
     buffer_object: Option<Value>,
 ) -> Value {
-    let table_handle = ctx.typedarray_table_create(
-        view.buffer_handle,
-        buffer_object,
-        view.byte_offset,
-        view.length,
-        view.element_size,
-        view.element_kind,
-        view.is_shared,
-    );
+    let table_handle = ctx.typedarray_table_create(view, buffer_object);
     let object = ctx.alloc_object(8);
     let Some(handle) = ctx.handle_index_of(object) else {
         return value::encode_undefined();

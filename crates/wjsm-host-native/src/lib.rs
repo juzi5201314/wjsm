@@ -4748,6 +4748,16 @@ pub struct NativeRuntime {
     not_send_sync: PhantomData<Rc<()>>,
 }
 
+/// builtin / user 两段 image 及其槽表，供 split install 一次装入。
+struct SplitProgramImages {
+    builtin_program: wjsm_ir::Program,
+    user_program: wjsm_ir::Program,
+    builtin_slots: HashMap<String, u32>,
+    user_slots: HashMap<String, u32>,
+    builtin_image: Arc<CompiledImage>,
+    user_image: Arc<CompiledImage>,
+}
+
 impl NativeRuntime {
     pub fn new(cache_dir: Option<PathBuf>) -> Result<Self, NativeRuntimeError> {
         Self::new_with_config(NativeRuntimeConfig::from_environment(cache_dir)?)
@@ -4924,12 +4934,14 @@ impl NativeRuntime {
                 self.install_split_images(
                     artifact,
                     store,
-                    builtin_program,
-                    user_program,
-                    builtin_slots,
-                    user_slots,
-                    builtin_image,
-                    user_image,
+                    SplitProgramImages {
+                        builtin_program,
+                        user_program,
+                        builtin_slots,
+                        user_slots,
+                        builtin_image,
+                        user_image,
+                    },
                 )
             }
             None => {
@@ -4969,12 +4981,14 @@ impl NativeRuntime {
                 self.install_split_images(
                     artifact,
                     store,
-                    builtin_program,
-                    user_program,
-                    builtin_slots,
-                    user_slots,
-                    builtin_image,
-                    user_image,
+                    SplitProgramImages {
+                        builtin_program,
+                        user_program,
+                        builtin_slots,
+                        user_slots,
+                        builtin_image,
+                        user_image,
+                    },
                 )
             }
             (None, PrecompiledNativeImages::Whole(object)) => {
@@ -4991,18 +5005,20 @@ impl NativeRuntime {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn install_split_images(
         &mut self,
         artifact: &PortableArtifact,
         store: &ModuleSourceStore,
-        builtin_program: wjsm_ir::Program,
-        user_program: wjsm_ir::Program,
-        builtin_slots: HashMap<String, u32>,
-        user_slots: HashMap<String, u32>,
-        builtin_image: Arc<CompiledImage>,
-        user_image: Arc<CompiledImage>,
+        images: SplitProgramImages,
     ) -> Result<(NativeSlowEntry, u64), NativeRuntimeError> {
+        let SplitProgramImages {
+            builtin_program,
+            user_program,
+            builtin_slots,
+            user_slots,
+            builtin_image,
+            user_image,
+        } = images;
         self.state
             .install_shared_variables(&builtin_slots, &user_slots);
         let builtin_image_id = builtin_image.image_id();

@@ -16,7 +16,7 @@ use wjsm_ir::{
 };
 use wjsm_parser::parse_module;
 use wjsm_semantic::{
-    BuiltinSegment, ModuleKind, ModuleLoweringInput, ModuleMetadata,
+    BuiltinSegment, ModuleKind, ModuleLinking, ModuleLoweringInput, ModuleMetadata,
     lower_modules_with_builtin_seed, lower_modules_with_debug_meta,
 };
 
@@ -147,17 +147,17 @@ fn seed_lower_calls_builtin_entry_from_user_main() {
     let builtin = minimal_builtin_segment();
     let entry_function_id = builtin.entry_function_id;
 
+    let import_map = builtin_import_map();
     let program = lower_modules_with_builtin_seed(
         vec![esm_input(
             0,
             "/project/main.js",
             "import { answer } from 'node:builtin-fixture';\nconsole.log(answer);\n",
         )],
-        &builtin_import_map(),
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
+        ModuleLinking {
+            import_map: &import_map,
+            ..ModuleLinking::empty()
+        },
         builtin,
         false,
     )
@@ -187,17 +187,17 @@ fn seed_lower_with_tla_calls_builtin_from_async_body_entry() {
     let builtin = minimal_builtin_segment();
     let entry_function_id = builtin.entry_function_id;
 
+    let import_map = builtin_import_map();
     let program = lower_modules_with_builtin_seed(
         vec![esm_input(
             0,
             "/project/main.js",
             "import { answer } from 'node:builtin-fixture';\nconsole.log(answer);\nawait Promise.resolve();\n",
         )],
-        &builtin_import_map(),
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
+        ModuleLinking {
+            import_map: &import_map,
+            ..ModuleLinking::empty()
+        },
         builtin,
         false,
     )
@@ -251,11 +251,11 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
             esm_input(1, "/__wjsm_builtin__/node/seg_a.mjs", segment_source_a),
             esm_input(2, "/__wjsm_builtin__/node/seg_b.mjs", segment_source_b),
         ],
-        &segment_import_map,
-        &HashMap::new(),
-        &segment_export_names,
-        &HashMap::new(),
-        &HashMap::new(),
+        ModuleLinking {
+            import_map: &segment_import_map,
+            export_names: &segment_export_names,
+            ..ModuleLinking::empty()
+        },
         false,
     )
     .expect("segment lower should succeed");
@@ -301,11 +301,10 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
             "/project/main.js",
             "import { makeCounter, base } from 'node:seg_a';\nconst c = makeCounter();\nconsole.log(c(), base);\n",
         )],
-        &user_import_map,
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
-        &HashMap::new(),
+        ModuleLinking {
+            import_map: &user_import_map,
+            ..ModuleLinking::empty()
+        },
         builtin,
         false,
     )
@@ -355,11 +354,11 @@ fn debug_meta_collects_export_map_module_scopes_and_scope_count() {
                 "import { v } from './dep.js';\nconsole.log(v);\n",
             ),
         ],
-        &import_map,
-        &HashMap::new(),
-        &export_names,
-        &HashMap::new(),
-        &HashMap::new(),
+        ModuleLinking {
+            import_map: &import_map,
+            export_names: &export_names,
+            ..ModuleLinking::empty()
+        },
         false,
     )
     .expect("meta lower should succeed");

@@ -18,6 +18,18 @@ pub struct ModuleLinkResult {
     pub re_export_map: HashMap<ModuleId, Vec<ReExportBinding>>,
 }
 
+impl ModuleLinkResult {
+    pub fn as_linking(&self) -> wjsm_semantic::ModuleLinking<'_> {
+        wjsm_semantic::ModuleLinking {
+            import_map: &self.import_map,
+            dynamic_import_targets: &self.dynamic_import_targets,
+            export_names: &self.export_names,
+            dynamic_import_specifiers: &self.dynamic_import_specifiers,
+            re_export_map: &self.re_export_map,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CollectedExports {
     names: BTreeSet<String>,

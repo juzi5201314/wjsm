@@ -651,6 +651,100 @@ impl DeclaredData {
     }
 }
 
+/// 单函数 codegen 的完整输入。与 `ObjectModule` 解耦，可供并行 compile 与特化 overlay 共用。
+///
+/// `'s` 是栈帧局部名的字符串生命周期，必须与 `'a` 分开：`BTreeSet` 对元素类型不变。
+pub(crate) struct FunctionCompileInput<'a, 's> {
+    pub isa: &'a cranelift_codegen::isa::OwnedTargetIsa,
+    pub target_config: cranelift_codegen::isa::TargetFrontendConfig,
+    pub program: &'a Program,
+    pub ir_function: &'a wjsm_ir::Function,
+    pub index: usize,
+    pub signature: &'a Signature,
+    pub function_id: FuncId,
+    pub dispatcher: &'a DeclaredFunction,
+    pub barrier_thunks: &'a DeclaredBarrierThunks,
+    pub math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
+    pub root_bitmaps: &'a [DeclaredData],
+    pub f64_values: &'a HashSet<ValueId>,
+    pub variable_slots: &'a HashMap<String, u32>,
+    pub root_plan: &'a RootPlan,
+    pub root_capacity: usize,
+    pub frame_local_names: &'a BTreeSet<&'s str>,
+    pub boxed_local_names: &'a BTreeSet<&'s str>,
+    pub ic_slots: &'a HashMap<ValueId, u32>,
+    pub feedback_slots: &'a HashMap<(BasicBlockId, usize), u32>,
+    pub specialized_tags: Option<&'a [wjsm_native_abi::NativeFeedbackTag]>,
+    pub collect_diagnostics: bool,
+}
+
+/// 指令级 lowering 的共享可变上下文。
+struct LoweringCx<'a, 'f> {
+    builder: &'a mut FunctionBuilder<'f>,
+    variables: &'a HashMap<ValueId, Variable>,
+    root_frame: &'a mut FrameLowering,
+    dispatcher: ir::FuncRef,
+    ctx: ir::Value,
+}
+
+impl LoweringCx<'_, '_> {
+    fn call(
+        &mut self,
+        operation: u32,
+        args: &[ir::Value],
+        feedback: Option<ir::Value>,
+    ) -> Result<ir::Value> {
+        call_dispatcher(
+            self.builder,
+            self.root_frame,
+            self.dispatcher,
+            self.ctx,
+            operation,
+            args,
+            feedback,
+        )
+    }
+
+    fn publish(&mut self, roots: &[ValueId], extras: &[ir::Value]) -> Result<()> {
+        self.root_frame
+            .publish(self.builder, self.variables, roots, extras)
+    }
+}
+
+/// 指令 lowering 所需的只读/半可变表。
+struct InstructionTables<'a> {
+    constants: &'a [Constant],
+    function_index: u32,
+    barrier_thunks: &'a BarrierThunks,
+    f64_values: &'a HashSet<ValueId>,
+    math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
+    imported_math_thunks: &'a mut HashMap<Builtin, ir::FuncRef>,
+    slow_call_signature: ir::SigRef,
+    variable_slots: &'a HashMap<String, u32>,
+    frame_locals: &'a HashMap<String, Variable>,
+    frame_local_indices: &'a HashMap<String, usize>,
+    ic_slots: &'a HashMap<ValueId, u32>,
+}
+
+/// 调用类指令的操作数。
+struct CallLowering<'a> {
+    destination: Option<ValueId>,
+    callee: ValueId,
+    this_value: ValueId,
+    args: &'a [ValueId],
+    operation: NativeRuntimeOp,
+    forward_args: bool,
+}
+
+/// 属性访问 IC 的操作数。
+#[derive(Clone, Copy)]
+struct PropAccess {
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    slot: u32,
+}
+
 fn compile_program_inner(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
@@ -741,33 +835,33 @@ fn compile_program_inner(
         .par_iter()
         .enumerate()
         .map(|(index, function)| {
-            compile_one_function(
-                &module_isa,
+            compile_one_function(&FunctionCompileInput {
+                isa: &module_isa,
                 target_config,
                 program,
-                function,
+                ir_function: function,
                 index,
-                &signature,
-                function_ids[index],
-                &dispatcher_decl,
-                &barrier_thunks,
-                &math_thunk_decls,
-                &bitmap_decls,
-                inferred_f64
+                signature: &signature,
+                function_id: function_ids[index],
+                dispatcher: &dispatcher_decl,
+                barrier_thunks: &barrier_thunks,
+                math_thunks: &math_thunk_decls,
+                root_bitmaps: &bitmap_decls,
+                f64_values: inferred_f64
                     .get(&FunctionId(
                         u32::try_from(index).expect("function index fits u32"),
                     ))
                     .expect("analysis covers every function"),
                 variable_slots,
-                &root_plans[index],
-                root_capacities[index],
-                &frame_locals[index],
-                &boxed_frame_locals[index],
-                &ic_slots[index],
-                feedback_plan.function_slots(index),
-                None,
+                root_plan: &root_plans[index],
+                root_capacity: root_capacities[index],
+                frame_local_names: &frame_locals[index],
+                boxed_local_names: &boxed_frame_locals[index],
+                ic_slots: &ic_slots[index],
+                feedback_slots: feedback_plan.function_slots(index),
+                specialized_tags: None,
                 collect_diagnostics,
-            )
+            })
         })
         .collect::<Result<Vec<_>, NativeCompileError>>()?;
 
@@ -827,66 +921,27 @@ fn compile_program_inner(
 
 /// 单个函数的完整 codegen：IR → CLIF → 机器码 + relocation + unwind info。
 /// 不接触 `ObjectModule`，可安全并行执行。
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_one_function(
-    isa: &cranelift_codegen::isa::OwnedTargetIsa,
-    target_config: cranelift_codegen::isa::TargetFrontendConfig,
-    program: &Program,
-    ir_function: &wjsm_ir::Function,
-    index: usize,
-    signature: &Signature,
-    function_id: FuncId,
-    dispatcher: &DeclaredFunction,
-    barrier_thunks: &DeclaredBarrierThunks,
-    math_thunks: &HashMap<Builtin, DeclaredFunction>,
-    root_bitmaps: &[DeclaredData],
-    f64_values: &HashSet<ValueId>,
-    variable_slots: &HashMap<String, u32>,
-    root_plan: &RootPlan,
-    root_capacity: usize,
-    frame_local_names: &BTreeSet<&str>,
-    boxed_local_names: &BTreeSet<&str>,
-    ic_slots: &HashMap<ValueId, u32>,
-    feedback_slots: &HashMap<(BasicBlockId, usize), u32>,
-    specialized_tags: Option<&[wjsm_native_abi::NativeFeedbackTag]>,
-    collect_diagnostics: bool,
+    input: &FunctionCompileInput<'_, '_>,
 ) -> Result<CompiledFunction, NativeCompileError> {
     let function_index =
-        u32::try_from(index).map_err(|_| NativeCompileError::Capacity("function IDs"))?;
+        u32::try_from(input.index).map_err(|_| NativeCompileError::Capacity("function IDs"))?;
     let mut context = cranelift_codegen::Context::new();
     let mut builder_context = FunctionBuilderContext::new();
-    context.set_disasm(collect_diagnostics);
-    context.func.signature = signature.clone();
+    context.set_disasm(input.collect_diagnostics);
+    context.func.signature = input.signature.clone();
     context.func.name = UserFuncName::user(0, function_index);
-    lower_function(
-        &mut context.func,
-        &mut builder_context,
-        target_config,
-        program,
-        ir_function,
-        function_index,
-        dispatcher,
-        barrier_thunks,
-        math_thunks,
-        f64_values,
-        variable_slots,
-        root_plan,
-        root_capacity,
-        root_bitmaps,
-        frame_local_names,
-        boxed_local_names,
-        ic_slots,
-        feedback_slots,
-        specialized_tags,
-    )
-    .map_err(|error| NativeCompileError::Lowering {
-        function: FunctionId(function_index),
-        message: error.to_string(),
+    lower_function(&mut context.func, &mut builder_context, input).map_err(|error| {
+        NativeCompileError::Lowering {
+            function: FunctionId(function_index),
+            message: error.to_string(),
+        }
     })?;
-    let clif = if collect_diagnostics {
+    let clif = if input.collect_diagnostics {
         format!(
-            ";; function {index}: {}\n{}\n",
-            ir_function.name(),
+            ";; function {}: {}\n{}\n",
+            input.index,
+            input.ir_function.name(),
             context.func.display()
         )
     } else {
@@ -894,20 +949,22 @@ pub(crate) fn compile_one_function(
     };
 
     context
-        .compile(isa.as_ref(), &mut ControlPlane::default())
+        .compile(input.isa.as_ref(), &mut ControlPlane::default())
         .map_err(|error| NativeCompileError::Cranelift(error.inner.to_string()))?;
     let compiled = context
         .compiled_code()
         .ok_or_else(|| NativeCompileError::CompilerInvariant("missing compiled code".into()))?;
     if !compiled.buffer.traps().is_empty() {
         return Err(NativeCompileError::CompilerInvariant(format!(
-            "function {index} contains a machine trap"
+            "function {} contains a machine trap",
+            input.index
         )));
     }
-    let disassembly = if collect_diagnostics {
+    let disassembly = if input.collect_diagnostics {
         format!(
-            ";; function {index}: {}\n{}\n",
-            ir_function.name(),
+            ";; function {}: {}\n{}\n",
+            input.index,
+            input.ir_function.name(),
             compiled.vcode.as_deref().unwrap_or("")
         )
     } else {
@@ -918,17 +975,18 @@ pub(crate) fn compile_one_function(
         .frame_layout()
         .ok_or_else(|| {
             NativeCompileError::CompilerInvariant(format!(
-                "function {index} is missing frame metadata"
+                "function {} is missing frame metadata",
+                input.index
             ))
         })?
         .frame_to_fp_offset;
     let unwind = compiled
-        .create_unwind_info(isa.as_ref())
+        .create_unwind_info(input.isa.as_ref())
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?
         .ok_or(NativeCompileError::MissingUnwindInfo(FunctionId(
             function_index,
         )))?;
-    validate_unwind_info(isa.triple(), &unwind, FunctionId(function_index))?;
+    validate_unwind_info(input.isa.triple(), &unwind, FunctionId(function_index))?;
     let alignment = u64::from(compiled.buffer.alignment);
     let code_len = u64::from(compiled.buffer.total_size());
     let bytes = compiled.buffer.data().to_vec();
@@ -936,7 +994,7 @@ pub(crate) fn compile_one_function(
         .buffer
         .relocs()
         .iter()
-        .map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, function_id))
+        .map(|reloc| ModuleReloc::from_mach_reloc(reloc, &context.func, input.function_id))
         .collect();
     Ok(CompiledFunction {
         alignment,
@@ -1111,28 +1169,27 @@ pub(crate) fn slow_entry_signature(call_conv: CallConv) -> Signature {
     signature
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_function(
     function: &mut Function,
     builder_context: &mut FunctionBuilderContext,
-    target_config: cranelift_codegen::isa::TargetFrontendConfig,
-    program: &Program,
-    ir_function: &wjsm_ir::Function,
-    function_index: u32,
-    host_dispatcher: &DeclaredFunction,
-    barrier_thunks: &DeclaredBarrierThunks,
-    math_thunks: &HashMap<Builtin, DeclaredFunction>,
-    f64_values: &HashSet<ValueId>,
-    variable_slots: &HashMap<String, u32>,
-    root_plan: &RootPlan,
-    root_capacity: usize,
-    root_bitmaps: &[DeclaredData],
-    frame_local_names: &BTreeSet<&str>,
-    boxed_local_names: &BTreeSet<&str>,
-    ic_slots: &HashMap<ValueId, u32>,
-    feedback_slots: &HashMap<(BasicBlockId, usize), u32>,
-    specialized_tags: Option<&[wjsm_native_abi::NativeFeedbackTag]>,
+    input: &FunctionCompileInput<'_, '_>,
 ) -> Result<()> {
+    let target_config = input.target_config;
+    let program = input.program;
+    let ir_function = input.ir_function;
+    let function_index = u32::try_from(input.index).context("function index exceeds u32")?;
+    let host_dispatcher = input.dispatcher;
+    let math_thunks = input.math_thunks;
+    let f64_values = input.f64_values;
+    let variable_slots = input.variable_slots;
+    let root_plan = input.root_plan;
+    let root_capacity = input.root_capacity;
+    let root_bitmaps = input.root_bitmaps;
+    let frame_local_names = input.frame_local_names;
+    let boxed_local_names = input.boxed_local_names;
+    let ic_slots = input.ic_slots;
+    let feedback_slots = input.feedback_slots;
+    let specialized_tags = input.specialized_tags;
     let slow_call_signature = function.signature.clone();
     let mut builder = FunctionBuilder::new(function, builder_context);
     let mut blocks = HashMap::with_capacity(ir_function.blocks().len());
@@ -1156,7 +1213,7 @@ pub(crate) fn lower_function(
     let dispatcher_ref = host_dispatcher.import(builder.func);
     let mut imported_math_thunks: HashMap<Builtin, ir::FuncRef> =
         HashMap::with_capacity(math_thunks.len());
-    let barrier_thunks = barrier_thunks.import(builder.func);
+    let barrier_thunks = input.barrier_thunks.import(builder.func);
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
     let constants = program.constants();
@@ -1172,107 +1229,95 @@ pub(crate) fn lower_function(
         &frame_locals,
         &boxed_local_order,
     )?;
-    lower_function_parameters(
-        &mut builder,
-        ir_function,
-        variable_slots,
-        dispatcher_ref,
-        ctx_value,
-        &mut root_frame,
-        &frame_locals,
-        &boxed_local_indices,
-        specialized_tags,
-    )?;
+    {
+        let mut cx = LoweringCx {
+            builder: &mut builder,
+            variables: &variables,
+            root_frame: &mut root_frame,
+            dispatcher: dispatcher_ref,
+            ctx: ctx_value,
+        };
+        let mut tables = InstructionTables {
+            constants,
+            function_index,
+            barrier_thunks: &barrier_thunks,
+            f64_values,
+            math_thunks,
+            imported_math_thunks: &mut imported_math_thunks,
+            slow_call_signature,
+            variable_slots,
+            frame_locals: &frame_locals,
+            frame_local_indices: &boxed_local_indices,
+            ic_slots,
+        };
+        lower_function_parameters(
+            &mut cx,
+            ir_function,
+            tables.variable_slots,
+            tables.frame_locals,
+            tables.frame_local_indices,
+            specialized_tags,
+        )?;
 
-    for block in ir_function.blocks() {
-        let clif_block = blocks[&block.id()];
-        builder.switch_to_block(clif_block);
-        root_frame.enter_block();
-        let has_suspend = block.instructions().iter().any(|instruction| {
-            matches!(
-                instruction,
-                Instruction::Suspend { .. } | Instruction::GeneratorSuspend { .. }
-            )
-        });
-        for (instruction_index, instruction) in block.instructions().iter().enumerate() {
-            if matches!(instruction, Instruction::Phi { .. }) {
+        for block in ir_function.blocks() {
+            let clif_block = blocks[&block.id()];
+            cx.builder.switch_to_block(clif_block);
+            cx.root_frame.enter_block();
+            let has_suspend = block.instructions().iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Suspend { .. } | Instruction::GeneratorSuspend { .. }
+                )
+            });
+            for (instruction_index, instruction) in block.instructions().iter().enumerate() {
+                if matches!(instruction, Instruction::Phi { .. }) {
+                    continue;
+                }
+                let roots = root_plan.before_instruction(block.id(), instruction_index);
+                cx.publish(roots, &[])?;
+                let ctx = cx.ctx;
+                let feedback_ptr = feedback_slots
+                    .get(&(block.id(), instruction_index))
+                    .map(|slot| emit_feedback_slot_ptr(cx.builder, ctx, *slot))
+                    .transpose()?;
+                lower_instruction(&mut cx, &mut tables, instruction, roots, feedback_ptr)?;
+            }
+            if has_suspend {
                 continue;
             }
-            let roots = root_plan.before_instruction(block.id(), instruction_index);
-            root_frame.publish(&mut builder, &variables, roots, &[])?;
-            let feedback_ptr = feedback_slots
-                .get(&(block.id(), instruction_index))
-                .map(|slot| emit_feedback_slot_ptr(&mut builder, ctx_value, *slot))
-                .transpose()?;
-            lower_instruction(
-                &mut builder,
-                instruction,
+            cx.publish(root_plan.before_terminator(block.id()), &[])?;
+            lower_terminator(
+                &mut cx,
+                block.id(),
+                block.terminator(),
                 constants,
-                function_index,
-                &variables,
-                dispatcher_ref,
-                &barrier_thunks,
-                ctx_value,
-                f64_values,
-                math_thunks,
-                &mut imported_math_thunks,
-                slow_call_signature,
-                variable_slots,
-                &mut root_frame,
-                roots,
-                &frame_locals,
-                &boxed_local_indices,
-                ic_slots,
-                feedback_ptr,
+                &blocks,
+                &phi_edges,
             )?;
         }
-        if has_suspend {
-            continue;
-        }
-        root_frame.publish(
-            &mut builder,
-            &variables,
-            root_plan.before_terminator(block.id()),
-            &[],
-        )?;
-        lower_terminator(
-            &mut builder,
-            block.id(),
-            block.terminator(),
-            constants,
-            &blocks,
-            &variables,
-            &phi_edges,
-            dispatcher_ref,
-            ctx_value,
-            &mut root_frame,
-        )?;
+        cx.root_frame.finish(cx.builder);
+        cx.builder.seal_all_blocks();
     }
-    root_frame.finish(&mut builder);
-    builder.seal_all_blocks();
     builder.finalize(target_config);
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_function_parameters(
-    builder: &mut FunctionBuilder<'_>,
+    cx: &mut LoweringCx<'_, '_>,
     function: &wjsm_ir::Function,
     variable_slots: &HashMap<String, u32>,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
-    root_frame: &mut FrameLowering,
     frame_locals: &HashMap<String, Variable>,
     frame_local_indices: &HashMap<String, usize>,
     specialized_tags: Option<&[wjsm_native_abi::NativeFeedbackTag]>,
 ) -> Result<()> {
-    let native_params = builder
-        .block_params(builder.current_block().context("missing entry block")?)
+    let native_params = cx
+        .builder
+        .block_params(cx.builder.current_block().context("missing entry block")?)
         .to_vec();
     let env = native_params[1];
     let this_value = native_params[2];
-    let args_base = builder.ins().uextend(types::I64, native_params[3]);
-    let args_len = builder.ins().uextend(types::I64, native_params[4]);
+    let args_base = cx.builder.ins().uextend(types::I64, native_params[3]);
+    let args_len = cx.builder.ins().uextend(types::I64, native_params[4]);
     let entry_roots: &[ir::Value] = if function.params().len() >= 2 {
         &[env, this_value]
     } else if function.params().len() == 1 {
@@ -1280,7 +1325,8 @@ fn lower_function_parameters(
     } else {
         &[]
     };
-    root_frame.publish(builder, &HashMap::new(), &[], entry_roots)?;
+    cx.root_frame
+        .publish(cx.builder, &HashMap::new(), &[], entry_roots)?;
     let uses_canonical_this = function.blocks().iter().any(|block| {
         block.instructions().iter().any(|instruction| {
             matches!(
@@ -1319,34 +1365,30 @@ fn lower_function_parameters(
                 if let Some(tags) = specialized_tags
                     && let Some(_tag) = tags.get(index - 2)
                 {
-                    let pointer_type = builder.func.dfg.value_type(ctx);
-                    let args_base_u32 = builder.ins().uextend(types::I64, native_params[3]);
-                    let arena_base = builder.ins().load(
+                    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+                    let args_base_u32 = cx.builder.ins().uextend(types::I64, native_params[3]);
+                    let arena_base = cx.builder.ins().load(
                         pointer_type,
                         MemFlagsData::trusted(),
-                        ctx,
+                        cx.ctx,
                         vmctx_offset(offset_of!(NativeVmContext, call_arena_slots))?,
                     );
                     let slot_offset = i64::try_from(index - 2)
                         .context("parameter index exceeds i64")?
                         .checked_mul(size_of::<i64>() as i64)
                         .context("call arena offset overflows")?;
-                    let args_base_bytes = builder.ins().ishl_imm_u(args_base_u32, 3);
-                    let param_bytes = builder.ins().iadd_imm_s(args_base_bytes, slot_offset);
-                    let address = builder.ins().iadd(arena_base, param_bytes);
-                    builder
+                    let args_base_bytes = cx.builder.ins().ishl_imm_u(args_base_u32, 3);
+                    let param_bytes = cx.builder.ins().iadd_imm_s(args_base_bytes, slot_offset);
+                    let address = cx.builder.ins().iadd(arena_base, param_bytes);
+                    cx.builder
                         .ins()
                         .load(types::I64, MemFlagsData::trusted(), address, 0)
                 } else {
-                    let argument = builder.ins().iconst(
+                    let argument = cx.builder.ins().iconst(
                         types::I64,
                         i64::try_from(index - 2).context("parameter index exceeds i64")?,
                     );
-                    call_dispatcher(
-                        builder,
-                        root_frame,
-                        dispatcher,
-                        ctx,
+                    cx.call(
                         NativeRuntimeOp::LoadArgument.id(),
                         &[args_base, args_len, argument],
                         None,
@@ -1355,49 +1397,27 @@ fn lower_function_parameters(
             }
         };
         if let Some(local) = frame_locals.get(storage_name).copied() {
-            builder.def_var(local, value);
+            cx.builder.def_var(local, value);
             if let Some(index) = frame_local_indices.get(storage_name).copied() {
-                root_frame.update_pinned_local(builder, index, value)?;
+                cx.root_frame
+                    .update_pinned_local(cx.builder, index, value)?;
             }
             continue;
         }
         let Some(slot) = variable_slots.get(storage_name).copied() else {
             continue;
         };
-        let slot = builder.ins().iconst(types::I64, i64::from(slot));
-        let _ = call_dispatcher(
-            builder,
-            root_frame,
-            dispatcher,
-            ctx,
-            NativeRuntimeOp::StoreVar.id(),
-            &[slot, value],
-            None,
-        )?;
+        let slot = cx.builder.ins().iconst(types::I64, i64::from(slot));
+        let _ = cx.call(NativeRuntimeOp::StoreVar.id(), &[slot, value], None)?;
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_instruction(
-    builder: &mut FunctionBuilder<'_>,
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &mut InstructionTables<'_>,
     instruction: &Instruction,
-    constants: &[Constant],
-    function_index: u32,
-    variables: &HashMap<ValueId, Variable>,
-    dispatcher: ir::FuncRef,
-    barrier_thunks: &BarrierThunks,
-    ctx: ir::Value,
-    f64_values: &HashSet<ValueId>,
-    math_thunks: &HashMap<Builtin, DeclaredFunction>,
-    imported_math_thunks: &mut HashMap<Builtin, ir::FuncRef>,
-    slow_call_signature: ir::SigRef,
-    variable_slots: &HashMap<String, u32>,
-    root_frame: &mut FrameLowering,
     roots: &[ValueId],
-    frame_locals: &HashMap<String, Variable>,
-    frame_local_indices: &HashMap<String, usize>,
-    ic_slots: &HashMap<ValueId, u32>,
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     match instruction {
@@ -1407,34 +1427,34 @@ fn lower_instruction(
         } => {
             let constant_index =
                 usize::try_from(constant_id.0).context("constant index does not fit usize")?;
-            let constant = constants
+            let constant = tables
+                .constants
                 .get(constant_index)
                 .with_context(|| format!("constant {} is missing", constant_id.0))?;
             let native = match constant {
-                Constant::Number(value) => {
-                    builder.ins().iconst(types::I64, value::encode_f64(*value))
-                }
-                Constant::Bool(value) => {
-                    builder.ins().iconst(types::I64, value::encode_bool(*value))
-                }
-                Constant::Null => builder.ins().iconst(types::I64, value::encode_null()),
-                Constant::Undefined => builder.ins().iconst(types::I64, value::encode_undefined()),
+                Constant::Number(value) => cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_f64(*value)),
+                Constant::Bool(value) => cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_bool(*value)),
+                Constant::Null => cx.builder.ins().iconst(types::I64, value::encode_null()),
+                Constant::Undefined => cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_undefined()),
                 Constant::FunctionRef(function) => {
-                    let index = builder.ins().iconst(types::I64, i64::from(function.0));
-                    call_dispatcher(
-                        builder,
-                        root_frame,
-                        dispatcher,
-                        ctx,
-                        NativeRuntimeOp::MaterializeFunction.id(),
-                        &[index],
-                        None,
-                    )?
+                    let index = cx.builder.ins().iconst(types::I64, i64::from(function.0));
+                    cx.call(NativeRuntimeOp::MaterializeFunction.id(), &[index], None)?
                 }
-                Constant::NativeCallableEval => builder
+                Constant::NativeCallableEval => cx
+                    .builder
                     .ins()
                     .iconst(types::I64, value::encode_native_callable_idx(0)),
-                Constant::ModuleId(module) => builder
+                Constant::ModuleId(module) => cx
+                    .builder
                     .ins()
                     .iconst(types::I64, value::encode_f64(f64::from(module.0))),
                 Constant::String(_) | Constant::BigInt(_) | Constant::RegExp { .. } => {
@@ -1444,103 +1464,76 @@ fn lower_instruction(
                         Constant::RegExp { .. } => NativeRuntimeOp::MaterializeRegExp,
                         _ => unreachable!("guard restricts materialized constants"),
                     };
-                    let index = builder.ins().iconst(types::I64, i64::from(constant_id.0));
-                    let result = call_dispatcher(
-                        builder,
-                        root_frame,
-                        dispatcher,
-                        ctx,
-                        operation.id(),
-                        &[index],
-                        None,
-                    )?;
+                    let index = cx
+                        .builder
+                        .ins()
+                        .iconst(types::I64, i64::from(constant_id.0));
+                    let result = cx.call(operation.id(), &[index], None)?;
                     if matches!(constant, Constant::RegExp { .. }) {
-                        return_if_exception(builder, result, root_frame, ctx)?;
+                        return_if_exception(cx.builder, result, cx.root_frame, cx.ctx)?;
                     }
                     result
                 }
             };
-            define_value(builder, variables, *dest, native)
+            define_value(cx.builder, cx.variables, *dest, native)
         }
         Instruction::Binary { dest, op, lhs, rhs }
-            if f64_values.contains(dest)
+            if tables.f64_values.contains(dest)
                 && matches!(
                     op,
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
                 ) =>
         {
-            let lhs = use_value(builder, variables, *lhs)?;
-            let rhs = use_value(builder, variables, *rhs)?;
-            let lhs = builder
+            let lhs = use_value(cx.builder, cx.variables, *lhs)?;
+            let rhs = use_value(cx.builder, cx.variables, *rhs)?;
+            let lhs = cx
+                .builder
                 .ins()
                 .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-            let rhs = builder
+            let rhs = cx
+                .builder
                 .ins()
                 .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
             let result = match op {
-                BinaryOp::Add => builder.ins().fadd(lhs, rhs),
-                BinaryOp::Sub => builder.ins().fsub(lhs, rhs),
-                BinaryOp::Mul => builder.ins().fmul(lhs, rhs),
-                BinaryOp::Div => builder.ins().fdiv(lhs, rhs),
+                BinaryOp::Add => cx.builder.ins().fadd(lhs, rhs),
+                BinaryOp::Sub => cx.builder.ins().fsub(lhs, rhs),
+                BinaryOp::Mul => cx.builder.ins().fmul(lhs, rhs),
+                BinaryOp::Div => cx.builder.ins().fdiv(lhs, rhs),
                 _ => unreachable!("guard restricts direct f64 operations"),
             };
-            let result = box_f64_result(builder, result);
-            define_value(builder, variables, *dest, result)
+            let result = box_f64_result(cx.builder, result);
+            define_value(cx.builder, cx.variables, *dest, result)
         }
-        Instruction::Binary { dest, op, lhs, rhs } => lower_dynamic_binary(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
-            *dest,
-            *op,
-            *lhs,
-            *rhs,
-            feedback_ptr,
-        ),
+        Instruction::Binary { dest, op, lhs, rhs } => {
+            lower_dynamic_binary(cx, *dest, *op, *lhs, *rhs, feedback_ptr)
+        }
         Instruction::Unary { dest, op, value } => {
-            if f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
-                let value = use_value(builder, variables, *value)?;
+            if tables.f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
+                let value = use_value(cx.builder, cx.variables, *value)?;
                 let result = if *op == UnaryOp::Neg {
-                    let value = builder
-                        .ins()
-                        .bitcast(types::F64, ir::MemFlagsData::new(), value);
-                    let result = builder.ins().fneg(value);
-                    box_f64_result(builder, result)
+                    let value =
+                        cx.builder
+                            .ins()
+                            .bitcast(types::F64, ir::MemFlagsData::new(), value);
+                    let result = cx.builder.ins().fneg(value);
+                    box_f64_result(cx.builder, result)
                 } else {
                     value
                 };
-                define_value(builder, variables, *dest, result)
+                define_value(cx.builder, cx.variables, *dest, result)
             } else {
                 let operation = DYNAMIC_UNARY_BASE + u32::from(unary_tag(*op));
-                let input = use_value(builder, variables, *value)?;
-                let result = call_dispatcher(
-                    builder,
-                    root_frame,
-                    dispatcher,
-                    ctx,
-                    operation,
-                    &[input],
-                    feedback_ptr,
-                )?;
-                define_value(builder, variables, *dest, result)
+                let input = use_value(cx.builder, cx.variables, *value)?;
+                let result = cx.call(operation, &[input], feedback_ptr)?;
+                define_value(cx.builder, cx.variables, *dest, result)
             }
         }
         Instruction::Compare { dest, op, lhs, rhs } => {
             let operation = DYNAMIC_COMPARE_BASE + u32::from(compare_tag(*op));
-            let lhs = use_value(builder, variables, *lhs)?;
-            let rhs = use_value(builder, variables, *rhs)?;
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                operation,
-                &[lhs, rhs],
-                feedback_ptr,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let lhs = use_value(cx.builder, cx.variables, *lhs)?;
+            let rhs = use_value(cx.builder, cx.variables, *rhs)?;
+            let result = cx.call(operation, &[lhs, rhs], feedback_ptr)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         // 已证明 f64 的单参数 Math builtin：直接发 CLIF 浮点指令，零 host 往返。
         // guard 即类型检查——参数未证明 f64 时本 arm 不匹配，落到下方通用 dispatcher 路径。
@@ -1554,25 +1547,26 @@ fn lower_instruction(
                 | Builtin::MathTrunc
                 | Builtin::MathFround),
             args,
-        } if f64_values.contains(dest) && args.len() == 1 => {
-            let input = use_value(builder, variables, args[0])?;
-            let input = builder
+        } if tables.f64_values.contains(dest) && args.len() == 1 => {
+            let input = use_value(cx.builder, cx.variables, args[0])?;
+            let input = cx
+                .builder
                 .ins()
                 .bitcast(types::F64, ir::MemFlagsData::new(), input);
             let result = match builtin {
-                Builtin::MathAbs => builder.ins().fabs(input),
-                Builtin::MathSqrt => builder.ins().sqrt(input),
-                Builtin::MathCeil => builder.ins().ceil(input),
-                Builtin::MathFloor => builder.ins().floor(input),
-                Builtin::MathTrunc => builder.ins().trunc(input),
+                Builtin::MathAbs => cx.builder.ins().fabs(input),
+                Builtin::MathSqrt => cx.builder.ins().sqrt(input),
+                Builtin::MathCeil => cx.builder.ins().ceil(input),
+                Builtin::MathFloor => cx.builder.ins().floor(input),
+                Builtin::MathTrunc => cx.builder.ins().trunc(input),
                 Builtin::MathFround => {
-                    let narrowed = builder.ins().fdemote(types::F32, input);
-                    builder.ins().fpromote(types::F64, narrowed)
+                    let narrowed = cx.builder.ins().fdemote(types::F32, input);
+                    cx.builder.ins().fpromote(types::F64, narrowed)
                 }
                 _ => unreachable!("arm 模式已限定这六个 builtin"),
             };
-            let result = box_f64_result(builder, result);
-            define_value(builder, variables, *dest, result)
+            let result = box_f64_result(cx.builder, result);
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         // 已证明 f64 的 21 个 libm Math builtin：typed native direct call。
         // guard 即类型检查——实参未证明 f64 时落入下方 dispatcher 路径，
@@ -1581,37 +1575,45 @@ fn lower_instruction(
             dest: Some(dest),
             builtin,
             args,
-        } if f64_values.contains(dest)
+        } if tables.f64_values.contains(dest)
             && NativeHostSymbol::for_builtin(*builtin).is_some_and(|symbol| {
                 args.len() == usize::from(symbol.signature().argument_count())
             }) =>
         {
             let symbol = NativeHostSymbol::for_builtin(*builtin)
                 .context("guard 已限制为 math thunk builtin")?;
-            let thunk = import_math_thunk(builder, math_thunks, imported_math_thunks, *builtin)?;
+            let thunk = import_math_thunk(
+                cx.builder,
+                tables.math_thunks,
+                tables.imported_math_thunks,
+                *builtin,
+            )?;
             let result = match symbol.signature() {
                 NativeSignature::F64Unary => {
-                    let input = use_value(builder, variables, args[0])?;
-                    let input = builder
-                        .ins()
-                        .bitcast(types::F64, ir::MemFlagsData::new(), input);
-                    let call = builder.ins().call(thunk, &[input]);
-                    *builder
+                    let input = use_value(cx.builder, cx.variables, args[0])?;
+                    let input =
+                        cx.builder
+                            .ins()
+                            .bitcast(types::F64, ir::MemFlagsData::new(), input);
+                    let call = cx.builder.ins().call(thunk, &[input]);
+                    *cx.builder
                         .inst_results(call)
                         .first()
                         .context("typed math thunk returned no result")?
                 }
                 NativeSignature::F64Binary => {
-                    let lhs = use_value(builder, variables, args[0])?;
-                    let rhs = use_value(builder, variables, args[1])?;
-                    let lhs = builder
+                    let lhs = use_value(cx.builder, cx.variables, args[0])?;
+                    let rhs = use_value(cx.builder, cx.variables, args[1])?;
+                    let lhs = cx
+                        .builder
                         .ins()
                         .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-                    let rhs = builder
+                    let rhs = cx
+                        .builder
                         .ins()
                         .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
-                    let call = builder.ins().call(thunk, &[lhs, rhs]);
-                    *builder
+                    let call = cx.builder.ins().call(thunk, &[lhs, rhs]);
+                    *cx.builder
                         .inst_results(call)
                         .first()
                         .context("typed math thunk returned no result")?
@@ -1622,8 +1624,8 @@ fn lower_instruction(
                     unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
                 }
             };
-            let result = box_f64_result(builder, result);
-            define_value(builder, variables, *dest, result)
+            let result = box_f64_result(cx.builder, result);
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::CallBuiltin {
             dest,
@@ -1632,19 +1634,11 @@ fn lower_instruction(
         } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(use_value(builder, variables, *arg)?);
+                values.push(use_value(cx.builder, cx.variables, *arg)?);
             }
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                u32::from(builtin.wire_id()),
-                &values,
-                feedback_ptr,
-            )?;
+            let result = cx.call(u32::from(builtin.wire_id()), &values, feedback_ptr)?;
             if let Some(dest) = dest {
-                define_value(builder, variables, *dest, result)?;
+                define_value(cx.builder, cx.variables, *dest, result)?;
             }
             Ok(())
         }
@@ -1654,18 +1648,16 @@ fn lower_instruction(
             this_val,
             args,
         } => lower_call_instruction(
-            builder,
-            variables,
-            dispatcher,
-            ctx,
-            slow_call_signature,
-            *dest,
-            *callee,
-            *this_val,
-            args,
-            NativeRuntimeOp::PrepareCall,
-            false,
-            root_frame,
+            cx,
+            tables.slow_call_signature,
+            CallLowering {
+                destination: *dest,
+                callee: *callee,
+                this_value: *this_val,
+                args,
+                operation: NativeRuntimeOp::PrepareCall,
+                forward_args: false,
+            },
             roots,
             feedback_ptr,
         ),
@@ -1676,22 +1668,20 @@ fn lower_instruction(
             args,
             forward_args,
         } => lower_call_instruction(
-            builder,
-            variables,
-            dispatcher,
-            ctx,
-            slow_call_signature,
-            *dest,
-            *callee,
-            *this_val,
-            args,
-            if *forward_args {
-                NativeRuntimeOp::PrepareSuperCallForward
-            } else {
-                NativeRuntimeOp::PrepareSuperCall
+            cx,
+            tables.slow_call_signature,
+            CallLowering {
+                destination: *dest,
+                callee: *callee,
+                this_value: *this_val,
+                args,
+                operation: if *forward_args {
+                    NativeRuntimeOp::PrepareSuperCallForward
+                } else {
+                    NativeRuntimeOp::PrepareSuperCall
+                },
+                forward_args: *forward_args,
             },
-            *forward_args,
-            root_frame,
             roots,
             feedback_ptr,
         ),
@@ -1701,18 +1691,16 @@ fn lower_instruction(
             this_val,
             args,
         } => lower_call_instruction(
-            builder,
-            variables,
-            dispatcher,
-            ctx,
-            slow_call_signature,
-            *dest,
-            *callee,
-            *this_val,
-            args,
-            NativeRuntimeOp::PrepareConstruct,
-            false,
-            root_frame,
+            cx,
+            tables.slow_call_signature,
+            CallLowering {
+                destination: *dest,
+                callee: *callee,
+                this_value: *this_val,
+                args,
+                operation: NativeRuntimeOp::PrepareConstruct,
+                forward_args: false,
+            },
             roots,
             feedback_ptr,
         ),
@@ -1722,80 +1710,46 @@ fn lower_instruction(
             this_val,
             args,
         } => lower_optional_call_instruction(
-            builder,
-            variables,
-            dispatcher,
-            ctx,
-            slow_call_signature,
-            *dest,
-            *callee,
-            *this_val,
-            args,
-            root_frame,
+            cx,
+            tables.slow_call_signature,
+            CallLowering {
+                destination: Some(*dest),
+                callee: *callee,
+                this_value: *this_val,
+                args,
+                operation: NativeRuntimeOp::PrepareCall,
+                forward_args: false,
+            },
             roots,
             feedback_ptr,
         ),
-        Instruction::StringConcatVa { dest, parts } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
-            NativeRuntimeOp::StringConcat,
-            parts,
-            Some(*dest),
-        ),
+        Instruction::StringConcatVa { dest, parts } => {
+            lower_value_operation(cx, NativeRuntimeOp::StringConcat, parts, Some(*dest))
+        }
         Instruction::NewPromise { dest } => {
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                Builtin::PromiseCreate.wire_id().into(),
-                &[],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let result = cx.call(Builtin::PromiseCreate.wire_id().into(), &[], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::NewObject { dest, capacity } => {
-            let capacity = builder.ins().iconst(types::I64, i64::from(*capacity));
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::NewObject.id(),
-                &[capacity],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let capacity = cx.builder.ins().iconst(types::I64, i64::from(*capacity));
+            let result = cx.call(NativeRuntimeOp::NewObject.id(), &[capacity], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::GetProp { dest, object, key } => {
-            if let Some(slot) = ic_slots.get(dest).copied() {
+            if let Some(slot) = tables.ic_slots.get(dest).copied() {
                 lower_get_prop_ic(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    barrier_thunks,
-                    ctx,
-                    *dest,
-                    *object,
-                    *key,
-                    slot,
+                    cx,
+                    tables.barrier_thunks,
+                    PropAccess {
+                        dest: *dest,
+                        object: *object,
+                        key: *key,
+                        slot,
+                    },
                     roots,
                 )
             } else {
-                lower_value_operation(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    ctx,
-                    NativeRuntimeOp::GetProp,
-                    &[*object, *key],
-                    Some(*dest),
-                )
+                lower_value_operation(cx, NativeRuntimeOp::GetProp, &[*object, *key], Some(*dest))
             }
         }
         Instruction::SetProp {
@@ -1804,27 +1758,21 @@ fn lower_instruction(
             key,
             value,
         } => {
-            if let Some(slot) = ic_slots.get(dest).copied() {
+            if let Some(slot) = tables.ic_slots.get(dest).copied() {
                 lower_set_prop_ic(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    barrier_thunks,
-                    ctx,
-                    *dest,
-                    *object,
-                    *key,
+                    cx,
+                    tables.barrier_thunks,
+                    PropAccess {
+                        dest: *dest,
+                        object: *object,
+                        key: *key,
+                        slot,
+                    },
                     *value,
-                    slot,
                 )
             } else {
                 lower_value_operation(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    ctx,
+                    cx,
                     NativeRuntimeOp::SetProp,
                     &[*object, *key, *value],
                     Some(*dest),
@@ -1837,58 +1785,31 @@ fn lower_instruction(
             key,
             value,
         } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             NativeRuntimeOp::CreateDataProperty,
             &[*object, *key, *value],
             Some(*dest),
         ),
         Instruction::DeleteProp { dest, object, key } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             NativeRuntimeOp::DeleteProp,
             &[*object, *key],
             Some(*dest),
         ),
-        Instruction::SetProto { object, value } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
-            NativeRuntimeOp::SetProto,
-            &[*object, *value],
-            None,
-        ),
+        Instruction::SetProto { object, value } => {
+            lower_value_operation(cx, NativeRuntimeOp::SetProto, &[*object, *value], None)
+        }
         Instruction::NewArray { dest, capacity } => {
-            let capacity = builder.ins().iconst(types::I64, i64::from(*capacity));
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::NewArray.id(),
-                &[capacity],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let capacity = cx.builder.ins().iconst(types::I64, i64::from(*capacity));
+            let result = cx.call(NativeRuntimeOp::NewArray.id(), &[capacity], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::GetElem {
             dest,
             object,
             index,
         } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             NativeRuntimeOp::GetElem,
             &[*object, *index],
             Some(*dest),
@@ -1899,37 +1820,27 @@ fn lower_instruction(
             index,
             value,
         } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             NativeRuntimeOp::SetElem,
             &[*object, *index, *value],
             Some(*dest),
         ),
         Instruction::OptionalGetProp { dest, object, key } => {
-            if let Some(slot) = ic_slots.get(dest).copied() {
+            if let Some(slot) = tables.ic_slots.get(dest).copied() {
                 lower_optional_get_prop_ic(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    barrier_thunks,
-                    ctx,
-                    *dest,
-                    *object,
-                    *key,
-                    slot,
+                    cx,
+                    tables.barrier_thunks,
+                    PropAccess {
+                        dest: *dest,
+                        object: *object,
+                        key: *key,
+                        slot,
+                    },
                     roots,
                 )
             } else {
                 lower_value_operation(
-                    builder,
-                    variables,
-                    root_frame,
-                    dispatcher,
-                    ctx,
+                    cx,
                     NativeRuntimeOp::OptionalGetProp,
                     &[*object, *key],
                     Some(*dest),
@@ -1937,237 +1848,153 @@ fn lower_instruction(
             }
         }
         Instruction::OptionalGetElem { dest, object, key } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             NativeRuntimeOp::OptionalGetElem,
             &[*object, *key],
             Some(*dest),
         ),
         Instruction::GetSuperBase { dest } => {
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::GetSuperBase.id(),
-                &[],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let result = cx.call(NativeRuntimeOp::GetSuperBase.id(), &[], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::GetSuperConstructor { dest } => {
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::GetSuperConstructor.id(),
-                &[],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let result = cx.call(NativeRuntimeOp::GetSuperConstructor.id(), &[], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
-        Instruction::ObjectSpread { dest, source } => lower_value_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
-            NativeRuntimeOp::ObjectSpread,
-            &[*dest, *source],
-            None,
-        ),
+        Instruction::ObjectSpread { dest, source } => {
+            lower_value_operation(cx, NativeRuntimeOp::ObjectSpread, &[*dest, *source], None)
+        }
         Instruction::GuardSameFunction {
             dest,
             callee,
             function,
         } => {
-            let callee = use_value(builder, variables, *callee)?;
-            let function = builder.ins().iconst(types::I64, i64::from(function.0));
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
+            let callee = use_value(cx.builder, cx.variables, *callee)?;
+            let function = cx.builder.ins().iconst(types::I64, i64::from(function.0));
+            let result = cx.call(
                 NativeRuntimeOp::GuardSameFunction.id(),
                 &[callee, function],
                 None,
             )?;
-            define_value(builder, variables, *dest, result)
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::CollectRestArgs { dest, skip } => {
-            let skip = builder.ins().iconst(types::I64, i64::from(*skip));
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::CollectRestArguments.id(),
-                &[skip],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let skip = cx.builder.ins().iconst(types::I64, i64::from(*skip));
+            let result = cx.call(NativeRuntimeOp::CollectRestArguments.id(), &[skip], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::IsException { dest, value: input } => {
-            let input = use_value(builder, variables, *input)?;
-            let condition = emit_is_exception(builder, input);
-            let true_value = builder.ins().iconst(types::I64, value::encode_bool(true));
-            let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
-            let boolean = builder.ins().select(condition, true_value, false_value);
-            define_value(builder, variables, *dest, boolean)
+            let input = use_value(cx.builder, cx.variables, *input)?;
+            let condition = emit_is_exception(cx.builder, input);
+            let true_value = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_bool(true));
+            let false_value = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_bool(false));
+            let boolean = cx.builder.ins().select(condition, true_value, false_value);
+            define_value(cx.builder, cx.variables, *dest, boolean)
         }
         Instruction::EncodeException { dest, value: input } => {
-            let input = use_value(builder, variables, *input)?;
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::CreateException.id(),
-                &[input],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let input = use_value(cx.builder, cx.variables, *input)?;
+            let result = cx.call(NativeRuntimeOp::CreateException.id(), &[input], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::PromiseResolve { promise, value } => lower_builtin_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             Builtin::PromiseInstanceResolve,
             &[*promise, *value],
             None,
         ),
         Instruction::PromiseReject { promise, reason } => lower_builtin_operation(
-            builder,
-            variables,
-            root_frame,
-            dispatcher,
-            ctx,
+            cx,
             Builtin::PromiseInstanceReject,
             &[*promise, *reason],
             None,
         ),
         Instruction::ExceptionToObject { dest, value: input } => {
-            let input = use_value(builder, variables, *input)?;
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::ExceptionValue.id(),
-                &[input],
-                None,
-            )?;
-            define_value(builder, variables, *dest, result)
+            let input = use_value(cx.builder, cx.variables, *input)?;
+            let result = cx.call(NativeRuntimeOp::ExceptionValue.id(), &[input], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::StoreVar { name, value } => {
-            let value = use_value(builder, variables, *value)?;
-            if let Some(local) = frame_locals.get(name).copied() {
-                builder.def_var(local, value);
-                if let Some(index) = frame_local_indices.get(name).copied() {
-                    root_frame.update_pinned_local(builder, index, value)?;
+            let value = use_value(cx.builder, cx.variables, *value)?;
+            if let Some(local) = tables.frame_locals.get(name).copied() {
+                cx.builder.def_var(local, value);
+                if let Some(index) = tables.frame_local_indices.get(name).copied() {
+                    cx.root_frame
+                        .update_pinned_local(cx.builder, index, value)?;
                 }
                 return Ok(());
             }
-            let slot = variable_slots
+            let slot = tables
+                .variable_slots
                 .get(name)
                 .copied()
                 .with_context(|| format!("variable slot is missing for {name}"))?;
-            let slot = builder.ins().iconst(types::I64, i64::from(slot));
-            let _ = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::StoreVar.id(),
-                &[slot, value],
-                None,
-            )?;
+            let slot = cx.builder.ins().iconst(types::I64, i64::from(slot));
+            let _ = cx.call(NativeRuntimeOp::StoreVar.id(), &[slot, value], None)?;
             Ok(())
         }
         Instruction::LoadVar { dest, name } => {
-            if let Some(local) = frame_locals.get(name).copied() {
-                let value = builder.use_var(local);
-                return define_value(builder, variables, *dest, value);
+            if let Some(local) = tables.frame_locals.get(name).copied() {
+                let value = cx.builder.use_var(local);
+                return define_value(cx.builder, cx.variables, *dest, value);
             }
-            let slot = variable_slots
+            let slot = tables
+                .variable_slots
                 .get(name)
                 .copied()
                 .with_context(|| format!("variable slot is missing for {name}"))?;
-            let slot = builder.ins().iconst(types::I64, i64::from(slot));
-            let value = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::LoadVar.id(),
-                &[slot],
-                None,
-            )?;
-            define_value(builder, variables, *dest, value)
+            let slot = cx.builder.ins().iconst(types::I64, i64::from(slot));
+            let value = cx.call(NativeRuntimeOp::LoadVar.id(), &[slot], None)?;
+            define_value(cx.builder, cx.variables, *dest, value)
         }
 
         Instruction::Suspend { promise, state } => {
-            let promise = use_value(builder, variables, *promise)?;
-            let suspend_state = builder
+            let promise = use_value(cx.builder, cx.variables, *promise)?;
+            let suspend_state = cx
+                .builder
                 .ins()
                 .iconst(types::I64, value::encode_f64(f64::from(*state)));
-            let result = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
+            let result = cx.call(
                 Builtin::AsyncFunctionSuspend.wire_id().into(),
                 &[promise, suspend_state],
                 None,
             )?;
-            root_frame.unlink(builder, ctx)?;
-            builder.ins().return_(&[result]);
+            cx.root_frame.unlink(cx.builder, cx.ctx)?;
+            cx.builder.ins().return_(&[result]);
             Ok(())
         }
         Instruction::GeneratorSuspend { result, state } => {
-            let result = use_value(builder, variables, *result)?;
-            let continuation = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::LoadCallEnv.id(),
-                &[],
-                None,
-            )?;
-            root_frame.publish(builder, variables, roots, &[continuation])?;
-            let slot = builder.ins().iconst(types::I64, value::encode_f64(0.0));
-            let suspend_state = builder
+            let result = use_value(cx.builder, cx.variables, *result)?;
+            let continuation = cx.call(NativeRuntimeOp::LoadCallEnv.id(), &[], None)?;
+            cx.root_frame
+                .publish(cx.builder, cx.variables, roots, &[continuation])?;
+            let slot = cx.builder.ins().iconst(types::I64, value::encode_f64(0.0));
+            let suspend_state = cx
+                .builder
                 .ins()
                 .iconst(types::I64, value::encode_f64(f64::from(*state)));
-            let _ = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
+            let _ = cx.call(
                 Builtin::ContinuationSaveVar.wire_id().into(),
                 &[continuation, slot, suspend_state],
                 None,
             )?;
-            root_frame.unlink(builder, ctx)?;
-            builder.ins().return_(&[result]);
+            cx.root_frame.unlink(cx.builder, cx.ctx)?;
+            cx.builder.ins().return_(&[result]);
             Ok(())
         }
         Instruction::DebugCheck { line, col } => {
-            let function = builder.ins().iconst(types::I64, i64::from(function_index));
-            let line = builder.ins().iconst(types::I64, i64::from(*line));
-            let col = builder.ins().iconst(types::I64, i64::from(*col));
-            let _ = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
+            let function = cx
+                .builder
+                .ins()
+                .iconst(types::I64, i64::from(tables.function_index));
+            let line = cx.builder.ins().iconst(types::I64, i64::from(*line));
+            let col = cx.builder.ins().iconst(types::I64, i64::from(*col));
+            let _ = cx.call(
                 NativeRuntimeOp::DebugCheck.id(),
                 &[function, line, col],
                 None,
@@ -2178,184 +2005,144 @@ fn lower_instruction(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_call_instruction(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
+    cx: &mut LoweringCx<'_, '_>,
     slow_call_signature: ir::SigRef,
-    destination: Option<ValueId>,
-    callee: ValueId,
-    this_value: ValueId,
-    args: &[ValueId],
-    operation: NativeRuntimeOp,
-    forward_args: bool,
-    root_frame: &mut FrameLowering,
+    call: CallLowering<'_>,
     roots: &[ValueId],
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
-    let callee = use_value(builder, variables, callee)?;
-    let this_value = use_value(builder, variables, this_value)?;
+    let CallLowering {
+        destination,
+        callee,
+        this_value,
+        args,
+        operation,
+        forward_args,
+    } = call;
+    let callee = use_value(cx.builder, cx.variables, callee)?;
+    let this_value = use_value(cx.builder, cx.variables, this_value)?;
     let mut call_args = Vec::with_capacity(if forward_args { 1 } else { args.len() + 1 });
     call_args.push(callee);
     if !forward_args {
         for argument in args {
-            call_args.push(use_value(builder, variables, *argument)?);
+            call_args.push(use_value(cx.builder, cx.variables, *argument)?);
         }
     }
-    let entry = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        operation.id(),
-        &call_args,
-        feedback_ptr,
-    )?;
+    let entry = cx.call(operation.id(), &call_args, feedback_ptr)?;
     let args_len = if forward_args {
-        let entry_block = builder
+        let entry_block = cx
+            .builder
             .func
             .layout
             .entry_block()
             .context("native function is missing entry block")?;
-        builder.block_params(entry_block)[4]
+        cx.builder.block_params(entry_block)[4]
     } else {
-        builder.ins().iconst(
+        cx.builder.ins().iconst(
             types::I32,
             i64::try_from(args.len()).context("call argument count exceeds i64")?,
         )
     };
-    let active_len = builder.ins().load(
+    let active_len = cx.builder.ins().load(
         types::I32,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         i32::try_from(offset_of!(NativeVmContext, call_arena_active_len))
             .context("call arena active length offset exceeds i32")?,
     );
-    let args_base = builder.ins().isub(active_len, args_len);
-    let env = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        NativeRuntimeOp::LoadCallEnv.id(),
-        &[],
-        None,
-    )?;
-    let call = builder.ins().call_indirect(
+    let args_base = cx.builder.ins().isub(active_len, args_len);
+    let env = cx.call(NativeRuntimeOp::LoadCallEnv.id(), &[], None)?;
+    let call = cx.builder.ins().call_indirect(
         slow_call_signature,
         entry,
-        &[ctx, env, this_value, args_base, args_len],
+        &[cx.ctx, env, this_value, args_base, args_len],
     );
-    let result = builder.inst_results(call)[0];
-    root_frame.publish(builder, variables, roots, &[result])?;
-    let _ = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        NativeRuntimeOp::FinishCall.id(),
-        &[],
-        None,
-    )?;
+    let result = cx.builder.inst_results(call)[0];
+    cx.root_frame
+        .publish(cx.builder, cx.variables, roots, &[result])?;
+    let _ = cx.call(NativeRuntimeOp::FinishCall.id(), &[], None)?;
     if let Some(destination) = destination {
-        define_value(builder, variables, destination, result)?;
+        define_value(cx.builder, cx.variables, destination, result)?;
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_optional_call_instruction(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
+    cx: &mut LoweringCx<'_, '_>,
     slow_call_signature: ir::SigRef,
-    destination: ValueId,
-    callee: ValueId,
-    this_value: ValueId,
-    args: &[ValueId],
-    root_frame: &mut FrameLowering,
+    call: CallLowering<'_>,
     roots: &[ValueId],
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
-    let encoded_callee = use_value(builder, variables, callee)?;
-    let nullish = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
+    let CallLowering {
+        destination,
+        callee,
+        this_value,
+        args,
+        ..
+    } = call;
+    let destination = destination.context("optional call requires a destination")?;
+    let encoded_callee = use_value(cx.builder, cx.variables, callee)?;
+    let nullish = cx.call(
         NativeRuntimeOp::UnaryIsNullish.id(),
         &[encoded_callee],
         None,
     )?;
-    let is_nullish = builder.ins().icmp_imm_s(
+    let is_nullish = cx.builder.ins().icmp_imm_s(
         ir::condcodes::IntCC::Equal,
         nullish,
         value::encode_bool(true),
     );
-    let skip_block = builder.create_block();
-    let call_block = builder.create_block();
-    let continuation = builder.create_block();
-    builder
+    let skip_block = cx.builder.create_block();
+    let call_block = cx.builder.create_block();
+    let continuation = cx.builder.create_block();
+    cx.builder
         .ins()
         .brif(is_nullish, skip_block, &[], call_block, &[]);
 
-    builder.switch_to_block(skip_block);
-    builder.seal_block(skip_block);
-    let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
-    define_value(builder, variables, destination, undefined)?;
-    builder.ins().jump(continuation, &[]);
+    cx.builder.switch_to_block(skip_block);
+    cx.builder.seal_block(skip_block);
+    let undefined = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_undefined());
+    define_value(cx.builder, cx.variables, destination, undefined)?;
+    cx.builder.ins().jump(continuation, &[]);
 
-    builder.switch_to_block(call_block);
-    builder.seal_block(call_block);
+    cx.builder.switch_to_block(call_block);
+    cx.builder.seal_block(call_block);
     lower_call_instruction(
-        builder,
-        variables,
-        dispatcher,
-        ctx,
+        cx,
         slow_call_signature,
-        Some(destination),
-        callee,
-        this_value,
-        args,
-        NativeRuntimeOp::PrepareCall,
-        false,
-        root_frame,
+        CallLowering {
+            destination: Some(destination),
+            callee,
+            this_value,
+            args,
+            operation: NativeRuntimeOp::PrepareCall,
+            forward_args: false,
+        },
         roots,
         feedback_ptr,
     )?;
-    builder.ins().jump(continuation, &[]);
+    cx.builder.ins().jump(continuation, &[]);
 
-    builder.switch_to_block(continuation);
-    builder.seal_block(continuation);
+    cx.builder.switch_to_block(continuation);
+    cx.builder.seal_block(continuation);
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
 fn lower_builtin_operation(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
+    cx: &mut LoweringCx<'_, '_>,
     builtin: Builtin,
     args: &[ValueId],
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
     let args = args
         .iter()
-        .map(|value| use_value(builder, variables, *value))
+        .map(|value| use_value(cx.builder, cx.variables, *value))
         .collect::<Result<Vec<_>>>()?;
-    let result = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        builtin.wire_id().into(),
-        &args,
-        feedback_ptr,
-    )?;
+    let result = cx.call(builtin.wire_id().into(), &args, feedback_ptr)?;
     if builtin == Builtin::PromiseInstanceResolve || builtin == Builtin::PromiseInstanceReject {
         return Ok(());
     }
@@ -2363,21 +2150,16 @@ fn lower_builtin_operation(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_dynamic_binary(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
+    cx: &mut LoweringCx<'_, '_>,
     dest: ValueId,
     op: BinaryOp,
     lhs: ValueId,
     rhs: ValueId,
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
-    let lhs = use_value(builder, variables, lhs)?;
-    let rhs = use_value(builder, variables, rhs)?;
+    let lhs = use_value(cx.builder, cx.variables, lhs)?;
+    let rhs = use_value(cx.builder, cx.variables, rhs)?;
 
     // 位运算、% 与 ** 仍需 ToPrimitive/ToNumber/ToBigInt 等完整语义，继续走 dispatcher。
     if !matches!(
@@ -2385,16 +2167,8 @@ fn lower_dynamic_binary(
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
     ) {
         let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
-        let result = call_dispatcher(
-            builder,
-            root_frame,
-            dispatcher,
-            ctx,
-            operation,
-            &[lhs, rhs],
-            feedback_ptr,
-        )?;
-        return define_value(builder, variables, dest, result);
+        let result = cx.call(operation, &[lhs, rhs], feedback_ptr)?;
+        return define_value(cx.builder, cx.variables, dest, result);
     }
 
     // #389 的 number 快路径不经过 dispatcher，二元反馈必须在守卫前内联更新，
@@ -2402,61 +2176,55 @@ fn lower_dynamic_binary(
     // 慢路径的 dispatcher 调用传 null 槽，避免同一次执行重复计数。
     if let Some(slot) = feedback_ptr {
         let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
-        emit_inline_binary_feedback(builder, ctx, slot, operation, lhs, rhs);
+        emit_inline_binary_feedback(cx.builder, cx.ctx, slot, operation, lhs, rhs);
     }
 
     // 守卫：两边必须都是原始 f64（非 NaN-boxed 的 number）才走原生指令。
     // string 拼接、BigInt、对象 ToPrimitive 等 NaN-boxed 值一律 miss 落 dispatcher。
-    let lhs_is_number = emit_is_number(builder, lhs);
-    let rhs_is_number = emit_is_number(builder, rhs);
-    let both_numbers = builder.ins().band(lhs_is_number, rhs_is_number);
+    let lhs_is_number = emit_is_number(cx.builder, lhs);
+    let rhs_is_number = emit_is_number(cx.builder, rhs);
+    let both_numbers = cx.builder.ins().band(lhs_is_number, rhs_is_number);
 
-    let fast_block = builder.create_block();
-    let slow_block = builder.create_block();
-    let merge_block = builder.create_block();
-    builder
+    let fast_block = cx.builder.create_block();
+    let slow_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+    cx.builder
         .ins()
         .brif(both_numbers, fast_block, &[], slow_block, &[]);
 
     // 快路径：位模式即 IEEE-754 f64，直接 bitcast 后发原生浮点指令。
     // NaN 在 box_f64_result 中规范化为运行时一致的正向 quiet NaN。
-    builder.switch_to_block(fast_block);
-    builder.seal_block(fast_block);
-    let lhs_f64 = builder
+    cx.builder.switch_to_block(fast_block);
+    cx.builder.seal_block(fast_block);
+    let lhs_f64 = cx
+        .builder
         .ins()
         .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-    let rhs_f64 = builder
+    let rhs_f64 = cx
+        .builder
         .ins()
         .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
     let result = match op {
-        BinaryOp::Add => builder.ins().fadd(lhs_f64, rhs_f64),
-        BinaryOp::Sub => builder.ins().fsub(lhs_f64, rhs_f64),
-        BinaryOp::Mul => builder.ins().fmul(lhs_f64, rhs_f64),
-        BinaryOp::Div => builder.ins().fdiv(lhs_f64, rhs_f64),
+        BinaryOp::Add => cx.builder.ins().fadd(lhs_f64, rhs_f64),
+        BinaryOp::Sub => cx.builder.ins().fsub(lhs_f64, rhs_f64),
+        BinaryOp::Mul => cx.builder.ins().fmul(lhs_f64, rhs_f64),
+        BinaryOp::Div => cx.builder.ins().fdiv(lhs_f64, rhs_f64),
         _ => unreachable!("guard restricts guarded binary operations"),
     };
-    let result = box_f64_result(builder, result);
-    define_value(builder, variables, dest, result)?;
-    builder.ins().jump(merge_block, &[]);
+    let result = box_f64_result(cx.builder, result);
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
     // 慢路径：完整 JS 语义（ToPrimitive、string 拼接、BigInt、异常）。
-    builder.switch_to_block(slow_block);
-    builder.seal_block(slow_block);
+    cx.builder.switch_to_block(slow_block);
+    cx.builder.seal_block(slow_block);
     let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
-    let result = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        operation,
-        &[lhs, rhs],
-        None,
-    )?;
-    define_value(builder, variables, dest, result)?;
-    builder.ins().jump(merge_block, &[]);
+    let result = cx.call(operation, &[lhs, rhs], None)?;
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
-    builder.switch_to_block(merge_block);
-    builder.seal_block(merge_block);
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
     Ok(())
 }
 
@@ -2598,40 +2366,16 @@ fn emit_inline_binary_feedback(
 
 /// 常量字符串键的 GetProp 快路径入口：创建 merge 块后交给共享的非 nullish
 /// IC 核心。GetProp 与 OptionalGetProp 的非 nullish 分支语义相同。
-#[expect(
-    clippy::too_many_arguments,
-    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
-)]
 fn lower_get_prop_ic(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
+    cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
-    ctx: ir::Value,
-    dest: ValueId,
-    object: ValueId,
-    key: ValueId,
-    slot: u32,
+    access: PropAccess,
     roots: &[ValueId],
 ) -> Result<()> {
-    let merge_block = builder.create_block();
-    lower_get_prop_ic_non_nullish(
-        builder,
-        variables,
-        root_frame,
-        dispatcher,
-        barrier_thunks,
-        ctx,
-        dest,
-        object,
-        key,
-        slot,
-        roots,
-        merge_block,
-    )?;
-    builder.switch_to_block(merge_block);
-    builder.seal_block(merge_block);
+    let merge_block = cx.builder.create_block();
+    lower_get_prop_ic_non_nullish(cx, barrier_thunks, access, roots, merge_block)?;
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
     Ok(())
 }
 
@@ -2643,167 +2387,168 @@ fn lower_get_prop_ic(
 ///   `invoke_callable(getter, receiver)`（不查属性表）。
 ///
 /// 其余情况 miss 到 `GetPropIc` 走完整宿主 [[Get]] 并回填。
-#[expect(
-    clippy::too_many_arguments,
-    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
-)]
 fn lower_get_prop_ic_non_nullish(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
+    cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
-    ctx: ir::Value,
-    dest: ValueId,
-    object: ValueId,
-    key: ValueId,
-    slot: u32,
+    access: PropAccess,
     roots: &[ValueId],
     merge_block: ir::Block,
 ) -> Result<()> {
-    let pointer_type = builder.func.dfg.value_type(ctx);
-    let obj = use_value(builder, variables, object)?;
-    let key_value = use_value(builder, variables, key)?;
+    let PropAccess {
+        dest,
+        object,
+        key,
+        slot,
+    } = access;
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let obj = use_value(cx.builder, cx.variables, object)?;
+    let key_value = use_value(cx.builder, cx.variables, key)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
 
     // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
-    let ht_base = builder.ins().load(
+    let ht_base = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
     );
-    let ic_base = builder.ins().load(
+    let ic_base = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
     );
-    let barrier_state = builder.ins().load(
+    let barrier_state = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
     );
 
     // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
-    let boxed_bits = builder.ins().band_imm_s(obj, box_base);
-    let is_boxed = builder
+    let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
+    let is_boxed = cx
+        .builder
         .ins()
         .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
-    let tag = builder.ins().ushr_imm_u(obj, 32);
-    let tag = builder.ins().band_imm_u(
+    let tag = cx.builder.ins().ushr_imm_u(obj, 32);
+    let tag = cx.builder.ins().band_imm_u(
         tag,
         i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
     );
-    let is_obj = builder.ins().icmp_imm_u(
+    let is_obj = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         tag,
         i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
     );
-    let tag_ok = builder.ins().band(is_boxed, is_obj);
+    let tag_ok = cx.builder.ins().band(is_boxed, is_obj);
 
     // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在入口块计算
     // 以支配所有后续分支（miss 分支需要它作为 GetPropIc 的回填目标）。
-    let ic_ptr = builder.ins().iadd_imm_s(
+    let ic_ptr = cx.builder.ins().iadd_imm_s(
         ic_base,
         i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
     );
 
-    let entry_block = builder.create_block();
-    let legacy_entry_block = builder.create_block();
-    let zgc_kind_block = builder.create_block();
-    let zgc_entry_block = builder.create_block();
-    let zgc_fast_block = builder.create_block();
-    let receiver_assist_block = builder.create_block();
-    let shape_check_block = builder.create_block();
-    builder.append_block_param(shape_check_block, types::I64);
-    let shape_hit_block = builder.create_block();
-    let own_hit_block = builder.create_block();
-    let holder_block = builder.create_block();
-    let holder_resolve_block = builder.create_block();
-    let holder_legacy_block = builder.create_block();
-    let holder_zgc_block = builder.create_block();
-    let holder_fast_block = builder.create_block();
-    let holder_assist_block = builder.create_block();
-    let holder_addr_block = builder.create_block();
-    builder.append_block_param(holder_addr_block, types::I64);
-    let proto_hit_block = builder.create_block();
-    let accessor_hit_block = builder.create_block();
-    let miss_block = builder.create_block();
+    let entry_block = cx.builder.create_block();
+    let legacy_entry_block = cx.builder.create_block();
+    let zgc_kind_block = cx.builder.create_block();
+    let zgc_entry_block = cx.builder.create_block();
+    let zgc_fast_block = cx.builder.create_block();
+    let receiver_assist_block = cx.builder.create_block();
+    let shape_check_block = cx.builder.create_block();
+    cx.builder.append_block_param(shape_check_block, types::I64);
+    let shape_hit_block = cx.builder.create_block();
+    let own_hit_block = cx.builder.create_block();
+    let holder_block = cx.builder.create_block();
+    let holder_resolve_block = cx.builder.create_block();
+    let holder_legacy_block = cx.builder.create_block();
+    let holder_zgc_block = cx.builder.create_block();
+    let holder_fast_block = cx.builder.create_block();
+    let holder_assist_block = cx.builder.create_block();
+    let holder_addr_block = cx.builder.create_block();
+    cx.builder.append_block_param(holder_addr_block, types::I64);
+    let proto_hit_block = cx.builder.create_block();
+    let accessor_hit_block = cx.builder.create_block();
+    let miss_block = cx.builder.create_block();
     // 第一级：标签必须是 TAG_OBJECT。**句柄表 entry 读取必须放在此分支之后**：
     // `trusted()`（notrap）load 允许 Cranelift 块内投机提前，若 entry 读取与
     // tag 检查同块，非对象值（字符串等）的 handle 可能落在未提交的 block，
     // 投机读取直接段错误。条件分支隔离后跨块提升不合法，entry 只在
     // `tag_ok` 为真（对象句柄必然已分配提交）后才读取。
-    builder
+    cx.builder
         .ins()
         .brif(tag_ok, entry_block, &[], miss_block, &[]);
 
     // 第二级：读取接收者句柄 entry。Disabled 模式沿用稳定态快链；ZGC 只有偶数
     // access epoch 与稳定 entry 能直接使用地址，其余状态进入 no-GC load assist。
-    builder.switch_to_block(entry_block);
-    builder.seal_block(entry_block);
-    let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
-    let handle_i32 = builder.ins().ireduce(types::I32, handle_idx);
-    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3);
-    let entry_addr = builder.ins().iadd(ht_base, entry_offset);
-    let entry = builder
+    cx.builder.switch_to_block(entry_block);
+    cx.builder.seal_block(entry_block);
+    let handle_idx = cx.builder.ins().band_imm_u(obj, i64::from(u32::MAX));
+    let handle_i32 = cx.builder.ins().ireduce(types::I32, handle_idx);
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle_idx, 3);
+    let entry_addr = cx.builder.ins().iadd(ht_base, entry_offset);
+    let entry = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
-    let entry_state = builder.ins().band_imm_u(entry, 0xFFFF);
-    let stable = builder.ins().icmp_imm_u(
+    let entry_state = cx.builder.ins().band_imm_u(entry, 0xFFFF);
+    let stable = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
         entry_state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
-    let logical_addr = builder.ins().ushr_imm_u(entry, 16);
-    let heap_delta = builder.ins().load(
+    let logical_addr = cx.builder.ins().ushr_imm_u(entry, 16);
+    let heap_delta = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
     );
     // IC 槽（32 字节）：
     // word0 = shape_id(lo32) | value_index(hi32)
     // word1 = kind(lo32) | proto_generation(hi32)
     // word2 = holder_handle(lo32) | expected_proto(hi32)
-    let ic_word0 = builder
+    let ic_word0 = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
-    let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
-    let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
-    let ic_word1 = builder
+    let ic_shape = cx.builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
+    let ic_val_idx = cx.builder.ins().ushr_imm_u(ic_word0, 32);
+    let ic_word1 = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
-    let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
-    let ic_generation = builder.ins().ushr_imm_u(ic_word1, 32);
-    let ic_word2 = builder
+    let ic_kind = cx.builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
+    let ic_generation = cx.builder.ins().ushr_imm_u(ic_word1, 32);
+    let ic_word2 = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 16);
-    let ic_holder = builder.ins().band_imm_u(ic_word2, i64::from(u32::MAX));
-    let ic_expected_proto = builder.ins().ushr_imm_u(ic_word2, 32);
-    let kind_own = builder.ins().icmp_imm_u(
+    let ic_holder = cx.builder.ins().band_imm_u(ic_word2, i64::from(u32::MAX));
+    let ic_expected_proto = cx.builder.ins().ushr_imm_u(ic_word2, 32);
+    let kind_own = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
         i64::from(constants::IC_KIND_OWN_DATA),
     );
-    let kind_proto = builder.ins().icmp_imm_u(
+    let kind_proto = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
         i64::from(constants::IC_KIND_PROTO_DATA),
     );
-    let kind_accessor = builder.ins().icmp_imm_u(
+    let kind_accessor = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
         i64::from(constants::IC_KIND_ACCESSOR),
     );
-    let kind_holder = builder.ins().bor(kind_proto, kind_accessor);
-    let kind_supported = builder.ins().bor(kind_own, kind_holder);
-    let barrier_disabled = builder
-        .ins()
-        .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
-    builder.ins().brif(
+    let kind_holder = cx.builder.ins().bor(kind_proto, kind_accessor);
+    let kind_supported = cx.builder.ins().bor(kind_own, kind_holder);
+    let barrier_disabled =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    cx.builder.ins().brif(
         barrier_disabled,
         legacy_entry_block,
         &[],
@@ -2811,10 +2556,10 @@ fn lower_get_prop_ic_non_nullish(
         &[],
     );
 
-    builder.switch_to_block(legacy_entry_block);
-    builder.seal_block(legacy_entry_block);
-    let legacy_ok = builder.ins().band(stable, kind_supported);
-    builder.ins().brif(
+    cx.builder.switch_to_block(legacy_entry_block);
+    cx.builder.seal_block(legacy_entry_block);
+    let legacy_ok = cx.builder.ins().band(stable, kind_supported);
+    cx.builder.ins().brif(
         legacy_ok,
         shape_check_block,
         &[ir::BlockArg::Value(logical_addr)],
@@ -2822,50 +2567,56 @@ fn lower_get_prop_ic_non_nullish(
         &[],
     );
 
-    builder.switch_to_block(zgc_kind_block);
-    builder.seal_block(zgc_kind_block);
-    builder
+    cx.builder.switch_to_block(zgc_kind_block);
+    cx.builder.seal_block(zgc_kind_block);
+    cx.builder
         .ins()
         .brif(kind_supported, zgc_entry_block, &[], miss_block, &[]);
 
-    builder.switch_to_block(zgc_entry_block);
-    builder.seal_block(zgc_entry_block);
-    let epoch_addr = builder.ins().iadd_imm_s(
+    cx.builder.switch_to_block(zgc_entry_block);
+    cx.builder.seal_block(zgc_entry_block);
+    let epoch_addr = cx.builder.ins().iadd_imm_s(
         barrier_state,
         i64::try_from(offset_of!(NativeBarrierState, access_epoch))
             .expect("access epoch offset fits i64"),
     );
-    let access_epoch = builder
-        .ins()
-        .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
-    let epoch_bit = builder.ins().band_imm_u(access_epoch, 1);
-    let epoch_even = builder
+    let access_epoch =
+        cx.builder
+            .ins()
+            .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
+    let epoch_bit = cx.builder.ins().band_imm_u(access_epoch, 1);
+    let epoch_even = cx
+        .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
-    let direct = builder.ins().band(stable, epoch_even);
-    builder
+    let direct = cx.builder.ins().band(stable, epoch_even);
+    cx.builder
         .ins()
         .brif(direct, zgc_fast_block, &[], receiver_assist_block, &[]);
 
-    builder.switch_to_block(zgc_fast_block);
-    builder.seal_block(zgc_fast_block);
+    cx.builder.switch_to_block(zgc_fast_block);
+    cx.builder.seal_block(zgc_fast_block);
     increment_barrier_counter(
-        builder,
+        cx.builder,
         barrier_state,
         offset_of!(NativeBarrierState, load_fast_events),
     );
-    builder
+    cx.builder
         .ins()
         .jump(shape_check_block, &[ir::BlockArg::Value(logical_addr)]);
 
-    builder.switch_to_block(receiver_assist_block);
-    builder.seal_block(receiver_assist_block);
-    let call = builder.ins().call(barrier_thunks.load, &[ctx, handle_i32]);
-    let assisted = builder.inst_results(call)[0];
-    let assisted_ok = builder
+    cx.builder.switch_to_block(receiver_assist_block);
+    cx.builder.seal_block(receiver_assist_block);
+    let call = cx
+        .builder
+        .ins()
+        .call(barrier_thunks.load, &[cx.ctx, handle_i32]);
+    let assisted = cx.builder.inst_results(call)[0];
+    let assisted_ok = cx
+        .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
-    builder.ins().brif(
+    cx.builder.ins().brif(
         assisted_ok,
         shape_check_block,
         &[ir::BlockArg::Value(assisted)],
@@ -2874,78 +2625,82 @@ fn lower_get_prop_ic_non_nullish(
     );
 
     // 第三级：对象地址已经过稳定态检查或 load assist，读取 shape 并与 IC 槽比对。
-    builder.switch_to_block(shape_check_block);
-    builder.seal_block(shape_check_block);
-    let logical_addr = builder.block_params(shape_check_block)[0];
-    let addr = builder.ins().iadd(logical_addr, heap_delta);
-    let obj_word = builder
+    cx.builder.switch_to_block(shape_check_block);
+    cx.builder.seal_block(shape_check_block);
+    let logical_addr = cx.builder.block_params(shape_check_block)[0];
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    let obj_word = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), addr, 8);
-    let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
-    let shape_match = builder
+    let obj_shape = cx.builder.ins().ushr_imm_u(obj_word, 32);
+    let shape_match = cx
+        .builder
         .ins()
         .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
-    builder
+    cx.builder
         .ins()
         .brif(shape_match, shape_hit_block, &[], miss_block, &[]);
 
     // shape 命中后按 kind 分派：OWN_DATA 直达自有值槽；其余先校验直接原型与世代。
-    builder.switch_to_block(shape_hit_block);
-    builder.seal_block(shape_hit_block);
-    builder
+    cx.builder.switch_to_block(shape_hit_block);
+    cx.builder.seal_block(shape_hit_block);
+    cx.builder
         .ins()
         .brif(kind_own, own_hit_block, &[], holder_block, &[]);
 
     // ProtoData / Accessor：同一 shape 的 receiver 可以有不同直接原型，故先比较
     // 对象头里的 proto handle；再比较原型世代以覆盖链上属性或原型变化。
-    builder.switch_to_block(holder_block);
-    builder.seal_block(holder_block);
-    let receiver_header = builder
+    cx.builder.switch_to_block(holder_block);
+    cx.builder.seal_block(holder_block);
+    let receiver_header = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), addr, 0);
-    let receiver_proto = builder
+    let receiver_proto = cx
+        .builder
         .ins()
         .band_imm_u(receiver_header, i64::from(u32::MAX));
-    let proto_match = builder.ins().icmp(
+    let proto_match = cx.builder.ins().icmp(
         ir::condcodes::IntCC::Equal,
         receiver_proto,
         ic_expected_proto,
     );
-    let current_generation = builder.ins().load(
+    let current_generation = cx.builder.ins().load(
         types::I32,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, proto_generation))?,
     );
-    let current_generation = builder.ins().uextend(types::I64, current_generation);
-    let generation_match = builder.ins().icmp(
+    let current_generation = cx.builder.ins().uextend(types::I64, current_generation);
+    let generation_match = cx.builder.ins().icmp(
         ir::condcodes::IntCC::Equal,
         current_generation,
         ic_generation,
     );
-    let holder_valid = builder.ins().band(proto_match, generation_match);
-    builder
+    let holder_valid = cx.builder.ins().band(proto_match, generation_match);
+    cx.builder
         .ins()
         .brif(holder_valid, holder_resolve_block, &[], miss_block, &[]);
 
     // 解析 holder_handle → holder entry → holder 地址；ZGC holder 与 receiver 使用
     // 同一 access epoch 协议，odd epoch 或 relocating entry 必须进入 load assist。
-    builder.switch_to_block(holder_resolve_block);
-    builder.seal_block(holder_resolve_block);
-    let holder_entry_offset = builder.ins().ishl_imm_u(ic_holder, 3);
-    let holder_entry_addr = builder.ins().iadd(ht_base, holder_entry_offset);
+    cx.builder.switch_to_block(holder_resolve_block);
+    cx.builder.seal_block(holder_resolve_block);
+    let holder_entry_offset = cx.builder.ins().ishl_imm_u(ic_holder, 3);
+    let holder_entry_addr = cx.builder.ins().iadd(ht_base, holder_entry_offset);
     let holder_entry =
-        builder
+        cx.builder
             .ins()
             .load(types::I64, MemFlagsData::trusted(), holder_entry_addr, 0);
-    let holder_state = builder.ins().band_imm_u(holder_entry, 0xFFFF);
-    let holder_stable = builder.ins().icmp_imm_u(
+    let holder_state = cx.builder.ins().band_imm_u(holder_entry, 0xFFFF);
+    let holder_stable = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
         holder_state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
-    let holder_logical_addr = builder.ins().ushr_imm_u(holder_entry, 16);
-    builder.ins().brif(
+    let holder_logical_addr = cx.builder.ins().ushr_imm_u(holder_entry, 16);
+    cx.builder.ins().brif(
         barrier_disabled,
         holder_legacy_block,
         &[],
@@ -2953,9 +2708,9 @@ fn lower_get_prop_ic_non_nullish(
         &[],
     );
 
-    builder.switch_to_block(holder_legacy_block);
-    builder.seal_block(holder_legacy_block);
-    builder.ins().brif(
+    cx.builder.switch_to_block(holder_legacy_block);
+    cx.builder.seal_block(holder_legacy_block);
+    cx.builder.ins().brif(
         holder_stable,
         holder_addr_block,
         &[ir::BlockArg::Value(holder_logical_addr)],
@@ -2963,24 +2718,24 @@ fn lower_get_prop_ic_non_nullish(
         &[],
     );
 
-    builder.switch_to_block(holder_zgc_block);
-    builder.seal_block(holder_zgc_block);
-    let holder_epoch_addr = builder.ins().iadd_imm_s(
+    cx.builder.switch_to_block(holder_zgc_block);
+    cx.builder.seal_block(holder_zgc_block);
+    let holder_epoch_addr = cx.builder.ins().iadd_imm_s(
         barrier_state,
         i64::try_from(offset_of!(NativeBarrierState, access_epoch))
             .expect("access epoch offset fits i64"),
     );
     let holder_epoch =
-        builder
+        cx.builder
             .ins()
             .atomic_load(types::I64, MemFlagsData::trusted(), holder_epoch_addr);
-    let holder_epoch_bit = builder.ins().band_imm_u(holder_epoch, 1);
+    let holder_epoch_bit = cx.builder.ins().band_imm_u(holder_epoch, 1);
     let holder_epoch_even =
-        builder
+        cx.builder
             .ins()
             .icmp_imm_u(ir::condcodes::IntCC::Equal, holder_epoch_bit, 0);
-    let holder_direct = builder.ins().band(holder_stable, holder_epoch_even);
-    builder.ins().brif(
+    let holder_direct = cx.builder.ins().band(holder_stable, holder_epoch_even);
+    cx.builder.ins().brif(
         holder_direct,
         holder_fast_block,
         &[],
@@ -2988,28 +2743,31 @@ fn lower_get_prop_ic_non_nullish(
         &[],
     );
 
-    builder.switch_to_block(holder_fast_block);
-    builder.seal_block(holder_fast_block);
+    cx.builder.switch_to_block(holder_fast_block);
+    cx.builder.seal_block(holder_fast_block);
     increment_barrier_counter(
-        builder,
+        cx.builder,
         barrier_state,
         offset_of!(NativeBarrierState, load_fast_events),
     );
-    builder.ins().jump(
+    cx.builder.ins().jump(
         holder_addr_block,
         &[ir::BlockArg::Value(holder_logical_addr)],
     );
 
-    builder.switch_to_block(holder_assist_block);
-    builder.seal_block(holder_assist_block);
-    let holder_i32 = builder.ins().ireduce(types::I32, ic_holder);
-    let call = builder.ins().call(barrier_thunks.load, &[ctx, holder_i32]);
-    let assisted_holder = builder.inst_results(call)[0];
+    cx.builder.switch_to_block(holder_assist_block);
+    cx.builder.seal_block(holder_assist_block);
+    let holder_i32 = cx.builder.ins().ireduce(types::I32, ic_holder);
+    let call = cx
+        .builder
+        .ins()
+        .call(barrier_thunks.load, &[cx.ctx, holder_i32]);
+    let assisted_holder = cx.builder.inst_results(call)[0];
     let assisted_holder_ok =
-        builder
+        cx.builder
             .ins()
             .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted_holder, 0);
-    builder.ins().brif(
+    cx.builder.ins().brif(
         assisted_holder_ok,
         holder_addr_block,
         &[ir::BlockArg::Value(assisted_holder)],
@@ -3017,215 +2775,209 @@ fn lower_get_prop_ic_non_nullish(
         &[],
     );
 
-    builder.switch_to_block(holder_addr_block);
-    builder.seal_block(holder_addr_block);
-    let holder_logical_addr = builder.block_params(holder_addr_block)[0];
-    let holder_addr = builder.ins().iadd(holder_logical_addr, heap_delta);
-    builder
+    cx.builder.switch_to_block(holder_addr_block);
+    cx.builder.seal_block(holder_addr_block);
+    let holder_logical_addr = cx.builder.block_params(holder_addr_block)[0];
+    let holder_addr = cx.builder.ins().iadd(holder_logical_addr, heap_delta);
+    cx.builder
         .ins()
         .brif(kind_accessor, accessor_hit_block, &[], proto_hit_block, &[]);
 
     // OWN_DATA 命中：`HEAP_OBJECT_HEADER_SIZE + value_index * 8` 处单 load。
-    builder.switch_to_block(own_hit_block);
-    builder.seal_block(own_hit_block);
-    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
-    let value_offset = builder
+    cx.builder.switch_to_block(own_hit_block);
+    cx.builder.seal_block(own_hit_block);
+    let value_shift = cx.builder.ins().ishl_imm_u(ic_val_idx, 3); // × 值槽 8 字节
+    let value_offset = cx
+        .builder
         .ins()
         .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
-    let value_addr = builder.ins().iadd(addr, value_offset);
-    let value = builder
+    let value_addr = cx.builder.ins().iadd(addr, value_offset);
+    let value = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
-    define_value(builder, variables, dest, value)?;
-    builder.ins().jump(merge_block, &[]);
+    define_value(cx.builder, cx.variables, dest, value)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
     // PROTO_DATA 命中：从 holder 对象的值槽 load。
-    builder.switch_to_block(proto_hit_block);
-    builder.seal_block(proto_hit_block);
-    let proto_value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3);
-    let proto_value_offset = builder.ins().iadd_imm_s(
+    cx.builder.switch_to_block(proto_hit_block);
+    cx.builder.seal_block(proto_hit_block);
+    let proto_value_shift = cx.builder.ins().ishl_imm_u(ic_val_idx, 3);
+    let proto_value_offset = cx.builder.ins().iadd_imm_s(
         proto_value_shift,
         i64::from(constants::HEAP_OBJECT_HEADER_SIZE),
     );
-    let proto_value_addr = builder.ins().iadd(holder_addr, proto_value_offset);
-    let proto_value = builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), proto_value_addr, 0);
-    define_value(builder, variables, dest, proto_value)?;
-    builder.ins().jump(merge_block, &[]);
+    let proto_value_addr = cx.builder.ins().iadd(holder_addr, proto_value_offset);
+    let proto_value =
+        cx.builder
+            .ins()
+            .load(types::I64, MemFlagsData::trusted(), proto_value_addr, 0);
+    define_value(cx.builder, cx.variables, dest, proto_value)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
     // ACCESSOR 命中：load getter 后直接走宿主 invoke_callable。getter 是刚从
     // 堆里读出的临时句柄，必须作为临时 root 发布后再发起可能触发 GC 的调用。
-    builder.switch_to_block(accessor_hit_block);
-    builder.seal_block(accessor_hit_block);
-    let getter_shift = builder.ins().ishl_imm_u(ic_val_idx, 3);
-    let getter_offset = builder
+    cx.builder.switch_to_block(accessor_hit_block);
+    cx.builder.seal_block(accessor_hit_block);
+    let getter_shift = cx.builder.ins().ishl_imm_u(ic_val_idx, 3);
+    let getter_offset = cx
+        .builder
         .ins()
         .iadd_imm_s(getter_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
-    let getter_addr = builder.ins().iadd(holder_addr, getter_offset);
-    let getter = builder
+    let getter_addr = cx.builder.ins().iadd(holder_addr, getter_offset);
+    let getter = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), getter_addr, 0);
-    root_frame.publish(builder, variables, roots, &[getter])?;
-    let result = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        NativeRuntimeOp::GetPropAccessor.id(),
-        &[getter, obj],
-        None,
-    )?;
-    define_value(builder, variables, dest, result)?;
-    builder.ins().jump(merge_block, &[]);
+    cx.root_frame
+        .publish(cx.builder, cx.variables, roots, &[getter])?;
+    let result = cx.call(NativeRuntimeOp::GetPropAccessor.id(), &[getter, obj], None)?;
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
     // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
-    builder.switch_to_block(miss_block);
-    builder.seal_block(miss_block);
-    let result = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
+    cx.builder.switch_to_block(miss_block);
+    cx.builder.seal_block(miss_block);
+    let result = cx.call(
         NativeRuntimeOp::GetPropIc.id(),
         &[obj, key_value, ic_ptr],
         None,
     )?;
-    define_value(builder, variables, dest, result)?;
-    builder.ins().jump(merge_block, &[]);
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
-)]
 fn lower_set_prop_ic(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
+    cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
-    ctx: ir::Value,
-    dest: ValueId,
-    object: ValueId,
-    key: ValueId,
+    access: PropAccess,
     value: ValueId,
-    slot: u32,
 ) -> Result<()> {
-    let pointer_type = builder.func.dfg.value_type(ctx);
-    let obj = use_value(builder, variables, object)?;
-    let key_value = use_value(builder, variables, key)?;
-    let stored = use_value(builder, variables, value)?;
+    let PropAccess {
+        dest,
+        object,
+        key,
+        slot,
+    } = access;
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let obj = use_value(cx.builder, cx.variables, object)?;
+    let key_value = use_value(cx.builder, cx.variables, key)?;
+    let stored = use_value(cx.builder, cx.variables, value)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
 
     // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
-    let ht_base = builder.ins().load(
+    let ht_base = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
     );
-    let ic_base = builder.ins().load(
+    let ic_base = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
     );
-    let barrier_state = builder.ins().load(
+    let barrier_state = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
     );
 
     // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
-    let boxed_bits = builder.ins().band_imm_s(obj, box_base);
-    let is_boxed = builder
+    let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
+    let is_boxed = cx
+        .builder
         .ins()
         .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
-    let tag = builder.ins().ushr_imm_u(obj, 32);
-    let tag = builder.ins().band_imm_u(
+    let tag = cx.builder.ins().ushr_imm_u(obj, 32);
+    let tag = cx.builder.ins().band_imm_u(
         tag,
         i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
     );
-    let is_obj = builder.ins().icmp_imm_u(
+    let is_obj = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         tag,
         i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
     );
-    let tag_ok = builder.ins().band(is_boxed, is_obj);
+    let tag_ok = cx.builder.ins().band(is_boxed, is_obj);
 
     // IC 槽指针：基于 ic_base（当前 image 的 IC 区，始终映射），放在本块计算
     // 以支配所有后续分支（miss 分支需要它作为 SetPropIc 的回填目标）。
-    let ic_ptr = builder.ins().iadd_imm_s(
+    let ic_ptr = cx.builder.ins().iadd_imm_s(
         ic_base,
         i64::from(slot) * i64::from(constants::IC_SLOT_SIZE),
     );
 
-    let entry_block = builder.create_block();
-    let legacy_entry_block = builder.create_block();
-    let zgc_kind_block = builder.create_block();
-    let zgc_entry_block = builder.create_block();
-    let zgc_fast_block = builder.create_block();
-    let receiver_assist_block = builder.create_block();
-    let shape_check_block = builder.create_block();
-    builder.append_block_param(shape_check_block, types::I64);
-    builder.append_block_param(shape_check_block, types::I8);
-    let hit_block = builder.create_block();
-    let zgc_store_mode_block = builder.create_block();
-    let legacy_store_block = builder.create_block();
-    let zgc_direct_store_block = builder.create_block();
-    let barrier_store_block = builder.create_block();
-    let store_done_block = builder.create_block();
-    let miss_block = builder.create_block();
-    let merge_block = builder.create_block();
-    builder
+    let entry_block = cx.builder.create_block();
+    let legacy_entry_block = cx.builder.create_block();
+    let zgc_kind_block = cx.builder.create_block();
+    let zgc_entry_block = cx.builder.create_block();
+    let zgc_fast_block = cx.builder.create_block();
+    let receiver_assist_block = cx.builder.create_block();
+    let shape_check_block = cx.builder.create_block();
+    cx.builder.append_block_param(shape_check_block, types::I64);
+    cx.builder.append_block_param(shape_check_block, types::I8);
+    let hit_block = cx.builder.create_block();
+    let zgc_store_mode_block = cx.builder.create_block();
+    let legacy_store_block = cx.builder.create_block();
+    let zgc_direct_store_block = cx.builder.create_block();
+    let barrier_store_block = cx.builder.create_block();
+    let store_done_block = cx.builder.create_block();
+    let miss_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+    cx.builder
         .ins()
         .brif(tag_ok, entry_block, &[], miss_block, &[]);
 
-    builder.switch_to_block(entry_block);
-    builder.seal_block(entry_block);
-    let handle_idx = builder.ins().band_imm_u(obj, i64::from(u32::MAX));
-    let handle_i32 = builder.ins().ireduce(types::I32, handle_idx);
-    let entry_offset = builder.ins().ishl_imm_u(handle_idx, 3);
-    let entry_addr = builder.ins().iadd(ht_base, entry_offset);
-    let entry = builder
+    cx.builder.switch_to_block(entry_block);
+    cx.builder.seal_block(entry_block);
+    let handle_idx = cx.builder.ins().band_imm_u(obj, i64::from(u32::MAX));
+    let handle_i32 = cx.builder.ins().ireduce(types::I32, handle_idx);
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle_idx, 3);
+    let entry_addr = cx.builder.ins().iadd(ht_base, entry_offset);
+    let entry = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
-    let state = builder.ins().band_imm_u(entry, 0xFFFF);
-    let stable = builder.ins().icmp_imm_u(
+    let state = cx.builder.ins().band_imm_u(entry, 0xFFFF);
+    let stable = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
         state,
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
-    let logical_addr = builder.ins().ushr_imm_u(entry, 16);
-    let heap_delta = builder.ins().load(
+    let logical_addr = cx.builder.ins().ushr_imm_u(entry, 16);
+    let heap_delta = cx.builder.ins().load(
         pointer_type,
         MemFlagsData::trusted(),
-        ctx,
+        cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
     );
 
-    let ic_word0 = builder
+    let ic_word0 = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
-    let ic_shape = builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
-    let ic_val_idx = builder.ins().ushr_imm_u(ic_word0, 32);
-    let ic_word1 = builder
+    let ic_shape = cx.builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
+    let ic_val_idx = cx.builder.ins().ushr_imm_u(ic_word0, 32);
+    let ic_word1 = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
-    let ic_kind = builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
-    let kind_own = builder.ins().icmp_imm_u(
+    let ic_kind = cx.builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
+    let kind_own = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
         i64::from(constants::IC_KIND_OWN_DATA),
     );
-    let barrier_disabled = builder
-        .ins()
-        .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
-    builder.ins().brif(
+    let barrier_disabled =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    cx.builder.ins().brif(
         barrier_disabled,
         legacy_entry_block,
         &[],
@@ -3233,11 +2985,11 @@ fn lower_set_prop_ic(
         &[],
     );
 
-    builder.switch_to_block(legacy_entry_block);
-    builder.seal_block(legacy_entry_block);
-    let legacy_ok = builder.ins().band(stable, kind_own);
-    let direct_store = builder.ins().iconst(types::I8, 1);
-    builder.ins().brif(
+    cx.builder.switch_to_block(legacy_entry_block);
+    cx.builder.seal_block(legacy_entry_block);
+    let legacy_ok = cx.builder.ins().band(stable, kind_own);
+    let direct_store = cx.builder.ins().iconst(types::I8, 1);
+    cx.builder.ins().brif(
         legacy_ok,
         shape_check_block,
         &[
@@ -3248,28 +3000,30 @@ fn lower_set_prop_ic(
         &[],
     );
 
-    builder.switch_to_block(zgc_kind_block);
-    builder.seal_block(zgc_kind_block);
-    builder
+    cx.builder.switch_to_block(zgc_kind_block);
+    cx.builder.seal_block(zgc_kind_block);
+    cx.builder
         .ins()
         .brif(kind_own, zgc_entry_block, &[], miss_block, &[]);
 
-    builder.switch_to_block(zgc_entry_block);
-    builder.seal_block(zgc_entry_block);
-    let epoch_addr = builder.ins().iadd_imm_s(
+    cx.builder.switch_to_block(zgc_entry_block);
+    cx.builder.seal_block(zgc_entry_block);
+    let epoch_addr = cx.builder.ins().iadd_imm_s(
         barrier_state,
         i64::try_from(offset_of!(NativeBarrierState, access_epoch))
             .expect("access epoch offset fits i64"),
     );
-    let access_epoch = builder
-        .ins()
-        .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
-    let epoch_bit = builder.ins().band_imm_u(access_epoch, 1);
-    let epoch_even = builder
+    let access_epoch =
+        cx.builder
+            .ins()
+            .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
+    let epoch_bit = cx.builder.ins().band_imm_u(access_epoch, 1);
+    let epoch_even = cx
+        .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
-    let direct_resolve = builder.ins().band(stable, epoch_even);
-    builder.ins().brif(
+    let direct_resolve = cx.builder.ins().band(stable, epoch_even);
+    cx.builder.ins().brif(
         direct_resolve,
         zgc_fast_block,
         &[],
@@ -3277,28 +3031,31 @@ fn lower_set_prop_ic(
         &[],
     );
 
-    builder.switch_to_block(zgc_fast_block);
-    builder.seal_block(zgc_fast_block);
-    let phase_addr = builder.ins().iadd_imm_s(
+    cx.builder.switch_to_block(zgc_fast_block);
+    cx.builder.seal_block(zgc_fast_block);
+    let phase_addr = cx.builder.ins().iadd_imm_s(
         barrier_state,
         i64::try_from(offset_of!(NativeBarrierState, phase)).expect("phase offset fits i64"),
     );
-    let phase = builder
+    let phase = cx
+        .builder
         .ins()
         .atomic_load(types::I64, MemFlagsData::trusted(), phase_addr);
-    let marking = builder
+    let marking = cx
+        .builder
         .ins()
         .band_imm_u(phase, NATIVE_BARRIER_MARKING_MASK as i64);
-    let marking_idle = builder
+    let marking_idle = cx
+        .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::Equal, marking, 0);
-    let stable_young = builder.ins().icmp_imm_u(
+    let stable_young = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         state,
         i64::from(constants::HANDLE_STATE_STABLE_YOUNG),
     );
-    let direct_store = builder.ins().band(marking_idle, stable_young);
-    builder.ins().jump(
+    let direct_store = cx.builder.ins().band(marking_idle, stable_young);
+    cx.builder.ins().jump(
         shape_check_block,
         &[
             ir::BlockArg::Value(logical_addr),
@@ -3306,15 +3063,19 @@ fn lower_set_prop_ic(
         ],
     );
 
-    builder.switch_to_block(receiver_assist_block);
-    builder.seal_block(receiver_assist_block);
-    let call = builder.ins().call(barrier_thunks.load, &[ctx, handle_i32]);
-    let assisted = builder.inst_results(call)[0];
-    let assisted_ok = builder
+    cx.builder.switch_to_block(receiver_assist_block);
+    cx.builder.seal_block(receiver_assist_block);
+    let call = cx
+        .builder
+        .ins()
+        .call(barrier_thunks.load, &[cx.ctx, handle_i32]);
+    let assisted = cx.builder.inst_results(call)[0];
+    let assisted_ok = cx
+        .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
-    let no_direct_store = builder.ins().iconst(types::I8, 0);
-    builder.ins().brif(
+    let no_direct_store = cx.builder.ins().iconst(types::I8, 0);
+    cx.builder.ins().brif(
         assisted_ok,
         shape_check_block,
         &[
@@ -3325,31 +3086,34 @@ fn lower_set_prop_ic(
         &[],
     );
 
-    builder.switch_to_block(shape_check_block);
-    builder.seal_block(shape_check_block);
-    let logical_addr = builder.block_params(shape_check_block)[0];
-    let direct_store = builder.block_params(shape_check_block)[1];
-    let addr = builder.ins().iadd(logical_addr, heap_delta);
-    let obj_word = builder
+    cx.builder.switch_to_block(shape_check_block);
+    cx.builder.seal_block(shape_check_block);
+    let logical_addr = cx.builder.block_params(shape_check_block)[0];
+    let direct_store = cx.builder.block_params(shape_check_block)[1];
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    let obj_word = cx
+        .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), addr, 8);
-    let obj_shape = builder.ins().ushr_imm_u(obj_word, 32);
-    let shape_match = builder
+    let obj_shape = cx.builder.ins().ushr_imm_u(obj_word, 32);
+    let shape_match = cx
+        .builder
         .ins()
         .icmp(ir::condcodes::IntCC::Equal, obj_shape, ic_shape);
-    builder
+    cx.builder
         .ins()
         .brif(shape_match, hit_block, &[], miss_block, &[]);
 
-    builder.switch_to_block(hit_block);
-    builder.seal_block(hit_block);
-    let value_shift = builder.ins().ishl_imm_u(ic_val_idx, 3);
-    let value_offset = builder
+    cx.builder.switch_to_block(hit_block);
+    cx.builder.seal_block(hit_block);
+    let value_shift = cx.builder.ins().ishl_imm_u(ic_val_idx, 3);
+    let value_offset = cx
+        .builder
         .ins()
         .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
-    let logical_slot = builder.ins().iadd(logical_addr, value_offset);
-    let value_addr = builder.ins().iadd(addr, value_offset);
-    builder.ins().brif(
+    let logical_slot = cx.builder.ins().iadd(logical_addr, value_offset);
+    let value_addr = cx.builder.ins().iadd(addr, value_offset);
+    cx.builder.ins().brif(
         barrier_disabled,
         legacy_store_block,
         &[],
@@ -3357,9 +3121,9 @@ fn lower_set_prop_ic(
         &[],
     );
 
-    builder.switch_to_block(zgc_store_mode_block);
-    builder.seal_block(zgc_store_mode_block);
-    builder.ins().brif(
+    cx.builder.switch_to_block(zgc_store_mode_block);
+    cx.builder.seal_block(zgc_store_mode_block);
+    cx.builder.ins().brif(
         direct_store,
         zgc_direct_store_block,
         &[],
@@ -3367,157 +3131,138 @@ fn lower_set_prop_ic(
         &[],
     );
 
-    builder.switch_to_block(legacy_store_block);
-    builder.seal_block(legacy_store_block);
-    builder
+    cx.builder.switch_to_block(legacy_store_block);
+    cx.builder.seal_block(legacy_store_block);
+    cx.builder
         .ins()
         .store(MemFlagsData::trusted(), stored, value_addr, 0);
-    builder.ins().jump(store_done_block, &[]);
+    cx.builder.ins().jump(store_done_block, &[]);
 
-    builder.switch_to_block(zgc_direct_store_block);
-    builder.seal_block(zgc_direct_store_block);
-    builder
+    cx.builder.switch_to_block(zgc_direct_store_block);
+    cx.builder.seal_block(zgc_direct_store_block);
+    cx.builder
         .ins()
         .atomic_store(MemFlagsData::trusted(), stored, value_addr);
     increment_barrier_counter(
-        builder,
+        cx.builder,
         barrier_state,
         offset_of!(NativeBarrierState, store_fast_events),
     );
-    builder.ins().jump(store_done_block, &[]);
+    cx.builder.ins().jump(store_done_block, &[]);
 
-    builder.switch_to_block(barrier_store_block);
-    builder.seal_block(barrier_store_block);
-    let call = builder.ins().call(
+    cx.builder.switch_to_block(barrier_store_block);
+    cx.builder.seal_block(barrier_store_block);
+    let call = cx.builder.ins().call(
         barrier_thunks.store,
-        &[ctx, handle_i32, logical_slot, stored],
+        &[cx.ctx, handle_i32, logical_slot, stored],
     );
-    let status = builder.inst_results(call)[0];
-    let stored_ok = builder
+    let status = cx.builder.inst_results(call)[0];
+    let stored_ok = cx
+        .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::Equal, status, 0);
-    builder
+    cx.builder
         .ins()
         .brif(stored_ok, store_done_block, &[], miss_block, &[]);
 
-    builder.switch_to_block(store_done_block);
-    builder.seal_block(store_done_block);
-    define_value(builder, variables, dest, stored)?;
-    builder.ins().jump(merge_block, &[]);
+    cx.builder.switch_to_block(store_done_block);
+    cx.builder.seal_block(store_done_block);
+    define_value(cx.builder, cx.variables, dest, stored)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
     // miss：宿主完整 [[Set]] + IC 回填；`ic_ptr` 作为回填目标传入。
-    builder.switch_to_block(miss_block);
-    builder.seal_block(miss_block);
-    let result = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
+    cx.builder.switch_to_block(miss_block);
+    cx.builder.seal_block(miss_block);
+    let result = cx.call(
         NativeRuntimeOp::SetPropIc.id(),
         &[obj, key_value, stored, ic_ptr],
         None,
     )?;
-    define_value(builder, variables, dest, result)?;
-    builder.ins().jump(merge_block, &[]);
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
 
-    builder.switch_to_block(merge_block);
-    builder.seal_block(merge_block);
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
     Ok(())
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "与 lower_instruction 的既有参数集合保持一致，全部为 lowering 上下文"
-)]
 fn lower_optional_get_prop_ic(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
+    cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
-    ctx: ir::Value,
-    dest: ValueId,
-    object: ValueId,
-    key: ValueId,
-    slot: u32,
+    access: PropAccess,
     roots: &[ValueId],
 ) -> Result<()> {
-    let obj = use_value(builder, variables, object)?;
-
-    // 第零级：null / undefined 检查。
-    let is_null = builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_null());
-    let is_undefined =
-        builder
-            .ins()
-            .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_undefined());
-    let is_nullish = builder.ins().bor(is_null, is_undefined);
-
-    let nullish_block = builder.create_block();
-    let ic_entry_block = builder.create_block();
-    let merge_block = builder.create_block();
-
-    builder
-        .ins()
-        .brif(is_nullish, nullish_block, &[], ic_entry_block, &[]);
-
-    // nullish 分支：提前返回 undefined。
-    builder.switch_to_block(nullish_block);
-    builder.seal_block(nullish_block);
-    let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
-    define_value(builder, variables, dest, undefined)?;
-    builder.ins().jump(merge_block, &[]);
-
-    // IC 分支入口：非 nullish 值走与 GetProp 相同的共享核心。
-    builder.switch_to_block(ic_entry_block);
-    builder.seal_block(ic_entry_block);
-    lower_get_prop_ic_non_nullish(
-        builder,
-        variables,
-        root_frame,
-        dispatcher,
-        barrier_thunks,
-        ctx,
+    let PropAccess {
         dest,
         object,
         key,
         slot,
+    } = access;
+    let obj = use_value(cx.builder, cx.variables, object)?;
+
+    // 第零级：null / undefined 检查。
+    let is_null =
+        cx.builder
+            .ins()
+            .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_null());
+    let is_undefined =
+        cx.builder
+            .ins()
+            .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_undefined());
+    let is_nullish = cx.builder.ins().bor(is_null, is_undefined);
+
+    let nullish_block = cx.builder.create_block();
+    let ic_entry_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+
+    cx.builder
+        .ins()
+        .brif(is_nullish, nullish_block, &[], ic_entry_block, &[]);
+
+    // nullish 分支：提前返回 undefined。
+    cx.builder.switch_to_block(nullish_block);
+    cx.builder.seal_block(nullish_block);
+    let undefined = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_undefined());
+    define_value(cx.builder, cx.variables, dest, undefined)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    // IC 分支入口：非 nullish 值走与 GetProp 相同的共享核心。
+    cx.builder.switch_to_block(ic_entry_block);
+    cx.builder.seal_block(ic_entry_block);
+    lower_get_prop_ic_non_nullish(
+        cx,
+        barrier_thunks,
+        PropAccess {
+            dest,
+            object,
+            key,
+            slot,
+        },
         roots,
         merge_block,
     )?;
 
-    builder.switch_to_block(merge_block);
-    builder.seal_block(merge_block);
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_value_operation(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    root_frame: &mut FrameLowering,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
+    cx: &mut LoweringCx<'_, '_>,
     operation: NativeRuntimeOp,
     args: &[ValueId],
     destination: Option<ValueId>,
 ) -> Result<()> {
     let args = args
         .iter()
-        .map(|value| use_value(builder, variables, *value))
+        .map(|value| use_value(cx.builder, cx.variables, *value))
         .collect::<Result<Vec<_>>>()?;
-    let result = call_dispatcher(
-        builder,
-        root_frame,
-        dispatcher,
-        ctx,
-        operation.id(),
-        &args,
-        None,
-    )?;
+    let result = cx.call(operation.id(), &args, None)?;
     if let Some(destination) = destination {
-        define_value(builder, variables, destination, result)?;
+        define_value(cx.builder, cx.variables, destination, result)?;
     }
     Ok(())
 }
@@ -3612,34 +3357,32 @@ fn call_dispatcher(
         .context("host dispatcher returned no result")
 }
 
-#[allow(clippy::too_many_arguments)]
 fn lower_terminator(
-    builder: &mut FunctionBuilder<'_>,
+    cx: &mut LoweringCx<'_, '_>,
     predecessor: BasicBlockId,
     terminator: &Terminator,
     constants: &[Constant],
     blocks: &HashMap<BasicBlockId, ir::Block>,
-    variables: &HashMap<ValueId, Variable>,
     phi_edges: &HashMap<(BasicBlockId, BasicBlockId), Vec<(ValueId, ValueId)>>,
-    dispatcher: ir::FuncRef,
-    ctx: ir::Value,
-    root_frame: &mut FrameLowering,
 ) -> Result<()> {
     match terminator {
         Terminator::Return { value } => {
             let result = match value {
-                Some(value) => use_value(builder, variables, *value)?,
-                None => builder.ins().iconst(types::I64, value::encode_undefined()),
+                Some(value) => use_value(cx.builder, cx.variables, *value)?,
+                None => cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_undefined()),
             };
-            root_frame.unlink(builder, ctx)?;
-            builder.ins().return_(&[result]);
+            cx.root_frame.unlink(cx.builder, cx.ctx)?;
+            cx.builder.ins().return_(&[result]);
         }
         Terminator::Jump { target } => {
             if target.0 <= predecessor.0 {
-                lower_cooperative_poll(builder, dispatcher, ctx, root_frame)?;
+                lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
-            define_phi_edge(builder, variables, phi_edges, predecessor, *target)?;
-            builder.ins().jump(blocks[target], &[]);
+            define_phi_edge(cx.builder, cx.variables, phi_edges, predecessor, *target)?;
+            cx.builder.ins().jump(blocks[target], &[]);
         }
         Terminator::Branch {
             condition,
@@ -3647,26 +3390,30 @@ fn lower_terminator(
             false_block,
         } => {
             if true_block.0 <= predecessor.0 || false_block.0 <= predecessor.0 {
-                lower_cooperative_poll(builder, dispatcher, ctx, root_frame)?;
+                lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
-            let condition = use_value(builder, variables, *condition)?;
-            let condition = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::IsTruthy.id(),
-                &[condition],
-                None,
-            )?;
-            let condition = builder.ins().icmp_imm_s(
+            let condition = use_value(cx.builder, cx.variables, *condition)?;
+            let condition = cx.call(NativeRuntimeOp::IsTruthy.id(), &[condition], None)?;
+            let condition = cx.builder.ins().icmp_imm_s(
                 ir::condcodes::IntCC::NotEqual,
                 condition,
                 value::encode_bool(false),
             );
-            define_phi_edge(builder, variables, phi_edges, predecessor, *true_block)?;
-            define_phi_edge(builder, variables, phi_edges, predecessor, *false_block)?;
-            builder
+            define_phi_edge(
+                cx.builder,
+                cx.variables,
+                phi_edges,
+                predecessor,
+                *true_block,
+            )?;
+            define_phi_edge(
+                cx.builder,
+                cx.variables,
+                phi_edges,
+                predecessor,
+                *false_block,
+            )?;
+            cx.builder
                 .ins()
                 .brif(condition, blocks[true_block], &[], blocks[false_block], &[]);
         }
@@ -3679,12 +3426,18 @@ fn lower_terminator(
             if cases.iter().any(|case| case.target.0 <= predecessor.0)
                 || default_block.0 <= predecessor.0
             {
-                lower_cooperative_poll(builder, dispatcher, ctx, root_frame)?;
+                lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
-            let value = use_value(builder, variables, *value)?;
+            let value = use_value(cx.builder, cx.variables, *value)?;
             if cases.is_empty() {
-                define_phi_edge(builder, variables, phi_edges, predecessor, *default_block)?;
-                builder.ins().jump(blocks[default_block], &[]);
+                define_phi_edge(
+                    cx.builder,
+                    cx.variables,
+                    phi_edges,
+                    predecessor,
+                    *default_block,
+                )?;
+                cx.builder.ins().jump(blocks[default_block], &[]);
             } else {
                 for (index, case) in cases.iter().enumerate() {
                     let constant = constants
@@ -3697,19 +3450,25 @@ fn lower_terminator(
                         })?;
                     let immediate = switch_constant_immediate(constant)?;
                     let condition =
-                        builder
+                        cx.builder
                             .ins()
                             .icmp_imm_u(ir::condcodes::IntCC::Equal, value, immediate);
-                    define_phi_edge(builder, variables, phi_edges, predecessor, case.target)?;
+                    define_phi_edge(
+                        cx.builder,
+                        cx.variables,
+                        phi_edges,
+                        predecessor,
+                        case.target,
+                    )?;
                     if index + 1 == cases.len() {
                         define_phi_edge(
-                            builder,
-                            variables,
+                            cx.builder,
+                            cx.variables,
                             phi_edges,
                             predecessor,
                             *default_block,
                         )?;
-                        builder.ins().brif(
+                        cx.builder.ins().brif(
                             condition,
                             blocks[&case.target],
                             &[],
@@ -3717,33 +3476,28 @@ fn lower_terminator(
                             &[],
                         );
                     } else {
-                        let next_case = builder.create_block();
-                        builder
+                        let next_case = cx.builder.create_block();
+                        cx.builder
                             .ins()
                             .brif(condition, blocks[&case.target], &[], next_case, &[]);
-                        builder.switch_to_block(next_case);
+                        cx.builder.switch_to_block(next_case);
                     }
                 }
             }
         }
         Terminator::Throw { value } => {
-            let value = use_value(builder, variables, *value)?;
-            let exception = call_dispatcher(
-                builder,
-                root_frame,
-                dispatcher,
-                ctx,
-                NativeRuntimeOp::CreateException.id(),
-                &[value],
-                None,
-            )?;
-            root_frame.unlink(builder, ctx)?;
-            builder.ins().return_(&[exception]);
+            let value = use_value(cx.builder, cx.variables, *value)?;
+            let exception = cx.call(NativeRuntimeOp::CreateException.id(), &[value], None)?;
+            cx.root_frame.unlink(cx.builder, cx.ctx)?;
+            cx.builder.ins().return_(&[exception]);
         }
         Terminator::Unreachable => {
-            let result = builder.ins().iconst(types::I64, value::encode_undefined());
-            root_frame.unlink(builder, ctx)?;
-            builder.ins().return_(&[result]);
+            let result = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_undefined());
+            cx.root_frame.unlink(cx.builder, cx.ctx)?;
+            cx.builder.ins().return_(&[result]);
         }
     }
     Ok(())

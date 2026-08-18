@@ -1,9 +1,48 @@
+use std::collections::{BTreeSet, HashMap};
+use std::sync::LazyLock;
+
 use super::*;
 use swc_core::ecma::ast as swc_ast;
 use wjsm_ir::{
-    BasicBlockId, Builtin, Constant, Function, FunctionId, Instruction, MODULE_ENTRY_IR_NAME,
-    ModuleId, Program, Terminator,
+    BasicBlockId, Builtin, Constant, Function, FunctionId, ImportBinding, Instruction,
+    MODULE_ENTRY_IR_NAME, ModuleId, Program, ReExportBinding, Terminator,
 };
+
+/// 多模块 lowering 的链接图：import / 动态 import / 导出 / 重导出。
+///
+/// 这五张表总是一起传入 [`lower_modules`] 及其变体，收成一个借用视图避免
+/// 位置参数错位，并消掉 `too_many_arguments`。
+#[derive(Clone, Copy, Debug)]
+pub struct ModuleLinking<'a> {
+    pub import_map: &'a HashMap<ModuleId, Vec<ImportBinding>>,
+    pub dynamic_import_targets: &'a HashMap<ModuleId, Vec<ModuleId>>,
+    pub export_names: &'a HashMap<ModuleId, BTreeSet<String>>,
+    pub dynamic_import_specifiers: &'a HashMap<ModuleId, Vec<(String, ModuleId)>>,
+    pub re_export_map: &'a HashMap<ModuleId, Vec<ReExportBinding>>,
+}
+
+impl ModuleLinking<'static> {
+    /// 空链接图：单模块、无 import/export 边的测试与 agent 脚本路径。
+    pub fn empty() -> Self {
+        static IMPORT_MAP: LazyLock<HashMap<ModuleId, Vec<ImportBinding>>> =
+            LazyLock::new(HashMap::new);
+        static DYNAMIC_IMPORT_TARGETS: LazyLock<HashMap<ModuleId, Vec<ModuleId>>> =
+            LazyLock::new(HashMap::new);
+        static EXPORT_NAMES: LazyLock<HashMap<ModuleId, BTreeSet<String>>> =
+            LazyLock::new(HashMap::new);
+        static DYNAMIC_IMPORT_SPECIFIERS: LazyLock<HashMap<ModuleId, Vec<(String, ModuleId)>>> =
+            LazyLock::new(HashMap::new);
+        static RE_EXPORT_MAP: LazyLock<HashMap<ModuleId, Vec<ReExportBinding>>> =
+            LazyLock::new(HashMap::new);
+        Self {
+            import_map: &IMPORT_MAP,
+            dynamic_import_targets: &DYNAMIC_IMPORT_TARGETS,
+            export_names: &EXPORT_NAMES,
+            dynamic_import_specifiers: &DYNAMIC_IMPORT_SPECIFIERS,
+            re_export_map: &RE_EXPORT_MAP,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ModuleLoweringInput {
@@ -68,55 +107,21 @@ pub struct BuiltinSegment {
 ///
 /// # 参数
 /// - `modules`: 模块列表，包含 ModuleId、AST 与编译期路径元数据
-/// - `import_map`: 导入映射，module_id → ImportBinding 列表
-/// - `dynamic_import_targets`: 动态 import() 目标映射，module_id → 被动态 import 的目标模块 ID 列表
-/// - `export_names`: 导出名称映射，module_id → 导出名集合
-/// - `dynamic_import_specifiers`: 动态 import() specifier 映射，module_id → [(specifier, 目标 ModuleId)]
+/// - `linking`: import / 动态 import / 导出 / 重导出链接图
 pub fn lower_modules(
     modules: Vec<ModuleLoweringInput>,
-    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
-    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
-    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
-    dynamic_import_specifiers: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<(String, wjsm_ir::ModuleId)>,
-    >,
-    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    linking: ModuleLinking<'_>,
 ) -> Result<Program, LoweringError> {
-    lower_modules_with_debug(
-        modules,
-        import_map,
-        dynamic_import_targets,
-        export_names,
-        dynamic_import_specifiers,
-        re_export_map,
-        false,
-    )
+    lower_modules_with_debug(modules, linking, false)
 }
 
 /// 多模块 lowering；`emit_debug_checks` 为 true 时在各模块 body 语句入口插桩。
 pub fn lower_modules_with_debug(
     modules: Vec<ModuleLoweringInput>,
-    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
-    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
-    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
-    dynamic_import_specifiers: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<(String, wjsm_ir::ModuleId)>,
-    >,
-    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    linking: ModuleLinking<'_>,
     emit_debug_checks: bool,
 ) -> Result<Program, LoweringError> {
-    lower_modules_with_debug_meta(
-        modules,
-        import_map,
-        dynamic_import_targets,
-        export_names,
-        dynamic_import_specifiers,
-        re_export_map,
-        emit_debug_checks,
-    )
-    .map(|(program, _)| program)
+    lower_modules_with_debug_meta(modules, linking, emit_debug_checks).map(|(program, _)| program)
 }
 
 /// 与 [`lower_modules_with_debug`] 相同，但额外返回 [`LoweringMetadata`]
@@ -126,14 +131,7 @@ pub fn lower_modules_with_debug(
 /// [`BuiltinSegment`]（scope 基址 + 导出解析）。
 pub fn lower_modules_with_debug_meta(
     modules: Vec<ModuleLoweringInput>,
-    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
-    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
-    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
-    dynamic_import_specifiers: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<(String, wjsm_ir::ModuleId)>,
-    >,
-    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    linking: ModuleLinking<'_>,
     emit_debug_checks: bool,
 ) -> Result<(Program, LoweringMetadata), LoweringError> {
     // 多模块编译路径
@@ -146,15 +144,7 @@ pub fn lower_modules_with_debug_meta(
         .iter()
         .map(|module| (module.id, module.metadata.clone()))
         .collect();
-    let mut lowerer = setup_multi_module_lowerer(
-        module_metadata,
-        import_map,
-        dynamic_import_targets,
-        export_names,
-        dynamic_import_specifiers,
-        re_export_map,
-        0,
-    )?;
+    let mut lowerer = setup_multi_module_lowerer(module_metadata, linking, 0)?;
     lowerer.emit_debug_checks = emit_debug_checks;
 
     predeclare_module_exports(&mut lowerer, &modules)?;
@@ -198,17 +188,9 @@ pub fn lower_modules_with_debug_meta(
 ///
 /// `modules` 只含用户模块；`builtin` 段必须无 TLA（builtin 段构建时保证）。
 /// 生产路径遇用户 TLA 会回退整包 lower，不会走进本函数。
-#[allow(clippy::too_many_arguments)]
 pub fn lower_modules_with_builtin_seed(
     modules: Vec<ModuleLoweringInput>,
-    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
-    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
-    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
-    dynamic_import_specifiers: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<(String, wjsm_ir::ModuleId)>,
-    >,
-    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    linking: ModuleLinking<'_>,
     builtin: BuiltinSegment,
     emit_debug_checks: bool,
 ) -> Result<Program, LoweringError> {
@@ -223,11 +205,7 @@ pub fn lower_modules_with_builtin_seed(
         .collect();
     let mut lowerer = setup_multi_module_lowerer(
         module_metadata,
-        import_map,
-        dynamic_import_targets,
-        export_names,
-        dynamic_import_specifiers,
-        re_export_map,
+        linking,
         usize::try_from(builtin.scope_count).expect("u32 scope_count 总能转为 usize"),
     )?;
     lowerer.emit_debug_checks = emit_debug_checks;
@@ -297,33 +275,26 @@ fn emit_builtin_entry_call(lowerer: &mut Lowerer, builtin: &BuiltinSegment) {
 
 /// 设置多模块 lowerer 的初始状态
 fn setup_multi_module_lowerer(
-    module_metadata: std::collections::HashMap<wjsm_ir::ModuleId, ModuleMetadata>,
-    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
-    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
-    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
-    dynamic_import_specifiers: &std::collections::HashMap<
-        wjsm_ir::ModuleId,
-        Vec<(String, wjsm_ir::ModuleId)>,
-    >,
-    re_export_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    module_metadata: HashMap<ModuleId, ModuleMetadata>,
+    linking: ModuleLinking<'_>,
     base_scope_count: usize,
 ) -> Result<Lowerer, LoweringError> {
     let mut lowerer = Lowerer::with_base_scope_count(base_scope_count);
-    lowerer.import_bindings = import_map.clone();
-    lowerer.dynamic_import_targets = dynamic_import_targets.clone();
-    lowerer.module_export_names = export_names.clone();
-    lowerer.re_export_map = re_export_map.clone();
+    lowerer.import_bindings = linking.import_map.clone();
+    lowerer.dynamic_import_targets = linking.dynamic_import_targets.clone();
+    lowerer.module_export_names = linking.export_names.clone();
+    lowerer.re_export_map = linking.re_export_map.clone();
     lowerer.module_metadata = module_metadata;
 
     // 收集需要构建命名空间对象的模块
-    for targets in dynamic_import_targets.values() {
+    for targets in linking.dynamic_import_targets.values() {
         for &target_id in targets {
             lowerer.dynamic_import_namespace_modules.insert(target_id);
         }
     }
 
     // 构建 specifier → ModuleId 映射（从动态 import specifier 列表构建，而非 import_map）
-    for (module_id, spec_list) in dynamic_import_specifiers.iter() {
+    for (module_id, spec_list) in linking.dynamic_import_specifiers.iter() {
         for (specifier, target_id) in spec_list {
             lowerer
                 .dynamic_import_specifier_map

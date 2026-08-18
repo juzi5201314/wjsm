@@ -345,15 +345,8 @@ fn compile_agent_artifact(
         },
         source: Some(Arc::<str>::from(script)),
     };
-    let program = wjsm_semantic::lower_modules(
-        vec![input],
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-        &std::collections::HashMap::new(),
-    )
-    .map_err(|error| error.to_string())?;
+    let program = wjsm_semantic::lower_modules(vec![input], wjsm_semantic::ModuleLinking::empty())
+        .map_err(|error| error.to_string())?;
     wjsm_artifact_format::PortableArtifact::from_input(
         &wjsm_artifact_format::ArtifactBuildInput::new(
             program,

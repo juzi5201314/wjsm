@@ -1033,16 +1033,10 @@ pub trait ExecContext: HeapContext {
     fn dataview_resolve(&mut self, handle: u32) -> Option<(u32, u32, u32, bool)>;
 
     /// TypedArray 表登记。
-    #[allow(clippy::too_many_arguments)]
     fn typedarray_table_create(
         &mut self,
-        buffer_handle: u32,
+        view: TypedArrayView,
         buffer_object: Option<Value>,
-        byte_offset: u32,
-        length: u32,
-        element_size: u8,
-        element_kind: u8,
-        is_shared: bool,
     ) -> u32;
 
     /// Live TypedArray 迭代器：`kind` 0=entries / 1=keys / 2=values。

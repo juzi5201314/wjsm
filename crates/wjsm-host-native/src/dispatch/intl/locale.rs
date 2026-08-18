@@ -230,13 +230,15 @@ fn apply_options(
         canonicalize_unicode_locale_id(&rebuilt).map_err(|error| throw_intl(ctx, state, error))?;
     slot_from_canonical(
         canonical,
-        calendar,
-        collation,
-        hour_cycle,
-        case_first,
-        numbering_system,
-        numeric,
-        first_day_of_week,
+        LocaleOverrides {
+            calendar,
+            collation,
+            hour_cycle,
+            case_first,
+            numbering_system,
+            numeric,
+            first_day_of_week,
+        },
     )
     .ok_or_else(|| crate::dispatch::runtime::range_error(ctx, state, "Invalid language tag"))
 }
@@ -322,7 +324,7 @@ fn transform(
 }
 
 fn create_from_tag(ctx: &mut NativeVmContext, state: &mut NativeAgentState, tag: String) -> i64 {
-    let Some(slot) = slot_from_canonical(tag, None, None, None, None, None, None, None) else {
+    let Some(slot) = slot_from_canonical(tag, LocaleOverrides::default()) else {
         return fail_dispatch(ctx);
     };
     create_instance(
@@ -435,9 +437,8 @@ fn optional(ctx: &mut NativeVmContext, state: &mut NativeAgentState, value: Opti
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn slot_from_canonical(
-    tag: String,
+#[derive(Default)]
+struct LocaleOverrides {
     calendar: Option<String>,
     collation: Option<String>,
     hour_cycle: Option<String>,
@@ -445,10 +446,12 @@ fn slot_from_canonical(
     numbering_system: Option<String>,
     numeric: Option<bool>,
     first_day_of_week: Option<String>,
-) -> Option<LocaleSlot> {
+}
+
+fn slot_from_canonical(tag: String, overrides: LocaleOverrides) -> Option<LocaleSlot> {
     let fields = wjsm_intl_data::tag::language_fields(&tag)?;
     let keywords = wjsm_intl_data::tag::unicode_keywords(&tag);
-    let mut case_first = case_first.or_else(|| keyword(&keywords, "kf"));
+    let mut case_first = overrides.case_first.or_else(|| keyword(&keywords, "kf"));
     if case_first.as_deref() == Some("true") {
         case_first = Some(String::new());
     }
@@ -457,14 +460,19 @@ fn slot_from_canonical(
         script: fields.script,
         region: fields.region,
         variants: fields.variants,
-        calendar: calendar.or_else(|| keyword(&keywords, "ca")),
-        collation: collation.or_else(|| keyword(&keywords, "co")),
-        hour_cycle: hour_cycle.or_else(|| keyword(&keywords, "hc")),
+        calendar: overrides.calendar.or_else(|| keyword(&keywords, "ca")),
+        collation: overrides.collation.or_else(|| keyword(&keywords, "co")),
+        hour_cycle: overrides.hour_cycle.or_else(|| keyword(&keywords, "hc")),
         case_first,
-        numbering_system: numbering_system.or_else(|| keyword(&keywords, "nu")),
-        numeric: numeric
+        numbering_system: overrides
+            .numbering_system
+            .or_else(|| keyword(&keywords, "nu")),
+        numeric: overrides
+            .numeric
             .unwrap_or_else(|| keywords.get("kn").is_some_and(|value| value != "false")),
-        first_day_of_week: first_day_of_week.or_else(|| keyword(&keywords, "fw")),
+        first_day_of_week: overrides
+            .first_day_of_week
+            .or_else(|| keyword(&keywords, "fw")),
         tag,
     })
 }

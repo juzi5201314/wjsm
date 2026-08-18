@@ -973,15 +973,8 @@ fn compile_worker_artifact(
             },
             source: Some(Arc::<str>::from(filename)),
         };
-        wjsm_semantic::lower_modules(
-            vec![input],
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-            &HashMap::new(),
-        )
-        .map_err(|error| error.to_string())?
+        wjsm_semantic::lower_modules(vec![input], wjsm_semantic::ModuleLinking::empty())
+            .map_err(|error| error.to_string())?
     } else {
         let path = resolve_worker_entry(filename, store, cwd);
         if !store.is_file(&path) {

@@ -392,18 +392,13 @@ pub fn json_stringify_full_impl<E: ExecContext>(
         value::encode_undefined()
     };
     let mut stack = Vec::new();
-    match serialize_json_property(
-        ctx,
-        "",
-        val,
-        holder,
-        replacer_is_fn,
+    let mut serialize = JsonSerialize {
         replacer_fn,
-        property_list.as_deref(),
-        &mut stack,
-        &gap,
-        "",
-    ) {
+        property_list: property_list.as_deref(),
+        stack: &mut stack,
+        gap: &gap,
+    };
+    match serialize_json_property(ctx, "", val, holder, &mut serialize, "") {
         Ok(json) => {
             if json == "undefined" {
                 value::encode_undefined()
@@ -415,18 +410,20 @@ pub fn json_stringify_full_impl<E: ExecContext>(
     }
 }
 
+struct JsonSerialize<'a> {
+    replacer_fn: Option<Value>,
+    property_list: Option<&'a [String]>,
+    stack: &'a mut Vec<Value>,
+    gap: &'a str,
+}
+
 /// 序列化 JSON 属性（核心递归 impl，含 cycle、toJSON、replacer、pretty-print）。
-#[allow(clippy::too_many_arguments)]
 fn serialize_json_property<E: ExecContext>(
     ctx: &mut E,
     key: &str,
     val: Value,
     holder: Value,
-    replacer_is_fn: bool,
-    replacer_fn: Option<Value>,
-    property_list: Option<&[String]>,
-    stack: &mut Vec<Value>,
-    gap: &str,
+    serialize: &mut JsonSerialize<'_>,
     current_indent: &str,
 ) -> Result<String, Value> {
     let mut value = get_to_json(ctx, key, val);
@@ -434,7 +431,7 @@ fn serialize_json_property<E: ExecContext>(
         return Err(value);
     }
     let mut replacer_returned_undefined = false;
-    if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
+    if let Some(rf) = serialize.replacer_fn {
         let key_str = ctx.store_string(key);
         let args = [key_str, value];
         match ctx.call_js(rf, holder, &args) {
@@ -481,19 +478,19 @@ fn serialize_json_property<E: ExecContext>(
         return Ok("null".to_string());
     }
 
-    let next_indent = if gap.is_empty() {
+    let next_indent = if serialize.gap.is_empty() {
         String::new()
     } else {
-        format!("{current_indent}{gap}")
+        format!("{current_indent}{}", serialize.gap)
     };
 
     if value::is_array(value) {
-        if stack.contains(&value) {
+        if serialize.stack.contains(&value) {
             return Err(ctx.make_type_error("Converting circular structure to JSON"));
         }
-        stack.push(value);
+        serialize.stack.push(value);
         let Some(len) = ctx.array_read_length(value) else {
-            stack.pop();
+            serialize.stack.pop();
             return Ok("null".to_string());
         };
         let mut parts = Vec::with_capacity(len as usize);
@@ -501,28 +498,18 @@ fn serialize_json_property<E: ExecContext>(
             let elem = ctx
                 .array_elem_at(value, i)
                 .unwrap_or_else(value::encode_undefined);
-            let s = serialize_json_property(
-                ctx,
-                &i.to_string(),
-                elem,
-                value,
-                replacer_is_fn,
-                replacer_fn,
-                property_list,
-                stack,
-                gap,
-                &next_indent,
-            )?;
+            let s =
+                serialize_json_property(ctx, &i.to_string(), elem, value, serialize, &next_indent)?;
             parts.push(if s == "undefined" {
                 "null".to_string()
             } else {
                 s
             });
         }
-        stack.pop();
+        serialize.stack.pop();
         return Ok(if parts.is_empty() {
             "[]".to_string()
-        } else if gap.is_empty() {
+        } else if serialize.gap.is_empty() {
             format!("[{}]", parts.join(","))
         } else {
             let inner = parts.join(&format!(",\n{next_indent}"));
@@ -531,17 +518,17 @@ fn serialize_json_property<E: ExecContext>(
     }
 
     if value::is_object(value) {
-        if stack.contains(&value) {
+        if serialize.stack.contains(&value) {
             return Err(ctx.make_type_error("Converting circular structure to JSON"));
         }
-        stack.push(value);
+        serialize.stack.push(value);
         let Some(slots) = ctx.own_enumerable_data_slots(value) else {
-            stack.pop();
+            serialize.stack.pop();
             return Ok("null".to_string());
         };
 
         let mut pairs = Vec::new();
-        if let Some(property_list) = property_list {
+        if let Some(property_list) = serialize.property_list {
             for name in property_list {
                 if let Some(prop_val) = ctx.read_property_for_render(value, name) {
                     if value::is_undefined(prop_val) {
@@ -552,15 +539,11 @@ fn serialize_json_property<E: ExecContext>(
                         name,
                         prop_val,
                         value,
-                        replacer_is_fn,
-                        replacer_fn,
-                        Some(property_list),
-                        stack,
-                        gap,
+                        serialize,
                         &next_indent,
                     )?;
                     if s != "undefined" {
-                        let colon = if gap.is_empty() { ":" } else { ": " };
+                        let colon = if serialize.gap.is_empty() { ":" } else { ": " };
                         pairs.push(format!("{}{}{}", json_escape_string(name), colon, s));
                     }
                 }
@@ -571,29 +554,19 @@ fn serialize_json_property<E: ExecContext>(
                     // Symbol 键或不可反查的 name_id：跳过
                     continue;
                 };
-                let s = serialize_json_property(
-                    ctx,
-                    &name,
-                    prop_val,
-                    value,
-                    replacer_is_fn,
-                    replacer_fn,
-                    None,
-                    stack,
-                    gap,
-                    &next_indent,
-                )?;
+                let s =
+                    serialize_json_property(ctx, &name, prop_val, value, serialize, &next_indent)?;
                 if s != "undefined" {
-                    let colon = if gap.is_empty() { ":" } else { ": " };
+                    let colon = if serialize.gap.is_empty() { ":" } else { ": " };
                     pairs.push(format!("{}{}{}", json_escape_string(&name), colon, s));
                 }
             }
         }
 
-        stack.pop();
+        serialize.stack.pop();
         return Ok(if pairs.is_empty() {
             "{}".to_string()
-        } else if gap.is_empty() {
+        } else if serialize.gap.is_empty() {
             format!("{{{}}}", pairs.join(","))
         } else {
             let inner = pairs.join(&format!(",\n{next_indent}"));

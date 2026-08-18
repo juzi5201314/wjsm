@@ -23,8 +23,8 @@ mod scope;
 mod wk_symbol_map;
 pub(crate) use function_builder::*;
 pub use lowerer_modules::{
-    BuiltinSegment, LoweringMetadata, ModuleKind, ModuleLoweringInput, ModuleMetadata,
-    lower_modules, lower_modules_with_builtin_seed, lower_modules_with_debug,
+    BuiltinSegment, LoweringMetadata, ModuleKind, ModuleLinking, ModuleLoweringInput,
+    ModuleMetadata, lower_modules, lower_modules_with_builtin_seed, lower_modules_with_debug,
     lower_modules_with_debug_meta,
 };
 pub(crate) use lowerer_types::*;

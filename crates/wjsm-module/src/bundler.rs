@@ -206,11 +206,7 @@ impl ModuleBundler {
 
         wjsm_semantic::lower_modules_with_builtin_seed(
             modules,
-            &link_result.import_map,
-            &link_result.dynamic_import_targets,
-            &link_result.export_names,
-            &link_result.dynamic_import_specifiers,
-            &link_result.re_export_map,
+            link_result.as_linking(),
             segment.to_semantic_segment(),
             self.emit_debug_checks,
         )
@@ -305,16 +301,8 @@ fn lower_graph(
             source: Some(std::sync::Arc::<str>::from(node.source.as_str())),
         });
     }
-    wjsm_semantic::lower_modules_with_debug(
-        modules,
-        &link_result.import_map,
-        &link_result.dynamic_import_targets,
-        &link_result.export_names,
-        &link_result.dynamic_import_specifiers,
-        &link_result.re_export_map,
-        emit_debug_checks,
-    )
-    .with_context(|| "Failed to lower modules")
+    wjsm_semantic::lower_modules_with_debug(modules, link_result.as_linking(), emit_debug_checks)
+        .with_context(|| "Failed to lower modules")
 }
 
 fn manifest_for_graph(
@@ -509,11 +497,7 @@ fn lower_runtime_graph(
 
     let program = wjsm_semantic::lower_modules_with_debug(
         modules,
-        &link_result.import_map,
-        &link_result.dynamic_import_targets,
-        &link_result.export_names,
-        &link_result.dynamic_import_specifiers,
-        &link_result.re_export_map,
+        link_result.as_linking(),
         emit_debug_checks,
     )
     .with_context(|| "Failed to lower modules")?;

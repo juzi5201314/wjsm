@@ -32,18 +32,14 @@ pub(super) fn stringify(
         value::encode_undefined()
     };
     let mut stack = HashSet::new();
-    match serialize_property(
-        ctx,
-        state,
-        "",
-        input,
-        holder,
+    let gap = indentation(state, space);
+    let mut serialize = JsonSerialize {
         replacer,
-        property_list.as_deref(),
-        &mut stack,
-        &indentation(state, space),
-        "",
-    ) {
+        property_list: property_list.as_deref(),
+        stack: &mut stack,
+        gap: &gap,
+    };
+    match serialize_property(ctx, state, "", input, holder, &mut serialize, "") {
         Ok(JsonOutput::Omitted) => value::encode_undefined(),
         Ok(JsonOutput::Text(text)) => state
             .intern_text(text, value::TAG_STRING)
@@ -57,21 +53,24 @@ enum JsonOutput {
     Text(String),
 }
 
-#[allow(clippy::too_many_arguments)]
+struct JsonSerialize<'a> {
+    replacer: Option<i64>,
+    property_list: Option<&'a [String]>,
+    stack: &'a mut HashSet<i64>,
+    gap: &'a str,
+}
+
 fn serialize_property(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     key: &str,
     encoded: i64,
     holder: i64,
-    replacer: Option<i64>,
-    property_list: Option<&[String]>,
-    stack: &mut HashSet<i64>,
-    gap: &str,
+    serialize: &mut JsonSerialize<'_>,
     current_indent: &str,
 ) -> Result<JsonOutput, i64> {
     let encoded = apply_to_json(ctx, state, key, encoded)?;
-    let encoded = if let Some(replacer) = replacer {
+    let encoded = if let Some(replacer) = serialize.replacer {
         let key = state
             .intern_text(key.into(), value::TAG_STRING)
             .ok_or_else(|| runtime::fail_dispatch(ctx))?;
@@ -79,27 +78,14 @@ fn serialize_property(
     } else {
         encoded
     };
-    serialize_value(
-        ctx,
-        state,
-        encoded,
-        replacer,
-        property_list,
-        stack,
-        gap,
-        current_indent,
-    )
+    serialize_value(ctx, state, encoded, serialize, current_indent)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn serialize_value(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     encoded: i64,
-    replacer: Option<i64>,
-    property_list: Option<&[String]>,
-    stack: &mut HashSet<i64>,
-    gap: &str,
+    serialize: &mut JsonSerialize<'_>,
     current_indent: &str,
 ) -> Result<JsonOutput, i64> {
     if value::is_f64(encoded) {
@@ -133,44 +119,22 @@ fn serialize_value(
         return Ok(JsonOutput::Text("null".into()));
     }
     if value::is_array(encoded) {
-        return serialize_array(
-            ctx,
-            state,
-            encoded,
-            replacer,
-            property_list,
-            stack,
-            gap,
-            current_indent,
-        );
+        return serialize_array(ctx, state, encoded, serialize, current_indent);
     }
     if value::is_js_object(encoded) || value::is_regexp(encoded) {
-        return serialize_object(
-            ctx,
-            state,
-            encoded,
-            replacer,
-            property_list,
-            stack,
-            gap,
-            current_indent,
-        );
+        return serialize_object(ctx, state, encoded, serialize, current_indent);
     }
     Ok(JsonOutput::Omitted)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn serialize_array(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     array: i64,
-    replacer: Option<i64>,
-    property_list: Option<&[String]>,
-    stack: &mut HashSet<i64>,
-    gap: &str,
+    serialize: &mut JsonSerialize<'_>,
     current_indent: &str,
 ) -> Result<JsonOutput, i64> {
-    if !stack.insert(array) {
+    if !serialize.stack.insert(array) {
         return Err(runtime::type_error(
             ctx,
             state,
@@ -183,7 +147,7 @@ fn serialize_array(
             .heap()
             .array_length(value::decode_handle(array))
             .map_err(|_| runtime::fail_dispatch(ctx))?;
-        let next_indent = next_indent(gap, current_indent);
+        let next_indent = next_indent(serialize.gap, current_indent);
         let mut elements = Vec::with_capacity(length as usize);
         for index in 0..length {
             let encoded = state
@@ -200,10 +164,7 @@ fn serialize_array(
                 &index.to_string(),
                 encoded,
                 array,
-                replacer,
-                property_list,
-                stack,
-                gap,
+                serialize,
                 &next_indent,
             )?;
             elements.push(match serialized {
@@ -211,24 +172,25 @@ fn serialize_array(
                 JsonOutput::Text(text) => text,
             });
         }
-        Ok(render_array(elements, gap, current_indent, &next_indent))
+        Ok(render_array(
+            elements,
+            serialize.gap,
+            current_indent,
+            &next_indent,
+        ))
     })();
-    stack.remove(&array);
+    serialize.stack.remove(&array);
     result.map(JsonOutput::Text)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn serialize_object(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,
-    replacer: Option<i64>,
-    property_list: Option<&[String]>,
-    stack: &mut HashSet<i64>,
-    gap: &str,
+    serialize: &mut JsonSerialize<'_>,
     current_indent: &str,
 ) -> Result<JsonOutput, i64> {
-    if !stack.insert(object) {
+    if !serialize.stack.insert(object) {
         return Err(runtime::type_error(
             ctx,
             state,
@@ -236,28 +198,18 @@ fn serialize_object(
         ));
     }
     let result = (|| {
-        let names = match property_list {
+        let names = match serialize.property_list {
             Some(names) => names.to_vec(),
             None => enumerable_property_names(ctx, state, object)?,
         };
-        let next_indent = next_indent(gap, current_indent);
+        let next_indent = next_indent(serialize.gap, current_indent);
         let mut properties = Vec::with_capacity(names.len());
         for name in names {
             let encoded = super::get_property(ctx, state, object, &name)?;
-            let serialized = serialize_property(
-                ctx,
-                state,
-                &name,
-                encoded,
-                object,
-                replacer,
-                property_list,
-                stack,
-                gap,
-                &next_indent,
-            )?;
+            let serialized =
+                serialize_property(ctx, state, &name, encoded, object, serialize, &next_indent)?;
             if let JsonOutput::Text(serialized) = serialized {
-                let separator = if gap.is_empty() { ":" } else { ": " };
+                let separator = if serialize.gap.is_empty() { ":" } else { ": " };
                 let name = state
                     .intern_text(name, value::TAG_STRING)
                     .and_then(|name| state.string(name).map(|name| name.to_json_quoted()))
@@ -265,9 +217,14 @@ fn serialize_object(
                 properties.push(format!("{name}{separator}{serialized}"));
             }
         }
-        Ok(render_object(properties, gap, current_indent, &next_indent))
+        Ok(render_object(
+            properties,
+            serialize.gap,
+            current_indent,
+            &next_indent,
+        ))
     })();
-    stack.remove(&object);
+    serialize.stack.remove(&object);
     result.map(JsonOutput::Text)
 }
 
