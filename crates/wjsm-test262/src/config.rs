@@ -197,6 +197,16 @@ pub fn should_run_test(
             features.extend(extra.iter().cloned());
         }
     }
+
+    // test262 upstream 中部分 Temporal 测试遗漏了 `features: [Temporal]` 声明，
+    // 但其路径位于 `Temporal/` 目录下且实际使用了 Temporal 全局对象。隐式注入
+    // 该 feature 让 allowlist 自然过滤——Temporal 当前不在 SUPPORTED_FEATURES 中。
+    if !features.iter().any(|f| f == "Temporal")
+        && test.path.components().any(|c| c.as_os_str() == "Temporal")
+    {
+        features.push("Temporal".to_string());
+    }
+
     if features.is_empty() {
         return true;
     }
@@ -215,7 +225,23 @@ fn feature_supported(feature: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::feature_supported;
+    use super::{feature_supported, should_run_test};
+    use crate::read::{MetaData, Test};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_test(path: &str, features: &[&str]) -> Test {
+        Test::new(
+            PathBuf::from(path),
+            MetaData {
+                features: features.iter().map(|s| s.to_string()).collect(),
+                includes: vec![],
+                flags: vec![],
+                negative: None,
+            },
+            String::new(),
+        )
+    }
 
     #[test]
     fn in_does_not_match_intl_prefix() {
@@ -224,5 +250,33 @@ mod tests {
         assert!(!feature_supported("Temporal"));
         assert!(feature_supported("Intl.Locale"));
         assert!(feature_supported("Intl.Locale-info"));
+    }
+
+    #[test]
+    fn temporal_path_injects_feature_when_missing() {
+        let include_features: HashMap<String, Vec<String>> = HashMap::new();
+
+        // 路径含 Temporal 段、frontmatter 未声明 feature → 隐式注入后被 allowlist 拦截
+        let test = make_test(
+            "test262/test/intl402/Temporal/PlainMonthDay/prototype/toLocaleString/basic.js",
+            &[],
+        );
+        assert!(!should_run_test(&test, false, &include_features));
+
+        // 路径含 Temporal 段、frontmatter 已声明 Intl.DateTimeFormat →
+        // 注入 Temporal 后 all(features) 仍为 false
+        let test = make_test(
+            "test262/test/intl402/Temporal/PlainMonthDay/prototype/toLocaleString/basic.js",
+            &["Intl.DateTimeFormat-datetimestyle"],
+        );
+        assert!(!should_run_test(&test, false, &include_features));
+
+        // --all 跳过过滤，路径含 Temporal 也照常运行
+        let test = make_test("test262/test/built-ins/Temporal/prop-desc.js", &[]);
+        assert!(should_run_test(&test, true, &include_features));
+
+        // 路径不含 Temporal 段、无 feature → 基础语法测试照常运行
+        let test = make_test("test262/test/language/expressions/addition/S11.6.1_A1.js", &[]);
+        assert!(should_run_test(&test, false, &include_features));
     }
 }

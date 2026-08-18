@@ -540,7 +540,9 @@ mod tests {
     fn build_test_source_preserves_runtime_gc_binding() {
         let source = build_test_source(&empty_test(), &empty_harness());
 
-        assert!(source.contains("var $262 = { gc: gc };"));
+        // 宿主已提供 `$262`，不应整对象覆盖；只在缺少 gc 时补充绑定。
+        assert!(source.contains("if ($262 && typeof $262.gc !== 'function') { $262.gc = gc; }"));
+        assert!(!source.contains("var $262 = { gc: gc };"));
         assert!(!source.contains("function gc()"));
     }
 }
