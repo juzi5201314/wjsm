@@ -6,10 +6,121 @@ use icu::experimental::displaynames::multi::{LanguageDisplayNames, RegionDisplay
 use icu::experimental::duration::options::DurationFormatterOptions;
 use icu::experimental::duration::{Duration, DurationFormatter, ValidatedDurationFormatterOptions};
 use icu::locale::Locale;
+use icu::locale::subtags::Script;
 use icu::locale::subtags::{Language, Region};
 use icu::segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
 use icu::segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
 use idna::domain_to_ascii;
+
+/// DisplayNames 的 type。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisplayNameType {
+    Language,
+    Region,
+    Script,
+    Currency,
+    Calendar,
+    DateTimeField,
+}
+
+pub struct OwnedDisplayNames {
+    locale: Locale,
+    kind: DisplayNameType,
+}
+
+impl OwnedDisplayNames {
+    pub fn try_new(locale: &str, kind: DisplayNameType) -> Result<Self, String> {
+        Ok(Self {
+            locale: Locale::try_from_str(locale).map_err(err)?,
+            kind,
+        })
+    }
+
+    pub fn of(&self, code: &str) -> Result<Option<String>, String> {
+        match self.kind {
+            DisplayNameType::Language => {
+                let names =
+                    LanguageDisplayNames::try_new((&self.locale).into(), Default::default())
+                        .map_err(err)?;
+                let parsed = Language::try_from_str(code).map_err(err)?;
+                Ok(names.of(parsed).map(str::to_string))
+            }
+            DisplayNameType::Region => {
+                let names = RegionDisplayNames::try_new((&self.locale).into(), Default::default())
+                    .map_err(err)?;
+                let parsed = Region::try_from_str(code).map_err(err)?;
+                Ok(names.of(parsed).map(str::to_string))
+            }
+            DisplayNameType::Script => {
+                let parsed = Script::try_from_str(code).map_err(err)?;
+                Ok(Some(parsed.to_string()))
+            }
+            DisplayNameType::Currency => {
+                if crate::available_currencies().contains(&code) {
+                    Ok(Some(code.to_owned()))
+                } else {
+                    Ok(None)
+                }
+            }
+            DisplayNameType::Calendar => {
+                if crate::available_calendars().contains(&code) {
+                    Ok(Some(code.to_owned()))
+                } else {
+                    Ok(None)
+                }
+            }
+            DisplayNameType::DateTimeField => Ok(Some(code.to_owned())),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SegmentGranularity {
+    Grapheme,
+    Word,
+    Sentence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OwnedSegmenter {
+    granularity: SegmentGranularity,
+}
+
+impl OwnedSegmenter {
+    pub fn new(granularity: SegmentGranularity) -> Self {
+        Self { granularity }
+    }
+
+    pub fn break_offsets(&self, text: &str) -> Vec<usize> {
+        match self.granularity {
+            SegmentGranularity::Grapheme => {
+                GraphemeClusterSegmenter::new().segment_str(text).collect()
+            }
+            SegmentGranularity::Word => {
+                WordSegmenter::new_auto(WordBreakInvariantOptions::default())
+                    .segment_str(text)
+                    .collect()
+            }
+            SegmentGranularity::Sentence => {
+                SentenceSegmenter::new(SentenceBreakInvariantOptions::default())
+                    .segment_str(text)
+                    .collect()
+            }
+        }
+    }
+
+    /// ECMA-402 分段下标是 UTF-16 码元。
+    pub fn break_utf16_offsets(&self, text: &str) -> Vec<u32> {
+        self.break_offsets(text)
+            .into_iter()
+            .map(|offset| {
+                text.get(..offset)
+                    .map(|prefix| prefix.encode_utf16().count() as u32)
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+}
 
 pub fn encoding_for_label(label: &str) -> Option<&'static Encoding> {
     Encoding::for_label(label.as_bytes())

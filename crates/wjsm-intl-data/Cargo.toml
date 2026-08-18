@@ -5,7 +5,10 @@ edition.workspace = true
 
 [dependencies]
 encoding_rs = { workspace = true }
+fixed_decimal = "0.7.2"
 icu = { version = "=2.2.0", features = ["compiled_data", "unstable"] }
 icu_normalizer = { version = "=2.2.0", features = ["compiled_data"] }
 idna = "1.1"
 sha2 = { workspace = true }
+tinystr = "0.8.4"
+writeable = "0.6.1"

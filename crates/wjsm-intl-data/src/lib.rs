@@ -4,43 +4,69 @@
 //! 只允许经本 crate 进入生产二进制。禁止 Cranelift / native ABI 类型。
 //! 数据由 rustc 链进 `wjsm` / `wjsm-exec` stub，不进 `.wjsm` 或 startup snapshot。
 //!
-//! debug 的 `wjsm` 只链 `normalize`（生产 `String.prototype.normalize` 需要）。
-//! locale / format / text 在 test 与发行构建中编译，避免 debug fixture 被 3s 门禁打死。
+//! Phase 2 之后 locale / format / text 始终编译：host-native 的 `Intl` API 会引用它们。
+//! `keep_compiled_data()` 仍只在发行构建强制留住尚未被 JS 路径引用的实验数据。
 
+pub mod aliases;
+pub mod casemap;
+pub mod coverage;
+pub mod datetime;
+mod datetime_range;
+pub mod duration;
+pub mod enumeration;
+pub mod format;
+pub mod locale;
 pub mod manifest;
 pub mod normalize;
-
-#[cfg(any(test, not(debug_assertions)))]
-pub mod coverage;
-#[cfg(any(test, not(debug_assertions)))]
-pub mod format;
-#[cfg(any(test, not(debug_assertions)))]
-pub mod locale;
-#[cfg(any(test, not(debug_assertions)))]
+pub mod number;
+mod number_parts;
+mod number_round;
+pub mod number_symbols;
+pub mod tag;
 pub mod text;
 
-#[cfg(any(test, not(debug_assertions)))]
 pub use encoding_rs;
-#[cfg(any(test, not(debug_assertions)))]
 pub use icu;
-#[cfg(any(test, not(debug_assertions)))]
 pub use idna;
 
-#[cfg(any(test, not(debug_assertions)))]
+pub use aliases::canonicalize_unicode_keyword;
+pub use casemap::{case_map, locale_case_map};
 pub use coverage::{CoverageError, LocaleCoverage, probe_locale};
+pub use datetime::{DateTimeFormatSpec, OwnedDateTimeFormatter};
+pub use duration::{DurationFormatSpec, DurationUnitSpec, parse_iso_duration};
+pub use enumeration::{
+    available_calendars, available_collations, available_currencies, available_numbering_systems,
+    available_time_zones, available_units, canonicalize_time_zone, collation_supported,
+    default_ignore_punctuation, is_well_formed_unit_identifier, supported_values,
+};
+pub use format::{
+    CollatorSensitivity, FormatPart, OwnedCollator, OwnedDecimalFormatter, OwnedDurationFormatter,
+    OwnedListFormatter, OwnedPluralRules, OwnedRelativeTimeFormatter, calendar, collator,
+    format_and_list, format_month, format_number, parse_timezone, plural_rules,
+};
+pub use locale::{
+    UnicodeExtensionMap, canonicalize_locale, canonicalize_unicode_locale_id, default_locale,
+    expand_likely_subtags, fallback_steps, is_available_locale, is_structurally_valid_language_tag,
+    is_unicode_language_id, minimize_likely_subtags, parse_locale, unicode_extensions,
+};
 pub use manifest::{DATA_MANIFEST, DataManifest, canonical_json, manifest_sha256};
 pub use normalize::{NormalizationForm, normalize};
+pub use number::{NumberFormatSpec, OwnedNumberFormatter};
+pub use number_symbols::{currency_digits, locale_nan, substitute_digits};
+pub use text::{
+    DisplayNameType, OwnedDisplayNames, OwnedSegmenter, SegmentGranularity, domain_to_ascii_uts46,
+    encoding_for_label, language_display_name, region_display_name, word_segment_count,
+};
 
 /// smoke matrix 使用的 locale；发行清单与测试共用。
 pub const SMOKE_LOCALES: &[&str] = &[
     "en-US", "zh-CN", "de-DE", "es-ES", "ar", "th", "tr", "ja-JP",
 ];
 
-/// 强制把 Phase 2/4 所需 compiled_data 留在 rustc 链接的 **发行** stub 里。
+/// 强制把 compiled_data 留在 rustc 链接的 **发行** stub 里。
 ///
 /// ICU4X 的 compiled_data 可被 DCE 删掉。发行构建用 `#[used]` constructor 指针
-/// 留住各类数据入口，避免 Intl JS API 落地前 locale 数据从 `wjsm-exec` 消失。
-/// debug `wjsm` 不编译 locale/format/text，只保留 normalize。
+/// 留住各类数据入口。debug `wjsm` 依赖 JS `Intl` 路径的实际引用保留数据。
 pub fn keep_compiled_data() {
     #[cfg(not(debug_assertions))]
     std::hint::black_box(KEEP_COMPILED_DATA_CTORS);

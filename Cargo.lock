@@ -4633,10 +4633,13 @@ name = "wjsm-intl-data"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+ "fixed_decimal",
  "icu",
  "icu_normalizer",
  "idna",
  "sha2",
+ "tinystr",
+ "writeable",
 ]
 
 [[package]]
