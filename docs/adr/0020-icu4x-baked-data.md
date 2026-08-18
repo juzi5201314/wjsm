@@ -49,9 +49,9 @@ ADR 0003 的 startup snapshot 是强制 restore 的最小种子，不是 ICU 数
 
 ### 4. 版本契约可审计
 
-`DataManifest` 固定记录 ICU4X、CLDR、Unicode、UTS #46、tzdb、ISO 4217（CLDR 货币）与 Encoding 版本。canonical JSON 的 SHA-256 纳入测试；升级数据必须改清单，禁止静默混用。
+`DataManifest` 固定记录 ICU4X、CLDR、Unicode、UTS #46、tzdb、ISO 4217（CLDR 货币）、Encoding 与 RegExp（`regress` Unicode property escapes）版本。canonical JSON 的 SHA-256 纳入测试；升级数据必须改清单，禁止静默混用。
 
-本阶段基线：ICU4X **2.2.0**、CLDR **48.2**、Unicode **17.0.0**、tzdb **2026a**、`idna` 1.1.0、`encoding_rs` 0.8.35。
+本阶段基线：ICU4X **2.2.0**、CLDR **48.2**、Unicode **17.0.0**、tzdb **2026a**、`idna` 1.1.0、`encoding_rs` 0.8.35、`regress` 0.11.1（RegExp UCD 同为 Unicode 17）。
 
 ### 5. Phase 2/3 消费本 crate，不另起数据 owner
 

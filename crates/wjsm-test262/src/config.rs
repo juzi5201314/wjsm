@@ -133,6 +133,12 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "DataView",
     "JSON",
     "eval",
+    // RegExp
+    "regexp-dotall",
+    "regexp-lookbehind",
+    "regexp-named-groups",
+    "regexp-match-indices",
+    "regexp-unicode-property-escapes",
     // Weak references
     "WeakRef",
     "FinalizationRegistry",

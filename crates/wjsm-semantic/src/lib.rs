@@ -17,6 +17,7 @@ const WK_SYMBOL_ASYNC_DISPOSE: u32 = wk_symbol::ASYNC_DISPOSE;
 mod function_builder;
 mod lowerer_modules;
 mod lowerer_types;
+mod regexp_early;
 mod scan_await;
 mod scope;
 mod wk_symbol_map;

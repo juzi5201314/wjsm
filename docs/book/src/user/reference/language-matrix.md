@@ -60,7 +60,7 @@
 | `Number` | 可用 | `toLocaleString` 委托 `Intl.NumberFormat` |
 | `BigInt` | 可用 | `toLocaleString` 委托 `Intl.NumberFormat` |
 | `Symbol` | 可用 | |
-| `RegExp`（含命名捕获组） | 可用 | 由 `regress` 提供 |
+| `RegExp`（含命名捕获组与 Unicode property escapes） | 可用 | 由 `regress` 提供；`\p{...}` / `\P{...}` 字符属性需 `/u`；UCD Unicode 17 与 Phase 1 manifest 一致。`Script(_Extensions)=Unknown`/`Zzzz` 与 `regexp-v-flag` property-of-strings 暂未纳入（regress 缺口） |
 | `JSON` | 可用 | |
 | TypedArray、`ArrayBuffer`、`SharedArrayBuffer` | 可用 | 原型方法多数仅调用点可用；TypedArray `toLocaleString` 委托与 Array 相同的 Intl 路径 |
 | `DataView` | 可用 | 访问器取值得到 `undefined` |

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+regress = { workspace = true }
 swc_core = { workspace = true }
 thiserror = { workspace = true }
 wjsm-parser = { path = "../wjsm-parser" }

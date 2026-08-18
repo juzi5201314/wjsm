@@ -11,6 +11,7 @@ Phase 2/3 已把 JS `Intl` 与 ECMA-262 locale 敏感方法接到本 crate。ICU
 | ICU4X | 2.2.0（`compiled_data` + `unstable`） |
 | CLDR | 48.2 |
 | Unicode / UCD | 17.0.0 |
+| RegExp property escapes | regress 0.11.1（Unicode 17.0.0；与 UCD 同版本） |
 | UTS #46 | Unicode 17.0，经 `idna` 1.1.0（WHATWG URL 参数化） |
 | IANA tzdb | 2026a |
 | ISO 4217 | CLDR 48.2 货币数据 |
@@ -39,6 +40,7 @@ smoke locales：`en-US`、`zh-CN`、`de-DE`、`es-ES`、`ar`、`th`、`tr`、`ja
 | unit | `UnitsFormatter` | experimental |
 | IDNA | `domain_to_ascii_uts46` / `domain_to_unicode_uts46` | UTS #46；供 `node:url` 与全局 `URL` |
 | encoding labels | `encoding_rs::Encoding::for_label_no_replacement` | Phase 4 `TextDecoder` 经 `encoding_for_label` 消费 |
+| RegExp `\p{...}` | `regress` 0.11（host-native / semantic early error） | UCD 与 manifest `unicode` 同为 17.0.0；不另建 fallback |
 
 ## 分发路径
 

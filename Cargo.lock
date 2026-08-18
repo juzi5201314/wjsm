@@ -4700,6 +4700,7 @@ dependencies = [
 name = "wjsm-semantic"
 version = "0.1.0"
 dependencies = [
+ "regress",
  "swc_core",
  "thiserror",
  "wjsm-ir",

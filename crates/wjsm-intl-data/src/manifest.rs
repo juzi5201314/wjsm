@@ -12,11 +12,13 @@ pub struct DataManifest {
     pub tzdb: &'static str,
     pub iso4217: &'static str,
     pub encoding: &'static str,
+    pub regexp: &'static str,
     pub coverage: &'static str,
     pub smoke_locales: &'static [&'static str],
 }
 
 /// ICU4X 2.2 compiled_data：CLDR 48.2、TZDB 2026a、Unicode 17（CLDR 48 基线）。
+/// RegExp Unicode property escapes 由 `regress` 0.11 提供，UCD 同为 Unicode 17。
 pub const DATA_MANIFEST: DataManifest = DataManifest {
     icu4x: "2.2.0",
     cldr: "48.2",
@@ -25,17 +27,18 @@ pub const DATA_MANIFEST: DataManifest = DataManifest {
     tzdb: "2026a",
     iso4217: "CLDR 48.2",
     encoding: "WHATWG Encoding Standard (encoding_rs 0.8.35)",
+    regexp: "regress 0.11.1 (Unicode 17.0.0 property escapes)",
     coverage: "full",
     smoke_locales: crate::SMOKE_LOCALES,
 };
 
 /// 字段按字母序排列的紧凑 JSON，作为稳定 hash 输入。
 pub const CANONICAL_JSON: &str = concat!(
-    r#"{"cldr":"48.2","coverage":"full","encoding":"WHATWG Encoding Standard (encoding_rs 0.8.35)","icu4x":"2.2.0","iso4217":"CLDR 48.2","smoke_locales":["en-US","zh-CN","de-DE","es-ES","ar","th","tr","ja-JP"],"tzdb":"2026a","unicode":"17.0.0","uts46":"Unicode 17.0 UTS #46 (idna 1.1.0 / WHATWG URL)"}"#
+    r#"{"cldr":"48.2","coverage":"full","encoding":"WHATWG Encoding Standard (encoding_rs 0.8.35)","icu4x":"2.2.0","iso4217":"CLDR 48.2","regexp":"regress 0.11.1 (Unicode 17.0.0 property escapes)","smoke_locales":["en-US","zh-CN","de-DE","es-ES","ar","th","tr","ja-JP"],"tzdb":"2026a","unicode":"17.0.0","uts46":"Unicode 17.0 UTS #46 (idna 1.1.0 / WHATWG URL)"}"#
 );
 
 pub const DATA_MANIFEST_SHA256: &str =
-    "d3dc1f51aecf0bc0d60cb04f97a8e585f84a2458805e3553049fd7e3270190d6";
+    "ab4855fe416ff1264b388ce52a40ff0f238944846eeccfdad114c723cfe219df";
 
 pub fn canonical_json() -> &'static str {
     CANONICAL_JSON
@@ -66,6 +69,7 @@ mod tests {
         assert!(json.contains(DATA_MANIFEST.unicode));
         assert!(json.contains(DATA_MANIFEST.tzdb));
         assert!(json.contains(DATA_MANIFEST.coverage));
+        assert!(json.contains(DATA_MANIFEST.regexp));
         for locale in DATA_MANIFEST.smoke_locales {
             assert!(json.contains(locale), "missing {locale}");
         }

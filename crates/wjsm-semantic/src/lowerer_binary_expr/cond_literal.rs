@@ -125,10 +125,16 @@ impl Lowerer {
             }
             swc_ast::Lit::Bool(b) => Constant::Bool(b.value),
             swc_ast::Lit::BigInt(b) => Constant::BigInt(b.value.to_str_radix(10)),
-            swc_ast::Lit::Regex(regex) => Constant::RegExp {
-                pattern: regex.exp.to_string(),
-                flags: regex.flags.to_string(),
-            },
+            swc_ast::Lit::Regex(regex) => {
+                let pattern = regex.exp.to_string();
+                let flags = regex.flags.to_string();
+                // 字面量 early error：非法 property escape / flag 在 lower 期失败（exit 1）。
+                if let Err(message) = crate::regexp_early::validate_regexp_literal(&pattern, &flags)
+                {
+                    return Err(self.error(lit.span(), format!("SyntaxError: {message}")));
+                }
+                Constant::RegExp { pattern, flags }
+            }
             swc_ast::Lit::Null(_) => Constant::Null,
             _ => {
                 return Err(self.error(
