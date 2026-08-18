@@ -51,8 +51,6 @@ impl ManagedHeapLayout {
         self.object_heap_end
     }
 
-    // 由 HandleTableV2 使用；随 GC 算法层迁移后启用。
-    #[allow(dead_code)]
     pub(crate) fn contains_object_address(&self, address: u64) -> bool {
         (self.object_heap_base..self.object_heap_end).contains(&address)
     }

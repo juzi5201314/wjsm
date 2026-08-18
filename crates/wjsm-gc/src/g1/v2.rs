@@ -1,7 +1,6 @@
 //! memory64 V2 G1 policy（后端无关，`M: GrowableHeapMemory + Clone`）。
 //!
 //! region identity 直接使用 `ManagedAllocator` page，evacuation 仅更新 atomic handle
-//! entry；legacy `RegionSpace` 保留给 Task 15 前的 active default path。
 
 mod collection;
 mod types;

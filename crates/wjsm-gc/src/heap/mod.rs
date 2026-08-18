@@ -5,23 +5,15 @@
 
 use std::sync::Arc;
 
-// 以下子模块是 GC 算法层（HandleTableV2 / MarkSweepV2 / G1V2 / ZgcV2）的预留依赖；
-// 算法层迁完后它们被完全使用。当前仅 heap 纯模块落地，故暂允 dead_code。
-#[allow(dead_code)]
 mod allocator;
-#[allow(dead_code)]
 mod bitmap;
-#[allow(dead_code)]
 mod epoch;
 mod handle;
-#[allow(dead_code)]
 mod handle_entry;
 mod layout;
 mod memory;
 mod native_memory;
-#[allow(dead_code)]
 mod object_map;
-#[allow(dead_code)]
 mod page;
 pub mod platform;
 mod word;

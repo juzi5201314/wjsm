@@ -12,7 +12,6 @@ pub mod api;
 pub mod g1;
 pub mod heap;
 pub mod heap_access;
-pub mod mark_bitmap;
 pub mod mark_sweep;
 pub mod shape;
 pub mod stop_the_world;
@@ -43,7 +42,6 @@ pub use heap::{
 pub use heap_access::{
     CollectorHeapCapability, HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property,
 };
-pub use mark_bitmap::MarkBitmap;
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
 pub use registry::GcAlgorithmKind;

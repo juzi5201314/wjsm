@@ -63,8 +63,6 @@ const _: () = {
     assert!(HANDLE_STATE_STABLE_MIN as u32 == abi::HANDLE_STATE_STABLE_MIN);
 };
 
-// `stable_for`/`relocating_for`/`is_stable` 等由 HandleTableV2 使用；随 GC 算法层迁移后启用。
-#[allow(dead_code)]
 impl HandleState {
     pub const fn from_raw(raw: u16) -> Option<Self> {
         match raw {
@@ -110,8 +108,6 @@ impl HandleState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ColoredHandleEntry(u64);
 
-// `new`/`from_raw`/`stable_for` 等由 HandleTableV2 使用；HandleTableV2 随 GC 算法层迁移后启用。
-#[allow(dead_code)]
 impl ColoredHandleEntry {
     pub(crate) fn new(address: u64, state: HandleState) -> Result<Self, HandleTableError> {
         if address >= ADDRESS_LIMIT {
