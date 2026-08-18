@@ -1,12 +1,11 @@
 use swc_core::ecma::ast as swc_ast;
-use wjsm_ir::{BasicBlock, BasicBlockId, Function, Instruction, Terminator, ValueId};
+use wjsm_ir::{BasicBlock, BasicBlockId, Instruction, Terminator, ValueId};
 
 // ── CFG Builder ─────────────────────────────────────────────────────────
 
 /// Internal helper that encapsulates CFG construction for one function.
 pub(crate) struct FunctionBuilder {
     _name: String,
-    _entry: BasicBlockId,
     pub(crate) blocks: Vec<BasicBlock>,
     has_eval: bool,
     /// 该函数调用的"已知函数声明"变量名→FunctionId（Layer 3 callee 分析）。
@@ -18,7 +17,6 @@ impl FunctionBuilder {
     pub(crate) fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
         Self {
             _name: name.into(),
-            _entry: entry,
             blocks: vec![BasicBlock::new(entry)],
             has_eval: false,
             known_callee_vars: std::collections::HashMap::new(),
@@ -118,14 +116,6 @@ impl FunctionBuilder {
                 StmtFlow::Open(target)
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn finish(self) -> Function {
-        let entry = self._entry;
-        let mut function = Function::new(self._name, entry);
-        function.set_has_eval(self.has_eval);
-        function
     }
 
     pub(crate) fn into_blocks(mut self) -> Vec<BasicBlock> {

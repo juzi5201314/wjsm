@@ -259,11 +259,11 @@ impl ScopeTree {
         }
     }
 
-    /// 赋值时查找变量：组合 `check_mutable` 和 `lookup`，
+    /// 赋值时查找变量：组合 const 检查与作用域解析，
     /// 一次 scope chain 遍历完成 const 检查 + TDZ 检查。
     ///
     /// # 性能优化
-    /// `lower_assign` 原本先调 `check_mutable` 再调 `lookup`，
+    /// `lower_assign` 原本先做独立 const 检查再查找绑定，
     /// 分别遍历 scope chain 各一次。合并为一次遍历减少冗余的 HashMap 查找，
     /// 在深层嵌套作用域中有最多约 50% 的查找节省。
     pub(crate) fn lookup_for_assign(&self, name: &str) -> Result<(usize, VarKind), String> {
@@ -287,29 +287,6 @@ impl ScopeTree {
             }
         }
     }
-    /// Check that this variable is not `const` before reassignment.
-    /// 注意：`lower_assign` 现在使用 `lookup_for_assign` 在一次遍历中同时完成
-    /// const 检查和 scope 解析，此方法保留以供未来使用。
-    #[allow(dead_code)]
-    pub(crate) fn check_mutable(&self, name: &str) -> Result<(), String> {
-        let mut cursor = self.current;
-        loop {
-            let scope = &self.arenas[cursor];
-            if let Some(info) = scope.variables.get(name) {
-                if matches!(info.kind, VarKind::Const) {
-                    return Err(format!(
-                        "cannot reassign a const-declared variable `{name}`"
-                    ));
-                }
-                return Ok(());
-            }
-            match scope.parent {
-                Some(parent) => cursor = parent,
-                None => return Err(format!("undeclared identifier `{name}`")),
-            }
-        }
-    }
-
     /// 返回最近的 var 声明作用域。模块顶层与函数体都拥有独立 var 环境。
     fn nearest_var_scope(&self) -> Result<usize, String> {
         let mut cursor = self.current;

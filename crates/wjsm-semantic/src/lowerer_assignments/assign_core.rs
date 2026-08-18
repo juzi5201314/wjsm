@@ -351,7 +351,7 @@ impl Lowerer {
         };
 
         // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
-        // 避免 check_mutable and lookup 各自遍历 scope chain 的冗余。
+        // 避免独立的 const 检查与 lookup 各自遍历 scope chain 的冗余。
         let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
             Ok(found) => found,
             Err(msg)

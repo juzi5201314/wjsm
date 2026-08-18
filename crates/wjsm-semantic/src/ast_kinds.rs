@@ -20,45 +20,6 @@ pub(crate) fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
 
 // ── Kind strings ────────────────────────────────────────────────────────
 
-#[allow(dead_code)]
-pub(crate) fn stmt_kind(stmt: &swc_ast::Stmt) -> &'static str {
-    match stmt {
-        swc_ast::Stmt::Block(_) => "block",
-        swc_ast::Stmt::Empty(_) => "empty",
-        swc_ast::Stmt::Debugger(_) => "debugger",
-        swc_ast::Stmt::With(_) => "with",
-        swc_ast::Stmt::Return(_) => "return",
-        swc_ast::Stmt::Labeled(_) => "labeled",
-        swc_ast::Stmt::Break(_) => "break",
-        swc_ast::Stmt::Continue(_) => "continue",
-        swc_ast::Stmt::If(_) => "if",
-        swc_ast::Stmt::Switch(_) => "switch",
-        swc_ast::Stmt::Throw(_) => "throw",
-        swc_ast::Stmt::Try(_) => "try",
-        swc_ast::Stmt::While(_) => "while",
-        swc_ast::Stmt::DoWhile(_) => "do-while",
-        swc_ast::Stmt::For(_) => "for",
-        swc_ast::Stmt::ForIn(_) => "for-in",
-        swc_ast::Stmt::ForOf(_) => "for-of",
-        swc_ast::Stmt::Decl(_) => "decl",
-        swc_ast::Stmt::Expr(_) => "expr",
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn decl_kind(decl: &swc_ast::Decl) -> &'static str {
-    match decl {
-        swc_ast::Decl::Class(_) => "class",
-        swc_ast::Decl::Fn(_) => "function",
-        swc_ast::Decl::Var(_) => "var",
-        swc_ast::Decl::Using(_) => "using",
-        swc_ast::Decl::TsInterface(_) => "ts-interface",
-        swc_ast::Decl::TsTypeAlias(_) => "ts-type-alias",
-        swc_ast::Decl::TsEnum(_) => "ts-enum",
-        swc_ast::Decl::TsModule(_) => "ts-module",
-    }
-}
-
 pub(crate) fn expr_kind(expr: &swc_ast::Expr) -> &'static str {
     match expr {
         swc_ast::Expr::This(_) => "this",
@@ -111,21 +72,6 @@ pub(crate) fn literal_kind(lit: &swc_ast::Lit) -> &'static str {
         swc_ast::Lit::BigInt(_) => "bigint",
         swc_ast::Lit::Regex(_) => "regex",
         swc_ast::Lit::JSXText(_) => "jsx-text",
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn module_decl_kind(decl: &swc_ast::ModuleDecl) -> &'static str {
-    match decl {
-        swc_ast::ModuleDecl::Import(_) => "import",
-        swc_ast::ModuleDecl::ExportDecl(_) => "export-decl",
-        swc_ast::ModuleDecl::ExportNamed(_) => "export-named",
-        swc_ast::ModuleDecl::ExportDefaultDecl(_) => "export-default-decl",
-        swc_ast::ModuleDecl::ExportDefaultExpr(_) => "export-default-expr",
-        swc_ast::ModuleDecl::ExportAll(_) => "export-all",
-        swc_ast::ModuleDecl::TsImportEquals(_) => "ts-import-equals",
-        swc_ast::ModuleDecl::TsExportAssignment(_) => "ts-export-assignment",
-        swc_ast::ModuleDecl::TsNamespaceExport(_) => "ts-namespace-export",
     }
 }
 
