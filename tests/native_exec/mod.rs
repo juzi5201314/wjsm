@@ -6,7 +6,32 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
-pub fn scratch_dir() -> PathBuf {
+#[derive(Debug)]
+pub struct ScratchDir {
+    path: PathBuf,
+}
+
+impl std::ops::Deref for ScratchDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for ScratchDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+pub fn scratch_dir() -> ScratchDir {
     let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
     let path = std::env::temp_dir()
         .join("wjsm-test-cache")
@@ -14,7 +39,7 @@ pub fn scratch_dir() -> PathBuf {
         .join(format!("{}-{id}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("scratch dir");
-    path
+    ScratchDir { path }
 }
 
 pub fn exe_name(name: &str) -> String {
@@ -57,8 +82,7 @@ pub fn build_wjsm(args: &[&str], output: &Path) {
 pub fn relocate_and_hide_sources(packed: &Path, project: &Path, run_dir: &Path) -> PathBuf {
     std::fs::create_dir_all(run_dir).expect("run dir");
     let relocated = run_dir.join(packed.file_name().expect("exe name"));
-    std::fs::copy(packed, &relocated).expect("copy exe");
-    let _ = std::fs::remove_file(packed);
+    std::fs::rename(packed, &relocated).expect("move exe");
     std::fs::remove_dir_all(project).expect("hide source tree");
     relocated
 }

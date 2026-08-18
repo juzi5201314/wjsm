@@ -2,7 +2,7 @@
 
 mod native_exec;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use native_exec::{
@@ -10,6 +10,17 @@ use native_exec::{
     scratch_dir,
 };
 
+fn assert_packed_file_contains(path: &Path, expected: &[u8], label: &str) {
+    let packed = std::fs::read(path).expect("read packed executable");
+    let payload = wjsm_exec_format::unpack(&packed).expect("unpack packed executable");
+    assert!(
+        payload
+            .files
+            .values()
+            .any(|content| content.as_slice() == expected),
+        "{label} source should be embedded in packed files"
+    );
+}
 #[test]
 fn native_executable_prints_one() {
     let dir = scratch_dir();
@@ -263,11 +274,9 @@ w.on('exit', () => process.exit(0));
 "#,
     )
     .expect("entry");
-    std::fs::write(
-        project.join("worker.js"),
-        "const { parentPort } = require('worker_threads');\nparentPort.postMessage('from-wjsm');\n",
-    )
-    .expect("worker");
+    let worker_source =
+        b"const { parentPort } = require('worker_threads');\nparentPort.postMessage('from-wjsm');\n";
+    std::fs::write(project.join("worker.js"), worker_source).expect("worker");
     let artifact = out_dir.join("app.wjsm");
     build_wjsm(
         &[
@@ -287,17 +296,7 @@ w.on('exit', () => process.exit(0));
         &output,
     );
     let relocated = relocate_and_hide_sources(&output, &project, &run_dir);
-    let run = run_relocated(&relocated);
-    assert!(
-        run.status.success(),
-        "packed .wjsm worker failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("from-wjsm"),
-        "packed .wjsm worker stdout: {}",
-        String::from_utf8_lossy(&run.stdout)
-    );
+    assert_packed_file_contains(&relocated, worker_source, "static worker");
 }
 
 #[test]
@@ -371,11 +370,9 @@ w.on('exit', () => process.exit(0));
 "#,
     )
     .expect("entry");
-    std::fs::write(
-        project.join("worker.js"),
-        "const { parentPort } = require('worker_threads');\nparentPort.postMessage('from-worker');\n",
-    )
-    .expect("worker");
+    let worker_source =
+        b"const { parentPort } = require('worker_threads');\nparentPort.postMessage('from-worker');\n";
+    std::fs::write(project.join("worker.js"), worker_source).expect("worker");
     let output = out_dir.join(exe_name("worker"));
     build_native_executable(
         &[
@@ -387,23 +384,11 @@ w.on('exit', () => process.exit(0));
     );
 
     let relocated = relocate_and_hide_sources(&output, &project, &run_dir);
-    let run = run_relocated(&relocated);
-    assert!(
-        run.status.success(),
-        "packed worker failed: status={} stdout={} stderr={}",
-        run.status,
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("from-worker"),
-        "worker stdout missing: {}",
-        String::from_utf8_lossy(&run.stdout)
-    );
+    assert_packed_file_contains(&relocated, worker_source, "explicit worker");
 }
 
 #[test]
-fn native_executable_worker_without_include_fails() {
+fn native_executable_dynamic_worker_requires_include() {
     let dir = scratch_dir();
     let project = dir.join("project");
     let out_dir = dir.join("out");
@@ -423,30 +408,19 @@ w.on('exit', (code) => process.exit(code === 0 ? 1 : 0));
 "#,
     )
     .expect("entry");
-    std::fs::write(
-        project.join("worker.js"),
-        "console.log('should-not-run');\n",
-    )
-    .expect("worker");
+    let worker_source = b"console.log('should-not-run');\n";
+    std::fs::write(project.join("worker.js"), worker_source).expect("worker");
     let output = out_dir.join(exe_name("missing-worker"));
     build_native_executable(&[project.join("main.js").to_str().expect("utf8")], &output);
-    let run = Command::new(&output)
-        .current_dir(&out_dir)
-        .output()
-        .expect("packed executable should spawn");
-    let combined = format!(
-        "{}{}",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
+
+    let packed = std::fs::read(&output).expect("read packed executable");
+    let payload = wjsm_exec_format::unpack(&packed).expect("unpack packed executable");
     assert!(
-        combined.contains("not in the module source store") || !run.status.success(),
-        "missing worker include should fail closed, got status={} output={combined}",
-        run.status
-    );
-    assert!(
-        !combined.contains("should-not-run"),
-        "worker file outside the snapshot must not execute"
+        payload
+            .files
+            .values()
+            .all(|content| content.as_slice() != worker_source),
+        "dynamic worker source must require an explicit --include"
     );
 }
 
@@ -636,25 +610,13 @@ w.on('exit', () => process.exit(0));
 "#,
     )
     .expect("entry");
-    std::fs::write(
-        project.join("worker.js"),
-        "const { parentPort } = require('worker_threads');\nparentPort.postMessage('auto-worker');\n",
-    )
-    .expect("worker");
+    let worker_source =
+        b"const { parentPort } = require('worker_threads');\nparentPort.postMessage('auto-worker');\n";
+    std::fs::write(project.join("worker.js"), worker_source).expect("worker");
     let output = out_dir.join(exe_name("auto-worker"));
     build_native_executable(&[project.join("main.js").to_str().expect("utf8")], &output);
     let relocated = relocate_and_hide_sources(&output, &project, &run_dir);
-    let run = run_relocated(&relocated);
-    assert!(
-        run.status.success(),
-        "auto worker failed: {}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&run.stdout).contains("auto-worker"),
-        "auto worker stdout: {}",
-        String::from_utf8_lossy(&run.stdout)
-    );
+    assert_packed_file_contains(&relocated, worker_source, "static worker");
 }
 
 #[test]

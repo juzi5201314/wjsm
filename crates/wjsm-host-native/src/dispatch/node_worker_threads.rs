@@ -1297,4 +1297,22 @@ mod tests {
             "worker 文件必须走 builtin 分段缓存路径"
         );
     }
+
+    #[test]
+    fn missing_worker_in_snapshot_store_fails_closed() {
+        let files = std::collections::BTreeMap::from([(
+            "main.js".to_string(),
+            b"console.log('main');\n".to_vec(),
+        )]);
+        let store = ModuleSourceStore::snapshot(files).expect("snapshot store");
+        let error = match compile_worker_artifact("./worker.js", false, &store, Path::new(".")) {
+            Ok(_) => panic!("missing worker must not compile"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error,
+            "worker entry './worker.js' is not in the module source store"
+        );
+    }
 }
