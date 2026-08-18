@@ -4,10 +4,8 @@
 //! `wjsm-host-native`。
 
 pub mod barrier;
-pub mod color;
 pub mod concurrent_relocate;
 pub mod director;
-pub mod page;
 pub mod remset;
 pub mod runtime;
 

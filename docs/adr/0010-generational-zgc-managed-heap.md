@@ -47,7 +47,7 @@ ADR 0005 established pluggable mark-sweep / G1 / ZGC under a safepoint-budgeted,
 
 | Owner | Responsibility |
 |---|---|
-| `zgc::color` / barrier emit | load/store barriers, good color, SATB/buffer flush |
+| barrier emit / color helpers | load/store barriers, good color, SATB/buffer flush |
 | `GenerationalZgc::run_cycle` | concurrent young/old mark, promotion, relocation-set selection, and cycle state |
 | `ConcurrentRelocator` | relocation CAS, copy/heal, and epoch-delayed source reclaim |
 | `remset` / page metadata | precise remembered edges, generation/page accounting, and promotion destinations |
