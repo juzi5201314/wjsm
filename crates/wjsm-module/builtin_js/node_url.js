@@ -1,5 +1,18 @@
 import { stringify as qsStringify } from 'node:querystring';
 
+function getIdna() {
+  const host = globalThis.__wjsm_idna;
+  if (!host) throw new Error('wjsm internal idna host bridge is not installed');
+  return host;
+}
+
+function canonicalizeHostname(hostname) {
+  if (!hostname) return hostname;
+  const ascii = getIdna().domainToASCII(hostname);
+  // Node：非空 host 的 IDNA 失败映射为空串，URL/legacy parse 均抛 Invalid URL。
+  if (ascii === '') throw new TypeError('Invalid URL');
+  return ascii;
+}
 
 function hexValue(code) {
   if (code >= 48 && code <= 57) return code - 48;
@@ -149,6 +162,7 @@ function parseAbsolute(input) {
   let port = '';
   const colon = hostname.lastIndexOf(':');
   if (colon >= 0) { port = hostname.substring(colon + 1, hostname.length); hostname = hostname.substring(0, colon); }
+  hostname = canonicalizeHostname(hostname);
   return { protocol, hostname, port, pathname, search, hash };
 }
 
@@ -247,18 +261,16 @@ export function resolve(from, to) { return new URL(to, from).href; }
 export function pathToFileURL(path) { return new URL('file://' + percentEncode(path, true)); }
 export function fileURLToPath(url) { const u = url && url._isURL ? url : new URL(String(url)); return String(u.pathname).replace(/%20/g, ' '); }
 
-function encodePunycodeLabel(label) { const lower = label.toLowerCase(); if (lower === 'mañana') return 'xn--maana-pta'; return lower; }
-function decodePunycodeLabel(label) { const lower = label.toLowerCase(); if (lower === 'xn--maana-pta') return 'mañana'; return lower; }
 export function domainToASCII(domain) {
-  const labels = String(domain).split('.');
-  for (let i = 0; i < labels.length; i = i + 1) labels[i] = encodePunycodeLabel(labels[i]);
-  return labels.join('.');
+  return getIdna().domainToASCII(domain);
 }
 export function domainToUnicode(domain) {
-  const labels = String(domain).split('.');
-  for (let i = 0; i < labels.length; i = i + 1) labels[i] = decodePunycodeLabel(labels[i]);
-  return labels.join('.');
+  return getIdna().domainToUnicode(domain);
 }
 
 const urlDefault = { URL, URLSearchParams, parse, format, resolve, pathToFileURL, fileURLToPath, domainToASCII, domainToUnicode };
 export default urlDefault;
+
+// Node 兼容：与模块导出共享同一构造器的全局 wiring。
+globalThis.URL = URL;
+globalThis.URLSearchParams = URLSearchParams;

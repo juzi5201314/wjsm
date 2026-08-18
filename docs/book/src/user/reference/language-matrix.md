@@ -68,7 +68,7 @@
 | `WeakRef`、`FinalizationRegistry` | 可用 | |
 | `Date` | 可用 | `toLocale*` 委托 `Intl.DateTimeFormat` |
 | `Intl` | 可用 | ECMA-402 核心构造器与 `getCanonicalLocales` / `supportedValuesOf`；不含 Temporal intl402、`intl-normative-optional` 遗留构造器 |
-| `URL` / `URLSearchParams` | 未提供 | 用 `node:url`、`node:querystring` |
+| `URL` / `URLSearchParams` | 支持（含 IDN） | 全局与 `node:url` 同引用 |
 
 ## TypeScript
 

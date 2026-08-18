@@ -37,8 +37,8 @@ smoke locales：`en-US`、`zh-CN`、`de-DE`、`es-ES`、`ar`、`th`、`tr`、`ja
 | segmenter | `WordSegmenter` / grapheme / sentence | 含泰文、日文分词数据 |
 | duration | `duration.rs` | JS `Intl.DurationFormat` 走规范 `PartitionDurationFormatPattern`，不直接用 ICU `DurationFormatter` 输出 |
 | unit | `UnitsFormatter` | experimental |
-| IDNA | `idna::domain_to_ascii` | UTS #46 |
-| encoding labels | `encoding_rs::Encoding::for_label` | 供 Phase 4 TextDecoder 消费；当前 JS `TextDecoder` 仍是 UTF-8-only |
+| IDNA | `domain_to_ascii_uts46` / `domain_to_unicode_uts46` | UTS #46；供 `node:url` 与全局 `URL` |
+| encoding labels | `encoding_rs::Encoding::for_label_no_replacement` | Phase 4 `TextDecoder` 经 `encoding_for_label` 消费 |
 
 ## 分发路径
 

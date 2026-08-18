@@ -1,6 +1,6 @@
 # Node.js 兼容矩阵
 
-wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
+wjsm 内置 25 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
 
 | 模块 | 导出项 | 备注 |
 | --- | --- | --- |
@@ -8,7 +8,8 @@ wjsm 内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。
 | `util` | 10 | 含 `inspect` |
 | `events` | 2 | `EventEmitter` 及默认导出 |
 | `assert` | 19 | |
-| `url` | 9 | 全局 `URL` 不可用，用本模块 |
+| `buffer` | 2 | 导出全局 `Buffer` 与 `transcode` |
+| `url` | 9 | 含 IDN；全局 `URL` / `URLSearchParams` 可用 |
 | `querystring` | 4 | |
 | `os` | 14 | |
 | `fs` | 20 | 受文件系统沙箱约束 |

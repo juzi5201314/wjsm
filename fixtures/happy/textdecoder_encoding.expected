@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+utf-8 false false
+windows-1252 €
+gbk 中
+"a"
+"﻿a"
+true
+""
+"é"
+""
+"あ"
+function true true true
+hi
+--- stderr ---

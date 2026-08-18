@@ -8,7 +8,8 @@ use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
 use super::buffers::NativeArrayBuffer;
-use super::runtime::{fail_dispatch, render_value, to_number};
+use super::modules;
+use super::runtime::{fail_dispatch, render_value, to_number, to_string_coerced};
 use super::typedarray::{NativeTypedArray, TypedArrayKind};
 use crate::{NativeAgentState, NativeCallableKind};
 
@@ -213,6 +214,170 @@ pub(crate) fn call_static(
                 .is_some_and(|input| state.buffers.contains_key(&value::decode_handle(*input))),
         ),
     }
+}
+
+/// 安装 `node:buffer` 使用的 host 桥（目前仅 `transcode`）。
+pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
+    if let Some(bridge) = state.node_buffer_bridge {
+        return Some(bridge);
+    }
+    let bridge = state.allocate_object(1, false).ok()?;
+    let callable = state.native_callable(NativeCallableKind::BufferTranscode)?;
+    modules::set_named_property(state, bridge, "transcode", callable).ok()?;
+    state.node_buffer_bridge = Some(bridge);
+    Some(bridge)
+}
+
+/// `import { transcode } from 'node:buffer'`：受限编码集合上的再编码。
+pub(crate) fn transcode(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(source) = args.first().copied() else {
+        return type_error(
+            ctx,
+            state,
+            "The \"source\" argument must be an instance of Buffer or Uint8Array. Received undefined",
+        );
+    };
+    let Some(bytes) = source_bytes(state, source) else {
+        return type_error(
+            ctx,
+            state,
+            "The \"source\" argument must be an instance of Buffer or Uint8Array. Received type that is not BufferSource",
+        );
+    };
+    let from_enc = match args.get(1).copied() {
+        Some(encoded) => match to_string_coerced(ctx, state, encoded) {
+            Ok(label) => label,
+            Err(exception) => return exception,
+        },
+        None => {
+            return transcode_error(ctx, state);
+        }
+    };
+    let to_enc = match args.get(2).copied() {
+        Some(encoded) => match to_string_coerced(ctx, state, encoded) {
+            Ok(label) => label,
+            Err(exception) => return exception,
+        },
+        None => {
+            return transcode_error(ctx, state);
+        }
+    };
+    let Some(from) = transcode_encoding(&from_enc) else {
+        return transcode_error(ctx, state);
+    };
+    let Some(to) = transcode_encoding(&to_enc) else {
+        return transcode_error(ctx, state);
+    };
+    let text = decode_for_transcode(&bytes, from);
+    let out = encode_for_transcode(&text, to);
+    create(state, out).unwrap_or_else(|| fail_dispatch(ctx))
+}
+
+fn source_bytes(state: &NativeAgentState, encoded: i64) -> Option<Vec<u8>> {
+    // 字符串/数字等标量的 handle payload 可能与对象槽位碰撞，必须先确认是对象。
+    if !value::is_js_object(encoded) {
+        return None;
+    }
+    if let Some(bytes) = bytes(state, encoded) {
+        return Some(bytes);
+    }
+    let array = state.typed_arrays.get(&value::decode_handle(encoded))?;
+    if array.kind != TypedArrayKind::Uint8 {
+        return None;
+    }
+    typed_array_bytes(state, encoded)
+}
+
+#[derive(Clone, Copy)]
+enum TranscodeEncoding {
+    Ascii,
+    Latin1,
+    Utf8,
+    Utf16Le,
+}
+
+fn transcode_encoding(label: &str) -> Option<TranscodeEncoding> {
+    match label.to_ascii_lowercase().as_str() {
+        "ascii" => Some(TranscodeEncoding::Ascii),
+        "latin1" | "binary" => Some(TranscodeEncoding::Latin1),
+        "utf8" | "utf-8" => Some(TranscodeEncoding::Utf8),
+        "ucs2" | "ucs-2" | "utf16le" | "utf-16le" => Some(TranscodeEncoding::Utf16Le),
+        _ => None,
+    }
+}
+
+fn decode_for_transcode(bytes: &[u8], encoding: TranscodeEncoding) -> String {
+    match encoding {
+        TranscodeEncoding::Ascii => bytes
+            .iter()
+            .map(|byte| {
+                if *byte < 0x80 {
+                    char::from(*byte)
+                } else {
+                    '\u{FFFD}'
+                }
+            })
+            .collect(),
+        TranscodeEncoding::Latin1 => bytes.iter().map(|byte| char::from(*byte)).collect(),
+        TranscodeEncoding::Utf8 => String::from_utf8_lossy(bytes).into_owned(),
+        TranscodeEncoding::Utf16Le => {
+            if bytes.len() % 2 == 1 {
+                // 奇数长度：末字节无法组成完整 code unit，按 Node/ICU 替换处理。
+                let mut units: Vec<u16> = bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .collect();
+                units.push(0xfffd);
+                String::from_utf16_lossy(&units)
+            } else {
+                String::from_utf16_lossy(
+                    &bytes
+                        .chunks_exact(2)
+                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    }
+}
+
+fn encode_for_transcode(text: &str, encoding: TranscodeEncoding) -> Vec<u8> {
+    match encoding {
+        TranscodeEncoding::Ascii => text
+            .chars()
+            .map(|character| {
+                let code = character as u32;
+                if code <= 0x7f {
+                    code as u8
+                } else {
+                    b'?'
+                }
+            })
+            .collect(),
+        TranscodeEncoding::Latin1 => text
+            .chars()
+            .map(|character| {
+                let code = character as u32;
+                if code <= 0xff {
+                    code as u8
+                } else {
+                    b'?'
+                }
+            })
+            .collect(),
+        TranscodeEncoding::Utf8 => text.as_bytes().to_vec(),
+        TranscodeEncoding::Utf16Le => text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+    }
+}
+
+fn transcode_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+    modules::named_error_object(
+        state,
+        "Error",
+        "Unable to transcode Buffer [U_ILLEGAL_ARGUMENT_ERROR]".to_owned(),
+    )
+    .and_then(|error| state.create_exception(error))
+    .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
 pub(crate) fn call_method(

@@ -15,4 +15,14 @@ console.log(format({ protocol: 'https:', hostname: 'example.com', pathname: '/x'
 console.log(resolve('https://e/a/b', '../c'));
 console.log(fileURLToPath(pathToFileURL('/tmp/a b')));
 console.log(domainToASCII('mañana.com'), domainToUnicode('xn--maana-pta.com'));
+console.log(domainToASCII('例子.测试'), domainToASCII('例え.テスト'));
+console.log(domainToASCII('MAÑANA.com'), domainToASCII('mañana.com.'));
+console.log(JSON.stringify(domainToASCII('xn--')));
+const idn = new URL('https://例え.テスト/path');
+console.log(idn.hostname, idn.href);
+const parsedIdn = parse('https://例子.测试/p');
+console.log(parsedIdn.hostname);
+let bad = false;
+try { new URL('https://xn--/'); } catch (e) { bad = e instanceof TypeError; }
+console.log(bad);
 console.log(qs.stringify({ a: [1, 2], b: 'x y' }));

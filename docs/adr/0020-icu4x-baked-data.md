@@ -55,7 +55,7 @@ ADR 0003 的 startup snapshot 是强制 restore 的最小种子，不是 ICU 数
 
 ### 5. Phase 2/3 消费本 crate，不另起数据 owner
 
-ECMA-402 `Intl` 对象与 ECMA-262 locale 敏感方法（`localeCompare`、`toLocale*`、`normalize` 的大小写映射）由 `wjsm-builtins` 抽象操作 + `wjsm-host-native` 安装/分派实现，ICU 包装只留在本 crate。URL IDN 接线与非 UTF-8 `TextDecoder` 仍属后续阶段，同样必须消费本 crate。
+ECMA-402 `Intl` 对象与 ECMA-262 locale 敏感方法（`localeCompare`、`toLocale*`、`normalize` 的大小写映射）由 `wjsm-builtins` 抽象操作 + `wjsm-host-native` 安装/分派实现，ICU 包装只留在本 crate。URL IDN 与 WHATWG `TextDecoder`（含非 UTF-8 标签）同样必须消费本 crate。
 
 对象模型沿用现有 console / Date / Map 模式（普通对象、lazy prototype、侧表内部槽），不新开架构 ADR。
 

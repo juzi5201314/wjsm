@@ -79,16 +79,14 @@ set.forEach((value) => console.log(typeof value)); // "object"
 
 实现定义差异（ILD/ILND）按规范允许，不把 Node full-icu 当作逐字符 oracle。Temporal 的 intl402 测试不在当前范围内。`intl-normative-optional` 的 legacy constructor 未实现。
 
-## URL / URLSearchParams 不是全局
+## URL / URLSearchParams 全局与 IDN
 
-`URL` 和 `URLSearchParams` 需要从 `node:url` 导入：
+`URL` / `URLSearchParams` 可作为全局使用，也与 `import { URL } from "node:url"` 共享同一构造器。hostname 走 UTS #46（`wjsm-intl-data` / `idna`），例如 `new URL("https://例え.テスト/")` 的 hostname 为 punycode。
 
 ```js
-import { URL, URLSearchParams } from "node:url";
+console.log(typeof globalThis.URL); // "function"
+console.log(new URL("https://例子.测试/").hostname);
 ```
-
-`typeof globalThis.URL` 为 `undefined`。
-
 ## --format native-executable 只覆盖当前宿主
 
 `wjsm build --format native-executable` 在当前宿主上产出可直接运行的 ELF/PE：预链 `wjsm-exec` stub 加上 portable `.wjsm`、预编译 `NativeObject` 与制品内源码快照。Linux 上的 wjsm 出 ELF，Windows 上的 wjsm 出 PE。交叉编译、把 runtime-private object 改后缀冒充 executable，都不支持。打包失败不创建或覆盖输出文件。发行物需要同时带 `wjsm` 与 `wjsm-exec`。

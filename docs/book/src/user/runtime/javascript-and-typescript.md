@@ -40,16 +40,16 @@ wjsm run -e 'class A { #p = 1; static s = 2; get v() { return this.#p } }
 
 ## 全局对象
 
-语义层维护一份内置全局名单（`crates/wjsm-semantic/src/builtins.rs` 的 `BUILTIN_GLOBALS`），其中包含 `console`、`process`、`Buffer`、`performance`、`structuredClone`、`queueMicrotask`、`atob`/`btoa`、`TextEncoder`/`TextDecoder`、`Intl`、`Iterator`、`setImmediate`，以及 Fetch/Streams 相关的 `Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController`。
+语义层维护一份内置全局名单（`crates/wjsm-semantic/src/builtins.rs` 的 `BUILTIN_GLOBALS`），其中包含 `console`、`process`、`Buffer`、`URL`、`URLSearchParams`、`performance`、`structuredClone`、`queueMicrotask`、`atob`/`btoa`、`TextEncoder`/`TextDecoder`、`Intl`、`Iterator`、`setImmediate`，以及 Fetch/Streams 相关的 `Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController`。
 
-`URL` 和 `URLSearchParams` 不是全局，需要从 `node:url` 导入：
+`URL` / `URLSearchParams` 与 `node:url` 导出为同一引用；IDN hostname 经 UTS #46 转为 punycode。
 
 ```bash
-wjsm run -e 'console.log(typeof globalThis.URL)'
+wjsm run -e 'console.log(typeof globalThis.URL, new URL("https://例え.テスト/").hostname)'
 ```
 
 ```text
-undefined
+function xn--r8jz45g.xn--zckzah
 ```
 
 ## TypeScript 的边界

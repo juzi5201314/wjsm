@@ -55,7 +55,8 @@ pub use number::{NumberFormatSpec, OwnedNumberFormatter};
 pub use number_symbols::{currency_digits, locale_nan, substitute_digits};
 pub use text::{
     DisplayNameType, OwnedDisplayNames, OwnedSegmenter, SegmentGranularity, domain_to_ascii_uts46,
-    encoding_for_label, language_display_name, region_display_name, word_segment_count,
+    domain_to_unicode_uts46, encoding_for_label, language_display_name, region_display_name,
+    word_segment_count,
 };
 
 /// smoke matrix 使用的 locale；发行清单与测试共用。

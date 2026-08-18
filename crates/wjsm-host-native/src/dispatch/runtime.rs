@@ -1179,6 +1179,16 @@ pub(super) fn get_property_with_receiver(
     if let Some(property) = state.global_property(object, key) {
         return Ok(property);
     }
+    // WHATWG URL 全局：惰性加载 node:url，与模块导出共享同一构造器。
+    if state.global_object == Some(object) || super::node_vm::is_context(state, object) {
+        let name = state.string(key).and_then(|text| text.to_utf8());
+        if let Some(name) = name.as_deref()
+            && matches!(name, "URL" | "URLSearchParams")
+            && let Some(property) = super::modules::ensure_url_global(ctx, state, name)
+        {
+            return Ok(property);
+        }
+    }
     if value::is_string(object)
         && let Some(index) = array_index(state, key)
     {

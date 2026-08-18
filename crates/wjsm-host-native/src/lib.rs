@@ -528,6 +528,7 @@ enum NativeCallableKind {
     AggregateErrorConstructor,
     BufferMethod(dispatch::node_buffer::BufferMethodKind),
     BufferStatic(dispatch::node_buffer::BufferStaticKind),
+    BufferTranscode,
     CjsRequire(u32),
     CjsResolve(u32),
     NodeNet(dispatch::node_net::NodeNetMethod),
@@ -538,6 +539,7 @@ enum NativeCallableKind {
     NodeDgram(dispatch::node_dgram::NodeDgramMethod),
     NodeAsyncHooks(dispatch::node_async_hooks::NodeAsyncHooksCallable),
     NodeOs(dispatch::node_os::NodeOsMethod),
+    Idna(dispatch::idna::IdnaMethod),
     NodeVm(dispatch::node_vm::NodeVmCallable),
     NodeChildProcess(dispatch::node_child_process::NodeChildProcessCallable),
     NodePerfHooks(dispatch::node_perf_hooks::NodePerfHooksCallable),
@@ -972,6 +974,11 @@ struct NativeAgentState {
     data_views: HashMap<u32, dispatch::buffers::NativeDataView>,
     typed_arrays: HashMap<u32, dispatch::typedarray::NativeTypedArray>,
     buffers: HashMap<u32, dispatch::node_buffer::NativeBuffer>,
+    text_decoders: HashMap<u32, dispatch::web_encoding::TextDecoderSlot>,
+    text_decoder_prototype: Option<i64>,
+    node_buffer_bridge: Option<i64>,
+    url_constructor: Option<i64>,
+    url_search_params_constructor: Option<i64>,
     promises: HashMap<u32, dispatch::promise::NativePromise>,
     promise_combinators: Vec<dispatch::promise::NativePromiseCombinator>,
     continuations: HashMap<u32, dispatch::promise::NativeContinuation>,
@@ -1048,6 +1055,7 @@ struct NativeAgentState {
     node_tls: dispatch::node_tls::NodeTlsState,
     node_zlib: dispatch::node_zlib::NodeZlibState,
     node_os: dispatch::node_os::NodeOsState,
+    idna: dispatch::idna::IdnaState,
     node_vm: dispatch::node_vm::NodeVmState,
     node_child_process: dispatch::node_child_process::NodeChildProcessState,
     node_perf_hooks: dispatch::node_perf_hooks::NodePerfHooksState,
@@ -1154,6 +1162,11 @@ impl NativeAgentState {
             array_iterators: HashMap::new(),
             enumerators: HashMap::new(),
             buffers: HashMap::new(),
+            text_decoders: HashMap::new(),
+            text_decoder_prototype: None,
+            node_buffer_bridge: None,
+            url_constructor: None,
+            url_search_params_constructor: None,
             regexp_iterators: Vec::new(),
             array_buffers: HashMap::new(),
             shared_array_buffers: HashMap::new(),
@@ -1221,6 +1234,7 @@ impl NativeAgentState {
             node_async_hooks: dispatch::node_async_hooks::NodeAsyncHooksState::default(),
             node_dgram: dispatch::node_dgram::NodeDgramState::default(),
             node_os: dispatch::node_os::NodeOsState::default(),
+            idna: dispatch::idna::IdnaState::default(),
             node_vm: dispatch::node_vm::NodeVmState::default(),
             node_child_process: dispatch::node_child_process::NodeChildProcessState::default(),
             node_perf_hooks: dispatch::node_perf_hooks::NodePerfHooksState::default(),
@@ -1470,6 +1484,11 @@ impl NativeAgentState {
         // 否则 agent 线程 execute 时会丢失 receiveBroadcast 注册。
         self.agent_bridge = None;
         self.buffers.clear();
+        self.text_decoders.clear();
+        self.text_decoder_prototype = None;
+        self.node_buffer_bridge = None;
+        self.url_constructor = None;
+        self.url_search_params_constructor = None;
         self.node_net = dispatch::node_net::NodeNetState::default();
         self.node_tls = dispatch::node_tls::NodeTlsState::default();
         self.node_zlib = dispatch::node_zlib::NodeZlibState::default();
@@ -1477,6 +1496,7 @@ impl NativeAgentState {
         self.node_async_hooks = dispatch::node_async_hooks::NodeAsyncHooksState::default();
         self.node_dgram = dispatch::node_dgram::NodeDgramState::default();
         self.node_os = dispatch::node_os::NodeOsState::default();
+        self.idna = dispatch::idna::IdnaState::default();
         self.node_perf_hooks = dispatch::node_perf_hooks::NodePerfHooksState::default();
         self.streams = dispatch::streams::NativeStreamsState::default();
         self.fetch = dispatch::fetch::NativeFetchState::default();
@@ -2647,6 +2667,12 @@ impl NativeAgentState {
         if name == "__wjsm_node_fs" {
             return dispatch::node_fs::ensure_bridge(self);
         }
+        if name == "__wjsm_node_buffer" {
+            return dispatch::node_buffer::ensure_bridge(self);
+        }
+        if name == "__wjsm_idna" {
+            return dispatch::idna::ensure_bridge(self);
+        }
         if name == "__wjsm_node_os" {
             return dispatch::node_os::ensure_bridge(self);
         }
@@ -2795,6 +2821,7 @@ impl NativeAgentState {
             | NativeCallableKind::BufferConstructor
             | NativeCallableKind::BufferMethod(_)
             | NativeCallableKind::BufferStatic(_)
+            | NativeCallableKind::BufferTranscode
             | NativeCallableKind::CjsRequire(_)
             | NativeCallableKind::CjsResolve(_)
             | NativeCallableKind::CjsResolvePaths(_)
@@ -2811,6 +2838,7 @@ impl NativeAgentState {
             | NativeCallableKind::NodeAsyncHooks(_)
             | NativeCallableKind::NodeFs(_)
             | NativeCallableKind::NodeOs(_)
+            | NativeCallableKind::Idna(_)
             | NativeCallableKind::NodeVm(_)
             | NativeCallableKind::NodeChildProcess(_)
             | NativeCallableKind::ErrorToString
@@ -3653,6 +3681,17 @@ impl NativeAgentState {
             self.callable_property_flags.insert((callable, key), 0);
             return Some(prototype);
         }
+        if self.native_callable_kind(callable)
+            == Some(NativeCallableKind::WebEncoding(
+                dispatch::web_encoding::WebEncodingCallable::TextDecoderConstructor,
+            ))
+            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+        {
+            let prototype = dispatch::web_encoding::ensure_text_decoder_prototype(self)?;
+            self.callable_properties.insert((callable, key), prototype);
+            self.callable_property_flags.insert((callable, key), 0);
+            return Some(prototype);
+        }
         if self.native_callable_kind(callable) == Some(NativeCallableKind::StringConstructor)
             && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
         {
@@ -4141,6 +4180,7 @@ impl NativeAgentState {
         self.data_views.retain(|handle, _| is_live(handle));
         self.typed_arrays.retain(|handle, _| is_live(handle));
         self.buffers.retain(|handle, _| is_live(handle));
+        self.text_decoders.retain(|handle, _| is_live(handle));
         self.promises.retain(|handle, _| is_live(handle));
         self.continuations.retain(|handle, _| is_live(handle));
         self.generators.retain(|handle, _| is_live(handle));
@@ -4405,6 +4445,9 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::BufferStatic(kind) => {
             dispatch::node_buffer::call_static(ctx, state, kind, &arguments)
         }
+        NativeCallableKind::BufferTranscode => {
+            dispatch::node_buffer::transcode(ctx, state, &arguments)
+        }
         NativeCallableKind::NodeAsyncHooks(callable) => {
             dispatch::node_async_hooks::call(ctx, state, callable, this_value, &arguments)
         }
@@ -4424,6 +4467,9 @@ unsafe extern "C" fn native_callable_call(
             dispatch::node_zlib::call(ctx, state, method, &arguments)
         }
         NativeCallableKind::NodeOs(method) => dispatch::node_os::call(ctx, state, method),
+        NativeCallableKind::Idna(method) => {
+            dispatch::idna::call(ctx, state, method, &arguments)
+        }
         NativeCallableKind::NodeVm(callable) => {
             dispatch::node_vm::call(ctx, state, callable, &arguments)
         }

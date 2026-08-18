@@ -17,6 +17,7 @@ mod eval;
 pub(crate) mod fetch;
 mod function;
 pub(crate) mod generator;
+pub(crate) mod idna;
 pub(crate) mod intl;
 mod iterator;
 mod json;

@@ -10,7 +10,7 @@ use icu::locale::subtags::Script;
 use icu::locale::subtags::{Language, Region};
 use icu::segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
 use icu::segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
-use idna::domain_to_ascii;
+use idna::{domain_to_ascii, domain_to_unicode};
 
 /// DisplayNames 的 type。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -122,12 +122,18 @@ impl OwnedSegmenter {
     }
 }
 
+/// 解析 WHATWG Encoding 标签；`replacement` 映射返回 `None`（供 TextDecoder）。
 pub fn encoding_for_label(label: &str) -> Option<&'static Encoding> {
-    Encoding::for_label(label.as_bytes())
+    Encoding::for_label_no_replacement(label.as_bytes())
 }
 
 pub fn domain_to_ascii_uts46(domain: &str) -> Result<String, idna::Errors> {
     domain_to_ascii(domain)
+}
+
+/// UTS #46 ToUnicode。失败时仍返回映射后的字符串（与 Node `domainToUnicode` 一致）。
+pub fn domain_to_unicode_uts46(domain: &str) -> String {
+    domain_to_unicode(domain).0
 }
 
 pub fn word_segment_count(text: &str) -> usize {

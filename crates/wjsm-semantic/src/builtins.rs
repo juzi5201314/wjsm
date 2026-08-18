@@ -60,6 +60,8 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "WeakRef",
     "process",
     "Buffer",
+    "URL",
+    "URLSearchParams",
     "TextEncoder",
     "TextDecoder",
     "structuredClone",
