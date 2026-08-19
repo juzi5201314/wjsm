@@ -1139,17 +1139,14 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
 }
 
 pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<u32> {
-    if value::is_string(encoded) {
-        let text = state.string(encoded)?.clone();
-        state
-            .intern_runtime_string(text, value::TAG_STRING)
-            .map(value::decode_handle)
+    let text = if value::is_string(encoded) {
+        state.string(encoded)?.clone()
     } else if value::is_symbol(encoded) {
-        Some(value::decode_handle(encoded) | SYMBOL_PROPERTY_KEY_BIT)
+        return Some(value::decode_handle(encoded) | SYMBOL_PROPERTY_KEY_BIT);
     } else {
-        let key = state.intern_text(render_value(state, encoded), value::TAG_STRING)?;
-        Some(value::decode_handle(key))
-    }
+        RuntimeString::from(render_value(state, encoded))
+    };
+    state.intern_property_string(text).map(value::decode_handle)
 }
 
 pub(super) fn encoded_property_key(key: u32) -> i64 {

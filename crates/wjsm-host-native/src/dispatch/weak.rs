@@ -855,6 +855,9 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         }
     }
     queue.extend(state.async_from_sync_iterators.values().copied());
+    state
+        .runtime_modules
+        .visit_gc_roots(|root| queue.push_back(root));
     queue.extend(state.fatal_exception);
     state.node_perf_hooks.extend_gc_roots(queue);
     queue.extend(state.node_async_hooks.defaults.values().copied());

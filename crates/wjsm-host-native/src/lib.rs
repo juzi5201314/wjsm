@@ -3971,6 +3971,35 @@ impl NativeAgentState {
         self.intern_runtime_string(RuntimeString::from(text), tag)
     }
 
+    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<i64> {
+        if let Some(handle) = self.string_ids.get(&text).copied() {
+            let encoded = value::encode_runtime_string_handle(handle);
+            self.gc.record_host_write(encoded, None, Some(encoded));
+            return Some(encoded);
+        }
+        let allocated_bytes = text.estimated_owned_bytes();
+        let handle = match self.string_free.pop() {
+            Some(handle) => {
+                self.string_occupied[handle as usize] = true;
+                self.string_ages[handle as usize] = 0;
+                handle
+            }
+            None => {
+                let handle = u32::try_from(self.strings.len()).ok()?;
+                self.strings.push(RuntimeString::empty());
+                self.string_occupied.push(true);
+                self.string_ages.push(0);
+                handle
+            }
+        };
+        self.string_ids.insert(text.clone(), handle);
+        self.strings[handle as usize] = text;
+        self.gc.observe_host_allocation(allocated_bytes);
+        let encoded = value::encode_runtime_string_handle(handle);
+        self.gc.record_host_write(encoded, None, Some(encoded));
+        Some(encoded)
+    }
+
     fn intern_utf16_slice(&mut self, units: &[u16], tag: u64) -> Option<i64> {
         if tag == value::TAG_STRING
             && units.len() <= 64

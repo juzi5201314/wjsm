@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use wjsm_artifact_format::{
     ArtifactBuildInput, BuildOptions, ManifestModule, ModuleKind, ModuleManifest, PortableArtifact,
 };
+use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, ModuleId, is_module_entry_ir_function, value};
 use wjsm_module::{
     ModuleSourceStore, ResolutionOptions, RuntimeModuleFormat, RuntimeModuleKey,
@@ -288,6 +289,17 @@ impl NativeModuleState {
         self.cjs_cache_object = None;
         self.referrers.clear();
         self.referrer_ids.clear();
+    }
+
+    pub(crate) fn visit_gc_roots(&self, mut visit: impl FnMut(i64)) {
+        self.namespaces.values().copied().for_each(&mut visit);
+        self.cjs_cache_object.iter().copied().for_each(&mut visit);
+        for record in self.cjs_modules.values() {
+            visit(record.module_object);
+            if let CjsModuleStatus::Errored(error) = record.status {
+                visit(error);
+            }
+        }
     }
 }
 
@@ -1039,11 +1051,11 @@ fn module_cache_key(state: &mut NativeAgentState, key: &RuntimeModuleKey) -> Opt
         }
         RuntimeModuleKey::Builtin(specifier) => specifier.clone(),
     };
-    state.intern_text(text, value::TAG_STRING)
+    state.intern_property_string(RuntimeString::from(text))
 }
 
 pub(crate) fn named_property(state: &mut NativeAgentState, object: i64, name: &str) -> Option<i64> {
-    let key = state.intern_text(name.to_string(), value::TAG_STRING)?;
+    let key = state.intern_property_string(RuntimeString::from(name))?;
     state
         .gc
         .heap()

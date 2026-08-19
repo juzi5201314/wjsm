@@ -197,12 +197,8 @@ impl NativeAgentState {
         );
         live_strings
     }
-
     fn retire_string(&mut self, index: usize) {
-        if self.strings[index].is_flat()
-            && self.strings[index].utf16_len() <= 64
-            && self.string_ids.get(&self.strings[index]).copied() == Some(index as u32)
-        {
+        if self.string_ids.get(&self.strings[index]).copied() == Some(index as u32) {
             self.string_ids.remove(&self.strings[index]);
         }
         self.strings[index] = RuntimeString::empty();
