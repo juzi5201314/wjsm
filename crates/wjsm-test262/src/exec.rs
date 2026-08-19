@@ -353,6 +353,14 @@ fn check_negative_result(exit_code: i32, stderr: &str, negative: &Negative) -> T
 fn build_test_source(test: &Test, harness: &Harness) -> String {
     let mut source = String::new();
 
+    // 严格模式指令必须作为脚本第一个语句（Directive Prologue），
+    // 否则被解析器视为普通表达式语句，不触发严格模式。
+    // 模块模式隐含 strict，无需显式 "use strict"。
+    let need_strict_directive = test.is_strict() && !test.is_module();
+    if need_strict_directive {
+        source.push_str("\"use strict\";\n");
+    }
+
     // 注入 wjsm 暂不支持的全局变量 workaround
     source.push_str("var undefined = void 0;\n");
     source.push_str("var NaN = 0 / 0;\n");
@@ -366,10 +374,6 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
 
     // raw 模式：只添加 workaround 和测试主体
     if test.is_raw() {
-        // 模块模式隐含 strict，无需显式 "use strict"
-        if test.is_strict() && !test.is_module() {
-            source.push_str("\"use strict\";\n");
-        }
         source.push_str(&test.source);
         source.push('\n');
         return source;
@@ -399,16 +403,11 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
         }
     }
 
-    // 5. 处理 flags — 模块模式隐含 strict，无需显式 "use strict"
-    if test.is_strict() && !test.is_module() {
-        source.push_str("\"use strict\";\n");
-    }
-
-    // 6. 添加测试主体
+    // 5. 添加测试主体
     source.push_str(&test.source);
     source.push('\n');
 
-    // 7. 添加 doneprintHandle
+    // 6. 添加 doneprintHandle
     source.push_str(&harness.doneprint_handle.content);
     source.push('\n');
 
@@ -549,5 +548,47 @@ mod tests {
         assert!(source.contains("if ($262 && typeof $262.gc !== 'function') { $262.gc = gc; }"));
         assert!(!source.contains("var $262 = { gc: gc };"));
         assert!(!source.contains("function gc()"));
+    }
+
+    #[test]
+    fn build_test_source_use_strict_is_directive_prologue() {
+        // onlyStrict 测试： "use strict" 必须是脚本第一个语句（Directive Prologue），
+        // 出现在 workaround 和 harness 之前，否则被解析器视为普通表达式语句。
+        let mut test = empty_test();
+        test.metadata.flags.push(crate::read::TestFlag::OnlyStrict);
+        let source = build_test_source(&test, &empty_harness());
+
+        let strict_pos = source.find("\"use strict\";");
+        let workaround_pos = source.find("var undefined = void 0;");
+        assert!(strict_pos.is_some(), "use strict 指令缺失");
+        assert!(workaround_pos.is_some(), "workaround 缺失");
+        assert!(
+            strict_pos < workaround_pos,
+            "use strict 必须在 workaround 之前，否则不作为指令序言"
+        );
+    }
+
+    #[test]
+    fn build_test_source_no_strict_for_non_strict_test() {
+        // 非 strict 测试不应注入 "use strict" 指令。
+        let test = empty_test();
+        let source = build_test_source(&test, &empty_harness());
+        assert!(
+            !source.contains("\"use strict\";"),
+            "非 strict 测试不应注入 use strict 指令"
+        );
+    }
+
+    #[test]
+    fn build_test_source_no_explicit_strict_for_module() {
+        // 模块模式隐含 strict，不应显式注入 "use strict"。
+        let mut test = empty_test();
+        test.metadata.flags.push(crate::read::TestFlag::Module);
+        test.metadata.flags.push(crate::read::TestFlag::OnlyStrict);
+        let source = build_test_source(&test, &empty_harness());
+        assert!(
+            !source.contains("\"use strict\";"),
+            "模块模式不应显式注入 use strict 指令"
+        );
     }
 }
