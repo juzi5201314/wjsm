@@ -83,6 +83,7 @@ webpki-roots = "0.26"
 flate2 = "1"
 brotli = "8"
 tar = "0.4"
+ryu = "1"
 wait-timeout = "0.2"
 # 与 cranelift-codegen/cranelift-object 的 unwind 特性锁定的同一版本，用于本地
 # 生成 Mach-O `.eh_frame`（Windows `.pdata` 不经过 gimli）。必须保持 `=0.33.1`。

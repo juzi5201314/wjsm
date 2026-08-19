@@ -106,6 +106,16 @@ fn subject(state: &NativeAgentState, encoded: i64) -> String {
         render_value(state, encoded)
     }
 }
+
+fn subject_runtime_string(state: &NativeAgentState, encoded: i64) -> wjsm_host::RuntimeString {
+    if value::is_string(encoded) {
+        state.string(encoded).cloned().unwrap_or_default()
+    } else if value::is_symbol(encoded) {
+        wjsm_host::RuntimeString::empty()
+    } else {
+        wjsm_host::RuntimeString::from(render_value(state, encoded))
+    }
+}
 pub(crate) fn symbol_builtin(key: i64) -> Option<Builtin> {
     if !value::is_symbol(key) {
         return None;
@@ -735,7 +745,6 @@ fn string_split_impl(
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let input = subject(state, receiver);
     let separator = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let limit_arg = args.get(2).copied().unwrap_or_else(value::encode_undefined);
     if invoke_protocol
@@ -757,51 +766,149 @@ fn string_split_impl(
             .allocate_array_values(&[])
             .unwrap_or_else(|_| fail_dispatch(ctx));
     }
-    let ranges = if value::is_regexp(separator) {
+    if value::is_regexp(separator) {
+        let input = subject(state, receiver);
         let Some(entry) = state.regexp(separator) else {
             return fail_dispatch(ctx);
         };
-        entry
+        let ranges = entry
             .compiled
             .find_iter(&input)
             .map(|matched| matched.range())
-            .collect::<Vec<_>>()
-    } else if value::is_undefined(separator) {
-        Vec::new()
-    } else {
-        let separator = subject(state, separator);
-        if separator.is_empty() {
-            input
-                .char_indices()
-                .skip(1)
-                .map(|(index, _)| index..index)
-                .collect()
-        } else {
-            input
-                .match_indices(&separator)
-                .map(|(start, matched)| start..start + matched.len())
-                .collect()
+            .collect::<Vec<_>>();
+        let mut values = Vec::new();
+        let mut start = 0;
+        for range in ranges {
+            if values.len() >= usize::try_from(limit).unwrap_or(usize::MAX) {
+                break;
+            }
+            let Some(part) =
+                state.intern_text(input[start..range.start].to_owned(), value::TAG_STRING)
+            else {
+                return fail_dispatch(ctx);
+            };
+            values.push(part);
+            start = range.end;
         }
-    };
+        if values.len() < usize::try_from(limit).unwrap_or(usize::MAX) {
+            let Some(part) = state.intern_text(input[start..].to_owned(), value::TAG_STRING) else {
+                return fail_dispatch(ctx);
+            };
+            values.push(part);
+        }
+        return state
+            .allocate_array_values(&values)
+            .unwrap_or_else(|_| fail_dispatch(ctx));
+    }
+    if value::is_undefined(separator) {
+        let input = subject_runtime_string(state, receiver);
+        let Some(part) = state.intern_runtime_string(input, value::TAG_STRING) else {
+            return fail_dispatch(ctx);
+        };
+        return state
+            .allocate_array_values(&[part])
+            .unwrap_or_else(|_| fail_dispatch(ctx));
+    }
+    let input = subject_runtime_string(state, receiver);
+    let separator = subject_runtime_string(state, separator);
+    string_split_string_fast(ctx, state, input, separator, limit)
+}
+
+fn string_split_string_fast(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    input: wjsm_host::RuntimeString,
+    separator: wjsm_host::RuntimeString,
+    limit: u32,
+) -> i64 {
+    let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
+    if separator.is_empty() {
+        return string_split_empty_separator(ctx, state, input, limit_usize);
+    }
+    if separator.utf16_len() == 1 {
+        return string_split_single_unit(ctx, state, input, separator, limit_usize);
+    }
     let mut values = Vec::new();
-    let mut start = 0;
-    for range in ranges {
-        if values.len() >= usize::try_from(limit).unwrap_or(usize::MAX) {
+    let mut start = 0usize;
+    let sep_len = separator.utf16_len();
+    let mut search_from = 0usize;
+    while values.len() + 1 < limit_usize {
+        let Some(pos) = input.find_units(&separator, search_from) else {
             break;
-        }
-        let Some(part) = state.intern_text(input[start..range.start].to_owned(), value::TAG_STRING)
+        };
+        let Some(part) =
+            state.intern_runtime_string(input.slice_units(start..pos), value::TAG_STRING)
         else {
             return fail_dispatch(ctx);
         };
         values.push(part);
-        start = range.end;
+        start = pos + sep_len;
+        search_from = start;
     }
-    if values.len() < usize::try_from(limit).unwrap_or(usize::MAX) {
-        let Some(part) = state.intern_text(input[start..].to_owned(), value::TAG_STRING) else {
+    let Some(part) = state.intern_runtime_string(
+        input.slice_units(start..input.utf16_len()),
+        value::TAG_STRING,
+    ) else {
+        return fail_dispatch(ctx);
+    };
+    values.push(part);
+    state
+        .allocate_array_values(&values)
+        .unwrap_or_else(|_| fail_dispatch(ctx))
+}
+
+fn string_split_empty_separator(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    input: wjsm_host::RuntimeString,
+    limit: usize,
+) -> i64 {
+    let total = input.utf16_len().min(limit);
+    let mut values = Vec::with_capacity(total);
+    for index in 0..total {
+        let Some(part) =
+            state.intern_runtime_string(input.slice_units(index..index + 1), value::TAG_STRING)
+        else {
             return fail_dispatch(ctx);
         };
         values.push(part);
     }
+    state
+        .allocate_array_values(&values)
+        .unwrap_or_else(|_| fail_dispatch(ctx))
+}
+
+fn string_split_single_unit(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    input: wjsm_host::RuntimeString,
+    separator: wjsm_host::RuntimeString,
+    limit: usize,
+) -> i64 {
+    let needle = separator.as_utf16_units()[0];
+    let units = input.as_utf16_units();
+    let mut values = Vec::new();
+    let mut start = 0usize;
+    for (index, unit) in units.iter().enumerate() {
+        if values.len() + 1 >= limit {
+            break;
+        }
+        if *unit == needle {
+            let Some(part) =
+                state.intern_runtime_string(input.slice_units(start..index), value::TAG_STRING)
+            else {
+                return fail_dispatch(ctx);
+            };
+            values.push(part);
+            start = index + 1;
+        }
+    }
+    let Some(part) =
+        state.intern_runtime_string(input.slice_units(start..units.len()), value::TAG_STRING)
+    else {
+        return fail_dispatch(ctx);
+    };
+    values.push(part);
     state
         .allocate_array_values(&values)
         .unwrap_or_else(|_| fail_dispatch(ctx))

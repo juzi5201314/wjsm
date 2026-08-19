@@ -8,7 +8,7 @@ mod instanceof;
 pub use equality::{abstract_compare_impl, abstract_eq_impl, strict_eq_impl};
 pub use instanceof::op_instanceof;
 
-use crate::number_format::format_number_js;
+use crate::number_format::{format_number_js_to_units, number_to_utf16_units_fast};
 use wjsm_host::{ExecContext, RuntimeString, ToPrimitiveHintKind, Value};
 use wjsm_ir::value;
 
@@ -152,17 +152,12 @@ pub fn typeof_impl<E: ExecContext>(ctx: &mut E, val: Value) -> Value {
 /// （Rust 输出 `"inf"`）、`abs >= 1e21` / `abs < 1e-6` 用科学计数法。
 #[inline]
 fn number_to_utf16_units(x: f64) -> Vec<u16> {
-    if x.is_nan() {
-        return "NaN".encode_utf16().collect();
+    if x.is_nan() || x.is_infinite() {
+        return number_to_utf16_units_fast(x);
     }
-    if x.is_infinite() {
-        return if x > 0.0 {
-            "Infinity".encode_utf16().collect()
-        } else {
-            "-Infinity".encode_utf16().collect()
-        };
-    }
-    format_number_js(x).encode_utf16().collect()
+    let mut out = Vec::new();
+    format_number_js_to_units(x, &mut out);
+    out
 }
 
 /// 拼接快路径：把操作数转成 UTF-16 code units。

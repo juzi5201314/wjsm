@@ -4518,6 +4518,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "rand 0.8.5",
+ "ryu",
  "thiserror",
  "wjsm-host",
  "wjsm-intl-data",

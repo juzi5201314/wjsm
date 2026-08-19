@@ -67,6 +67,9 @@ impl RuntimeString {
     }
 
     pub fn slice_units(&self, range: Range<usize>) -> Self {
+        if range.start >= range.end {
+            return Self::empty();
+        }
         Self::from_utf16_units(self.units[range].to_vec())
     }
 

@@ -48,6 +48,108 @@ pub fn format_number_js(x: f64) -> String {
     format!("{}", x)
 }
 
+pub fn format_number_js_to_units(x: f64, out: &mut Vec<u16>) {
+    if x == 0.0 {
+        out.extend([b'0' as u16]);
+        return;
+    }
+    if x.is_nan() {
+        out.extend("NaN".encode_utf16());
+        return;
+    }
+    if x.is_infinite() {
+        if x > 0.0 {
+            out.extend("Infinity".encode_utf16());
+        } else {
+            out.extend("-Infinity".encode_utf16());
+        }
+        return;
+    }
+    if write_integer_fast_to_units(x, out) {
+        return;
+    }
+    let abs = x.abs();
+    if abs >= 1e21 || (abs < 1e-6 && abs > 0.0) {
+        let mut buf = ryu::Buffer::new();
+        let s = buf.format(x);
+        write_normalized_exp_to_units(s, out);
+        return;
+    }
+    let mut buf = ryu::Buffer::new();
+    let s = buf.format(x);
+    out.extend(s.encode_utf16());
+}
+
+pub fn number_to_utf16_units_fast(x: f64) -> Vec<u16> {
+    if x.is_nan() {
+        return "NaN".encode_utf16().collect();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 {
+            "Infinity".encode_utf16().collect()
+        } else {
+            "-Infinity".encode_utf16().collect()
+        };
+    }
+    let mut out = Vec::new();
+    format_number_js_to_units(x, &mut out);
+    out
+}
+
+fn write_integer_fast_to_units(x: f64, out: &mut Vec<u16>) -> bool {
+    if x.fract() != 0.0 {
+        return false;
+    }
+    let abs = x.abs();
+    if abs >= 1e21 || abs >= 9_007_199_254_740_992.0 {
+        return false;
+    }
+    if abs < 1.0 && x != 0.0 {
+        return false;
+    }
+    let trunc = x.trunc() as i64;
+    if trunc == 0 {
+        out.push(b'0' as u16);
+        return true;
+    }
+    let negative = trunc < 0;
+    let mut value = if negative {
+        (-(trunc as i128)) as u64
+    } else {
+        trunc as u64
+    };
+    let mut digits = [0u8; 20];
+    let mut len = 0;
+    while value > 0 {
+        digits[len] = b'0' + (value % 10) as u8;
+        value /= 10;
+        len += 1;
+    }
+    if negative {
+        out.push(b'-' as u16);
+    }
+    for idx in (0..len).rev() {
+        out.push(digits[idx] as u16);
+    }
+    true
+}
+
+fn write_normalized_exp_to_units(s: &str, out: &mut Vec<u16>) {
+    if let Some(pos) = s.find(['e', 'E']) {
+        let mantissa = &s[..pos];
+        let exp_part = &s[pos + 1..];
+        let exp_val: i32 = exp_part.parse().unwrap_or(0);
+        out.extend(mantissa.encode_utf16());
+        out.push(b'e' as u16);
+        if exp_val >= 0 {
+            out.push(b'+' as u16);
+        }
+        out.extend(exp_val.to_string().encode_utf16());
+    } else {
+        out.extend(s.encode_utf16());
+    }
+}
+
 /// ECMA-262 §21.1.3.3 Number.prototype.toFixed。
 pub fn format_number_to_fixed_js(x: f64, digits: i32) -> String {
     if x.is_nan() {

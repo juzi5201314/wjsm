@@ -112,12 +112,21 @@ fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
 }
 
 fn runtime_string(state: &NativeAgentState, value: i64) -> Option<RuntimeString> {
+    borrow_runtime_string(state, value).map(|cow| cow.into_owned())
+}
+
+fn borrow_runtime_string<'a>(
+    state: &'a NativeAgentState,
+    value: i64,
+) -> Option<std::borrow::Cow<'a, RuntimeString>> {
     if value::is_string(value) {
-        state.string(value).cloned()
+        state.string(value).map(std::borrow::Cow::Borrowed)
     } else if value::is_symbol(value) {
         None
     } else {
-        Some(RuntimeString::from(render_value(state, value)))
+        Some(std::borrow::Cow::Owned(RuntimeString::from(render_value(
+            state, value,
+        ))))
     }
 }
 
@@ -360,7 +369,9 @@ fn string_repeat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 }
 
 fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) = receiver(state, args) else {
+    let Some(text) =
+        borrow_runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
+    else {
         return fail_dispatch(ctx);
     };
     let length = text.utf16_len() as i64;
@@ -374,11 +385,16 @@ fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
     } else {
         start..end
     };
+    if range.start >= range.end {
+        return intern(ctx, state, RuntimeString::empty());
+    }
     intern(ctx, state, text.slice_units(range))
 }
 
 fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) = receiver(state, args) else {
+    let Some(text) =
+        borrow_runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
+    else {
         return fail_dispatch(ctx);
     };
     let length = text.utf16_len();
@@ -390,6 +406,9 @@ fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         .clamp(0, length as i64) as usize;
     if start > end {
         std::mem::swap(&mut start, &mut end);
+    }
+    if start >= end {
+        return intern(ctx, state, RuntimeString::empty());
     }
     intern(ctx, state, text.slice_units(start..end))
 }
