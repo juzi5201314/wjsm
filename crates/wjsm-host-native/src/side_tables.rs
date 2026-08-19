@@ -132,42 +132,10 @@ impl NativeAgentState {
             .retain(|encoded| host_value_is_live(retired, live, *encoded));
     }
 
-    /// young ZGC 后只处理年轻字符串：新值连续存活两轮后晋升，避免每轮重复扫描。
-    pub(crate) fn sweep_young_strings(&mut self, live: &HostLiveSet) {
-        let live_strings = self.live_string_handles(live);
-        for index in 0..self.strings.len() {
-            if !self.string_occupied[index] || self.string_ages[index] == u8::MAX {
-                continue;
-            }
-            if live_strings.contains(&(index as u32)) {
-                self.string_ages[index] += 1;
-                if self.string_ages[index] >= 2 {
-                    self.string_ages[index] = u8::MAX;
-                }
-                continue;
-            }
-            self.retire_string(index);
-        }
-    }
-
-    /// full/old GC 已建立完整 live set，可同时回收年轻和晋升字符串。
+    /// 清 intern 字符串表：存活集 = 值图活字符串 ∪ 整张 ShapeTable 的 name_id
+    /// ∪ 活数组/活 callable 侧表的 name_id。ShapeTable 含死对象遗留 shape，
+    /// 这些 name_id 一旦复用会让 transition 别名到错误属性名，故一并钉扎。
     fn sweep_strings(&mut self, live: &HostLiveSet) {
-        let live_strings = self.live_string_handles(live);
-        for index in 0..self.strings.len() {
-            if !self.string_occupied[index] {
-                continue;
-            }
-            if live_strings.contains(&(index as u32)) {
-                self.string_ages[index] = u8::MAX;
-                continue;
-            }
-            self.retire_string(index);
-        }
-    }
-
-    /// managed young/old bridge与宿主边都已在 ZGC mark 中展开，report 的 host live set
-    /// 对字符串完整；属性名及专用侧表键另行钉扎。
-    fn live_string_handles(&self, live: &HostLiveSet) -> HashSet<u32> {
         let mut live_strings = live.strings.clone();
         live_strings.extend(self.gc.heap().property_name_ids());
         live_strings.extend(self.array_properties.keys().map(|(_, key)| *key));
@@ -177,38 +145,41 @@ impl NativeAgentState {
             live_strings.extend(keys.iter().copied());
         }
         // 符号 bit 置位的 key 是符号而非字符串，不计入字符串存活集。
-        live_strings.extend(
-            self.callable_properties
-                .keys()
-                .map(|(_, key)| *key)
-                .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0),
-        );
-        live_strings.extend(
-            self.callable_accessors
-                .keys()
-                .map(|(_, key)| *key)
-                .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0),
-        );
-        live_strings.extend(
-            self.callable_property_flags
-                .keys()
-                .map(|(_, key)| *key)
-                .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0),
-        );
-        live_strings
-    }
-
-    fn retire_string(&mut self, index: usize) {
-        if self.strings[index].is_flat()
-            && self.strings[index].utf16_len() <= 64
-            && self.string_ids.get(&self.strings[index]).copied() == Some(index as u32)
+        for key in self
+            .callable_properties
+            .keys()
+            .map(|(_, key)| *key)
+            .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0)
         {
-            self.string_ids.remove(&self.strings[index]);
+            live_strings.insert(key);
         }
-        self.strings[index] = RuntimeString::empty();
-        self.string_occupied[index] = false;
-        self.string_ages[index] = 0;
-        self.string_free.push(index as u32);
+        for key in self
+            .callable_accessors
+            .keys()
+            .map(|(_, key)| *key)
+            .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0)
+        {
+            live_strings.insert(key);
+        }
+        for key in self
+            .callable_property_flags
+            .keys()
+            .map(|(_, key)| *key)
+            .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0)
+        {
+            live_strings.insert(key);
+        }
+
+        for index in 0..self.strings.len() {
+            if live_strings.contains(&(index as u32)) {
+                continue;
+            }
+            if self.string_ids.get(&self.strings[index]).copied() == Some(index as u32) {
+                self.string_ids.remove(&self.strings[index]);
+            }
+            self.strings[index] = RuntimeString::empty();
+            self.string_free.push(index as u32);
+        }
     }
 }
 

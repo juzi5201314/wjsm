@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use wjsm_gc::{CycleKind, GcEdge, GcEphemeron, RootSnapshot, RuntimeGcReport};
+use wjsm_gc::{GcEdge, GcEphemeron, RootSnapshot, RuntimeGcReport};
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
@@ -528,8 +528,6 @@ pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcRe
     state.cleanup_retired_handles(retired);
     if report.cleans_host_tables {
         state.sweep_host_index_tables(retired, &live);
-    } else if report.stats.cycle_kind == CycleKind::Young {
-        state.sweep_young_strings(&live);
     }
 }
 

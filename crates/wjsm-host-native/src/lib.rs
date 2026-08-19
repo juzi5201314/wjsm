@@ -45,9 +45,8 @@ use dispatch::{
     native_math_asinh, native_math_atan, native_math_atan2, native_math_atanh, native_math_cbrt,
     native_math_cos, native_math_cosh, native_math_exp, native_math_expm1, native_math_log,
     native_math_log1p, native_math_log2, native_math_log10, native_math_pow, native_math_sin,
-    native_math_sinh, native_math_tan, native_math_tanh, native_string_add,
-    native_string_builder_append, native_string_builder_append_number,
-    native_string_builder_finish, native_zgc_load_barrier_assist, native_zgc_store_barrier,
+    native_math_sinh, native_math_tan, native_math_tanh, native_zgc_load_barrier_assist,
+    native_zgc_store_barrier,
 };
 use specialization::{
     CompilationRequest, SpecializationCoordinator, ValidatedFeedbackSlot, VariantKey,
@@ -488,12 +487,6 @@ impl NativeSymbolResolver for NativeHostRegistry {
             NativeHostSymbol::MathPow => native_math_pow as *const (),
             NativeHostSymbol::ZgcLoadBarrierAssist => native_zgc_load_barrier_assist as *const (),
             NativeHostSymbol::ZgcStoreBarrier => native_zgc_store_barrier as *const (),
-            NativeHostSymbol::StringAdd => native_string_add as *const (),
-            NativeHostSymbol::StringBuilderAppend => native_string_builder_append as *const (),
-            NativeHostSymbol::StringBuilderAppendNumber => {
-                native_string_builder_append_number as *const ()
-            }
-            NativeHostSymbol::StringBuilderFinish => native_string_builder_finish as *const (),
         };
         Some((pointer).addr())
     }
@@ -965,8 +958,6 @@ struct NativeAgentState {
     strings: Vec<RuntimeString>,
     string_ids: HashMap<RuntimeString, u32>,
     string_free: Vec<u32>,
-    string_occupied: Vec<bool>,
-    string_ages: Vec<u8>,
     activations: Vec<NativeActivation>,
     pending_stack_trace: Option<String>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
@@ -1161,8 +1152,6 @@ impl NativeAgentState {
             strings: Vec::new(),
             string_ids: HashMap::new(),
             string_free: Vec::new(),
-            string_occupied: Vec::new(),
-            string_ages: Vec::new(),
             activations: Vec::new(),
             maps: HashMap::new(),
             sets: HashMap::new(),
@@ -1445,8 +1434,6 @@ impl NativeAgentState {
         self.array_property_order.clear();
         self.string_ids.clear();
         self.string_free.clear();
-        self.string_occupied.clear();
-        self.string_ages.clear();
         self.array_accessors.clear();
         self.array_property_flags.clear();
         self.activations.clear();
@@ -1785,13 +1772,6 @@ impl NativeAgentState {
             .and_then(|handle| self.strings.get(handle))
     }
 
-    fn string_mut(&mut self, encoded: i64) -> Option<&mut RuntimeString> {
-        (value::is_string(encoded) || value::is_bigint(encoded))
-            .then(|| value::decode_handle(encoded))
-            .and_then(|handle| usize::try_from(handle).ok())
-            .and_then(|handle| self.strings.get_mut(handle))
-    }
-
     fn create_symbol(&mut self, description: Option<RuntimeString>) -> Option<i64> {
         let handle = self.next_symbol_handle;
         self.next_symbol_handle = handle.checked_add(1)?;
@@ -1820,7 +1800,7 @@ impl NativeAgentState {
 
     fn text_matches(&self, encoded: i64, expected: &str) -> bool {
         self.string(encoded).is_some_and(|text| {
-            text.as_flat_slice()
+            text.as_utf16_units()
                 .iter()
                 .copied()
                 .eq(expected.encode_utf16())
@@ -3971,68 +3951,27 @@ impl NativeAgentState {
         self.intern_runtime_string(RuntimeString::from(text), tag)
     }
 
-    fn intern_utf16_slice(&mut self, units: &[u16], tag: u64) -> Option<i64> {
+    fn intern_runtime_string(&mut self, text: RuntimeString, tag: u64) -> Option<i64> {
         if tag == value::TAG_STRING
-            && units.len() <= 64
-            && let Some(handle) = self.string_ids.get(units).copied()
+            && let Some(handle) = self.string_ids.get(&text).copied()
         {
             let encoded = value::encode_runtime_string_handle(handle);
             self.gc.record_host_write(encoded, None, Some(encoded));
             return Some(encoded);
         }
-        self.intern_runtime_string(RuntimeString::from_utf16_units(units.to_vec()), tag)
-    }
-
-    fn intern_runtime_string(&mut self, text: RuntimeString, tag: u64) -> Option<i64> {
-        let allocated_bytes = text.estimated_owned_bytes();
-        if tag == value::TAG_STRING {
-            if text.utf16_len() > 64 || !text.is_flat() {
-                let handle = match self.string_free.pop() {
-                    Some(handle) => {
-                        self.string_occupied[handle as usize] = true;
-                        self.string_ages[handle as usize] = 0;
-                        handle
-                    }
-                    None => {
-                        let handle = u32::try_from(self.strings.len()).ok()?;
-                        self.strings.push(RuntimeString::empty());
-                        self.string_occupied.push(true);
-                        self.string_ages.push(0);
-                        handle
-                    }
-                };
-                self.strings[handle as usize] = text;
-                self.gc.observe_host_allocation(allocated_bytes);
-                let encoded = value::encode_runtime_string_handle(handle);
-                self.gc.record_host_write(encoded, None, Some(encoded));
-                return Some(encoded);
-            }
-            if let Some(handle) = self.string_ids.get(&text).copied() {
-                let encoded = value::encode_runtime_string_handle(handle);
-                self.gc.record_host_write(encoded, None, Some(encoded));
-                return Some(encoded);
-            }
-        }
-        // 复用空闲槽；无空闲才扩表。TAG_STRING 且扁平小串才入 string_ids，大串/rope 节点跳过去重。
+        // 复用空闲槽；无空闲才扩表。TAG_STRING 写入反向映射，TAG_BIGINT 不进 string_ids。
         let handle = match self.string_free.pop() {
-            Some(handle) => {
-                self.string_occupied[handle as usize] = true;
-                self.string_ages[handle as usize] = 0;
-                handle
-            }
+            Some(handle) => handle,
             None => {
                 let handle = u32::try_from(self.strings.len()).ok()?;
                 self.strings.push(RuntimeString::empty());
-                self.string_occupied.push(true);
-                self.string_ages.push(0);
                 handle
             }
         };
-        if tag == value::TAG_STRING && text.is_flat() && text.utf16_len() <= 64 {
+        if tag == value::TAG_STRING {
             self.string_ids.insert(text.clone(), handle);
         }
         self.strings[handle as usize] = text;
-        self.gc.observe_host_allocation(allocated_bytes);
         let encoded = if tag == value::TAG_STRING {
             value::encode_runtime_string_handle(handle)
         } else {
@@ -4117,13 +4056,6 @@ impl NativeAgentState {
         &mut self,
         ctx: &NativeVmContext,
     ) -> Result<bool, NativeRuntimeError> {
-        if self.gc.host_collection_requested() {
-            self.collect_garbage(ctx)?;
-            return Ok(true);
-        }
-        if !self.gc.take_safepoint_poll_request() {
-            return Ok(false);
-        }
         self.poll_gc(ctx)
     }
 

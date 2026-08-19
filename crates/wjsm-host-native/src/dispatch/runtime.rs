@@ -3,7 +3,6 @@ use num_traits::{FromPrimitive, Zero};
 use wjsm_gc::{HeapAccessV2Error, StopTheWorldCollectorError};
 
 use crate::gc::NativeGcError;
-use wjsm_host::RuntimeString;
 use wjsm_ir::{constants, value};
 use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
@@ -112,16 +111,15 @@ pub(super) fn dispatch_runtime(
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         NativeRuntimeOp::StringConcat => {
-            let mut parts = Vec::with_capacity(args.len());
+            let mut text = String::new();
             for part in args {
-                let part = match to_runtime_string_coerced(ctx, state, *part) {
-                    Ok(part) => part,
+                match to_string_coerced(ctx, state, *part) {
+                    Ok(part) => text.push_str(&part),
                     Err(exception) => return exception,
-                };
-                parts.push(part);
+                }
             }
             state
-                .intern_runtime_string(RuntimeString::concat_many(parts), value::TAG_STRING)
+                .intern_text(text, value::TAG_STRING)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         NativeRuntimeOp::NewObject | NativeRuntimeOp::NewArray => {
@@ -526,7 +524,37 @@ pub(super) fn dispatch_runtime(
             let [left, right] = args else {
                 return fail_dispatch(ctx);
             };
-            binary_add(ctx, state, *left, *right)
+            let left = match to_primitive(ctx, state, *left, PrimitiveHint::Default) {
+                Ok(value) => value,
+                Err(exception) => return exception,
+            };
+            let right = match to_primitive(ctx, state, *right, PrimitiveHint::Default) {
+                Ok(value) => value,
+                Err(exception) => return exception,
+            };
+            if value::is_string(left) || value::is_string(right) {
+                let left = match to_string_coerced(ctx, state, left) {
+                    Ok(text) => text,
+                    Err(exception) => return exception,
+                };
+                let right = match to_string_coerced(ctx, state, right) {
+                    Ok(text) => text,
+                    Err(exception) => return exception,
+                };
+                state
+                    .intern_text(format!("{left}{right}"), value::TAG_STRING)
+                    .unwrap_or_else(|| fail_dispatch(ctx))
+            } else if value::is_bigint(left) || value::is_bigint(right) {
+                super::bigint::dispatch_bigint(
+                    ctx,
+                    state,
+                    wjsm_ir::Builtin::BigIntAdd,
+                    &[left, right],
+                )
+                .expect("BigIntAdd is handled")
+            } else {
+                binary_number(ctx, state, &[left, right], |left, right| left + right)
+            }
         }
         NativeRuntimeOp::BinarySub => numeric_or_bigint(
             ctx,
@@ -644,40 +672,6 @@ pub(super) fn dispatch_runtime(
                 !equal
             })
         }
-    }
-}
-
-pub(super) fn binary_add(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    left: i64,
-    right: i64,
-) -> i64 {
-    let left = match to_primitive(ctx, state, left, PrimitiveHint::Default) {
-        Ok(value) => value,
-        Err(exception) => return exception,
-    };
-    let right = match to_primitive(ctx, state, right, PrimitiveHint::Default) {
-        Ok(value) => value,
-        Err(exception) => return exception,
-    };
-    if value::is_string(left) || value::is_string(right) {
-        let left = match primitive_to_runtime_string(ctx, state, left) {
-            Ok(text) => text,
-            Err(exception) => return exception,
-        };
-        let right = match primitive_to_runtime_string(ctx, state, right) {
-            Ok(text) => text,
-            Err(exception) => return exception,
-        };
-        state
-            .intern_runtime_string(RuntimeString::concat(left, right), value::TAG_STRING)
-            .unwrap_or_else(|| fail_dispatch(ctx))
-    } else if value::is_bigint(left) || value::is_bigint(right) {
-        super::bigint::dispatch_bigint(ctx, state, wjsm_ir::Builtin::BigIntAdd, &[left, right])
-            .expect("BigIntAdd is handled")
-    } else {
-        binary_number(ctx, state, &[left, right], |left, right| left + right)
     }
 }
 
@@ -1197,7 +1191,7 @@ pub(super) fn get_property_with_receiver(
     {
         let unit = state
             .string(object)
-            .and_then(|text| text.code_unit_at(index as usize));
+            .and_then(|text| text.as_utf16_units().get(index as usize).copied());
         return Ok(unit
             .and_then(|unit| {
                 state.intern_runtime_string(
@@ -2349,36 +2343,6 @@ pub(super) fn to_number_coerced(
     to_number(state, primitive).ok_or_else(|| fail_dispatch(ctx))
 }
 
-pub(super) fn to_runtime_string_coerced(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    encoded: i64,
-) -> Result<RuntimeString, i64> {
-    let primitive = to_primitive(ctx, state, encoded, PrimitiveHint::String)?;
-    primitive_to_runtime_string(ctx, state, primitive)
-}
-
-fn primitive_to_runtime_string(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    primitive: i64,
-) -> Result<RuntimeString, i64> {
-    if value::is_symbol(primitive) {
-        return Err(type_error(
-            ctx,
-            state,
-            "Cannot convert a Symbol value to a string",
-        ));
-    }
-    if value::is_string(primitive) || value::is_bigint(primitive) {
-        return state
-            .string(primitive)
-            .cloned()
-            .ok_or_else(|| fail_dispatch(ctx));
-    }
-    Ok(RuntimeString::from(render_value(state, primitive)))
-}
-
 pub(crate) fn to_string_coerced(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -2481,7 +2445,7 @@ pub(super) fn strict_equal(state: &NativeAgentState, left: i64, right: i64) -> b
         state
             .string(left)
             .zip(state.string(right))
-            .is_some_and(|(left, right)| left == right)
+            .is_some_and(|(left, right)| left.as_utf16_units() == right.as_utf16_units())
     } else if value::is_bigint(left) && value::is_bigint(right) {
         super::bigint::read(state, left) == super::bigint::read(state, right)
     } else {

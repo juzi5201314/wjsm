@@ -1222,9 +1222,6 @@ impl Lowerer {
         }
         // direct_call pass：标记可直接调用的函数并替换绑定读取为 FunctionRef。
         crate::passes::direct_call::run(&mut self.module);
-        // string_concat pass：融合已证明的原始值拼接链，并把不逃逸的局部
-        // 字符串累加器降为可变 builder，避免循环中反复分配中间字符串。
-        crate::passes::string_concat::run(&mut self.module);
         // array_inline pass：展开可静态解析回调的数组高阶函数为显式循环，
         // 使 inline_for_ea 能内联 direct_callable 回调。
         crate::passes::array_inline::run(&mut self.module);

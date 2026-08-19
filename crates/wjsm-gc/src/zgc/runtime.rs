@@ -1,6 +1,6 @@
 //! 生产并发分代 ZGC 的唯一算法 owner。
 
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -60,8 +60,8 @@ struct RuntimeState {
     generation: MarkGeneration,
     snapshot: Option<Arc<RootSnapshot>>,
     pending: VecDeque<i64>,
-    live_host_values: HashSet<i64>,
-    visited_edge_owners: HashSet<i64>,
+    live_host_values: BTreeSet<i64>,
+    visited_edge_owners: BTreeSet<i64>,
     marked_handles: usize,
     bridge_handles: BTreeSet<u32>,
     marked_bytes: u64,
@@ -84,8 +84,8 @@ impl RuntimeState {
             generation: MarkGeneration::Young,
             snapshot: None,
             pending: VecDeque::with_capacity(packet_capacity),
-            live_host_values: HashSet::with_capacity(packet_capacity),
-            visited_edge_owners: HashSet::with_capacity(packet_capacity),
+            live_host_values: BTreeSet::new(),
+            visited_edge_owners: BTreeSet::new(),
             marked_handles: 0,
             marked_bytes: 0,
             started_at: None,
@@ -107,7 +107,7 @@ struct OldMarkState {
     active: bool,
     snapshot: Option<Arc<RootSnapshot>>,
     pending: VecDeque<i64>,
-    live_host_values: HashSet<i64>,
+    live_host_values: BTreeSet<i64>,
     bridge_handles: BTreeSet<u32>,
     marked_handles: usize,
     marked_bytes: u64,
@@ -121,7 +121,7 @@ impl OldMarkState {
             active: false,
             snapshot: None,
             pending: VecDeque::with_capacity(packet_capacity),
-            live_host_values: HashSet::with_capacity(packet_capacity),
+            live_host_values: BTreeSet::new(),
             bridge_handles: BTreeSet::new(),
             marked_handles: 0,
             marked_bytes: 0,
@@ -405,7 +405,7 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
             return Ok(());
         }
         drop(heap);
-        Ok(())
+        self.enqueue_snapshot_edges(encoded)
     }
 
     fn activate_ephemerons(&self) -> Result<bool, GenerationalZgcError> {
@@ -681,7 +681,6 @@ pub struct GenerationalZgc<M: GrowableHeapMemory + Clone + Send + Sync + 'static
     telemetry: GcTelemetry,
     next_epoch: AtomicU64,
     shutdown: AtomicBool,
-    force_young: AtomicBool,
 }
 
 impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
@@ -721,7 +720,6 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
             telemetry: GcTelemetry::default(),
             next_epoch: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
-            force_young: AtomicBool::new(false),
         })
     }
 
@@ -750,7 +748,7 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
     }
 
     pub fn cycle_active(&self) -> bool {
-        self.shared.state.lock().phase != RuntimePhase::Idle || self.shared.old.lock().active
+        self.shared.state.lock().phase != RuntimePhase::Idle
     }
     pub fn mark_black_allocation(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
         let should_mark = {
@@ -800,10 +798,6 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
             .observe_allocation(DirectorGeneration::Young, bytes, elapsed);
     }
 
-    pub fn request_young_collection(&self) {
-        self.force_young.store(true, Ordering::Release);
-    }
-
     pub fn safepoint_action(&self) -> GcSafepointAction {
         let phase = self.shared.state.lock().phase;
         match phase {
@@ -828,18 +822,13 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
                 let (young_live, old_live) = heap
                     .generation_bytes()
                     .expect("managed page metadata must resolve every live handle");
-                let forced_young = self.force_young.swap(false, Ordering::AcqRel);
                 let mut director = self.director.lock();
                 director.update_space(heap.free_bytes(), 0);
-                let generation = if forced_young {
-                    MarkGeneration::Young
-                } else {
-                    match director.evaluate(young_live, old_live) {
-                        DirectorDecision::StartYoung => MarkGeneration::Young,
-                        DirectorDecision::StartOld => MarkGeneration::Old,
-                        DirectorDecision::Idle | DirectorDecision::Continue => {
-                            return GcSafepointAction::Idle;
-                        }
+                let generation = match director.evaluate(young_live, old_live) {
+                    DirectorDecision::StartYoung => MarkGeneration::Young,
+                    DirectorDecision::StartOld => MarkGeneration::Old,
+                    DirectorDecision::Idle | DirectorDecision::Continue => {
+                        return GcSafepointAction::Idle;
                     }
                 };
                 drop(director);
@@ -1423,11 +1412,7 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
             retired_handles: state.retired_handles.clone(),
             relocated_handles: state.relocation_handles.clone(),
             promoted_handles: state.promoted_handles.clone(),
-            live_host_values: {
-                let mut values: Vec<_> = state.live_host_values.iter().copied().collect();
-                values.sort_unstable();
-                values
-            },
+            live_host_values: state.live_host_values.iter().copied().collect(),
             cleans_host_tables: generation != MarkGeneration::Young,
             stats: GcStats {
                 marked: state.marked_handles,

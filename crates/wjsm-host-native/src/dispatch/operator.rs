@@ -210,8 +210,8 @@ fn abstract_compare(state: &NativeAgentState, left: i64, right: i64) -> Option<O
     if value::is_string(left) && value::is_string(right) {
         return state
             .string(left)?
-            .as_flat_slice()
-            .partial_cmp(&state.string(right)?.as_flat_slice());
+            .as_utf16_units()
+            .partial_cmp(state.string(right)?.as_utf16_units());
     }
     match (value::is_bigint(left), value::is_bigint(right)) {
         (true, true) => bigint_compare(state, left, right),
