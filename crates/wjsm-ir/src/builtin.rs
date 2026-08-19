@@ -518,6 +518,11 @@ pub enum Builtin {
     ToBoolean,
     /// `Object.prototype.propertyIsEnumerable`
     PropertyIsEnumerable,
+    // ── 字符串累加器优化辅助 builtin（string_concat pass）──
+    /// 向编译器证明不逃逸的局部字符串累加器追加片段。
+    StringBuilderAppend,
+    /// 在累加器首次可观察前冻结其可变缓冲区。
+    StringBuilderFinish,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -553,7 +558,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::PropertyIsEnumerable as u16
+        Self::StringBuilderFinish as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1037,6 +1042,8 @@ impl Builtin {
             Self::ArrayHasElement => "array.has_element",
             Self::ToBoolean => "to_boolean",
             Self::PropertyIsEnumerable => "property_is_enumerable",
+            Self::StringBuilderAppend => "string.builder_append",
+            Self::StringBuilderFinish => "string.builder_finish",
         }
     }
 }

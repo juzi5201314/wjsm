@@ -36,7 +36,7 @@ fn transform_scalar_runs<F>(input: &RuntimeString, mut transform: F) -> RuntimeS
 where
     F: FnMut(&str) -> String,
 {
-    let units = input.as_utf16_units();
+    let units = input.as_flat_slice();
     let mut out = Vec::with_capacity(units.len());
     let mut run = String::new();
     let mut i = 0usize;
@@ -114,12 +114,12 @@ fn is_ecmascript_trim_whitespace(cp: u32) -> bool {
 }
 
 fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) -> RuntimeString {
-    let units = input.as_utf16_units();
+    let units = input.as_flat_slice();
     let mut start = 0usize;
     let mut end = units.len();
     if trim_start {
         while start < end {
-            let Some((cp, width, scalar)) = code_point_width_at(units, start) else {
+            let Some((cp, width, scalar)) = code_point_width_at(&units, start) else {
                 break;
             };
             if !scalar || !is_ecmascript_trim_whitespace(cp) {
@@ -130,7 +130,8 @@ fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) 
     }
     if trim_end {
         while start < end {
-            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(units, end) else {
+            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(&units, end)
+            else {
                 break;
             };
             if !scalar || !is_ecmascript_trim_whitespace(cp) {
@@ -143,7 +144,7 @@ fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) 
 }
 
 fn repeat_units_to_len(source: &RuntimeString, len: usize) -> RuntimeString {
-    let source_units = source.as_utf16_units();
+    let source_units = source.as_flat_slice();
     if len == 0 || source_units.is_empty() {
         return RuntimeString::empty();
     }
@@ -162,23 +163,25 @@ pub fn replace_all_units(
     search: &RuntimeString,
     replacement: &RuntimeString,
 ) -> RuntimeString {
+    let replacement_flat = replacement.as_flat_slice();
+    let haystack_flat = haystack.as_flat_slice();
     let mut out = Vec::new();
     if search.is_empty() {
-        out.extend_from_slice(replacement.as_utf16_units());
-        for unit in haystack.as_utf16_units() {
+        out.extend_from_slice(&replacement_flat);
+        for unit in haystack_flat {
             out.push(*unit);
-            out.extend_from_slice(replacement.as_utf16_units());
+            out.extend_from_slice(&replacement_flat);
         }
         return RuntimeString::from_utf16_units(out);
     }
     let search_len = search.utf16_len();
     let mut pos = 0usize;
     while let Some(found) = haystack.find_units(search, pos) {
-        out.extend_from_slice(&haystack.as_utf16_units()[pos..found]);
-        out.extend_from_slice(replacement.as_utf16_units());
+        out.extend_from_slice(&haystack_flat[pos..found]);
+        out.extend_from_slice(&replacement_flat);
         pos = found + search_len;
     }
-    out.extend_from_slice(&haystack.as_utf16_units()[pos..]);
+    out.extend_from_slice(&haystack_flat[pos..]);
     RuntimeString::from_utf16_units(out)
 }
 

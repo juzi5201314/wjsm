@@ -455,7 +455,7 @@ fn btoa(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     };
     let runtime = RuntimeString::from(input);
     let Some(bytes) = runtime
-        .as_utf16_units()
+        .as_flat_slice()
         .iter()
         .copied()
         .map(u8::try_from)
