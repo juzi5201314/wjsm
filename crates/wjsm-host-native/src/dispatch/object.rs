@@ -393,9 +393,10 @@ pub(crate) fn own_keys(
         return callable_own_keys(state, encoded, enumerable_only);
     }
     if value::is_string(encoded) {
-        let units = state.string(encoded)?.as_utf16_units().to_vec();
-        let mut properties = Vec::with_capacity(units.len());
-        for (index, unit) in units.into_iter().enumerate() {
+        let len = state.string(encoded)?.utf16_len();
+        let mut properties = Vec::with_capacity(len);
+        for index in 0..len {
+            let unit = state.string(encoded)?.code_unit_at(index)?;
             let key = state.intern_text(index.to_string(), value::TAG_STRING)?;
             let stored = state.intern_runtime_string(
                 wjsm_host::RuntimeString::from_utf16_units(vec![unit]),

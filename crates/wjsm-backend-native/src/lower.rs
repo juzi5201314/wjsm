@@ -31,6 +31,11 @@ use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_obje
 use crate::{NativeCompileError, NativeObject};
 
 const HOST_OPERATION_SYMBOL: NativeHostSymbol = NativeHostSymbol::HostOperationDispatcher;
+const STRING_ADD_SYMBOL: NativeHostSymbol = NativeHostSymbol::StringAdd;
+const STRING_BUILDER_APPEND_SYMBOL: NativeHostSymbol = NativeHostSymbol::StringBuilderAppend;
+const STRING_BUILDER_APPEND_NUMBER_SYMBOL: NativeHostSymbol =
+    NativeHostSymbol::StringBuilderAppendNumber;
+const STRING_BUILDER_FINISH_SYMBOL: NativeHostSymbol = NativeHostSymbol::StringBuilderFinish;
 const DYNAMIC_BINARY_BASE: u32 = 0x1_0000;
 const DYNAMIC_UNARY_BASE: u32 = 0x1_0100;
 const DYNAMIC_COMPARE_BASE: u32 = 0x1_0200;
@@ -664,6 +669,10 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub function_id: FuncId,
     pub dispatcher: &'a DeclaredFunction,
     pub barrier_thunks: &'a DeclaredBarrierThunks,
+    pub string_add: &'a DeclaredFunction,
+    pub string_builder_append: &'a DeclaredFunction,
+    pub string_builder_append_number: &'a DeclaredFunction,
+    pub string_builder_finish: &'a DeclaredFunction,
     pub math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
     pub root_bitmaps: &'a [DeclaredData],
     pub f64_values: &'a HashSet<ValueId>,
@@ -684,6 +693,10 @@ struct LoweringCx<'a, 'f> {
     variables: &'a HashMap<ValueId, Variable>,
     root_frame: &'a mut FrameLowering,
     dispatcher: ir::FuncRef,
+    string_add: ir::FuncRef,
+    string_builder_append: ir::FuncRef,
+    string_builder_append_number: ir::FuncRef,
+    string_builder_finish: ir::FuncRef,
     ctx: ir::Value,
 }
 
@@ -717,7 +730,9 @@ struct InstructionTables<'a> {
     function_index: u32,
     barrier_thunks: &'a BarrierThunks,
     f64_values: &'a HashSet<ValueId>,
+    string_values: &'a HashSet<ValueId>,
     math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
+    hoisted_constants: &'a HashMap<ConstantId, ir::Value>,
     imported_math_thunks: &'a mut HashMap<Builtin, ir::FuncRef>,
     slow_call_signature: ir::SigRef,
     variable_slots: &'a HashMap<String, u32>,
@@ -769,6 +784,10 @@ fn compile_program_inner(
     let signature = slow_entry_signature(module.isa().default_call_conv());
     let function_ids = declare_functions(&mut module, program, &signature)?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
+    let string_add = declare_string_add_thunk(&mut module)?;
+    let string_builder_append = declare_string_builder_append_thunk(&mut module)?;
+    let string_builder_append_number = declare_string_builder_append_number_thunk(&mut module)?;
+    let string_builder_finish = declare_string_builder_finish_thunk(&mut module)?;
     let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
     let math_thunks = declare_math_thunks(&mut module, program, &inferred_f64)?;
@@ -806,6 +825,13 @@ fn compile_program_inner(
     let root_bitmaps = declare_root_bitmaps(&mut module, max_roots)?;
 
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
+    let string_add_decl = DeclaredFunction::snapshot(module.declarations(), string_add);
+    let string_builder_append_decl =
+        DeclaredFunction::snapshot(module.declarations(), string_builder_append);
+    let string_builder_append_number_decl =
+        DeclaredFunction::snapshot(module.declarations(), string_builder_append_number);
+    let string_builder_finish_decl =
+        DeclaredFunction::snapshot(module.declarations(), string_builder_finish);
     let barrier_thunks =
         DeclaredBarrierThunks::snapshot(module.declarations(), zgc_load_barrier, zgc_store_barrier);
     let math_thunk_decls: HashMap<Builtin, DeclaredFunction> = math_thunks
@@ -844,6 +870,10 @@ fn compile_program_inner(
                 signature: &signature,
                 function_id: function_ids[index],
                 dispatcher: &dispatcher_decl,
+                string_add: &string_add_decl,
+                string_builder_append: &string_builder_append_decl,
+                string_builder_append_number: &string_builder_append_number_decl,
+                string_builder_finish: &string_builder_finish_decl,
                 barrier_thunks: &barrier_thunks,
                 math_thunks: &math_thunk_decls,
                 root_bitmaps: &bitmap_decls,
@@ -1050,6 +1080,74 @@ pub(crate) fn declare_host_dispatcher(
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
 }
 
+pub(crate) fn declare_string_add_thunk(
+    module: &mut ObjectModule,
+) -> Result<FuncId, NativeCompileError> {
+    let pointer_type = module.target_config().pointer_type();
+    let mut signature = module.make_signature();
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.returns.push(AbiParam::new(types::I64));
+    module
+        .declare_function(STRING_ADD_SYMBOL.symbol_name(), Linkage::Import, &signature)
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
+}
+pub(crate) fn declare_string_builder_append_thunk(
+    module: &mut ObjectModule,
+) -> Result<FuncId, NativeCompileError> {
+    let pointer_type = module.target_config().pointer_type();
+    let mut signature = module.make_signature();
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.returns.push(AbiParam::new(types::I64));
+    module
+        .declare_function(
+            STRING_BUILDER_APPEND_SYMBOL.symbol_name(),
+            Linkage::Import,
+            &signature,
+        )
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
+}
+
+pub(crate) fn declare_string_builder_append_number_thunk(
+    module: &mut ObjectModule,
+) -> Result<FuncId, NativeCompileError> {
+    let pointer_type = module.target_config().pointer_type();
+    let mut signature = module.make_signature();
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.params.push(AbiParam::new(types::F64));
+    signature.returns.push(AbiParam::new(types::I64));
+    module
+        .declare_function(
+            STRING_BUILDER_APPEND_NUMBER_SYMBOL.symbol_name(),
+            Linkage::Import,
+            &signature,
+        )
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
+}
+
+pub(crate) fn declare_string_builder_finish_thunk(
+    module: &mut ObjectModule,
+) -> Result<FuncId, NativeCompileError> {
+    let pointer_type = module.target_config().pointer_type();
+    let mut signature = module.make_signature();
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.params.push(AbiParam::new(types::I64));
+    signature.returns.push(AbiParam::new(types::I64));
+    module
+        .declare_function(
+            STRING_BUILDER_FINISH_SYMBOL.symbol_name(),
+            Linkage::Import,
+            &signature,
+        )
+        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
+}
+
 pub(crate) fn declare_barrier_thunks(
     module: &mut ObjectModule,
 ) -> Result<(FuncId, FuncId), NativeCompileError> {
@@ -1125,6 +1223,10 @@ pub(crate) fn declare_math_thunks(
             NativeSignature::F64Unary => &unary_signature,
             NativeSignature::F64Binary => &binary_signature,
             NativeSignature::HostOperation
+            | NativeSignature::ValueBinary
+            | NativeSignature::ValueUnary
+            | NativeSignature::ValueTernary
+            | NativeSignature::ValueBinaryF64
             | NativeSignature::ZgcLoadBarrier
             | NativeSignature::ZgcStoreBarrier => {
                 unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
@@ -1149,6 +1251,10 @@ fn math_thunk_signature(module: &ObjectModule, signature: NativeSignature) -> Si
             clif_signature.params.push(AbiParam::new(types::F64));
         }
         NativeSignature::HostOperation
+        | NativeSignature::ValueBinary
+        | NativeSignature::ValueUnary
+        | NativeSignature::ValueTernary
+        | NativeSignature::ValueBinaryF64
         | NativeSignature::ZgcLoadBarrier
         | NativeSignature::ZgcStoreBarrier => {
             unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
@@ -1179,6 +1285,10 @@ pub(crate) fn lower_function(
     let ir_function = input.ir_function;
     let function_index = u32::try_from(input.index).context("function index exceeds u32")?;
     let host_dispatcher = input.dispatcher;
+    let string_add = input.string_add;
+    let string_builder_append = input.string_builder_append;
+    let string_builder_append_number = input.string_builder_append_number;
+    let string_builder_finish = input.string_builder_finish;
     let math_thunks = input.math_thunks;
     let f64_values = input.f64_values;
     let variable_slots = input.variable_slots;
@@ -1211,12 +1321,19 @@ pub(crate) fn lower_function(
     let boxed_local_indices = frame_local_indices(&boxed_local_order);
     let phi_edges = collect_phi_edges(ir_function);
     let dispatcher_ref = host_dispatcher.import(builder.func);
+    let string_add_ref = string_add.import(builder.func);
+    let string_builder_append_ref = string_builder_append.import(builder.func);
+    let string_builder_append_number_ref = string_builder_append_number.import(builder.func);
+    let string_builder_finish_ref = string_builder_finish.import(builder.func);
     let mut imported_math_thunks: HashMap<Builtin, ir::FuncRef> =
         HashMap::with_capacity(math_thunks.len());
     let barrier_thunks = input.barrier_thunks.import(builder.func);
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
     let constants = program.constants();
+    let boolean_values = infer_boolean_values(ir_function, constants);
+    let string_values = immutable_string_values(ir_function, constants);
+    let immutable_constant_ids = immutable_constant_ids(ir_function, constants);
     // root frame 的基址值必须在入口块物化：入口块支配其余所有块，基址可跨块复用。
 
     builder.switch_to_block(entry);
@@ -1235,14 +1352,45 @@ pub(crate) fn lower_function(
             variables: &variables,
             root_frame: &mut root_frame,
             dispatcher: dispatcher_ref,
+            string_add: string_add_ref,
+            string_builder_append: string_builder_append_ref,
+            string_builder_append_number: string_builder_append_number_ref,
+            string_builder_finish: string_builder_finish_ref,
             ctx: ctx_value,
         };
+        lower_function_parameters(
+            &mut cx,
+            ir_function,
+            variable_slots,
+            &frame_locals,
+            &boxed_local_indices,
+            specialized_tags,
+        )?;
+        cx.publish(root_plan.before_instruction(ir_function.entry(), 0), &[])?;
+        let mut hoisted_constants = HashMap::with_capacity(immutable_constant_ids.len());
+        for constant_id in &immutable_constant_ids {
+            let constant = &constants
+                [usize::try_from(constant_id.0).context("constant index does not fit usize")?];
+            let operation = match constant {
+                Constant::String(_) => NativeRuntimeOp::MaterializeString,
+                Constant::BigInt(_) => NativeRuntimeOp::MaterializeBigInt,
+                _ => unreachable!("immutable constant collector only returns strings and BigInts"),
+            };
+            let index = cx
+                .builder
+                .ins()
+                .iconst(types::I64, i64::from(constant_id.0));
+            let result = cx.call(operation.id(), &[index], None)?;
+            hoisted_constants.insert(*constant_id, result);
+        }
         let mut tables = InstructionTables {
             constants,
             function_index,
             barrier_thunks: &barrier_thunks,
             f64_values,
+            string_values: &string_values,
             math_thunks,
+            hoisted_constants: &hoisted_constants,
             imported_math_thunks: &mut imported_math_thunks,
             slow_call_signature,
             variable_slots,
@@ -1250,14 +1398,6 @@ pub(crate) fn lower_function(
             frame_local_indices: &boxed_local_indices,
             ic_slots,
         };
-        lower_function_parameters(
-            &mut cx,
-            ir_function,
-            tables.variable_slots,
-            tables.frame_locals,
-            tables.frame_local_indices,
-            specialized_tags,
-        )?;
 
         for block in ir_function.blocks() {
             let clif_block = blocks[&block.id()];
@@ -1291,12 +1431,57 @@ pub(crate) fn lower_function(
                 block.id(),
                 block.terminator(),
                 constants,
+                &boolean_values,
                 &blocks,
                 &phi_edges,
             )?;
         }
         cx.root_frame.finish(cx.builder);
         cx.builder.seal_all_blocks();
+    }
+
+    fn immutable_constant_ids(
+        function: &wjsm_ir::Function,
+        constants: &[Constant],
+    ) -> Vec<ConstantId> {
+        let mut ids = HashSet::new();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let Instruction::Const { constant, .. } = instruction else {
+                    continue;
+                };
+                let Some(value) = constants.get(constant.0 as usize) else {
+                    continue;
+                };
+                if matches!(value, Constant::String(_) | Constant::BigInt(_)) {
+                    ids.insert(*constant);
+                }
+            }
+        }
+        let mut ids: Vec<_> = ids.into_iter().collect();
+        ids.sort_unstable_by_key(|constant| constant.0);
+
+        ids
+    }
+    fn immutable_string_values(
+        function: &wjsm_ir::Function,
+        constants: &[Constant],
+    ) -> HashSet<ValueId> {
+        function
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .filter_map(|instruction| {
+                let Instruction::Const { dest, constant } = instruction else {
+                    return None;
+                };
+                matches!(
+                    constants.get(usize::try_from(constant.0).ok()?),
+                    Some(Constant::String(_) | Constant::BigInt(_))
+                )
+                .then_some(*dest)
+            })
+            .collect()
     }
     builder.finalize(target_config);
     Ok(())
@@ -1457,21 +1642,19 @@ fn lower_instruction(
                     .builder
                     .ins()
                     .iconst(types::I64, value::encode_f64(f64::from(module.0))),
-                Constant::String(_) | Constant::BigInt(_) | Constant::RegExp { .. } => {
-                    let operation = match constant {
-                        Constant::String(_) => NativeRuntimeOp::MaterializeString,
-                        Constant::BigInt(_) => NativeRuntimeOp::MaterializeBigInt,
-                        Constant::RegExp { .. } => NativeRuntimeOp::MaterializeRegExp,
-                        _ => unreachable!("guard restricts materialized constants"),
-                    };
+                Constant::String(_) | Constant::BigInt(_) => tables
+                    .hoisted_constants
+                    .get(constant_id)
+                    .copied()
+                    .context("immutable constant was not hoisted")?,
+                Constant::RegExp { .. } => {
                     let index = cx
                         .builder
                         .ins()
                         .iconst(types::I64, i64::from(constant_id.0));
-                    let result = cx.call(operation.id(), &[index], None)?;
-                    if matches!(constant, Constant::RegExp { .. }) {
-                        return_if_exception(cx.builder, result, cx.root_frame, cx.ctx)?;
-                    }
+                    let result =
+                        cx.call(NativeRuntimeOp::MaterializeRegExp.id(), &[index], None)?;
+                    return_if_exception(cx.builder, result, cx.root_frame, cx.ctx)?;
                     result
                 }
             };
@@ -1535,6 +1718,63 @@ fn lower_instruction(
             let result = cx.call(operation, &[lhs, rhs], feedback_ptr)?;
             define_value(cx.builder, cx.variables, *dest, result)
         }
+        // 两侧均已证明是 Number 时，抽象关系比较退化为 IEEE-754 比较。
+        // reverse/invert 仍沿用语义 IR 的四种关系编码，NaN 在取反分支也必须返回 false。
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin: Builtin::AbstractCompare,
+            args,
+        } if args.len() == 4
+            && tables.f64_values.contains(&args[0])
+            && tables.f64_values.contains(&args[1]) =>
+        {
+            let lhs = use_value(cx.builder, cx.variables, args[0])?;
+            let rhs = use_value(cx.builder, cx.variables, args[1])?;
+            let reverse = use_value(cx.builder, cx.variables, args[2])?;
+            let invert = use_value(cx.builder, cx.variables, args[3])?;
+            let lhs = cx
+                .builder
+                .ins()
+                .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
+            let rhs = cx
+                .builder
+                .ins()
+                .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+            let normal = cx
+                .builder
+                .ins()
+                .fcmp(ir::condcodes::FloatCC::LessThan, lhs, rhs);
+            let reversed = cx
+                .builder
+                .ins()
+                .fcmp(ir::condcodes::FloatCC::LessThan, rhs, lhs);
+            let true_value = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_bool(true));
+            let reverse = cx
+                .builder
+                .ins()
+                .icmp(ir::condcodes::IntCC::Equal, reverse, true_value);
+            let invert = cx
+                .builder
+                .ins()
+                .icmp(ir::condcodes::IntCC::Equal, invert, true_value);
+            let relation = cx.builder.ins().select(reverse, reversed, normal);
+            let ordered = cx
+                .builder
+                .ins()
+                .fcmp(ir::condcodes::FloatCC::Ordered, lhs, rhs);
+            let not_relation = cx.builder.ins().bnot(relation);
+            let inverted = cx.builder.ins().band(ordered, not_relation);
+            let condition = cx.builder.ins().select(invert, inverted, relation);
+            let false_value = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_bool(false));
+            let result = cx.builder.ins().select(condition, true_value, false_value);
+            define_value(cx.builder, cx.variables, *dest, result)
+        }
         // 已证明 f64 的单参数 Math builtin：直接发 CLIF 浮点指令，零 host 往返。
         // guard 即类型检查——参数未证明 f64 时本 arm 不匹配，落到下方通用 dispatcher 路径。
         Instruction::CallBuiltin {
@@ -1567,6 +1807,59 @@ fn lower_instruction(
             };
             let result = box_f64_result(cx.builder, result);
             define_value(cx.builder, cx.variables, *dest, result)
+        }
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin: Builtin::StringBuilderAppend,
+            args,
+        } if args.len() == 3
+            && tables.string_values.contains(&args[1])
+            && tables.f64_values.contains(&args[2]) =>
+        {
+            let current = use_value(cx.builder, cx.variables, args[0])?;
+            let first = use_value(cx.builder, cx.variables, args[1])?;
+            let second = use_value(cx.builder, cx.variables, args[2])?;
+            let second = cx
+                .builder
+                .ins()
+                .bitcast(types::F64, ir::MemFlagsData::new(), second);
+            let call = cx.builder.ins().call(
+                cx.string_builder_append_number,
+                &[cx.ctx, current, first, second],
+            );
+            let result = cx.builder.inst_results(call)[0];
+            define_value(cx.builder, cx.variables, *dest, result)
+        }
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin: Builtin::StringBuilderAppend,
+            args,
+        } if args.len() == 3 => {
+            let current = use_value(cx.builder, cx.variables, args[0])?;
+            let first = use_value(cx.builder, cx.variables, args[1])?;
+            let second = use_value(cx.builder, cx.variables, args[2])?;
+            let call = cx
+                .builder
+                .ins()
+                .call(cx.string_builder_append, &[cx.ctx, current, first, second]);
+            let result = cx.builder.inst_results(call)[0];
+            define_value(cx.builder, cx.variables, *dest, result)
+        }
+        Instruction::CallBuiltin {
+            dest,
+            builtin: Builtin::StringBuilderFinish,
+            args,
+        } if args.len() == 1 => {
+            let builder = use_value(cx.builder, cx.variables, args[0])?;
+            let call = cx
+                .builder
+                .ins()
+                .call(cx.string_builder_finish, &[cx.ctx, builder]);
+            if let Some(dest) = dest {
+                let result = cx.builder.inst_results(call)[0];
+                define_value(cx.builder, cx.variables, *dest, result)?;
+            }
+            Ok(())
         }
         // 已证明 f64 的 21 个 libm Math builtin：typed native direct call。
         // guard 即类型检查——实参未证明 f64 时落入下方 dispatcher 路径，
@@ -1619,6 +1912,10 @@ fn lower_instruction(
                         .context("typed math thunk returned no result")?
                 }
                 NativeSignature::HostOperation
+                | NativeSignature::ValueBinary
+                | NativeSignature::ValueUnary
+                | NativeSignature::ValueTernary
+                | NativeSignature::ValueBinaryF64
                 | NativeSignature::ZgcLoadBarrier
                 | NativeSignature::ZgcStoreBarrier => {
                     unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
@@ -2179,23 +2476,21 @@ fn lower_dynamic_binary(
         emit_inline_binary_feedback(cx.builder, cx.ctx, slot, operation, lhs, rhs);
     }
 
-    // 守卫：两边必须都是原始 f64（非 NaN-boxed 的 number）才走原生指令。
-    // string 拼接、BigInt、对象 ToPrimitive 等 NaN-boxed 值一律 miss 落 dispatcher。
+    // number/number 直接发原生浮点指令；加法只要原始操作数一侧已是字符串，
+    // ToPrimitive 后必进入字符串拼接，可绕过通用 dispatcher 直达语义等价 thunk。
     let lhs_is_number = emit_is_number(cx.builder, lhs);
     let rhs_is_number = emit_is_number(cx.builder, rhs);
     let both_numbers = cx.builder.ins().band(lhs_is_number, rhs_is_number);
 
-    let fast_block = cx.builder.create_block();
-    let slow_block = cx.builder.create_block();
+    let number_block = cx.builder.create_block();
+    let non_number_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
     cx.builder
         .ins()
-        .brif(both_numbers, fast_block, &[], slow_block, &[]);
+        .brif(both_numbers, number_block, &[], non_number_block, &[]);
 
-    // 快路径：位模式即 IEEE-754 f64，直接 bitcast 后发原生浮点指令。
-    // NaN 在 box_f64_result 中规范化为运行时一致的正向 quiet NaN。
-    cx.builder.switch_to_block(fast_block);
-    cx.builder.seal_block(fast_block);
+    cx.builder.switch_to_block(number_block);
+    cx.builder.seal_block(number_block);
     let lhs_f64 = cx
         .builder
         .ins()
@@ -2215,9 +2510,42 @@ fn lower_dynamic_binary(
     define_value(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
-    // 慢路径：完整 JS 语义（ToPrimitive、string 拼接、BigInt、异常）。
-    cx.builder.switch_to_block(slow_block);
-    cx.builder.seal_block(slow_block);
+    cx.builder.switch_to_block(non_number_block);
+    cx.builder.seal_block(non_number_block);
+    if op == BinaryOp::Add {
+        let string_tag = cx.builder.ins().iconst(
+            types::I64,
+            i64::try_from(value::TAG_STRING).expect("string tag fits i64"),
+        );
+        let lhs_tag = emit_feedback_tag_code(cx.builder, lhs);
+        let rhs_tag = emit_feedback_tag_code(cx.builder, rhs);
+        let lhs_is_string = cx.builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            lhs_tag,
+            string_tag,
+        );
+        let rhs_is_string = cx.builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::Equal,
+            rhs_tag,
+            string_tag,
+        );
+        let either_is_string = cx.builder.ins().bor(lhs_is_string, rhs_is_string);
+        let string_block = cx.builder.create_block();
+        let slow_block = cx.builder.create_block();
+        cx.builder
+            .ins()
+            .brif(either_is_string, string_block, &[], slow_block, &[]);
+
+        cx.builder.switch_to_block(string_block);
+        cx.builder.seal_block(string_block);
+        let call = cx.builder.ins().call(cx.string_add, &[cx.ctx, lhs, rhs]);
+        let result = cx.builder.inst_results(call)[0];
+        define_value(cx.builder, cx.variables, dest, result)?;
+        cx.builder.ins().jump(merge_block, &[]);
+
+        cx.builder.switch_to_block(slow_block);
+        cx.builder.seal_block(slow_block);
+    }
     let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
     let result = cx.call(operation, &[lhs, rhs], None)?;
     define_value(cx.builder, cx.variables, dest, result)?;
@@ -3362,6 +3690,7 @@ fn lower_terminator(
     predecessor: BasicBlockId,
     terminator: &Terminator,
     constants: &[Constant],
+    boolean_values: &HashSet<ValueId>,
     blocks: &HashMap<BasicBlockId, ir::Block>,
     phi_edges: &HashMap<(BasicBlockId, BasicBlockId), Vec<(ValueId, ValueId)>>,
 ) -> Result<()> {
@@ -3392,13 +3721,22 @@ fn lower_terminator(
             if true_block.0 <= predecessor.0 || false_block.0 <= predecessor.0 {
                 lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
+            let condition_is_boolean = boolean_values.contains(condition);
             let condition = use_value(cx.builder, cx.variables, *condition)?;
-            let condition = cx.call(NativeRuntimeOp::IsTruthy.id(), &[condition], None)?;
-            let condition = cx.builder.ins().icmp_imm_s(
-                ir::condcodes::IntCC::NotEqual,
-                condition,
-                value::encode_bool(false),
-            );
+            let condition = if condition_is_boolean {
+                cx.builder.ins().icmp_imm_s(
+                    ir::condcodes::IntCC::Equal,
+                    condition,
+                    value::encode_bool(true),
+                )
+            } else {
+                let condition = cx.call(NativeRuntimeOp::IsTruthy.id(), &[condition], None)?;
+                cx.builder.ins().icmp_imm_s(
+                    ir::condcodes::IntCC::NotEqual,
+                    condition,
+                    value::encode_bool(false),
+                )
+            };
             define_phi_edge(
                 cx.builder,
                 cx.variables,
@@ -3661,6 +3999,65 @@ fn collect_phi_edges(
         }
     }
     edges
+}
+
+fn infer_boolean_values(function: &wjsm_ir::Function, constants: &[Constant]) -> HashSet<ValueId> {
+    let mut booleans = HashSet::new();
+    loop {
+        let before = booleans.len();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let destination = match instruction {
+                    Instruction::Const { dest, constant }
+                        if matches!(
+                            constants.get(
+                                usize::try_from(constant.0).expect("constant index fits usize"),
+                            ),
+                            Some(Constant::Bool(_))
+                        ) =>
+                    {
+                        Some(*dest)
+                    }
+                    Instruction::Compare { dest, .. }
+                    | Instruction::IsException { dest, .. }
+                    | Instruction::GuardSameFunction { dest, .. } => Some(*dest),
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not | UnaryOp::IsNullish,
+                        ..
+                    } => Some(*dest),
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin:
+                            Builtin::AbstractCompare
+                            | Builtin::AbstractEq
+                            | Builtin::StrictEq
+                            | Builtin::ToBoolean
+                            | Builtin::IsCallable
+                            | Builtin::IsJsObject
+                            | Builtin::ArrayHasElement
+                            | Builtin::ObjectIs,
+                        ..
+                    } => Some(*dest),
+                    Instruction::Phi { dest, sources }
+                        if !sources.is_empty()
+                            && sources
+                                .iter()
+                                .all(|source| booleans.contains(&source.value)) =>
+                    {
+                        Some(*dest)
+                    }
+                    _ => None,
+                };
+                if let Some(destination) = destination {
+                    booleans.insert(destination);
+                }
+            }
+        }
+        if booleans.len() == before {
+            return booleans;
+        }
+    }
 }
 
 fn collect_value_ids(function: &wjsm_ir::Function) -> HashSet<ValueId> {

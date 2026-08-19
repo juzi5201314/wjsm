@@ -124,6 +124,94 @@ pub(super) unsafe extern "C" fn native_zgc_store_barrier(
     )
 }
 
+/// 执行已由生成代码守卫为字符串参与的动态加法。
+///
+/// # Safety
+/// `ctx` 必须指向当前 owner 线程上存活且 pinned 的 [`NativeVmContext`]；其
+/// `heap_state` 必须指向同一 runtime 的 [`NativeAgentState`]，且调用期间不可并发访问。
+pub(super) unsafe extern "C" fn native_string_add(
+    ctx: *mut NativeVmContext,
+    left: i64,
+    right: i64,
+) -> i64 {
+    // SAFETY: generated code 传入 pinned vmctx；本同步 thunk 不保留引用。
+    let Some(ctx) = (unsafe { ctx.as_mut() }) else {
+        return value::encode_handle(value::TAG_EXCEPTION, 0);
+    };
+    // SAFETY: heap_state 在 runtime 生命周期内指向 pinned NativeAgentState，且仅 owner
+    // mutator 线程进入本 thunk。
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_mut() }) else {
+        return fail_dispatch(ctx);
+    };
+    let result = runtime::binary_add(ctx, state, left, right);
+    ctx.proto_generation = state.gc.heap().shapes().proto_generation();
+    result
+}
+
+/// 执行编译器证明为局部不逃逸累加器的字符串追加。
+///
+/// # Safety
+/// `ctx` 必须指向 owner 线程上存活且 pinned 的 [`NativeVmContext`]。
+pub(super) unsafe extern "C" fn native_string_builder_append(
+    ctx: *mut NativeVmContext,
+    current: i64,
+    first: i64,
+    second: i64,
+) -> i64 {
+    // SAFETY: generated code 传入 pinned vmctx；本同步 thunk 不保留引用。
+    let Some(ctx) = (unsafe { ctx.as_mut() }) else {
+        return value::encode_handle(value::TAG_EXCEPTION, 0);
+    };
+    // SAFETY: heap_state 在 runtime 生命周期内指向 pinned NativeAgentState，且仅 owner
+    // mutator 线程进入本 thunk。
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_mut() }) else {
+        return fail_dispatch(ctx);
+    };
+    string::string_builder_append_direct(ctx, state, current, first, second)
+}
+
+/// 追加 boxed 原始值与已证明为 f64 的数字，避免热循环重复装箱和标签分派。
+///
+/// # Safety
+/// `ctx` 必须指向 owner 线程上存活且 pinned 的 [`NativeVmContext`]。
+pub(super) unsafe extern "C" fn native_string_builder_append_number(
+    ctx: *mut NativeVmContext,
+    current: i64,
+    first: i64,
+    second: f64,
+) -> i64 {
+    // SAFETY: generated code 传入 pinned vmctx；本同步 thunk 不保留引用。
+    let Some(ctx) = (unsafe { ctx.as_mut() }) else {
+        return value::encode_handle(value::TAG_EXCEPTION, 0);
+    };
+    // SAFETY: heap_state 在 runtime 生命周期内指向 pinned NativeAgentState，且仅 owner
+    // mutator 线程进入本 thunk。
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_mut() }) else {
+        return fail_dispatch(ctx);
+    };
+    string::string_builder_append_number_direct(ctx, state, current, first, second)
+}
+
+/// 冻结编译器局部字符串累加器。
+///
+/// # Safety
+/// `ctx` 必须指向 owner 线程上存活且 pinned 的 [`NativeVmContext`]。
+pub(super) unsafe extern "C" fn native_string_builder_finish(
+    ctx: *mut NativeVmContext,
+    builder: i64,
+) -> i64 {
+    // SAFETY: generated code 传入 pinned vmctx；本同步 thunk 不保留引用。
+    let Some(ctx) = (unsafe { ctx.as_mut() }) else {
+        return value::encode_handle(value::TAG_EXCEPTION, 0);
+    };
+    // SAFETY: heap_state 在 runtime 生命周期内指向 pinned NativeAgentState，且仅 owner
+    // mutator 线程进入本 thunk。
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_mut() }) else {
+        return fail_dispatch(ctx);
+    };
+    string::string_builder_finish(ctx, state, &[builder])
+}
+
 pub(super) unsafe extern "C" fn native_host_operation(
     ctx: *mut NativeVmContext,
     operation: u32,
@@ -327,7 +415,7 @@ pub(super) fn dispatch_builtin(
             proxy::dispatch_proxy => Builtin::ProxyCreate | Builtin::ProxyRevocable | Builtin::ReflectApply | Builtin::ReflectConstruct | Builtin::ReflectDefineProperty | Builtin::ReflectDeleteProperty | Builtin::ReflectGet | Builtin::ReflectGetOwnPropertyDescriptor | Builtin::ReflectGetPrototypeOf | Builtin::ReflectHas | Builtin::ReflectIsExtensible | Builtin::ReflectOwnKeys | Builtin::ReflectPreventExtensions | Builtin::ReflectSet | Builtin::ReflectSetPrototypeOf,
             primitive::dispatch_primitive => Builtin::BooleanConstructor | Builtin::BooleanProtoToString | Builtin::BooleanProtoValueOf | Builtin::GlobalIsFinite | Builtin::GlobalIsNaN | Builtin::NumberConstructor | Builtin::NumberIsFinite | Builtin::NumberIsInteger | Builtin::NumberIsNaN | Builtin::NumberIsSafeInteger | Builtin::NumberParseFloat | Builtin::NumberParseInt | Builtin::NumberProtoToExponential | Builtin::NumberProtoToFixed | Builtin::NumberProtoToPrecision | Builtin::NumberProtoToString | Builtin::NumberProtoValueOf | Builtin::ToBoolean,
             symbol::dispatch_symbol => Builtin::SymbolCreate | Builtin::SymbolFor | Builtin::SymbolKeyFor | Builtin::SymbolProtoToString | Builtin::SymbolProtoValueOf | Builtin::SymbolWellKnown,
-            string::dispatch_string => Builtin::StringAt | Builtin::StringCharAt | Builtin::StringCharCodeAt | Builtin::StringCodePointAt | Builtin::StringConcatVa | Builtin::StringEndsWith | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::StringIncludes | Builtin::StringIndexOf | Builtin::StringLastIndexOf | Builtin::StringMatch | Builtin::StringMatchAll | Builtin::StringNormalize | Builtin::StringPadEnd | Builtin::StringPadStart | Builtin::StringRepeat | Builtin::StringReplace | Builtin::StringReplaceAll | Builtin::StringSearch | Builtin::StringSlice | Builtin::StringSplit | Builtin::StringStartsWith | Builtin::StringSubstring | Builtin::StringToLowerCase | Builtin::StringToString | Builtin::StringToUpperCase | Builtin::StringTrim | Builtin::StringTrimEnd | Builtin::StringTrimStart | Builtin::StringValueOf,
+            string::dispatch_string => Builtin::StringAt | Builtin::StringBuilderAppend | Builtin::StringBuilderFinish | Builtin::StringCharAt | Builtin::StringCharCodeAt | Builtin::StringCodePointAt | Builtin::StringConcatVa | Builtin::StringEndsWith | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::StringIncludes | Builtin::StringIndexOf | Builtin::StringLastIndexOf | Builtin::StringMatch | Builtin::StringMatchAll | Builtin::StringNormalize | Builtin::StringPadEnd | Builtin::StringPadStart | Builtin::StringRepeat | Builtin::StringReplace | Builtin::StringReplaceAll | Builtin::StringSearch | Builtin::StringSlice | Builtin::StringSplit | Builtin::StringStartsWith | Builtin::StringSubstring | Builtin::StringToLowerCase | Builtin::StringToString | Builtin::StringToUpperCase | Builtin::StringTrim | Builtin::StringTrimEnd | Builtin::StringTrimStart | Builtin::StringValueOf,
             weak::dispatch_weak => Builtin::FinalizationRegistryConstructor | Builtin::FinalizationRegistryProtoRegister | Builtin::FinalizationRegistryProtoUnregister | Builtin::WeakMapConstructor | Builtin::WeakMapProtoDelete | Builtin::WeakMapProtoGet | Builtin::WeakMapProtoHas | Builtin::WeakMapProtoSet | Builtin::WeakRefConstructor | Builtin::WeakRefProtoDeref | Builtin::WeakSetConstructor | Builtin::WeakSetProtoAdd | Builtin::WeakSetProtoDelete | Builtin::WeakSetProtoHas,
             // ── 原 dispatch_inline 兜底 match 拆分出的领域 handler ──
             modules::dispatch_scope => Builtin::ScopeRecordCreate | Builtin::ScopeRecordAddBinding | Builtin::ScopeRecordSetMeta | Builtin::ScopeRecordDestroy,

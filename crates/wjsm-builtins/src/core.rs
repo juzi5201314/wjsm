@@ -160,34 +160,28 @@ fn number_to_utf16_units(x: f64) -> Vec<u16> {
     out
 }
 
-/// 拼接快路径：把操作数转成 UTF-16 code units。
-///
-/// 仅覆盖可廉价转换的原始值（string / f64 / bool / undefined / null），
-/// 语义与 `concat_operand_bytes` 的 render 结果一致（且修正 -0 / 1e21 的
-/// ToString 输出）；对象 / 数组 / bigint / symbol 返回 `None` → 回退通用慢路径。
-fn concat_operand_units<E: ExecContext>(ctx: &mut E, val: Value) -> Option<Vec<u16>> {
+/// 拼接快路径：把操作数转成 RuntimeString。
+fn concat_operand_string<E: ExecContext>(ctx: &mut E, val: Value) -> Option<RuntimeString> {
     if value::is_string(val) {
-        return Some(ctx.get_runtime_string(val).into_utf16_units());
+        return Some(ctx.get_runtime_string(val));
     }
     if value::is_f64(val) {
-        return Some(number_to_utf16_units(value::decode_f64(val)));
+        return Some(RuntimeString::from_utf16_units(number_to_utf16_units(
+            value::decode_f64(val),
+        )));
     }
     if value::is_undefined(val) {
-        return Some("undefined".encode_utf16().collect());
+        return Some(RuntimeString::from_utf8_str("undefined"));
     }
     if value::is_null(val) {
-        return Some("null".encode_utf16().collect());
+        return Some(RuntimeString::from_utf8_str("null"));
     }
     if value::is_bool(val) {
-        return Some(
-            if value::decode_bool(val) {
-                "true"
-            } else {
-                "false"
-            }
-            .encode_utf16()
-            .collect(),
-        );
+        return Some(RuntimeString::from_utf8_str(if value::decode_bool(val) {
+            "true"
+        } else {
+            "false"
+        }));
     }
     None
 }
@@ -233,16 +227,11 @@ fn array_to_string_bytes<E: ExecContext>(ctx: &mut E, array: Value) -> Vec<u8> {
 /// - 其余 → ToNumeric 相加（BigInt/Number 混合 → TypeError）。
 #[inline]
 pub fn string_concat<E: ExecContext>(ctx: &mut E, a: Value, b: Value) -> Value {
-    // 快路径：任一操作数是原始字符串且两者都能廉价转 UTF-16 时，
-    // 直接在 UTF-16 空间单次分配拼接——避免 concat_operand_bytes 的
-    // UTF-8 往返 + 多次分配（`s += x` 累积拼接的 O(n²) 常量因子）。
     if (value::is_string(a) || value::is_string(b))
-        && let Some(mut units_a) = concat_operand_units(ctx, a)
-        && let Some(units_b) = concat_operand_units(ctx, b)
+        && let Some(rs_a) = concat_operand_string(ctx, a)
+        && let Some(rs_b) = concat_operand_string(ctx, b)
     {
-        units_a.reserve(units_b.len());
-        units_a.extend_from_slice(&units_b);
-        return ctx.store_runtime_string(RuntimeString::from_utf16_units(units_a));
+        return ctx.store_runtime_string(RuntimeString::concat(rs_a, rs_b));
     }
     if !value::is_string(a) && !value::is_string(b) {
         // 无原始字符串操作数：ToPrimitive 后仍可能产生字符串（String 对象、数组等）。

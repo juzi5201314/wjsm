@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 11;
+pub const NATIVE_ABI_VERSION: u32 = 12;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -541,6 +541,14 @@ pub enum NativeSignature {
     ZgcLoadBarrier = 3,
     /// `(vmctx, owner, slot, value) -> status`
     ZgcStoreBarrier = 4,
+    /// `(vmctx, left, right) -> value`
+    ValueBinary = 5,
+    /// `(vmctx, value) -> value`
+    ValueUnary = 6,
+    /// `(vmctx, first, second, third) -> value`
+    ValueTernary = 7,
+    /// `(vmctx, first, second, F64) -> value`
+    ValueBinaryF64 = 8,
 }
 
 impl NativeSignature {
@@ -565,6 +573,10 @@ impl NativeSignature {
             Self::F64Binary => 2,
             Self::ZgcLoadBarrier => 2,
             Self::ZgcStoreBarrier => 4,
+            Self::ValueBinary => 3,
+            Self::ValueUnary => 2,
+            Self::ValueTernary => 4,
+            Self::ValueBinaryF64 => 4,
         }
     }
 }
@@ -605,6 +617,10 @@ pub enum NativeHostSymbol {
     MathPow = 21,
     ZgcLoadBarrierAssist = 22,
     ZgcStoreBarrier = 23,
+    StringAdd = 24,
+    StringBuilderAppend = 25,
+    StringBuilderFinish = 26,
+    StringBuilderAppendNumber = 27,
 }
 
 impl NativeHostSymbol {
@@ -633,6 +649,10 @@ impl NativeHostSymbol {
         Self::MathPow,
         Self::ZgcLoadBarrierAssist,
         Self::ZgcStoreBarrier,
+        Self::StringAdd,
+        Self::StringBuilderAppend,
+        Self::StringBuilderFinish,
+        Self::StringBuilderAppendNumber,
     ];
 
     pub const fn id(self) -> u16 {
@@ -665,6 +685,10 @@ impl NativeHostSymbol {
             Self::MathPow => "wjsm_native_math_pow",
             Self::ZgcLoadBarrierAssist => "wjsm_native_zgc_load_barrier_assist",
             Self::ZgcStoreBarrier => "wjsm_native_zgc_store_barrier",
+            Self::StringAdd => "wjsm_native_string_add",
+            Self::StringBuilderAppend => "wjsm_native_string_builder_append",
+            Self::StringBuilderFinish => "wjsm_native_string_builder_finish",
+            Self::StringBuilderAppendNumber => "wjsm_native_string_builder_append_number",
         }
     }
 
@@ -674,6 +698,10 @@ impl NativeHostSymbol {
             Self::MathAtan2 | Self::MathPow => NativeSignature::F64Binary,
             Self::ZgcLoadBarrierAssist => NativeSignature::ZgcLoadBarrier,
             Self::ZgcStoreBarrier => NativeSignature::ZgcStoreBarrier,
+            Self::StringAdd => NativeSignature::ValueBinary,
+            Self::StringBuilderAppend => NativeSignature::ValueTernary,
+            Self::StringBuilderFinish => NativeSignature::ValueUnary,
+            Self::StringBuilderAppendNumber => NativeSignature::ValueBinaryF64,
             _ => NativeSignature::F64Unary,
         }
     }
@@ -718,7 +746,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v11\0");
+        hasher.update(b"wjsm-native-abi-v12\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");

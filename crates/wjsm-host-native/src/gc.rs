@@ -12,10 +12,11 @@ use wjsm_gc::{
     ManagedHeapLayout, MutatorContext, NativeHeapMemory, Nlab, RootSnapshot, RuntimeGcReport,
     StopTheWorldCollector, StopTheWorldCollectorError, ZgcBarrierSet,
 };
-use wjsm_native_abi::{NativeBarrierState, NativeVmContext};
+use wjsm_native_abi::{NATIVE_BARRIER_MARKING_MASK, NativeBarrierState, NativeVmContext};
 
 const ZGC_BARRIER_RING_CAPACITY: usize = 4_096;
 const ZGC_PACKET_CAPACITY: usize = 4_096;
+const HOST_ALLOCATION_GC_THRESHOLD: u64 = 32 * 1024 * 1024;
 
 pub(super) struct NativeGc {
     collector: NativeCollector,
@@ -23,6 +24,7 @@ pub(super) struct NativeGc {
     nlab: RefCell<Nlab>,
     mutator: MutatorContext,
     pacing_poll_requested: Cell<bool>,
+    host_allocated_since_full: Cell<u64>,
     barrier_state: Box<NativeBarrierState>,
 }
 
@@ -55,6 +57,7 @@ impl NativeGc {
             nlab: RefCell::new(Nlab::new()),
             mutator,
             pacing_poll_requested: Cell::new(false),
+            host_allocated_since_full: Cell::new(0),
             barrier_state: Box::default(),
         })
     }
@@ -114,13 +117,39 @@ impl NativeGc {
         }
     }
     pub(super) fn record_host_write(&self, owner: i64, old: Option<i64>, new: Option<i64>) {
+        if self.barrier_state.phase.load(Ordering::Acquire) & NATIVE_BARRIER_MARKING_MASK == 0 {
+            return;
+        }
         if let NativeCollector::Zgc(collector) = &self.collector {
             collector.record_host_write(owner, old, new);
         }
     }
 
+    pub(super) fn observe_host_allocation(&self, bytes: usize) {
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        self.host_allocated_since_full
+            .set(self.host_allocated_since_full.get().saturating_add(bytes));
+    }
+
+    pub(super) fn host_collection_requested(&self) -> bool {
+        matches!(self.collector, NativeCollector::StopTheWorld(_))
+            && self.host_allocated_since_full.get() >= HOST_ALLOCATION_GC_THRESHOLD
+    }
+
     pub(super) fn take_pacing_poll_request(&self) -> bool {
         self.pacing_poll_requested.replace(false)
+    }
+
+    pub(super) fn take_safepoint_poll_request(&self) -> bool {
+        let pacing_requested = self.take_pacing_poll_request();
+        match &self.collector {
+            NativeCollector::StopTheWorld(_) => pacing_requested,
+            NativeCollector::Zgc(collector) => {
+                pacing_requested
+                    || collector.cycle_active()
+                    || self.host_allocated_since_full.get() >= HOST_ALLOCATION_GC_THRESHOLD
+            }
+        }
     }
 
     pub(super) fn reset_nlab(&self) {
@@ -137,6 +166,7 @@ impl NativeGc {
             collector.reset_heap(Arc::clone(&heap))?;
         }
         self.heap = heap;
+        self.host_allocated_since_full.set(0);
         self.reset_nlab();
         self.sync_barrier_state();
         Ok(())
@@ -147,7 +177,13 @@ impl NativeGc {
             NativeCollector::StopTheWorld(collector) => {
                 collector.safepoint_action(self.heap.collector_capability())
             }
-            NativeCollector::Zgc(collector) => collector.safepoint_action(),
+            NativeCollector::Zgc(collector) => {
+                if self.host_allocated_since_full.get() >= HOST_ALLOCATION_GC_THRESHOLD {
+                    self.host_allocated_since_full.set(0);
+                    collector.request_young_collection();
+                }
+                collector.safepoint_action()
+            }
         }
     }
     pub(super) fn cycle_active(&self) -> bool {
@@ -171,6 +207,12 @@ impl NativeGc {
                 .transpose()?,
             NativeCollector::Zgc(collector) => collector.at_safepoint(snapshot)?,
         };
+        if report
+            .as_ref()
+            .is_some_and(|report| report.cleans_host_tables)
+        {
+            self.host_allocated_since_full.set(0);
+        }
         self.sync_barrier_state();
         Ok(report)
     }
@@ -186,6 +228,7 @@ impl NativeGc {
             }
             NativeCollector::Zgc(collector) => collector.collect_full(snapshot)?,
         };
+        self.host_allocated_since_full.set(0);
         self.sync_barrier_state();
         Ok(report)
     }
@@ -228,7 +271,7 @@ impl NativeGc {
 }
 
 fn worker_count() -> usize {
-    std::thread::available_parallelism().map_or(1, usize::from)
+    1
 }
 
 #[derive(Debug, Error)]

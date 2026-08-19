@@ -25,6 +25,8 @@ use crate::lower::{
     DeclaredBarrierThunks, DeclaredData, DeclaredFunction, FunctionCompileInput,
     allocate_feedback_slots, allocate_ic_slots, boxed_frame_local_names, compile_one_function,
     declare_barrier_thunks, declare_host_dispatcher, declare_math_thunks, declare_root_bitmaps,
+    declare_string_add_thunk, declare_string_builder_append_number_thunk,
+    declare_string_builder_append_thunk, declare_string_builder_finish_thunk,
     emit_feedback_tag_code, gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
 };
 use crate::root_plan::RootPlan;
@@ -160,6 +162,10 @@ pub(crate) fn compile_specialized(
         .declare_function("wjsm_specialized_body", Linkage::Export, &signature)
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
+    let string_add = declare_string_add_thunk(&mut module)?;
+    let string_builder_append = declare_string_builder_append_thunk(&mut module)?;
+    let string_builder_append_number = declare_string_builder_append_number_thunk(&mut module)?;
+    let string_builder_finish = declare_string_builder_finish_thunk(&mut module)?;
     let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let math_thunks = declare_math_thunks(&mut module, program, &seeded)?;
 
@@ -174,6 +180,13 @@ pub(crate) fn compile_specialized(
     let root_capacity = root_frame_capacity(ir_function, &root_plan, boxed_frame_locals.len());
     let root_bitmaps = declare_root_bitmaps(&mut module, root_capacity)?;
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
+    let string_add_decl = DeclaredFunction::snapshot(module.declarations(), string_add);
+    let string_builder_append_decl =
+        DeclaredFunction::snapshot(module.declarations(), string_builder_append);
+    let string_builder_append_number_decl =
+        DeclaredFunction::snapshot(module.declarations(), string_builder_append_number);
+    let string_builder_finish_decl =
+        DeclaredFunction::snapshot(module.declarations(), string_builder_finish);
     let barrier_thunks =
         DeclaredBarrierThunks::snapshot(module.declarations(), zgc_load_barrier, zgc_store_barrier);
     let math_thunk_decls: HashMap<Builtin, DeclaredFunction> = math_thunks
@@ -205,6 +218,10 @@ pub(crate) fn compile_specialized(
         signature: &signature,
         function_id: body_id,
         dispatcher: &dispatcher_decl,
+        string_add: &string_add_decl,
+        string_builder_append: &string_builder_append_decl,
+        string_builder_append_number: &string_builder_append_number_decl,
+        string_builder_finish: &string_builder_finish_decl,
         barrier_thunks: &barrier_thunks,
         math_thunks: &math_thunk_decls,
         root_bitmaps: &bitmap_decls,

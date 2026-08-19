@@ -885,27 +885,26 @@ fn string_split_single_unit(
     separator: wjsm_host::RuntimeString,
     limit: usize,
 ) -> i64 {
-    let needle = separator.as_utf16_units()[0];
-    let units = input.as_utf16_units();
-    let mut values = Vec::new();
+    let needle = separator.as_flat_slice()[0];
+    let units = input.as_flat_slice();
+    let mut values = smallvec::SmallVec::<[i64; 16]>::new();
     let mut start = 0usize;
-    for (index, unit) in units.iter().enumerate() {
-        if values.len() + 1 >= limit {
-            break;
+    for (index, unit) in units.iter().copied().enumerate() {
+        if unit != needle {
+            continue;
         }
-        if *unit == needle {
-            let Some(part) =
-                state.intern_runtime_string(input.slice_units(start..index), value::TAG_STRING)
-            else {
-                return fail_dispatch(ctx);
-            };
-            values.push(part);
-            start = index + 1;
+        let Some(part) = state.intern_utf16_slice(&units[start..index], value::TAG_STRING) else {
+            return fail_dispatch(ctx);
+        };
+        values.push(part);
+        if values.len() == limit {
+            return state
+                .allocate_array_values(&values)
+                .unwrap_or_else(|_| fail_dispatch(ctx));
         }
+        start = index + 1;
     }
-    let Some(part) =
-        state.intern_runtime_string(input.slice_units(start..units.len()), value::TAG_STRING)
-    else {
+    let Some(part) = state.intern_utf16_slice(&units[start..], value::TAG_STRING) else {
         return fail_dispatch(ctx);
     };
     values.push(part);
