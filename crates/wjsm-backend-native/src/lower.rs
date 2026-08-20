@@ -49,10 +49,11 @@ const ARENA_MIN_BYTES: u32 = 8;
 struct FrameLowering {
     bitmap_by_root_count: Vec<ir::GlobalValue>,
     capacity: usize,
-    published_roots: usize,
-    bitmap_published: bool,
     /// 块内各 root 槽当前持有的 ValueId；跨块必须清空（前驱可能发布了不同内容）。
-    published_slots: Vec<Option<ValueId>>,
+    /// 暂存但尚未落地的 root 集合。发布推迟到下一个可 GC 调用点，
+    /// 非安全点之间的 root frame 内容对 GC 不可见，无需维护。
+    staged_roots: Vec<ValueId>,
+    staged_dirty: bool,
     /// 入口块一次性物化的基址，被所有块支配后可跨块复用。
     frame_base: ir::Value,
     roots_base: ir::Value,
@@ -106,9 +107,8 @@ impl FrameLowering {
         Ok(Self {
             bitmap_by_root_count,
             capacity,
-            published_roots: 0,
-            bitmap_published: false,
-            published_slots: Vec::new(),
+            staged_roots: Vec::new(),
+            staged_dirty: false,
             frame_base,
             roots_base,
             arena_slot,
@@ -179,6 +179,35 @@ impl FrameLowering {
         Ok(())
     }
 
+    /// 暂存本指令的 root 集合，不产出任何指令。
+    ///
+    /// GC 只在安全点读取 root frame，两次安全点之间它的内容不可观察；因此发布
+    /// 推迟到真正可能收集的调用点，非安全点指令不再各自重写 bitmap 与槽位。
+    fn stage(&mut self, roots: &[ValueId]) {
+        self.staged_roots.clear();
+        self.staged_roots.extend_from_slice(roots);
+        self.staged_dirty = true;
+    }
+
+    /// 在可 GC / 可重入调用之前把暂存的 root 集合真正写入 root frame。
+    fn flush(
+        &mut self,
+        builder: &mut FunctionBuilder<'_>,
+        variables: &HashMap<ValueId, Variable>,
+    ) -> Result<()> {
+        if !self.staged_dirty {
+            return Ok(());
+        }
+        let roots = std::mem::take(&mut self.staged_roots);
+        let result = self.publish(builder, variables, &roots, &[]);
+        self.staged_roots = roots;
+        result
+    }
+
+    /// 无条件写入全部活 root 与 bitmap。
+    ///
+    /// 不做「槽内已是同一值就跳过」的块内 memo：发布点已下沉到 IC miss 等子块，
+    /// 这类块并不支配后续发布点，跨块复用记忆会漏写槽位并让 GC 扫到陈旧句柄。
     fn publish(
         &mut self,
         builder: &mut FunctionBuilder<'_>,
@@ -194,15 +223,8 @@ impl FrameLowering {
         if root_count > self.capacity {
             bail!("native root plan exceeds frame capacity");
         }
-        if self.published_slots.len() < live_count {
-            self.published_slots.resize(live_count, None);
-        }
         let local_base = self.pinned_local_count;
         for (index, root) in roots.iter().enumerate() {
-            // IR 是 SSA：块内直线执行时同一 ValueId 的运行时值不会变，槽里已经是它就无需重写。
-            if self.published_slots[index] == Some(*root) {
-                continue;
-            }
             let value = use_value(builder, variables, *root)?;
             builder.ins().store(
                 MemFlagsData::trusted(),
@@ -210,7 +232,6 @@ impl FrameLowering {
                 self.roots_base,
                 slot_offset(local_base + index, "native root spill")?,
             );
-            self.published_slots[index] = Some(*root);
         }
         for (index, temporary) in temporaries.iter().enumerate() {
             let slot = roots.len() + index;
@@ -220,33 +241,29 @@ impl FrameLowering {
                 self.roots_base,
                 slot_offset(local_base + slot, "native temporary root spill")?,
             );
-            self.published_slots[slot] = None;
         }
-        if root_count != self.published_roots || !self.bitmap_published {
-            let bitmap = builder
-                .ins()
-                .symbol_value(pointer_type, self.bitmap_by_root_count[root_count]);
-            builder.ins().store(
-                MemFlagsData::trusted(),
-                bitmap,
-                self.frame_base,
-                frame_offset(offset_of!(NativeRootFrame, bitmap_words))?,
-            );
-            let bitmap_word_count = root_count.div_ceil(u64::BITS as usize);
-            let bitmap_word_count = u32::try_from(bitmap_word_count)
-                .context("native root bitmap word count exceeds u32")?;
-            let bitmap_word_count = builder
-                .ins()
-                .iconst(types::I32, i64::from(bitmap_word_count));
-            builder.ins().store(
-                MemFlagsData::trusted(),
-                bitmap_word_count,
-                self.frame_base,
-                frame_offset(offset_of!(NativeRootFrame, bitmap_word_count))?,
-            );
-            self.bitmap_published = true;
-        }
-        self.published_roots = root_count;
+        let bitmap = builder
+            .ins()
+            .symbol_value(pointer_type, self.bitmap_by_root_count[root_count]);
+        builder.ins().store(
+            MemFlagsData::trusted(),
+            bitmap,
+            self.frame_base,
+            frame_offset(offset_of!(NativeRootFrame, bitmap_words))?,
+        );
+        let bitmap_word_count = root_count.div_ceil(u64::BITS as usize);
+        let bitmap_word_count = u32::try_from(bitmap_word_count)
+            .context("native root bitmap word count exceeds u32")?;
+        let bitmap_word_count = builder
+            .ins()
+            .iconst(types::I32, i64::from(bitmap_word_count));
+        builder.ins().store(
+            MemFlagsData::trusted(),
+            bitmap_word_count,
+            self.frame_base,
+            frame_offset(offset_of!(NativeRootFrame, bitmap_word_count))?,
+        );
+        self.staged_dirty = false;
         Ok(())
     }
 
@@ -282,11 +299,10 @@ impl FrameLowering {
         Ok(())
     }
 
-    /// 进入新块：root 槽内容与 bitmap 状态只在块内直线执行时可复用，
-    /// 跨块（前驱不唯一 / 前驱发布内容不同）必须全部重新发布。
+    /// 进入新块：丢弃上一块留下的暂存集合，本块的每条指令会重新暂存。
     fn enter_block(&mut self) {
-        self.bitmap_published = false;
-        self.published_slots.clear();
+        self.staged_roots.clear();
+        self.staged_dirty = false;
     }
 
     fn unlink(&self, builder: &mut FunctionBuilder<'_>, ctx: ir::Value) -> Result<()> {
@@ -701,12 +717,14 @@ struct LoweringCx<'a, 'f> {
 }
 
 impl LoweringCx<'_, '_> {
+    /// 统一的宿主分派入口：dispatcher 可能触发 GC 与重入，调用前必须落地 root。
     fn call(
         &mut self,
         operation: u32,
         args: &[ir::Value],
         feedback: Option<ir::Value>,
     ) -> Result<ir::Value> {
+        self.flush()?;
         call_dispatcher(
             self.builder,
             self.root_frame,
@@ -718,9 +736,13 @@ impl LoweringCx<'_, '_> {
         )
     }
 
-    fn publish(&mut self, roots: &[ValueId], extras: &[ir::Value]) -> Result<()> {
-        self.root_frame
-            .publish(self.builder, self.variables, roots, extras)
+    fn stage(&mut self, roots: &[ValueId]) {
+        self.root_frame.stage(roots);
+    }
+
+    /// 在可 GC / 可重入调用之前落地暂存的 root 集合。
+    fn flush(&mut self) -> Result<()> {
+        self.root_frame.flush(self.builder, self.variables)
     }
 }
 
@@ -1366,7 +1388,7 @@ pub(crate) fn lower_function(
             &boxed_local_indices,
             specialized_tags,
         )?;
-        cx.publish(root_plan.before_instruction(ir_function.entry(), 0), &[])?;
+        cx.stage(root_plan.before_instruction(ir_function.entry(), 0));
         let mut hoisted_constants = HashMap::with_capacity(immutable_constant_ids.len());
         for constant_id in &immutable_constant_ids {
             let constant = &constants
@@ -1414,7 +1436,7 @@ pub(crate) fn lower_function(
                     continue;
                 }
                 let roots = root_plan.before_instruction(block.id(), instruction_index);
-                cx.publish(roots, &[])?;
+                cx.stage(roots);
                 let ctx = cx.ctx;
                 let feedback_ptr = feedback_slots
                     .get(&(block.id(), instruction_index))
@@ -1425,7 +1447,7 @@ pub(crate) fn lower_function(
             if has_suspend {
                 continue;
             }
-            cx.publish(root_plan.before_terminator(block.id()), &[])?;
+            cx.stage(root_plan.before_terminator(block.id()));
             lower_terminator(
                 &mut cx,
                 block.id(),
@@ -1823,6 +1845,7 @@ fn lower_instruction(
                 .builder
                 .ins()
                 .bitcast(types::F64, ir::MemFlagsData::new(), second);
+            cx.flush()?;
             let call = cx.builder.ins().call(
                 cx.string_builder_append_number,
                 &[cx.ctx, current, first, second],
@@ -1838,6 +1861,7 @@ fn lower_instruction(
             let current = use_value(cx.builder, cx.variables, args[0])?;
             let first = use_value(cx.builder, cx.variables, args[1])?;
             let second = use_value(cx.builder, cx.variables, args[2])?;
+            cx.flush()?;
             let call = cx
                 .builder
                 .ins()
@@ -1851,6 +1875,7 @@ fn lower_instruction(
             args,
         } if args.len() == 1 => {
             let builder = use_value(cx.builder, cx.variables, args[0])?;
+            cx.flush()?;
             let call = cx
                 .builder
                 .ins()
@@ -2350,6 +2375,7 @@ fn lower_call_instruction(
     );
     let args_base = cx.builder.ins().isub(active_len, args_len);
     let env = cx.call(NativeRuntimeOp::LoadCallEnv.id(), &[], None)?;
+    cx.flush()?;
     let call = cx.builder.ins().call_indirect(
         slow_call_signature,
         entry,
@@ -2538,6 +2564,7 @@ fn lower_dynamic_binary(
 
         cx.builder.switch_to_block(string_block);
         cx.builder.seal_block(string_block);
+        cx.flush()?;
         let call = cx.builder.ins().call(cx.string_add, &[cx.ctx, lhs, rhs]);
         let result = cx.builder.inst_results(call)[0];
         define_value(cx.builder, cx.variables, dest, result)?;
@@ -3708,6 +3735,7 @@ fn lower_terminator(
         }
         Terminator::Jump { target } => {
             if target.0 <= predecessor.0 {
+                cx.flush()?;
                 lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
             define_phi_edge(cx.builder, cx.variables, phi_edges, predecessor, *target)?;
@@ -3719,6 +3747,7 @@ fn lower_terminator(
             false_block,
         } => {
             if true_block.0 <= predecessor.0 || false_block.0 <= predecessor.0 {
+                cx.flush()?;
                 lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
             let condition_is_boolean = boolean_values.contains(condition);
@@ -3764,6 +3793,7 @@ fn lower_terminator(
             if cases.iter().any(|case| case.target.0 <= predecessor.0)
                 || default_block.0 <= predecessor.0
             {
+                cx.flush()?;
                 lower_cooperative_poll(cx.builder, cx.dispatcher, cx.ctx, cx.root_frame)?;
             }
             let value = use_value(cx.builder, cx.variables, *value)?;

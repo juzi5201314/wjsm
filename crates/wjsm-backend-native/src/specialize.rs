@@ -80,6 +80,9 @@ pub(crate) fn compile_specialized(
             "profile tags exceed the parameter count",
         ));
     }
+    // 种子分析目前只把 Number 参数提升为 f64 起点；没有 Number tag 的 profile
+    // 必然在下面的收益判定处被拒，提前短路以省下一次全程序分析。
+    // 放开这道门槛需要后端先支持字符串/shape 类型特化。
     if !profile.argument_tags.contains(&NativeFeedbackTag::Number) {
         return Err(SpecializationError::NoBenefit(
             "profile has no number argument",
