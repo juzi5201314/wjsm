@@ -1,70 +1,15 @@
-use std::io::{ErrorKind, Read, Write};
-use std::net::TcpListener;
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+//! Host fetch resource timing 正确性测试（in-process + 测试替身 transport）。
+//!
+//! 不启动真实 HTTP 服务器、不做任何真实网络 I/O：通过 `WJSM_TEST_FAKE_FETCH`
+//! 让宿主 fetch transport 返回确定性响应，测试只断言 fetch → resource timing
+//! 完成/抑制协议的状态机行为。
 
 use anyhow::Result;
 use wjsm_runtime::{
     RuntimeInput, RuntimeOptions, compile_source, execute_with_writer_with_options,
 };
 
-fn spawn_http_server() -> (String, mpsc::Sender<()>, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind perf_hooks fetch server");
-    listener
-        .set_nonblocking(true)
-        .expect("configure perf_hooks fetch server");
-    let address = listener.local_addr().expect("perf_hooks fetch address");
-    let (shutdown_tx, shutdown_rx) = mpsc::channel();
-    let server = thread::spawn(move || {
-        let mut served = 0;
-        while served < 6 {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    served += 1;
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-                    respond_to_request(&mut stream);
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    if shutdown_rx.try_recv().is_ok() {
-                        return;
-                    }
-                    thread::sleep(Duration::from_millis(2));
-                }
-                Err(_) => return,
-            }
-        }
-    });
-    (format!("http://{address}"), shutdown_tx, server)
-}
-
-fn respond_to_request(stream: &mut std::net::TcpStream) {
-    let mut request = [0_u8; 2048];
-    let read = stream.read(&mut request).unwrap_or(0);
-    let request = String::from_utf8_lossy(&request[..read]);
-    let path = request
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/");
-    let response = match path {
-        "/empty" => "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n",
-        "/error" => concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "Content-Length: 20\r\n",
-            "Connection: close\r\n\r\n",
-            "short"
-        ),
-        _ => concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "Content-Length: 5\r\n",
-            "Connection: close\r\n\r\n",
-            "hello"
-        ),
-    };
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
-}
+const FAKE_FETCH_ENV: &str = "WJSM_TEST_FAKE_FETCH";
 
 fn run_source(source: &str, base_url: &str) -> Result<(String, String)> {
     let artifact = compile_source(source)?;
@@ -79,7 +24,12 @@ fn run_source(source: &str, base_url: &str) -> Result<(String, String)> {
 
 #[test]
 fn host_fetch_owns_resource_timing_completion() -> Result<()> {
-    let (base_url, shutdown, server) = spawn_http_server();
+    // 本二进制只有这一个测试；先记录原值，测试结束恢复，避免污染进程环境。
+    let previous = std::env::var_os(FAKE_FETCH_ENV);
+    // SAFETY: 本二进制只有这一个测试，测试期间无其它线程 set/remove 环境变量。
+    unsafe { std::env::set_var(FAKE_FETCH_ENV, "1") };
+
+    let base_url = "http://fake.test";
     let result = run_source(
         r#"
 const perfHost = globalThis.__wjsm_node_perf_hooks;
@@ -157,10 +107,16 @@ await nextImmediate();
 console.log(entries.length === beforeInternal);
 perfHost.setObserverState(0, undefined);
 "#,
-        &base_url,
+        base_url,
     );
-    let _ = shutdown.send(());
-    server.join().expect("join perf_hooks fetch server");
+
+    match previous {
+        // SAFETY: 本二进制只有这一个测试，测试期间无其它线程 set/remove 环境变量。
+        Some(value) => unsafe { std::env::set_var(FAKE_FETCH_ENV, value) },
+        // SAFETY: 本二进制只有这一个测试，测试期间无其它线程 set/remove 环境变量。
+        None => unsafe { std::env::remove_var(FAKE_FETCH_ENV) },
+    }
+
     let (stdout, stderr) = result?;
     assert_eq!(stdout, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
     assert!(stderr.is_empty(), "unexpected stderr: {stderr:?}");

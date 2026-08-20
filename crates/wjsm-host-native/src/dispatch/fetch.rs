@@ -269,6 +269,11 @@ fn fetch(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
 }
 
 fn send_request(request: NetworkRequest) -> Result<NetworkResponse, String> {
+    // 测试替身 transport：`WJSM_TEST_FAKE_FETCH` 非空时按 URL path 返回确定性响应，
+    // 不进行任何真实网络 I/O。生产环境未设置该变量时不会进入此分支。
+    if std::env::var_os("WJSM_TEST_FAKE_FETCH").is_some() {
+        return fake_transport_response(&request);
+    }
     let redirect = match request.redirect.as_str() {
         "follow" => reqwest::redirect::Policy::limited(20),
         _ => reqwest::redirect::Policy::none(),
@@ -318,6 +323,39 @@ fn send_request(request: NetworkRequest) -> Result<NetworkResponse, String> {
         headers,
         body,
     })
+}
+
+/// 确定性的测试替身响应：路径 `empty` → 204 无 body；`error` → body 错误；
+/// 其余路径 → 200 + `"hello"`。
+fn fake_transport_response(request: &NetworkRequest) -> Result<NetworkResponse, String> {
+    let path = request
+        .url
+        .rsplit('/')
+        .next()
+        .unwrap_or(&request.url)
+        .split('?')
+        .next()
+        .unwrap_or("");
+    match path {
+        "empty" => Ok(NetworkResponse {
+            status: 204,
+            status_text: "No Content".into(),
+            headers: Vec::new(),
+            body: Ok(String::new()),
+        }),
+        "error" => Ok(NetworkResponse {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-length".into(), "20".into())],
+            body: Err("fetch body failed: response body shorter than content-length".into()),
+        }),
+        _ => Ok(NetworkResponse {
+            status: 200,
+            status_text: "OK".into(),
+            headers: vec![("content-length".into(), "5".into())],
+            body: Ok("hello".into()),
+        }),
+    }
 }
 
 pub(super) fn register_object(state: &mut NativeAgentState, object: i64, kind: FetchObjectKind) {

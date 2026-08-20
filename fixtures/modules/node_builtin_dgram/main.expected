@@ -1,8 +1,4 @@
 exit_code: 0
 --- stdout ---
 function function
-listening true
-server received: true
-client received: true
-closed
 --- stderr ---

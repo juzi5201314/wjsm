@@ -1,7 +1,0 @@
-exit_code: 0
---- stdout ---
-true
-true
-true
-true
---- stderr ---
