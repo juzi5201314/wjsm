@@ -130,8 +130,7 @@ fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) 
     }
     if trim_end {
         while start < end {
-            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(units, end)
-            else {
+            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(units, end) else {
                 break;
             };
             if !scalar || !is_ecmascript_trim_whitespace(cp) {
