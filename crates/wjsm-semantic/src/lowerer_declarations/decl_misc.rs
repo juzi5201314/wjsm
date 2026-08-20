@@ -102,6 +102,13 @@ impl Lowerer {
                     {
                         self.typedarray_bindings.insert((scope_id, name.clone()));
                     }
+                    // 只登记 const：不可重新赋值，证明在整个作用域内恒成立。
+                    if kind == crate::scope::VarKind::Const
+                        && self.is_string_producing_expr(init)
+                        && let Ok((scope_id, _)) = self.scopes.lookup(&name)
+                    {
+                        self.string_bindings.insert((scope_id, name.clone()));
+                    }
                     if is_sharedarraybuffer_constructor_expr(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {

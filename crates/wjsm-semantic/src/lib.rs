@@ -238,6 +238,34 @@ fn is_array_from_of_call(expr: &swc_ast::Expr) -> bool {
         swc_ast::MemberProp::Ident(prop) if matches!(prop.sym.as_ref(), "from" | "of")
     )
 }
+/// 判断方法名是否为「receiver 为字符串时恒返回字符串」的 String.prototype 方法。
+///
+/// 排除 `at`（越界返回 undefined）、`split`（返回数组）、`match` 等返回对象或
+/// 可空值的方法；链式 receiver 判定依赖「恒为字符串」这一点。
+fn is_string_returning_proto_method(name: &str) -> bool {
+    matches!(
+        name,
+        "slice"
+            | "substring"
+            | "substr"
+            | "toUpperCase"
+            | "toLowerCase"
+            | "trim"
+            | "trimStart"
+            | "trimEnd"
+            | "padStart"
+            | "padEnd"
+            | "repeat"
+            | "replace"
+            | "replaceAll"
+            | "concat"
+            | "charAt"
+            | "normalize"
+            | "toString"
+            | "valueOf"
+    )
+}
+
 /// 判断方法名是否为「返回数组」的 Array.prototype 方法（`map`/`filter`/`slice`
 /// 等）。用于链式数组高阶函数 receiver 判定：这类方法在 receiver 为数组时
 /// 恒返回数组，其结果可作为下一链节的内建 receiver 继续展开。

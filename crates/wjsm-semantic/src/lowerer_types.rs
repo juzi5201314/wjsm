@@ -182,6 +182,13 @@ pub(crate) struct Lowerer {
     /// 追踪当前作用域中已推断为 Array 的绑定（scope_id, name）。
     /// Array.prototype 静态优化只在已知数组 receiver 上启用，避免劫持 Map/Set 等同名方法。
     pub(crate) array_bindings: std::collections::HashSet<(usize, String)>,
+    /// 追踪当前作用域中已证明为 String 的 `const` 绑定（scope_id, name）。
+    ///
+    /// `slice` / `concat` / `includes` / `indexOf` / `lastIndexOf` 在
+    /// String.prototype 与 Array.prototype 上同名，直连内建必须以「receiver 确为
+    /// 字符串」的正向证明为前提。只收 `const`：它不可重新赋值，绑定一旦证明成立
+    /// 就在整个作用域内成立，不受单遍 lowering 的源码顺序影响。
+    pub(crate) string_bindings: std::collections::HashSet<(usize, String)>,
     /// 追踪当前作用域中已推断为 TypedArray 的绑定（scope_id, name）。
     /// 用于在 lower_call_expr 中让 arr.at()/arr.indexOf() 等走 TypedArray dispatch，
     /// 而不是被 String.prototype dispatch 错误拦截。

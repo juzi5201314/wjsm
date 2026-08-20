@@ -141,6 +141,7 @@ impl Lowerer {
             eval_caller_has_arguments: false,
             active_using_vars: Vec::new(),
             array_bindings: std::collections::HashSet::new(),
+            string_bindings: std::collections::HashSet::new(),
             typedarray_bindings: std::collections::HashSet::new(),
             sab_bindings: std::collections::HashSet::new(),
             dataview_bindings: std::collections::HashSet::new(),
@@ -1222,6 +1223,9 @@ impl Lowerer {
         }
         // direct_call pass：标记可直接调用的函数并替换绑定读取为 FunctionRef。
         crate::passes::direct_call::run(&mut self.module);
+        // string_fold pass：常量 receiver 的字符串运算在编译期求值，
+        // 折叠结果直接参与随后的拼接链融合。
+        crate::passes::string_fold::run(&mut self.module);
         // string_concat pass：融合已证明的原始值拼接链，并把不逃逸的局部
         // 字符串累加器降为可变 builder，避免循环中反复分配中间字符串。
         crate::passes::string_concat::run(&mut self.module);
@@ -1273,6 +1277,54 @@ impl Lowerer {
                 };
                 is_array_producing_proto_method(&prop.sym)
                     && self.is_array_producing_expr(member.obj.as_ref())
+            }
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_string_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        match self.scopes.lookup(&name) {
+            Ok((scope_id, _)) => self.string_bindings.contains(&(scope_id, name)),
+            Err(_) => false,
+        }
+    }
+
+    /// 表达式是否可证明求值为字符串。
+    ///
+    /// 只做正向证明，宁可漏判不可误判：误判会把 Array.prototype 的同名方法
+    /// 劫持成 String.prototype 版本，产出错误结果。
+    pub(crate) fn is_string_producing_expr(&self, expr: &swc_ast::Expr) -> bool {
+        match expr {
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(_)) | swc_ast::Expr::Tpl(_) => true,
+            swc_ast::Expr::Ident(ident) => self.is_string_binding(ident),
+            swc_ast::Expr::Paren(paren) => self.is_string_producing_expr(&paren.expr),
+            // `typeof x` 恒为字符串。
+            swc_ast::Expr::Unary(unary) => unary.op == swc_ast::UnaryOp::TypeOf,
+            // `a + b`：任一侧确为字符串时结果必为字符串（ToPrimitive 后仍是拼接）。
+            swc_ast::Expr::Bin(bin) => {
+                bin.op == swc_ast::BinaryOp::Add
+                    && (self.is_string_producing_expr(&bin.left)
+                        || self.is_string_producing_expr(&bin.right))
+            }
+            swc_ast::Expr::Call(call) => {
+                let swc_ast::Callee::Expr(callee) = &call.callee else {
+                    return false;
+                };
+                match callee.as_ref() {
+                    // 未被遮蔽的全局 `String(x)` 恒返回字符串。
+                    swc_ast::Expr::Ident(ident) => {
+                        ident.sym.as_ref() == "String" && self.scopes.lookup("String").is_err()
+                    }
+                    swc_ast::Expr::Member(member) => {
+                        let swc_ast::MemberProp::Ident(prop) = &member.prop else {
+                            return false;
+                        };
+                        crate::is_string_returning_proto_method(&prop.sym)
+                            && self.is_string_producing_expr(member.obj.as_ref())
+                    }
+                    _ => false,
+                }
             }
             _ => false,
         }

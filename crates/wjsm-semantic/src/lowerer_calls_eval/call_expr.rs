@@ -511,13 +511,13 @@ impl Lowerer {
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(string_builtin) =
                             builtin_from_string_proto_method(&prop_ident.sym)
-                        && (matches!(
-                            member_expr.obj.as_ref(),
-                            swc_ast::Expr::Lit(swc_ast::Lit::Str(_)) | swc_ast::Expr::Tpl(_)
-                        ) || !matches!(
-                            prop_ident.sym.as_ref(),
-                            "concat" | "includes" | "indexOf" | "lastIndexOf" | "slice"
-                        ))
+                        // 与 Array.prototype 同名的方法只在 receiver 可证明为字符串时直连，
+                        // 否则保持通用属性查找 + 动态调用，避免劫持数组同名方法。
+                        && (self.is_string_producing_expr(member_expr.obj.as_ref())
+                            || !matches!(
+                                prop_ident.sym.as_ref(),
+                                "concat" | "includes" | "indexOf" | "lastIndexOf" | "slice"
+                            ))
                     {
                         return self.emit_proto_builtin_call(
                             string_builtin,
