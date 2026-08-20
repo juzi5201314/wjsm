@@ -119,7 +119,7 @@ fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) 
     let mut end = units.len();
     if trim_start {
         while start < end {
-            let Some((cp, width, scalar)) = code_point_width_at(&units, start) else {
+            let Some((cp, width, scalar)) = code_point_width_at(units, start) else {
                 break;
             };
             if !scalar || !is_ecmascript_trim_whitespace(cp) {
@@ -130,7 +130,7 @@ fn trim_runtime_string(input: &RuntimeString, trim_start: bool, trim_end: bool) 
     }
     if trim_end {
         while start < end {
-            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(&units, end)
+            let Some((cp_start, cp, _width, scalar)) = previous_code_point_width(units, end)
             else {
                 break;
             };
@@ -167,10 +167,10 @@ pub fn replace_all_units(
     let haystack_flat = haystack.as_flat_slice();
     let mut out = Vec::new();
     if search.is_empty() {
-        out.extend_from_slice(&replacement_flat);
+        out.extend_from_slice(replacement_flat);
         for unit in haystack_flat {
             out.push(*unit);
-            out.extend_from_slice(&replacement_flat);
+            out.extend_from_slice(replacement_flat);
         }
         return RuntimeString::from_utf16_units(out);
     }
@@ -178,7 +178,7 @@ pub fn replace_all_units(
     let mut pos = 0usize;
     while let Some(found) = haystack.find_units(search, pos) {
         out.extend_from_slice(&haystack_flat[pos..found]);
-        out.extend_from_slice(&replacement_flat);
+        out.extend_from_slice(replacement_flat);
         pos = found + search_len;
     }
     out.extend_from_slice(&haystack_flat[pos..]);
