@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -319,7 +320,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                     destination,
                     size,
                     generation,
-                    HeaderLayout::OBJECT,
+                    self.string_layout_for(*handle)?,
                 ));
             descriptors.push(descriptor);
         }
@@ -619,6 +620,77 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(())
     }
 
+    /// 发布字符串对象：写 32 字节字符串头（proto / type / repr / flags / length /
+    /// capacity / gc_word），payload 保持调用方已写入的字节不变。
+    ///
+    /// `capacity` 是 **payload 字节数**（按 8 对齐）：Flat/Builder 为原始数据缓冲
+    /// 大小，Cons/Slice 为固定子引用区大小（`HEAP_STRING_CONS_PAYLOAD_SIZE` /
+    /// `HEAP_STRING_SLICE_PAYLOAD_SIZE`）。hash 字段初始为 0（未计算），惰性由
+    /// [`HeapAccessV2::string_content_hash`] 填充。
+    #[allow(clippy::too_many_arguments)]
+    pub fn publish_string(
+        &self,
+        handle: u32,
+        object: u64,
+        prototype: u32,
+        repr: u8,
+        flags: u8,
+        length: u32,
+        capacity: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        if object < self.object_heap_base() || object & 7 != 0 || object >> 48 != 0 {
+            return Err(HeapAccessV2Error::InvalidObjectAddress { object });
+        }
+        if capacity & 7 != 0 {
+            return Err(HeapAccessV2Error::InvalidStringCapacity { capacity });
+        }
+        if !matches!(
+            repr,
+            constants::STRING_REPR_LATIN1_FLAT
+                | constants::STRING_REPR_UTF16_FLAT
+                | constants::STRING_REPR_CONS
+                | constants::STRING_REPR_SLICE
+                | constants::STRING_REPR_BUILDER
+        ) {
+            return Err(HeapAccessV2Error::InvalidStringRepr { repr });
+        }
+        let mut header = [0_u8; constants::HEAP_STRING_HEADER_SIZE as usize];
+        header[constants::HEAP_OBJECT_PROTO_OFFSET as usize..][..4]
+            .copy_from_slice(&prototype.to_le_bytes());
+        header[constants::HEAP_OBJECT_TYPE_OFFSET as usize] = wjsm_ir::HEAP_TYPE_STRING;
+        header[constants::HEAP_STRING_REPR_OFFSET as usize] = repr;
+        header[constants::HEAP_STRING_FLAGS_OFFSET as usize] = flags;
+        header[constants::HEAP_STRING_LENGTH_OFFSET as usize..][..4]
+            .copy_from_slice(&length.to_le_bytes());
+        header[constants::HEAP_STRING_CAPACITY_OFFSET as usize..][..4]
+            .copy_from_slice(&capacity.to_le_bytes());
+        let gc_word = u64::from(handle) & constants::HEAP_GC_HANDLE_MASK;
+        header[constants::HEAP_OBJECT_GC_WORD_OFFSET as usize..][..8]
+            .copy_from_slice(&gc_word.to_le_bytes());
+        // +24 hash 与 +28 pad 保持零：hash 未计算，pad 恒零。
+        self.heap
+            .memory()
+            .copy_from(HeapAddress::new(object), &header)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.shapes.note_prototype(prototype);
+        self.handles
+            .publish(HandleId::new(handle), object, HandleGeneration::Young)
+            .map_err(HeapAccessV2Error::HandleTable)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && barrier.epoch().young_marking
+        {
+            self.heap
+                .allocator()
+                .try_mark(
+                    ObjectRef::new(object),
+                    string_payload_bytes(capacity)?,
+                    HandleGeneration::Young,
+                )
+                .map_err(HeapAccessV2Error::Allocator)?;
+        }
+        Ok(())
+    }
+
     /// 读数组 ElementsKind（对象头 `+5` 的 pad 首字节）。
     ///
     /// 头字节 `+0..8` 是一个 word：低 32 位 proto、`+4` heap_type、`+5` kind。
@@ -886,6 +958,448 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(length + 1)
     }
 
+    // ── 字符串存取器 ─────────────────────────────────────────────────────────
+    /// 读字符串 repr（header `+5` 单字节）。
+    pub fn string_repr(&self, handle: u32) -> Result<u8, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.string_repr_at(object)
+    }
+
+    fn string_repr_at(&self, object: u64) -> Result<u8, HeapAccessV2Error> {
+        // repr 在 header `+5` 单字节，load_word 要求 8 对齐，从 `+0` 整 word 移位取字节。
+        self.heap
+            .memory()
+            .load_word(HeapAddress::new(object))
+            .map(|word| ((word >> (constants::HEAP_STRING_REPR_OFFSET * 8)) & 0xFF) as u8)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 读字符串 flags（header `+6` 单字节）。
+    pub fn string_flags(&self, handle: u32) -> Result<u8, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.heap
+            .memory()
+            .load_word(HeapAddress::new(object))
+            .map(|word| ((word >> (constants::HEAP_STRING_FLAGS_OFFSET * 8)) & 0xFF) as u8)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 原子覆写 flags 字节（`set` 置位 / `clear` 清零；同一字节同时给定时 set 优先）。
+    /// 与其他 header 字段一样走搬迁同步，ZGC 下不会写丢。
+    pub fn update_string_flags(
+        &self,
+        handle: u32,
+        set: u8,
+        clear: u8,
+    ) -> Result<(), HeapAccessV2Error> {
+        let owner = self.resolve_handle(handle)?;
+        let word = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(owner))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let shift = constants::HEAP_STRING_FLAGS_OFFSET * 8;
+        let current = ((word >> shift) & 0xFF) as u8;
+        let next = (current | set) & !clear;
+        let stored = (word & !(0xFF_u64 << shift)) | (u64::from(next) << shift);
+        self.store_header_word(handle, 0, stored)
+    }
+
+    /// 读字符串码元数（header `+8`）。
+    pub fn string_length(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.string_length_at(object)
+    }
+
+    fn string_length_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
+        self.heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_STRING_LENGTH_OFFSET),
+            ))
+            .map(|word| word as u32)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 覆写字符串 length（Builder 追加后推进）；length 与 capacity 共享 `+8` 的
+    /// word（低 32 位 length、高 32 位 capacity），写入必须保留 capacity。
+    pub fn set_string_length(&self, handle: u32, length: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let word = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_STRING_LENGTH_OFFSET),
+            ))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let packed = (word & !u64::from(u32::MAX)) | u64::from(length);
+        self.store_header_word(handle, constants::HEAP_STRING_LENGTH_OFFSET, packed)
+    }
+
+    /// 读 payload 字节容量（header `+12`；Cons/Slice 为固定子引用区大小）。
+    pub fn string_capacity(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.string_capacity_at(object)
+    }
+
+    fn string_capacity_at(&self, object: u64) -> Result<u32, HeapAccessV2Error> {
+        // capacity 在 `+12`（非 8 对齐），与 length 共享 `+8` 的 word 高 32 位。
+        self.heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_STRING_LENGTH_OFFSET),
+            ))
+            .map(|word| (word >> 32) as u32)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 读已缓存的内容哈希（header `+24`）；0 表示尚未计算，不触发计算。
+    pub fn string_hash(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_STRING_HASH_OFFSET),
+            ))
+            .map(|word| word as u32)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 读整个 payload（`capacity` 字节）；测试与宿主迁移期读取原始字节用。
+    pub fn read_string_payload(&self, handle: u32) -> Result<Vec<u8>, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let capacity = self.string_capacity_at(object)?;
+        self.heap
+            .memory()
+            .copy_to(
+                HeapAddress::new(self.string_payload_address(object)?),
+                u64::from(capacity),
+            )
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 写 payload 区间 `[offset, offset + bytes.len())`（Flat/Builder 的原始字节）。
+    pub fn write_string_payload(
+        &self,
+        handle: u32,
+        offset: u32,
+        bytes: &[u8],
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let capacity = self.string_capacity_at(object)?;
+        if offset
+            .checked_add(bytes.len() as u32)
+            .is_none_or(|end| end > capacity)
+        {
+            return Err(HeapAccessV2Error::StringPayloadOverflow {
+                offset,
+                len: bytes.len() as u32,
+                capacity,
+            });
+        }
+        let payload = self.string_payload_address(object)?;
+        self.heap
+            .memory()
+            .copy_from(HeapAddress::new(payload + u64::from(offset)), bytes)
+            .map_err(HeapAccessV2Error::Memory)
+    }
+
+    fn string_payload_address(&self, object: u64) -> Result<u64, HeapAccessV2Error> {
+        object
+            .checked_add(u64::from(constants::HEAP_STRING_PAYLOAD_OFFSET))
+            .ok_or(HeapAccessV2Error::AddressOverflow)
+    }
+
+    /// 把子引用写进 Cons 节点：两个子句柄各占一个独立 8 字节槽，都走
+    /// `store_reference`（写屏障 + remset），与数组元素同规则。
+    pub fn set_cons_children(
+        &self,
+        handle: u32,
+        left: u32,
+        right: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.string_repr_at(object)? != constants::STRING_REPR_CONS {
+            return Err(HeapAccessV2Error::NotAStringRepr {
+                handle,
+                repr: self.string_repr_at(object)?,
+                expected: constants::STRING_REPR_CONS,
+            });
+        }
+        let left_slot = self.string_payload_address(object)?
+            + u64::from(constants::HEAP_STRING_CONS_LEFT_OFFSET);
+        self.store_reference(handle, left_slot, value::encode_object_handle(left) as u64)?;
+        // 首次写入可能经 ZGC assist 触发搬迁，第二次写入前重新解析地址。
+        let object = self.resolve_handle(handle)?;
+        let right_slot = self.string_payload_address(object)?
+            + u64::from(constants::HEAP_STRING_CONS_RIGHT_OFFSET);
+        self.store_reference(handle, right_slot, value::encode_object_handle(right) as u64)
+    }
+
+    /// 读 Cons 节点两个子句柄；非 Cons 返回 `None`。
+    pub fn cons_children(&self, handle: u32) -> Result<Option<(u32, u32)>, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.string_repr_at(object)? != constants::STRING_REPR_CONS {
+            return Ok(None);
+        }
+        let left = self.load_string_child(object, constants::HEAP_STRING_CONS_LEFT_OFFSET)?;
+        let right = self.load_string_child(object, constants::HEAP_STRING_CONS_RIGHT_OFFSET)?;
+        Ok(Some((left, right)))
+    }
+
+    /// 写 Slice 节点：base 句柄走 `store_reference`；start/end 打包进一个 word
+    /// （低 32 位 start、高 32 位 end），两者都非引用，走搬迁同步的整 word 写。
+    pub fn set_slice_parts(
+        &self,
+        handle: u32,
+        base: u32,
+        start: u32,
+        end: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.string_repr_at(object)? != constants::STRING_REPR_SLICE {
+            return Err(HeapAccessV2Error::NotAStringRepr {
+                handle,
+                repr: self.string_repr_at(object)?,
+                expected: constants::STRING_REPR_SLICE,
+            });
+        }
+        let base_slot = self.string_payload_address(object)?
+            + u64::from(constants::HEAP_STRING_SLICE_BASE_OFFSET);
+        self.store_reference(handle, base_slot, value::encode_object_handle(base) as u64)?;
+        self.store_header_word(
+            handle,
+            constants::HEAP_STRING_PAYLOAD_OFFSET + constants::HEAP_STRING_SLICE_RANGE_OFFSET,
+            u64::from(start) | (u64::from(end) << 32),
+        )
+    }
+
+    /// 读 Slice 节点 `(base, start, end)`；非 Slice 返回 `None`。
+    pub fn slice_parts(&self, handle: u32) -> Result<Option<(u32, u32, u32)>, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.string_repr_at(object)? != constants::STRING_REPR_SLICE {
+            return Ok(None);
+        }
+        let base = self.load_string_child(object, constants::HEAP_STRING_SLICE_BASE_OFFSET)?;
+        let range = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                self.string_payload_address(object)?
+                    + u64::from(constants::HEAP_STRING_SLICE_RANGE_OFFSET),
+            ))
+            .map_err(HeapAccessV2Error::Memory)?;
+        Ok(Some((base, range as u32, (range >> 32) as u32)))
+    }
+
+    /// 读字符串节点 payload 区的子引用句柄；存储值经 GC 上色，读取时剥离颜色。
+    fn load_string_child(&self, object: u64, payload_offset: u32) -> Result<u32, HeapAccessV2Error> {
+        let stored = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                self.string_payload_address(object)? + u64::from(payload_offset),
+            ))
+            .map_err(HeapAccessV2Error::Memory)? as i64;
+        Ok(value::strip_gc_color(stored) as u32)
+    }
+
+    /// 覆写 header/载荷区的单 word 字段；ZGC 下同步写入搬迁目的地与最终地址，
+    /// 与 `write_shape_id` 同一套搬迁一致性协议。
+    fn store_header_word(&self, handle: u32, offset: u32, value: u64) -> Result<(), HeapAccessV2Error> {
+        let owner = self.resolve_handle(handle)?;
+        let address = owner
+            .checked_add(u64::from(offset))
+            .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        self.heap
+            .memory()
+            .store_word(HeapAddress::new(address), value)
+            .map_err(HeapAccessV2Error::Memory)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && let Some(descriptor) = barrier.relocator().descriptor(HandleId::new(handle))
+            && descriptor.source == owner
+        {
+            let destination_slot = descriptor
+                .destination
+                .checked_add(u64::from(offset))
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .memory()
+                .store_word(HeapAddress::new(destination_slot), value)
+                .map_err(HeapAccessV2Error::Memory)?;
+        }
+        let final_owner = self.resolve_handle(handle)?;
+        if final_owner != owner {
+            let final_slot = final_owner
+                .checked_add(u64::from(offset))
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.heap
+                .memory()
+                .store_word(HeapAddress::new(final_slot), value)
+                .map_err(HeapAccessV2Error::Memory)?;
+        }
+        Ok(())
+    }
+
+    // ── 字符串增长 / 搬迁 ────────────────────────────────────────────────────
+    /// 把字符串 payload 容量扩到至少 `needed` 字节（Flat/Builder 的原始数据缓冲；
+    /// Cons/Slice 的子引用区大小固定，调用方不应扩容）。通过 handle table 原子发布新地址。
+    pub fn grow_string_capacity(&self, handle: u32, needed: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let repr = self.string_repr_at(object)?;
+        let capacity = self.string_capacity_at(object)?;
+        if needed <= capacity {
+            return Ok(());
+        }
+        match repr {
+            constants::STRING_REPR_CONS | constants::STRING_REPR_SLICE => {
+                return Err(HeapAccessV2Error::FixedSizeStringPayload { handle });
+            }
+            _ => {}
+        }
+        let grown = capacity.saturating_mul(2).max(8).max(needed);
+        let new_capacity = (grown + 7) & !7;
+        if new_capacity <= capacity {
+            return Err(HeapAccessV2Error::AddressOverflow);
+        }
+        self.relocate_string(handle, new_capacity)
+    }
+
+    fn relocate_string(&self, handle: u32, new_capacity: u32) -> Result<(), HeapAccessV2Error> {
+        let old_object = self.resolve_handle(handle)?;
+        let old_capacity = self.string_capacity_at(old_object)?;
+        if new_capacity <= old_capacity {
+            return Err(HeapAccessV2Error::StringCapacityExceeded {
+                handle,
+                capacity: new_capacity,
+            });
+        }
+        let old_bytes = string_payload_bytes(old_capacity)?;
+        let new_bytes = string_payload_bytes(new_capacity)?;
+        let generation = self
+            .handle_generation(handle)
+            .ok_or(HeapAccessV2Error::UnresolvedHandle { handle })?;
+        let destination = self.reserve_exact(new_bytes)?;
+        self.heap
+            .memory()
+            .copy_atomic_words(
+                HeapAddress::new(old_object),
+                HeapAddress::new(destination),
+                old_bytes,
+            )
+            .map_err(HeapAccessV2Error::Memory)?;
+        // 新扩容区清零（header 与 payload 都是 8 对齐，按 word 写零）。
+        let mut offset = old_bytes;
+        while offset < new_bytes {
+            self.heap
+                .memory()
+                .store_word(HeapAddress::new(destination + offset), 0)
+                .map_err(HeapAccessV2Error::Memory)?;
+            offset += 8;
+        }
+        // 更新新对象的 capacity（与 length 共享 `+8` word 的高 32 位；
+        // `+12` 非 8 对齐不能单独写，且不能覆盖 `+16` gc_word）。
+        let shape_word = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                destination + u64::from(constants::HEAP_STRING_LENGTH_OFFSET),
+            ))
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.heap
+            .memory()
+            .store_word(
+                HeapAddress::new(destination + u64::from(constants::HEAP_STRING_LENGTH_OFFSET)),
+                (shape_word & u64::from(u32::MAX)) | (u64::from(new_capacity) << 32),
+            )
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.handles
+            .begin_relocation(HandleId::new(handle))
+            .map_err(HeapAccessV2Error::HandleTable)?;
+        self.handles
+            .complete_relocation(HandleId::new(handle), destination)
+            .map_err(HeapAccessV2Error::HandleTable)?;
+        self.heap
+            .allocator()
+            .transfer_mark(
+                ObjectRef::new(old_object),
+                ObjectRef::new(destination),
+                new_bytes,
+                generation,
+            )
+            .map_err(HeapAccessV2Error::Allocator)?;
+        if self
+            .heap
+            .allocator()
+            .forget_object_if_present(ObjectRef::new(old_object), old_bytes)
+            .map_err(HeapAccessV2Error::Allocator)?
+        {
+            self.heap
+                .allocator()
+                .quarantine_allocation(ObjectRef::new(old_object), old_bytes);
+        }
+        Ok(())
+    }
+
+    // ── 字符串内容哈希 ────────────────────────────────────────────────────────
+    /// 惰性计算并缓存内容哈希；语义与宿主 `RuntimeString::content_hash` 一致
+    /// （进程级随机种子抗碰撞构造、0 表示未计算、真实哈希归一化到非 0）。
+    ///
+    /// 只支持扁平载荷（Latin1/Utf16 Flat 与 Builder）；Cons/Slice 需先扁平化
+    /// （宿主 `with_string_units` 作用域，2.2 落地）后哈希。
+    pub fn string_content_hash(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let cached = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_STRING_HASH_OFFSET),
+            ))
+            .map_err(HeapAccessV2Error::Memory)? as u32;
+        if cached != 0 {
+            return Ok(cached);
+        }
+        let repr = self.string_repr_at(object)?;
+        let length = self.string_length_at(object)? as usize;
+        let payload = self.string_payload_address(object)?;
+        let hash = match repr {
+            constants::STRING_REPR_LATIN1_FLAT => {
+                let bytes = self
+                    .heap
+                    .memory()
+                    .copy_to(HeapAddress::new(payload), length as u64)
+                    .map_err(HeapAccessV2Error::Memory)?;
+                compute_string_hash(length, |index| u16::from(bytes[index]))
+            }
+            constants::STRING_REPR_UTF16_FLAT | constants::STRING_REPR_BUILDER => {
+                let bytes = self
+                    .heap
+                    .memory()
+                    .copy_to(HeapAddress::new(payload), (length as u64) * 2)
+                    .map_err(HeapAccessV2Error::Memory)?;
+                compute_string_hash(length, |index| {
+                    u16::from_le_bytes([bytes[index * 2], bytes[index * 2 + 1]])
+                })
+            }
+            _ => {
+                return Err(HeapAccessV2Error::StringHashRequiresFlatten { handle });
+            }
+        };
+        self.store_header_word(handle, constants::HEAP_STRING_HASH_OFFSET, u64::from(hash))?;
+        Ok(hash)
+    }
+
+    /// ZGC 重定位按对象类型选择 header 布局：字符串的 `+24` hash 在发布后仍可能
+    /// 被 mutator 惰性写入，必须以 MutableAtomicWord 参与搬迁同步。
+    fn string_layout_for(&self, handle: u32) -> Result<HeaderLayout, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if self.object_type_at(object)? == u32::from(wjsm_ir::HEAP_TYPE_STRING) {
+            Ok(HeaderLayout::STRING)
+        } else {
+            Ok(HeaderLayout::OBJECT)
+        }
+    }
+
     /// 删除自有属性：对象退化为字典 shape，被删属性的值槽清零。
     /// 值槽不回收——其余属性的下标必须保持稳定，否则已发射的 IC 会读错槽。
     pub fn delete_property(
@@ -1093,6 +1607,28 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 visitor(value::encode_object_handle(prototype));
             }
         }
+        // 字符串对象：payload 是原始字节或子引用句柄，不是值槽数组。
+        if header_heap_type(header) == u32::from(wjsm_ir::HEAP_TYPE_STRING) {
+            let repr = self.string_repr_at(object)?;
+            match repr {
+                // Cons / Slice 的子引用是 handle 编码（低 32 位句柄），
+                // 与数组元素同规则；Flat / Builder 的 payload 无引用。
+                constants::STRING_REPR_CONS => {
+                    let left = self.load_string_child(object, constants::HEAP_STRING_CONS_LEFT_OFFSET)?;
+                    let right = self
+                        .load_string_child(object, constants::HEAP_STRING_CONS_RIGHT_OFFSET)?;
+                    visitor(value::encode_object_handle(left));
+                    visitor(value::encode_object_handle(right));
+                }
+                constants::STRING_REPR_SLICE => {
+                    let base = self
+                        .load_string_child(object, constants::HEAP_STRING_SLICE_BASE_OFFSET)?;
+                    visitor(value::encode_object_handle(base));
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         let capacity = if header_heap_type(header) == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
             self.heap
                 .memory()
@@ -1177,10 +1713,16 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(bytes)
     }
 
-    /// 对象与数组的字节数公式统一为 `header + capacity * 8`——两者 payload 同构。
+    /// 对象与数组的字节数公式统一为 `header + capacity * 8`——两者 payload 同构；
+    /// 字符串为 `string header + payload 字节数`（Cons/Slice 的 capacity 是固定
+    /// 子引用区大小），三种类型都按 `object_type_at` 分派。
     pub fn object_size(&self, handle: u32) -> Result<u64, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
-        let capacity = if self.object_at_is_array(object)? {
+        let object_type = self.object_type_at(object)?;
+        if object_type == u32::from(wjsm_ir::HEAP_TYPE_STRING) {
+            return string_payload_bytes(self.string_capacity_at(object)?);
+        }
+        let capacity = if object_type == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
             self.array_shape(handle)?.1
         } else {
             self.value_capacity(object)?
@@ -1788,6 +2330,69 @@ pub fn object_payload_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
         .ok_or(HeapAccessV2Error::AddressOverflow)
 }
 
+/// 字符串字节数：`32 + capacity`；Cons/Slice 的 capacity 是固定子引用区大小。
+pub fn string_payload_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
+    u64::from(capacity)
+        .checked_add(u64::from(constants::HEAP_STRING_HEADER_SIZE))
+        .ok_or(HeapAccessV2Error::AddressOverflow)
+}
+
+/// 进程级哈希种子：与宿主 `wjsm-host::runtime_string` 同一来源（`RandomState`），
+/// 使内容哈希不可被外部构造碰撞。字符串归入 ManagedHeap 后哈希由本层唯一计算，
+/// 种子语义必须与宿主保持同构，迁移期才不会出现同内容不同哈希。
+fn string_hash_seed() -> u32 {
+    static SEED: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| {
+        let mut hasher = std::hash::RandomState::new().build_hasher();
+        hasher.write_u8(0);
+        (hasher.finish() as u32) | 1
+    })
+}
+
+/// UTF-16 码元序列内容哈希；算法与宿主 `RuntimeString` 的 `compute_hash` 完全一致
+/// （每 8 码元两组打包进双累加器，murmur 风格收尾），保证堆内字符串与宿主侧
+/// 旧表示的哈希值语义等价。按码元下标读取（Latin-1 逐字节、UTF-16 逐字），
+/// 闭包在编译期内联；哈希惰性只算一次，非热路径。
+fn compute_string_hash(len: usize, mut read_unit: impl FnMut(usize) -> u16) -> u32 {
+    const K1: u64 = 0xff51_afd7_ed55_8ccd;
+    const K2: u64 = 0xc4ce_b9fe_1a85_ec53;
+
+    let mut left = u64::from(string_hash_seed()) ^ (len as u64).wrapping_mul(K1);
+    let mut right = K2;
+    let full_chunks = len / 8;
+    for chunk in 0..full_chunks {
+        let base = chunk * 8;
+        let mut low = 0_u64;
+        let mut high = 0_u64;
+        for j in 0..4 {
+            low |= u64::from(read_unit(base + j)) << (j * 16);
+        }
+        for j in 0..4 {
+            high |= u64::from(read_unit(base + 4 + j)) << (j * 16);
+        }
+        left = (left ^ low).wrapping_mul(K1).rotate_left(31);
+        right = (right ^ high).wrapping_mul(K2).rotate_left(29);
+    }
+    let mut tail = 0_u64;
+    let mut tail_units = 0;
+    for index in (full_chunks * 8)..len {
+        tail |= u64::from(read_unit(index)) << ((tail_units % 4) * 16);
+        tail_units += 1;
+        if tail_units % 4 == 0 {
+            left = (left ^ tail).wrapping_mul(K1).rotate_left(31);
+            tail = 0;
+        }
+    }
+    right ^= tail;
+
+    let mut mixed = left ^ right.wrapping_mul(K1);
+    mixed ^= mixed >> 33;
+    mixed = mixed.wrapping_mul(K2);
+    mixed ^= mixed >> 29;
+    let hash = (mixed as u32) ^ ((mixed >> 32) as u32);
+    if hash == 0 { 1 } else { hash }
+}
+
 /// 数组元素地址；与对象值槽同构，故直接复用同一公式。
 fn array_element_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
     value_slot_address(object, index)
@@ -1844,6 +2449,39 @@ pub enum HeapAccessV2Error {
     /// 数组对象没有属性槽（offset 8/12 与 length/元素容量别名）；
     /// 命名属性必须经宿主 `ArrayNamedPropsStore` 侧表。
     ArrayPropertySlots {
+        handle: u32,
+    },
+    /// payload 容量未按 8 对齐（publish_string 的前置条件）。
+    InvalidStringCapacity {
+        capacity: u32,
+    },
+    /// 未知字符串 repr 编码（header `+5`）。
+    InvalidStringRepr {
+        repr: u8,
+    },
+    /// 写 payload 越界（offset + len > capacity）。
+    StringPayloadOverflow {
+        offset: u32,
+        len: u32,
+        capacity: u32,
+    },
+    /// 操作与字符串 repr 不符（如对 Flat 调 set_cons_children）。
+    NotAStringRepr {
+        handle: u32,
+        repr: u8,
+        expected: u8,
+    },
+    /// Cons/Slice 的子引用区大小固定，不支持扩容。
+    FixedSizeStringPayload {
+        handle: u32,
+    },
+    /// 扩容目标容量不大于当前容量。
+    StringCapacityExceeded {
+        handle: u32,
+        capacity: u32,
+    },
+    /// 内容哈希需要扁平载荷；Cons/Slice 须先经宿主作用域扁平化。
+    StringHashRequiresFlatten {
         handle: u32,
     },
 }
@@ -1917,6 +2555,41 @@ impl fmt::Display for HeapAccessV2Error {
             Self::ArrayPropertySlots { handle } => write!(
                 formatter,
                 "V2 array handle {handle} has no property slots; named props live in the host side table"
+            ),
+            Self::InvalidStringCapacity { capacity } => write!(
+                formatter,
+                "string payload capacity {capacity} is not 8-byte aligned"
+            ),
+            Self::InvalidStringRepr { repr } => {
+                write!(formatter, "unknown string repr encoding {repr}")
+            }
+            Self::StringPayloadOverflow {
+                offset,
+                len,
+                capacity,
+            } => write!(
+                formatter,
+                "string payload write offset {offset} + {len} bytes exceeds capacity {capacity}"
+            ),
+            Self::NotAStringRepr {
+                handle,
+                repr,
+                expected,
+            } => write!(
+                formatter,
+                "string handle {handle} has repr {repr}, expected {expected}"
+            ),
+            Self::FixedSizeStringPayload { handle } => write!(
+                formatter,
+                "string handle {handle} has a fixed-size payload (Cons/Slice) and cannot grow"
+            ),
+            Self::StringCapacityExceeded { handle, capacity } => write!(
+                formatter,
+                "string handle {handle} cannot shrink to capacity {capacity}"
+            ),
+            Self::StringHashRequiresFlatten { handle } => write!(
+                formatter,
+                "string handle {handle} must be flattened before hashing (Cons/Slice)"
             ),
         }
     }

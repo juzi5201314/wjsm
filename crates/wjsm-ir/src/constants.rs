@@ -301,6 +301,72 @@ pub const ARRAY_KIND_DICTIONARY: u32 = 2;
 pub const HEAP_ARRAY_LENGTH_OFFSET: u32 = 8;
 pub const HEAP_ARRAY_CAPACITY_OFFSET: u32 = 12;
 pub const HEAP_ARRAY_ELEMENT_SIZE: u32 = 8;
+
+// ── 字符串对象布局（header 32 字节，payload 从 +32 开始）────────────────────
+// 与对象/数组共享统一 header 语义（GC 遍历、handle remap、快照恢复都依赖
+// `+0 proto / +4 type / +16 gc_word` 三字段的位置不变）：
+//
+// +0   u32 proto            与对象/数组同位置；字符串原型（String.prototype）
+// +4   u8  heap_type        = HEAP_TYPE_STRING
+// +5   u8  repr             Latin1Flat | Utf16Flat | Cons | Slice | Builder
+// +6   u8  flags            已内部化 / 已扁平 / 全 ASCII
+// +7   u8  pad              保留为零
+// +8   u32 length           码元数（UTF-16 码元语义；与数组 length 同位置）
+// +12  u32 capacity         payload 字节容量（按 8 对齐）；Cons/Slice 为固定
+//                           子引用区字节数（8 / 16），GC 尺寸公式统一为
+//                           `HEAP_STRING_HEADER_SIZE + capacity`
+// +16  u64 gc_word          handle + age（与对象/数组同位置同编码）
+// +24  u32 hash             惰性内容哈希；0 = 尚未计算（与宿主 RuntimeString
+//                           `HASH_UNCOMPUTED` 语义一致，真实哈希归一化到非 0）
+// +28  u32 pad              保留为零
+// +32  payload…             Flat/Builder 为原始字节（Latin1 每码元 1 字节，
+//                           Utf16 每码元 2 字节）；Cons 为 left/right 两个
+//                           独立 8 字节引用槽（与数组元素同构，写入必须走
+//                           store_reference）；Slice 为 base 引用槽 +
+//                           start/end 打包 word
+//
+// Cons/Slice 的子引用是句柄，写入必须走 store_reference（写屏障 + remset），
+// 与数组元素同规则；payload 其余字节是原始数据，GC 扫描不解释。
+pub const HEAP_STRING_HEADER_SIZE: u32 = 32;
+pub const HEAP_STRING_REPR_OFFSET: u32 = HEAP_OBJECT_HEADER_PAD_START;
+pub const HEAP_STRING_FLAGS_OFFSET: u32 = HEAP_OBJECT_HEADER_PAD_START + 1;
+pub const HEAP_STRING_LENGTH_OFFSET: u32 = HEAP_ARRAY_LENGTH_OFFSET;
+pub const HEAP_STRING_CAPACITY_OFFSET: u32 = HEAP_ARRAY_CAPACITY_OFFSET;
+pub const HEAP_STRING_HASH_OFFSET: u32 = 24;
+pub const HEAP_STRING_PAYLOAD_OFFSET: u32 = HEAP_STRING_HEADER_SIZE;
+/// Cons 子引用区：left/right 各占一个独立 8 字节槽（与数组元素同构，引用值
+/// 可以独立走 store_reference 与颜色处理）。
+pub const HEAP_STRING_CONS_PAYLOAD_SIZE: u32 = 16;
+/// Slice 子引用区：base 引用槽 + start/end 打包 word，共 16 字节。
+pub const HEAP_STRING_SLICE_PAYLOAD_SIZE: u32 = 16;
+/// Cons 载荷中子引用槽偏移（相对 payload，均为 8 对齐）。
+pub const HEAP_STRING_CONS_LEFT_OFFSET: u32 = 0;
+pub const HEAP_STRING_CONS_RIGHT_OFFSET: u32 = 8;
+/// Slice 载荷中 base 引用槽偏移（相对 payload，8 对齐）。
+pub const HEAP_STRING_SLICE_BASE_OFFSET: u32 = 0;
+/// Slice 载荷中 start/end 打包 word 偏移（相对 payload，8 对齐；
+/// 低 32 位 start、高 32 位 end——两者都非引用，可共享 word）。
+pub const HEAP_STRING_SLICE_RANGE_OFFSET: u32 = 8;
+
+// ── 字符串 repr 编码（header +5）────────────────────────────────────────────
+/// 单字节载荷：每个码元 1 字节，仅当内容可编码为 Latin-1（0..=0xFF）。
+pub const STRING_REPR_LATIN1_FLAT: u8 = 0;
+/// 双字节载荷：每个码元 2 字节（UTF-16），ECMAScript 语义的规范表示。
+pub const STRING_REPR_UTF16_FLAT: u8 = 1;
+/// 拼接节点：left + right 两个子句柄，O(1) 不扁平。
+pub const STRING_REPR_CONS: u8 = 2;
+/// 切片节点：base 句柄 + start/end 码元区间。
+pub const STRING_REPR_SLICE: u8 = 3;
+/// 原地增长的累加器缓冲（非逃逸字符串拼接的宿主侧缓冲）。
+pub const STRING_REPR_BUILDER: u8 = 4;
+
+// ── 字符串 flags 位（header +6）─────────────────────────────────────────────
+/// 已进入内容去重表（字面量 / 属性名）；删除去重表前必须先清该位。
+pub const STRING_FLAG_INTERNED: u8 = 1 << 0;
+/// Cons/Slice 已惰性扁平化（repr 改为 Flat 后由编译器置位，供调试断言）。
+pub const STRING_FLAG_FLATTENED: u8 = 1 << 1;
+/// 内容全部为 ASCII（0..=0x7F）；Latin-1 载荷的快速判定位，供 2.5 追平 V8。
+pub const STRING_FLAG_ALL_ASCII: u8 = 1 << 2;
 pub const HANDLE_TABLE_ENTRY_SIZE: u32 = 8;
 
 // ── handle entry 状态编码（codegen ↔ 宿主堆的 ABI 契约）───────────────────
@@ -390,6 +456,20 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("heap_array_length_offset", HEAP_ARRAY_LENGTH_OFFSET),
         ("heap_array_capacity_offset", HEAP_ARRAY_CAPACITY_OFFSET),
         ("heap_array_element_size", HEAP_ARRAY_ELEMENT_SIZE),
+        // 字符串对象头布局：快照恢复按 header+capacity 重建 metadata → 进 ABI。
+        ("heap_string_header_size", HEAP_STRING_HEADER_SIZE),
+        ("heap_string_repr_offset", HEAP_STRING_REPR_OFFSET),
+        ("heap_string_flags_offset", HEAP_STRING_FLAGS_OFFSET),
+        ("heap_string_hash_offset", HEAP_STRING_HASH_OFFSET),
+        ("heap_string_payload_offset", HEAP_STRING_PAYLOAD_OFFSET),
+        (
+            "heap_string_cons_payload_size",
+            HEAP_STRING_CONS_PAYLOAD_SIZE,
+        ),
+        (
+            "heap_string_slice_payload_size",
+            HEAP_STRING_SLICE_PAYLOAD_SIZE,
+        ),
         ("handle_table_entry_size", HANDLE_TABLE_ENTRY_SIZE),
         ("handle_table_min_entries", HANDLE_TABLE_MIN_ENTRIES),
         ("gc_initial_trigger_bytes", GC_INITIAL_TRIGGER_BYTES),

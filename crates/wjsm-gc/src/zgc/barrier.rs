@@ -471,6 +471,23 @@ impl HeaderLayout {
         ],
     };
 
+    /// 字符串对象：publish 后 `+0` proto（可换原型）与 `+24` hash（惰性内容哈希）
+    /// 仍可能被 mutator 写；`+5 repr / +6 flags / +8 length / +12 capacity` 在
+    /// publish 时一次写入后不可变。hash 一次写入后不再变，但写入时机在 GC 之后，
+    /// 必须以 MutableAtomicWord 参与搬迁同步。
+    pub const STRING: Self = Self {
+        fields: &[
+            HeaderField {
+                offset: 0,
+                kind: HeaderFieldKind::MutableAtomicWord, // prototype + type bits
+            },
+            HeaderField {
+                offset: 24,
+                kind: HeaderFieldKind::MutableAtomicWord, // hash（惰性写）
+            },
+        ],
+    };
+
     pub fn rejects_bulk_copy_of_mutable_headers(self) -> bool {
         self.fields.iter().any(|field| {
             matches!(

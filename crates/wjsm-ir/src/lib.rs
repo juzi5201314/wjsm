@@ -1838,4 +1838,6 @@ pub const HEAP_TYPE_PROMISE: u8 = 0x02;
 pub const HEAP_TYPE_CONTINUATION: u8 = 0x03;
 pub const HEAP_TYPE_ASYNC_GENERATOR: u8 = 0x04;
 pub const HEAP_TYPE_ARGUMENTS: u8 = 0x05;
+/// 0x06 = string（字符串对象，payload 为原始字节或子引用句柄）
+pub const HEAP_TYPE_STRING: u8 = 0x06;
 pub const HEAP_TYPE_MODULE_NAMESPACE: u8 = 0x08;
