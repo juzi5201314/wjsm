@@ -7,7 +7,7 @@ use super::runtime::{
     PrimitiveHint, fail_dispatch, range_error, render_value, to_number, to_primitive,
     to_string_coerced, to_uint32, type_error,
 };
-use crate::NativeAgentState;
+use crate::{NativeAgentState, StringSlot};
 
 pub(super) fn dispatch_string(
     ctx: &mut NativeVmContext,
@@ -300,23 +300,23 @@ impl DirectBuilderPart {
 
     fn append_to(
         self,
-        strings: &mut [RuntimeString],
+        strings: &mut [StringSlot],
         builder_index: usize,
         aliased_builder: Option<&RuntimeString>,
     ) -> bool {
         match self {
-            Self::Number(number) => strings[builder_index].append_builder_number(number),
-            Self::Static(text) => strings[builder_index].append_builder_utf8(text),
+            Self::Number(number) => strings[builder_index].text.append_builder_number(number),
+            Self::Static(text) => strings[builder_index].text.append_builder_utf8(text),
             Self::String(part_index) if part_index == builder_index => {
-                aliased_builder.is_some_and(|part| strings[builder_index].append_builder(part))
+                aliased_builder.is_some_and(|part| strings[builder_index].text.append_builder(part))
             }
             Self::String(part_index) if builder_index < part_index => {
                 let (left, right) = strings.split_at_mut(part_index);
-                left[builder_index].append_builder(&right[0])
+                left[builder_index].text.append_builder(&right[0].text)
             }
             Self::String(part_index) => {
                 let (left, right) = strings.split_at_mut(builder_index);
-                right[0].append_builder(&left[part_index])
+                right[0].text.append_builder(&left[part_index].text)
             }
         }
     }
@@ -344,7 +344,7 @@ pub(super) fn string_builder_append_direct(
     };
     let aliased_builder = matches!(first, DirectBuilderPart::String(index) if index == builder_index)
         || matches!(second, DirectBuilderPart::String(index) if index == builder_index);
-    let aliased_builder = aliased_builder.then(|| state.strings[builder_index].clone());
+    let aliased_builder = aliased_builder.then(|| state.strings[builder_index].text.clone());
     if first.append_to(&mut state.strings, builder_index, aliased_builder.as_ref())
         && second.append_to(&mut state.strings, builder_index, aliased_builder.as_ref())
     {
@@ -373,14 +373,20 @@ pub(super) fn string_builder_append_number_direct(
         return fail_dispatch(ctx);
     };
     let appended = if builder_index == part_index {
-        let part = state.strings[part_index].clone();
-        state.strings[builder_index].append_builder_string_number(&part, second)
+        let part = state.strings[part_index].text.clone();
+        state.strings[builder_index]
+            .text
+            .append_builder_string_number(&part, second)
     } else if builder_index < part_index {
         let (left, right) = state.strings.split_at_mut(part_index);
-        left[builder_index].append_builder_string_number(&right[0], second)
+        left[builder_index]
+            .text
+            .append_builder_string_number(&right[0].text, second)
     } else {
         let (left, right) = state.strings.split_at_mut(builder_index);
-        right[0].append_builder_string_number(&left[part_index], second)
+        right[0]
+            .text
+            .append_builder_string_number(&left[part_index].text, second)
     };
     if appended {
         current

@@ -468,6 +468,8 @@ pub(crate) fn snapshot_gc_graph(
     frame_roots: impl IntoIterator<Item = i64>,
     epoch: u64,
 ) -> RootSnapshot {
+    // 本次快照之后诞生的字符串不在 live set 覆盖范围内，清扫必须放行它们。
+    state.begin_string_epoch();
     let roots = root_values(ctx, state, frame_roots);
     let (strong_edges, ephemerons) = host_edges(state);
     RootSnapshot::new(epoch, roots, strong_edges, ephemerons)

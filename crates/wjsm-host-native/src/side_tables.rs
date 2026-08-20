@@ -12,7 +12,7 @@ use wjsm_host::RuntimeString;
 use wjsm_ir::value;
 
 use crate::dispatch::SYMBOL_PROPERTY_KEY_BIT;
-use crate::{NativeAgentState, NativeCallableKind};
+use crate::{NativeAgentState, NativeCallableKind, StringSlot};
 
 /// 标记期收集的宿主侧活下标集合。sweep 只放行出现在这里的槽位。
 #[derive(Default)]
@@ -135,15 +135,20 @@ impl NativeAgentState {
     /// young ZGC 后只处理年轻字符串：新值连续存活两轮后晋升，避免每轮重复扫描。
     pub(crate) fn sweep_young_strings(&mut self, live: &HostLiveSet) {
         let live_strings = self.live_string_handles(live);
+        let snapshot_epoch = self.string_epoch.get();
         for index in 0..self.strings.len() {
-            if !self.string_occupied[index] || self.string_ages[index] == u8::MAX {
+            let slot = &mut self.strings[index];
+            if !slot.occupied || slot.age == StringSlot::AGE_PROMOTED {
                 continue;
             }
             if live_strings.contains(&(index as u32)) {
-                self.string_ages[index] += 1;
-                if self.string_ages[index] >= 2 {
-                    self.string_ages[index] = u8::MAX;
+                slot.age = slot.age.saturating_add(1);
+                if slot.age >= StringSlot::AGE_PROMOTE_AT {
+                    slot.age = StringSlot::AGE_PROMOTED;
                 }
+                continue;
+            }
+            if slot.born_after(snapshot_epoch) {
                 continue;
             }
             self.retire_string(index);
@@ -153,12 +158,17 @@ impl NativeAgentState {
     /// full/old GC 已建立完整 live set，可同时回收年轻和晋升字符串。
     fn sweep_strings(&mut self, live: &HostLiveSet) {
         let live_strings = self.live_string_handles(live);
+        let snapshot_epoch = self.string_epoch.get();
         for index in 0..self.strings.len() {
-            if !self.string_occupied[index] {
+            let slot = &mut self.strings[index];
+            if !slot.occupied {
                 continue;
             }
             if live_strings.contains(&(index as u32)) {
-                self.string_ages[index] = u8::MAX;
+                slot.age = StringSlot::AGE_PROMOTED;
+                continue;
+            }
+            if slot.born_after(snapshot_epoch) {
                 continue;
             }
             self.retire_string(index);
@@ -197,13 +207,25 @@ impl NativeAgentState {
         );
         live_strings
     }
+    /// 退休一个字符串槽位。
+    ///
+    /// 只有登记过去重表的槽位才回表删除：运行时产生的长串与 rope 节点从未入表，
+    /// 而查表本身要展平整串并计算内容哈希，字符串累加负载下这是 O(n²) 的主要来源。
     fn retire_string(&mut self, index: usize) {
-        if self.string_ids.get(&self.strings[index]).copied() == Some(index as u32) {
-            self.string_ids.remove(&self.strings[index]);
+        let slot = &mut self.strings[index];
+        let interned = slot.interned;
+        slot.occupied = false;
+        slot.age = 0;
+        slot.interned = false;
+        if interned {
+            let text = std::mem::replace(&mut self.strings[index].text, RuntimeString::empty());
+            // 去重表可能已因同内容的其它槽位而改指他处，只摘除仍指向本槽的映射。
+            if self.string_ids.get(&text).copied() == Some(index as u32) {
+                self.string_ids.remove(&text);
+            }
+        } else {
+            slot.text = RuntimeString::empty();
         }
-        self.strings[index] = RuntimeString::empty();
-        self.string_occupied[index] = false;
-        self.string_ages[index] = 0;
         self.string_free.push(index as u32);
     }
 }

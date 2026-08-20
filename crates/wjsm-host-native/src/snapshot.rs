@@ -10,7 +10,7 @@ use wjsm_snapshot_format::{
     SnapshotLimits, decode_snapshot,
 };
 
-use crate::{NativeAgentState, NativeCallableKind, NativeRuntimeError, gc};
+use crate::{NativeAgentState, NativeCallableKind, NativeRuntimeError, StringSlot, gc};
 
 include!(concat!(env!("OUT_DIR"), "/bootstrap_hash.rs"));
 
@@ -44,13 +44,19 @@ impl NativeAgentState {
         self.gc.reset_heap(restored.heap)?;
         self.gc.reset_nlab();
         self.global_object = Some(restored.global_object);
-        self.strings = restored.strings;
-        self.string_ids = self
+        // 种子字符串全部是内部化的常驻值：登记去重表，并直接置为已晋升，
+        // 免得 young sweep 每轮重扫这批永不回收的槽位。
+        self.string_ids = restored
             .strings
             .iter()
             .cloned()
             .enumerate()
             .map(|(index, string)| (string, index as u32))
+            .collect();
+        self.strings = restored
+            .strings
+            .into_iter()
+            .map(StringSlot::promoted_interned)
             .collect();
         self.native_callables = restored.native_callables;
         self.native_callable_ids = self
@@ -155,6 +161,9 @@ fn decode_host_state(bytes: &[u8]) -> Result<(Vec<RuntimeString>, Vec<NativeCall
         bail!("host state string count exceeds limit")
     }
     let mut strings = Vec::with_capacity(string_count as usize);
+    // RuntimeString 的内部可变性只承载扁平化与内容哈希两个缓存，二者都由内容
+    // 唯一决定，Hash / Eq 的结果不随缓存状态变化，因此可安全作为集合键。
+    #[allow(clippy::mutable_key_type)]
     let mut unique = HashSet::with_capacity(string_count as usize);
     for _ in 0..string_count {
         let unit_count = reader.u32()?;

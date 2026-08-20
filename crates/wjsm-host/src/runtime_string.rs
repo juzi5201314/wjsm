@@ -3,19 +3,27 @@
 //! V8 `ConsString` / JSC `RopeString` 路线：`+` / `slice` / `split` 快捷路径
 //! 产出 rope 节点 O(1) 不扁平，仅在需要连续 `&[u16]` 时（哈希/查找/渲染）
 //! 才一次性扁平化。节点以 `Arc` 共享，克隆 O(1) 不深拷。
+//!
+//! 扁平内容统一由 `Arc<[u16]>` 承载（`Builder` 例外，它在原地增长）：克隆恒为
+//! 引用计数递增，内容相等的两个值只要共享同一 `Arc` 就能以指针比较短路。
+//! 内容哈希惰性计算并缓存在 [`RuntimeString::hash`]，intern 表因此不必在每次
+//! 查表/退表时重新展平并遍历整串。
 
-use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Range;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
 const ROPE_FLATTEN_THRESHOLD: usize = 256;
 const ROPE_CONCAT_SHORT_FLATTEN: usize = 64;
 
+/// `hash` 字段的「未计算」哨兵；真实哈希把 0 归一到 1，二者不会混淆。
+const HASH_UNCOMPUTED: u32 = 0;
+
 #[derive(Clone, Debug)]
 enum RopeKind {
-    Flat(Vec<u16>),
+    Flat(Arc<[u16]>),
     Builder(Vec<u16>),
     Concat {
         children: Arc<(RuntimeString, RuntimeString)>,
@@ -34,10 +42,25 @@ enum RopeKind {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RuntimeString {
     kind: RopeKind,
+    /// 非 `Flat` / 非 `Builder` 节点的扁平化缓存；这两类直接从 `kind` 读，
+    /// 不经此字段，因此不会出现同一内容两份存储。
     flat: OnceLock<Arc<[u16]>>,
+    /// 惰性内容哈希，[`HASH_UNCOMPUTED`] 表示尚未计算。内容变更（builder 追加）
+    /// 必须复位。
+    hash: AtomicU32,
+}
+
+impl Clone for RuntimeString {
+    fn clone(&self) -> Self {
+        Self {
+            kind: self.kind.clone(),
+            flat: self.flat.clone(),
+            hash: AtomicU32::new(self.hash.load(AtomicOrdering::Relaxed)),
+        }
+    }
 }
 
 impl Default for RuntimeString {
@@ -51,8 +74,23 @@ impl PartialEq for RuntimeString {
         if self.utf16_len() != other.utf16_len() {
             return false;
         }
-        if let (Some(a), Some(b)) = (self.try_flat_slice(), other.try_flat_slice()) {
-            return a == b;
+        // 共享同一扁平缓冲的两个值必然内容相同，省掉整串比较。
+        if let (Some(left), Some(right)) = (self.flat_arc(), other.flat_arc())
+            && Arc::ptr_eq(left, right)
+        {
+            return true;
+        }
+        // 两侧哈希都已算出时，不等即可直接否定。
+        let (left_hash, right_hash) = (
+            self.hash.load(AtomicOrdering::Relaxed),
+            other.hash.load(AtomicOrdering::Relaxed),
+        );
+        if left_hash != HASH_UNCOMPUTED && right_hash != HASH_UNCOMPUTED && left_hash != right_hash
+        {
+            return false;
+        }
+        if let (Some(left), Some(right)) = (self.try_flat_slice(), other.try_flat_slice()) {
+            return left == right;
         }
         self.as_flat_slice() == other.as_flat_slice()
     }
@@ -60,23 +98,36 @@ impl PartialEq for RuntimeString {
 
 impl Eq for RuntimeString {}
 
-impl Borrow<[u16]> for RuntimeString {
-    fn borrow(&self) -> &[u16] {
-        self.as_flat_slice()
-    }
-}
-
 impl Hash for RuntimeString {
+    /// 只把缓存的内容哈希喂给外层 hasher：intern 表的查表/退表因此是常数时间，
+    /// 不再随字符串长度展平并遍历。外层仍是 `RandomState`，进程级随机种子在
+    /// [`content_hash`] 内注入，抗碰撞构造攻击。
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.as_flat_slice().hash(state);
+        state.write_u32(self.content_hash());
     }
 }
 
 impl RuntimeString {
     pub fn empty() -> Self {
+        static EMPTY: OnceLock<Arc<[u16]>> = OnceLock::new();
+        Self::from_flat(Arc::clone(
+            EMPTY.get_or_init(|| Arc::from(Vec::<u16>::new().into_boxed_slice())),
+        ))
+    }
+
+    fn from_flat(units: Arc<[u16]>) -> Self {
         Self {
-            kind: RopeKind::Flat(Vec::new()),
-            flat: OnceLock::from(Arc::from(Vec::<u16>::new().into_boxed_slice())),
+            kind: RopeKind::Flat(units),
+            flat: OnceLock::new(),
+            hash: AtomicU32::new(HASH_UNCOMPUTED),
+        }
+    }
+
+    fn from_rope(kind: RopeKind) -> Self {
+        Self {
+            kind,
+            flat: OnceLock::new(),
+            hash: AtomicU32::new(HASH_UNCOMPUTED),
         }
     }
 
@@ -89,23 +140,24 @@ impl RuntimeString {
     }
 
     pub fn from_utf16_units(units: Vec<u16>) -> Self {
-        let flat: Arc<[u16]> = Arc::from(units.into_boxed_slice());
-        Self {
-            kind: RopeKind::Flat(Vec::new()),
-            flat: OnceLock::from(flat),
-        }
+        Self::from_flat(Arc::from(units.into_boxed_slice()))
     }
 
-    fn from_owned_utf16_units(units: Vec<u16>) -> Self {
-        Self {
-            kind: RopeKind::Flat(units),
-            flat: OnceLock::new(),
-        }
+    /// 由 number 直接构造。
+    ///
+    /// 走 [`append_number_units`] 的安全整数快路径，避开 Rust 浮点 Display 的
+    /// grisu 最短表示算法，也不经 `String` 再做一次 UTF-8 → UTF-16 编码。
+    pub fn from_number(number: f64) -> Self {
+        // 有限 f64 的十进制最长形态（含符号、小数点与指数）不超过 24 个码元。
+        let mut units = Vec::with_capacity(24);
+        append_number_units(&mut units, number);
+        Self::from_utf16_units(units)
     }
 
     pub fn from_utf16_code_unit(unit: u16) -> Self {
         Self::from_utf16_units(vec![unit])
     }
+
     pub fn as_flat_slice(&self) -> &[u16] {
         if let Some(flat) = self.try_flat_slice() {
             return flat;
@@ -115,13 +167,35 @@ impl RuntimeString {
     }
 
     fn try_flat_slice(&self) -> Option<&[u16]> {
-        self.flat
-            .get()
-            .map(AsRef::as_ref)
-            .or_else(|| match &self.kind {
-                RopeKind::Flat(units) => Some(units.as_slice()),
-                _ => None,
-            })
+        match &self.kind {
+            RopeKind::Flat(units) => Some(units),
+            RopeKind::Builder(units) => Some(units),
+            _ => self.flat.get().map(AsRef::as_ref),
+        }
+    }
+
+    /// 已具备 `Arc` 形态的扁平缓冲；`Builder` 在原地增长故不参与共享。
+    fn flat_arc(&self) -> Option<&Arc<[u16]>> {
+        match &self.kind {
+            RopeKind::Flat(units) => Some(units),
+            RopeKind::Builder(_) => None,
+            _ => self.flat.get(),
+        }
+    }
+
+    /// 惰性计算并缓存内容哈希。
+    pub fn content_hash(&self) -> u32 {
+        let cached = self.hash.load(AtomicOrdering::Relaxed);
+        if cached != HASH_UNCOMPUTED {
+            return cached;
+        }
+        let hash = compute_hash(self.as_flat_slice());
+        self.hash.store(hash, AtomicOrdering::Relaxed);
+        hash
+    }
+
+    fn invalidate_hash(&self) {
+        self.hash.store(HASH_UNCOMPUTED, AtomicOrdering::Relaxed);
     }
 
     fn flatten_to_vec(&self) -> Vec<u16> {
@@ -137,14 +211,8 @@ impl RuntimeString {
             return;
         }
         match &self.kind {
-            RopeKind::Flat(v) => {
-                if !v.is_empty() {
-                    out.extend_from_slice(v);
-                } else if let Some(flat) = self.flat.get() {
-                    out.extend_from_slice(flat);
-                }
-            }
-            RopeKind::Builder(v) => out.extend_from_slice(v),
+            RopeKind::Flat(units) => out.extend_from_slice(units),
+            RopeKind::Builder(units) => out.extend_from_slice(units),
             RopeKind::Concat { children, .. } => {
                 children.0.write_into(out);
                 children.1.write_into(out);
@@ -181,6 +249,9 @@ impl RuntimeString {
     }
 
     pub fn flattened_units(&self) -> Arc<[u16]> {
+        if let RopeKind::Flat(units) = &self.kind {
+            return Arc::clone(units);
+        }
         Arc::clone(
             self.flat
                 .get_or_init(|| Arc::from(self.flatten_to_vec().into_boxed_slice())),
@@ -189,14 +260,8 @@ impl RuntimeString {
 
     pub fn utf16_len(&self) -> usize {
         match &self.kind {
-            RopeKind::Flat(v) => {
-                if !v.is_empty() {
-                    v.len()
-                } else {
-                    self.flat.get().map_or(0, |f| f.len())
-                }
-            }
-            RopeKind::Builder(v) => v.len(),
+            RopeKind::Flat(units) => units.len(),
+            RopeKind::Builder(units) => units.len(),
             RopeKind::Concat { len, .. } => *len,
             RopeKind::Slice { len, .. } => *len,
             RopeKind::Repeat { len, .. } => *len,
@@ -212,13 +277,8 @@ impl RuntimeString {
             return None;
         }
         match &self.kind {
-            RopeKind::Flat(v) => {
-                if !v.is_empty() {
-                    return v.get(index).copied();
-                }
-                self.flat.get()?.get(index).copied()
-            }
-            RopeKind::Builder(v) => v.get(index).copied(),
+            RopeKind::Flat(units) => units.get(index).copied(),
+            RopeKind::Builder(units) => units.get(index).copied(),
             RopeKind::Concat { children, .. } => {
                 let left_len = children.0.utf16_len();
                 if index < left_len {
@@ -229,11 +289,11 @@ impl RuntimeString {
             }
             RopeKind::Slice { base, start, .. } => base.code_unit_at(start + index),
             RopeKind::Repeat { base, .. } => {
-                let bl = base.utf16_len();
-                if bl == 0 {
+                let base_len = base.utf16_len();
+                if base_len == 0 {
                     return None;
                 }
-                base.code_unit_at(index % bl)
+                base.code_unit_at(index % base_len)
             }
         }
     }
@@ -260,23 +320,20 @@ impl RuntimeString {
             return self.clone();
         }
         if let Some(flat) = self.try_flat_slice() {
-            return Self::from_owned_utf16_units(flat[start..end].to_vec());
+            return Self::from_utf16_units(flat[start..end].to_vec());
         }
         let slice_len = end - start;
         if slice_len <= ROPE_FLATTEN_THRESHOLD {
             let mut out = Vec::with_capacity(slice_len);
             write_slice_into(self, start, end, &mut out);
-            return Self::from_owned_utf16_units(out);
+            return Self::from_utf16_units(out);
         }
-        Self {
-            kind: RopeKind::Slice {
-                base: Arc::new(self.clone()),
-                start,
-                end,
-                len: slice_len,
-            },
-            flat: OnceLock::new(),
-        }
+        Self::from_rope(RopeKind::Slice {
+            base: Arc::new(self.clone()),
+            start,
+            end,
+            len: slice_len,
+        })
     }
 
     pub fn push_units_from(&mut self, other: &Self) {
@@ -300,21 +357,18 @@ impl RuntimeString {
         }
         let total = left.utf16_len() + right.utf16_len();
         if total <= ROPE_CONCAT_SHORT_FLATTEN
-            && left.try_flat_slice().is_some()
-            && right.try_flat_slice().is_some()
+            && let (Some(left_flat), Some(right_flat)) =
+                (left.try_flat_slice(), right.try_flat_slice())
         {
             let mut out = Vec::with_capacity(total);
-            out.extend_from_slice(left.try_flat_slice().unwrap());
-            out.extend_from_slice(right.try_flat_slice().unwrap());
+            out.extend_from_slice(left_flat);
+            out.extend_from_slice(right_flat);
             return Self::from_utf16_units(out);
         }
-        Self {
-            kind: RopeKind::Concat {
-                children: Arc::new((left, right)),
-                len: total,
-            },
-            flat: OnceLock::new(),
-        }
+        Self::from_rope(RopeKind::Concat {
+            children: Arc::new((left, right)),
+            len: total,
+        })
     }
 
     /// 从右向左组合一组已完成 ToString 的片段，使末尾短扁平串先合并，
@@ -334,23 +388,21 @@ impl RuntimeString {
         if count == 1 {
             return self.clone();
         }
-        let len = self.utf16_len().checked_mul(count).unwrap_or(usize::MAX);
-        if len <= ROPE_FLATTEN_THRESHOLD && self.try_flat_slice().is_some() {
-            let flat = self.try_flat_slice().unwrap();
+        let len = self.utf16_len().saturating_mul(count);
+        if len <= ROPE_FLATTEN_THRESHOLD
+            && let Some(flat) = self.try_flat_slice()
+        {
             let mut out = Vec::with_capacity(len);
             for _ in 0..count {
                 out.extend_from_slice(flat);
             }
             return Self::from_utf16_units(out);
         }
-        Self {
-            kind: RopeKind::Repeat {
-                base: Arc::new(self.clone()),
-                count,
-                len,
-            },
-            flat: OnceLock::new(),
-        }
+        Self::from_rope(RopeKind::Repeat {
+            base: Arc::new(self.clone()),
+            count,
+            len,
+        })
     }
 
     pub fn find_units(&self, needle: &Self, from: usize) -> Option<usize> {
@@ -414,7 +466,7 @@ impl RuntimeString {
 
     pub fn to_utf8_lossy(&self) -> String {
         let flat = self.as_flat_slice();
-        String::from_utf16_lossy(&flat)
+        String::from_utf16_lossy(flat)
     }
 
     pub fn to_utf8_lossy_bytes(&self) -> Vec<u8> {
@@ -454,10 +506,7 @@ impl RuntimeString {
 
     /// 创建仅供编译器证明不逃逸的局部累加器使用的可变缓冲区。
     pub fn builder(capacity: usize) -> Self {
-        Self {
-            kind: RopeKind::Builder(Vec::with_capacity(capacity)),
-            flat: OnceLock::new(),
-        }
+        Self::from_rope(RopeKind::Builder(Vec::with_capacity(capacity)))
     }
 
     pub fn append_builder(&mut self, part: &Self) -> bool {
@@ -465,6 +514,7 @@ impl RuntimeString {
             return false;
         };
         part.write_into(units);
+        self.invalidate_hash();
         true
     }
 
@@ -473,6 +523,7 @@ impl RuntimeString {
             return false;
         };
         units.extend(text.encode_utf16());
+        self.invalidate_hash();
         true
     }
 
@@ -480,7 +531,9 @@ impl RuntimeString {
         let RopeKind::Builder(units) = &mut self.kind else {
             return false;
         };
-        append_number_units(units, number)
+        let appended = append_number_units(units, number);
+        self.invalidate_hash();
+        appended
     }
 
     pub fn append_builder_string_number(&mut self, part: &Self, number: f64) -> bool {
@@ -488,16 +541,19 @@ impl RuntimeString {
             return false;
         };
         part.write_into(units);
-        append_number_units(units, number)
+        let appended = append_number_units(units, number);
+        self.invalidate_hash();
+        appended
     }
 
     pub fn finish_builder(&mut self) -> bool {
         let RopeKind::Builder(units) =
-            std::mem::replace(&mut self.kind, RopeKind::Flat(Vec::new()))
+            std::mem::replace(&mut self.kind, RopeKind::Flat(Arc::from(Vec::new())))
         else {
             return false;
         };
-        self.kind = RopeKind::Flat(units);
+        self.kind = RopeKind::Flat(Arc::from(units.into_boxed_slice()));
+        self.invalidate_hash();
         true
     }
 
@@ -508,18 +564,20 @@ impl RuntimeString {
     pub fn is_flat(&self) -> bool {
         matches!(self.kind, RopeKind::Flat(_)) || self.flat.get().is_some()
     }
+
     /// 估算本值本次创建独占的宿主堆字节，用于把字符串分配反馈给 GC pacing。
     /// 共享的 rope 子串与已有扁平缓冲不会重复计费。
     pub fn estimated_owned_bytes(&self) -> usize {
-        let flat_bytes = self
+        let cached_bytes = self
             .flat
             .get()
             .filter(|flat| Arc::strong_count(flat) == 1)
             .map_or(0, |flat| flat.len().saturating_mul(size_of::<u16>()));
         let node_bytes = match &self.kind {
-            RopeKind::Flat(units) | RopeKind::Builder(units) => {
-                units.capacity().saturating_mul(size_of::<u16>())
+            RopeKind::Flat(units) if Arc::strong_count(units) == 1 => {
+                units.len().saturating_mul(size_of::<u16>())
             }
+            RopeKind::Builder(units) => units.capacity().saturating_mul(size_of::<u16>()),
             RopeKind::Concat { children, .. } if Arc::strong_count(children) == 1 => {
                 size_of::<(RuntimeString, RuntimeString)>()
             }
@@ -528,9 +586,12 @@ impl RuntimeString {
             {
                 size_of::<RuntimeString>()
             }
-            RopeKind::Concat { .. } | RopeKind::Slice { .. } | RopeKind::Repeat { .. } => 0,
+            RopeKind::Flat(_)
+            | RopeKind::Concat { .. }
+            | RopeKind::Slice { .. }
+            | RopeKind::Repeat { .. } => 0,
         };
-        flat_bytes.saturating_add(node_bytes)
+        cached_bytes.saturating_add(node_bytes)
     }
 }
 
@@ -552,6 +613,61 @@ impl From<Vec<u16>> for RuntimeString {
     }
 }
 
+/// 进程级哈希种子：`RandomState` 提供随机性，使内容哈希不可被外部构造碰撞。
+fn hash_seed() -> u32 {
+    static SEED: OnceLock<u32> = OnceLock::new();
+    *SEED.get_or_init(|| {
+        let mut hasher = std::hash::RandomState::new().build_hasher();
+        hasher.write_u8(0);
+        (hasher.finish() as u32) | 1
+    })
+}
+
+/// UTF-16 内容哈希：每次吃 4 个码元（8 字节），双累加器交替。
+///
+/// 逐码元做一次乘法会形成长度成正比的串行乘法依赖链，中等长度串上比它要取代的
+/// SipHash 还慢；按机器字打包并拆成两条独立链后，吞吐由乘法端口而非延迟决定。
+/// 结果归一化到非 [`HASH_UNCOMPUTED`]。
+fn compute_hash(units: &[u16]) -> u32 {
+    const K1: u64 = 0xff51_afd7_ed55_8ccd;
+    const K2: u64 = 0xc4ce_b9fe_1a85_ec53;
+
+    let mut left = u64::from(hash_seed()) ^ (units.len() as u64).wrapping_mul(K1);
+    let mut right = K2;
+    let (chunks, remainder) = units.as_chunks::<8>();
+    for chunk in chunks {
+        let low = pack_four(&chunk[..4]);
+        let high = pack_four(&chunk[4..]);
+        left = (left ^ low).wrapping_mul(K1).rotate_left(31);
+        right = (right ^ high).wrapping_mul(K2).rotate_left(29);
+    }
+    let mut tail = 0_u64;
+    for (index, unit) in remainder.iter().enumerate() {
+        tail |= u64::from(*unit) << ((index % 4) * 16);
+        if index % 4 == 3 {
+            left = (left ^ tail).wrapping_mul(K1).rotate_left(31);
+            tail = 0;
+        }
+    }
+    right ^= tail;
+
+    let mut mixed = left ^ right.wrapping_mul(K1);
+    mixed ^= mixed >> 33;
+    mixed = mixed.wrapping_mul(K2);
+    mixed ^= mixed >> 29;
+    let hash = (mixed as u32) ^ ((mixed >> 32) as u32);
+    if hash == HASH_UNCOMPUTED { 1 } else { hash }
+}
+
+/// 把 4 个 UTF-16 码元打包成一个机器字。
+fn pack_four(units: &[u16]) -> u64 {
+    debug_assert_eq!(units.len(), 4, "pack_four 只接受 4 个码元");
+    u64::from(units[0])
+        | (u64::from(units[1]) << 16)
+        | (u64::from(units[2]) << 32)
+        | (u64::from(units[3]) << 48)
+}
+
 struct Utf16Writer<'a>(&'a mut Vec<u16>);
 
 impl std::fmt::Write for Utf16Writer<'_> {
@@ -560,6 +676,7 @@ impl std::fmt::Write for Utf16Writer<'_> {
         Ok(())
     }
 }
+
 fn safe_integer(number: f64) -> Option<i64> {
     if !(-9_007_199_254_740_991.0..=9_007_199_254_740_991.0).contains(&number) {
         return None;
@@ -618,14 +735,8 @@ fn write_slice_into(base: &RuntimeString, start: usize, end: usize, out: &mut Ve
         return;
     }
     match &base.kind {
-        RopeKind::Flat(v) => {
-            if !v.is_empty() {
-                out.extend_from_slice(&v[start..end]);
-            } else if let Some(flat) = base.flat.get() {
-                out.extend_from_slice(&flat[start..end]);
-            }
-        }
-        RopeKind::Builder(v) => out.extend_from_slice(&v[start..end]),
+        RopeKind::Flat(units) => out.extend_from_slice(&units[start..end]),
+        RopeKind::Builder(units) => out.extend_from_slice(&units[start..end]),
         RopeKind::Concat { children, .. } => {
             let left_len = children.0.utf16_len();
             if end <= left_len {
@@ -644,18 +755,14 @@ fn write_slice_into(base: &RuntimeString, start: usize, end: usize, out: &mut Ve
         } => {
             write_slice_into(inner, s + start, s + end, out);
         }
-        RopeKind::Repeat {
-            base: inner,
-            count: _,
-            ..
-        } => {
-            let bl = inner.utf16_len();
-            if bl == 0 {
+        RopeKind::Repeat { base: inner, .. } => {
+            let base_len = inner.utf16_len();
+            if base_len == 0 {
                 return;
             }
             for idx in start..end {
-                if let Some(u) = inner.code_unit_at(idx % bl) {
-                    out.push(u);
+                if let Some(unit) = inner.code_unit_at(idx % base_len) {
+                    out.push(unit);
                 }
             }
         }
@@ -747,6 +854,7 @@ mod tests {
         assert!(string.finish_builder());
         assert_eq!(string.as_utf16_units(), &[0x61, 0x62, 0x63, 0x64]);
     }
+
     #[test]
     fn slice_of_rope_preserves_units() {
         let a = RuntimeString::from_utf16_units((0..1000).map(|i| (i % 256) as u16).collect());
@@ -756,5 +864,49 @@ mod tests {
         let s = c.slice_units(900..1100);
         assert_eq!(s.utf16_len(), 200);
         assert_eq!(s.as_flat_slice().len(), 200);
+    }
+
+    #[test]
+    fn clone_shares_flat_storage() {
+        let original = RuntimeString::from_utf8_str("shared flat payload");
+        let cloned = original.clone();
+        // 共享同一 Arc 时相等比较走指针短路，不再深拷内容。
+        assert_eq!(original, cloned);
+        assert_eq!(original.content_hash(), cloned.content_hash());
+    }
+
+    #[test]
+    fn content_hash_matches_across_independent_values() {
+        let left = RuntimeString::from_utf8_str("alpha,beta");
+        let right = RuntimeString::from_utf16_units("alpha,beta".encode_utf16().collect());
+        assert_eq!(left.content_hash(), right.content_hash());
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn content_hash_follows_builder_mutation() {
+        let mut builder = RuntimeString::builder(8);
+        assert!(builder.append_builder_utf8("ab"));
+        let first = builder.content_hash();
+        assert!(builder.append_builder_utf8("cd"));
+        let second = builder.content_hash();
+        assert_ne!(first, second);
+        assert!(builder.finish_builder());
+        assert_eq!(builder.content_hash(), {
+            let flat = RuntimeString::from_utf8_str("abcd");
+            flat.content_hash()
+        });
+    }
+
+    #[test]
+    fn rope_and_flat_with_same_content_are_equal() {
+        let left = RuntimeString::concat(
+            RuntimeString::from_utf8_str(&"a".repeat(100)),
+            RuntimeString::from_utf8_str(&"b".repeat(100)),
+        );
+        let right =
+            RuntimeString::from_utf8_str(&format!("{}{}", "a".repeat(100), "b".repeat(100)));
+        assert_eq!(left, right);
+        assert_eq!(left.content_hash(), right.content_hash());
     }
 }

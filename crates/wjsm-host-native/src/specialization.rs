@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::thread::{self, JoinHandle};
 
@@ -90,6 +91,12 @@ pub(crate) struct SpecializationCoordinator {
     pending: HashSet<VariantKey>,
     disabled: HashSet<VariantKey>,
     overlays: HashMap<VariantKey, PublishedOverlay>,
+    /// worker 已投递、owner 尚未收敛的结果数。
+    ///
+    /// owner 在每一次宿主调用的入口都要判断有无待收敛结果；没有这个计数就得
+    /// 无条件 `try_recv` 并搬动整个协调器，等于让后台分层编译给每一次宿主调用
+    /// 收税。放松序的读取足够：漏读一轮只会把收敛推迟到下一次调用。
+    completed: Arc<AtomicUsize>,
     active_bytes: usize,
     tick: u64,
     next_overlay_image_id: u64,
@@ -105,6 +112,7 @@ impl SpecializationCoordinator {
             pending: HashSet::new(),
             disabled: HashSet::new(),
             overlays: HashMap::new(),
+            completed: Arc::new(AtomicUsize::new(0)),
             active_bytes: 0,
             tick: 0,
             next_overlay_image_id: u64::MAX,
@@ -117,6 +125,7 @@ impl SpecializationCoordinator {
             let (request_tx, request_rx) =
                 mpsc::sync_channel::<CompilationRequest>(REQUEST_QUEUE_CAPACITY);
             let (result_tx, result_rx) = mpsc::channel::<CompilationResult>();
+            let completed = Arc::clone(&self.completed);
             let worker = thread::Builder::new()
                 .name("wjsm-specialization".into())
                 .spawn(move || {
@@ -137,6 +146,7 @@ impl SpecializationCoordinator {
                         {
                             break;
                         }
+                        completed.fetch_add(1, Ordering::Release);
                     }
                 })
                 .ok()?;
@@ -167,6 +177,11 @@ impl SpecializationCoordinator {
         }
     }
 
+    /// 是否有 worker 已投递、尚未收敛的结果。
+    pub(crate) fn has_results(&self) -> bool {
+        self.completed.load(Ordering::Acquire) != 0
+    }
+
     pub(crate) fn drain_results(&mut self) -> Vec<CompilationResult> {
         let mut results = Vec::new();
         let Some(receiver) = &self.result_rx else {
@@ -179,6 +194,8 @@ impl SpecializationCoordinator {
             }
             results.push(result);
         }
+        // 计数只由本方法回落；worker 只增不减，二者不会互相覆盖。
+        self.completed.fetch_sub(results.len(), Ordering::AcqRel);
         results
     }
     pub(crate) fn reset_runtime_state(&mut self) {

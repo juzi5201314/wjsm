@@ -2373,6 +2373,10 @@ fn primitive_to_runtime_string(
             .cloned()
             .ok_or_else(|| fail_dispatch(ctx));
     }
+    // number 是字符串拼接里最热的来源，直连整数快路径而非绕道 `String`。
+    if value::is_f64(primitive) {
+        return Ok(RuntimeString::from_number(value::decode_f64(primitive)));
+    }
     Ok(RuntimeString::from(render_value(state, primitive)))
 }
 

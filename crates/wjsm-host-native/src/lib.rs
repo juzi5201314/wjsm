@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -923,6 +923,60 @@ enum NativePrivateSlot {
     Accessor { getter: i64, setter: i64 },
 }
 
+/// 字符串槽位：内容与回收簿记合一。
+///
+/// 占用位、存活代数与「是否登记在 `string_ids` 去重表」曾是三张与 `strings`
+/// 平行的 `Vec`，任何一处扩容遗漏都会让下标错位；合并成单一元素后长度不变式
+/// 由类型保证。`interned` 让退休路径无需为从未入表的字符串计算内容哈希。
+pub(crate) struct StringSlot {
+    text: RuntimeString,
+    /// 已占用；false 表示槽位在 `string_free` 中等待复用。
+    occupied: bool,
+    /// young sweep 的连续存活轮数，`u8::MAX` 表示已晋升。
+    age: u8,
+    /// 是否登记在 `string_ids` 内容去重表。
+    interned: bool,
+    /// 诞生时的根快照代号，见 [`NativeAgentState::string_epoch`]。
+    birth_epoch: u64,
+}
+
+impl StringSlot {
+    /// 连续存活到这个代数即晋升，后续 young sweep 不再重复扫描。
+    const AGE_PROMOTE_AT: u8 = 2;
+    /// 已晋升，只有 full/old sweep 才会处理。
+    const AGE_PROMOTED: u8 = u8::MAX;
+
+    /// 本槽是否诞生于当前 GC 周期的根快照之后。
+    ///
+    /// ZGC 并发标记，live set 由「根快照 + 标记期写屏障补录」构成；快照之后诞生
+    /// 的字符串不在其覆盖范围内，按「不在 live set」回收会静默丢掉仍被栈根引用的
+    /// 字符串。这类槽必须放行一轮——下一轮的根快照必然覆盖它。
+    fn born_after(&self, snapshot_epoch: u64) -> bool {
+        self.birth_epoch >= snapshot_epoch
+    }
+
+    fn vacant() -> Self {
+        Self {
+            text: RuntimeString::empty(),
+            occupied: false,
+            age: 0,
+            interned: false,
+            birth_epoch: 0,
+        }
+    }
+
+    /// 启动快照恢复出的种子字符串：已占用、已晋升、且全部登记在去重表内。
+    fn promoted_interned(text: RuntimeString) -> Self {
+        Self {
+            text,
+            occupied: true,
+            age: Self::AGE_PROMOTED,
+            interned: true,
+            birth_epoch: 0,
+        }
+    }
+}
+
 struct NativeAgentState {
     output: RefCell<Vec<u8>>,
     stderr: RefCell<Vec<u8>>,
@@ -944,6 +998,13 @@ struct NativeAgentState {
     function_needs_prototype: Vec<bool>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     current_image_id: u64,
+    /// 根快照代号：每次 GC 取根快照时递增。字符串槽记录诞生时的代号，
+    /// 清扫据此区分「快照已覆盖」与「快照之后才诞生」。
+    string_epoch: Cell<u64>,
+    /// 当前 image 反馈区的 `(基址, 字节长度)`，随 image 激活刷新。
+    /// 每次宿主调用都要校验生成代码传入的反馈槽指针；走 `images` 哈希表会给
+    /// 每次调用摊上一次 SipHash 查表。
+    current_feedback_region: (usize, usize),
     programs: HashMap<u64, NativeProgramState>,
     retained_images: HashMap<u64, Arc<CompiledImage>>,
     program_snapshots: HashMap<u64, Arc<wjsm_ir::Program>>,
@@ -962,11 +1023,9 @@ struct NativeAgentState {
     repository: NativeImageRepository,
     runtime_modules: dispatch::modules::NativeModuleState,
     scope_records: HashMap<u32, dispatch::modules::NativeScopeRecord>,
-    strings: Vec<RuntimeString>,
+    strings: Vec<StringSlot>,
     string_ids: HashMap<RuntimeString, u32>,
     string_free: Vec<u32>,
-    string_occupied: Vec<bool>,
-    string_ages: Vec<u8>,
     activations: Vec<NativeActivation>,
     pending_stack_trace: Option<String>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
@@ -1139,6 +1198,8 @@ impl NativeAgentState {
             function_needs_prototype: Vec::new(),
             function_home_objects: Vec::new(),
             current_image_id: 0,
+            string_epoch: Cell::new(1),
+            current_feedback_region: (0, 0),
             programs: HashMap::new(),
             program_snapshots: HashMap::new(),
             variable_slot_snapshots: HashMap::new(),
@@ -1161,8 +1222,6 @@ impl NativeAgentState {
             strings: Vec::new(),
             string_ids: HashMap::new(),
             string_free: Vec::new(),
-            string_occupied: Vec::new(),
-            string_ages: Vec::new(),
             activations: Vec::new(),
             maps: HashMap::new(),
             sets: HashMap::new(),
@@ -1420,6 +1479,7 @@ impl NativeAgentState {
         self.function_names.clear();
         self.function_source_spans.clear();
         self.current_image_id = 0;
+        self.current_feedback_region = (0, 0);
         self.builtin_image_id = None;
         self.user_image_id = None;
         self.user_function_count = None;
@@ -1445,8 +1505,6 @@ impl NativeAgentState {
         self.array_property_order.clear();
         self.string_ids.clear();
         self.string_free.clear();
-        self.string_occupied.clear();
-        self.string_ages.clear();
         self.array_accessors.clear();
         self.array_property_flags.clear();
         self.activations.clear();
@@ -1622,6 +1680,12 @@ impl NativeAgentState {
         ctx.handle_table_base = self.gc.heap().handle_table_base();
         ctx.ic_slots_base = image.ic_slots().cast::<u8>().cast_mut();
         ctx.feedback_slots_base = image.feedback_slots();
+        self.current_feedback_region = (
+            image.feedback_slots().addr(),
+            usize::try_from(image.feedback_slot_count())
+                .ok()?
+                .saturating_mul(wjsm_ir::constants::FEEDBACK_SLOT_SIZE as usize),
+        );
         ctx.proto_generation = self.gc.heap().shapes().proto_generation();
         // 对象地址的「逻辑 → 虚拟」偏移：snapshot 恢复后 virtual_base 可能改变，
         // 必须与 handle_table_base 同步刷新，属性快链才能把 entry 里的逻辑地址
@@ -1783,6 +1847,7 @@ impl NativeAgentState {
             .then(|| value::decode_handle(encoded))
             .and_then(|handle| usize::try_from(handle).ok())
             .and_then(|handle| self.strings.get(handle))
+            .map(|slot| &slot.text)
     }
 
     fn string_mut(&mut self, encoded: i64) -> Option<&mut RuntimeString> {
@@ -1790,6 +1855,7 @@ impl NativeAgentState {
             .then(|| value::decode_handle(encoded))
             .and_then(|handle| usize::try_from(handle).ok())
             .and_then(|handle| self.strings.get_mut(handle))
+            .map(|slot| &mut slot.text)
     }
 
     fn create_symbol(&mut self, description: Option<RuntimeString>) -> Option<i64> {
@@ -2923,16 +2989,11 @@ impl NativeAgentState {
         if pointer.is_null() {
             return None;
         }
-        let image = self.images.get(&self.current_image_id)?;
-        let base = image.feedback_slots();
-        if base.is_null() {
+        let (base_address, byte_len) = self.current_feedback_region;
+        if base_address == 0 || byte_len == 0 {
             return None;
         }
-        let slot_size = usize::try_from(wjsm_ir::constants::FEEDBACK_SLOT_SIZE).ok()?;
-        let byte_len = usize::try_from(image.feedback_slot_count())
-            .ok()?
-            .checked_mul(slot_size)?;
-        let base_address = base.addr();
+        let slot_size = wjsm_ir::constants::FEEDBACK_SLOT_SIZE as usize;
         let pointer_address = pointer.addr();
         let offset = pointer_address.checked_sub(base_address)?;
         if offset >= byte_len || offset % slot_size != 0 {
@@ -2946,17 +3007,20 @@ impl NativeAgentState {
         ))
     }
 
-    fn feedback_tags(arguments: &[i64]) -> Option<Box<[NativeFeedbackTag]>> {
-        if arguments.len() > usize::try_from(wjsm_ir::constants::FEEDBACK_MAX_TAGS).ok()? {
+    /// 直接算出反馈签名。
+    ///
+    /// tag 序列的唯一消费者是 [`encode_feedback_tag_signature`]，先物化成
+    /// `Box<[_]>` 会让每一次带反馈的宿主调用都做一次堆分配与释放；上界
+    /// [`wjsm_ir::constants::FEEDBACK_MAX_TAGS`] 是编译期常量，栈数组即可。
+    fn feedback_tag_signature(arguments: &[i64]) -> Option<u64> {
+        const MAX_TAGS: usize = wjsm_ir::constants::FEEDBACK_MAX_TAGS as usize;
+        if arguments.len() > MAX_TAGS {
             return None;
         }
-        let tags = arguments
-            .iter()
-            .copied()
-            .map(NativeFeedbackTag::of)
-            .collect::<Box<[_]>>();
-        if tags.iter().any(|tag| {
-            matches!(
+        let mut tags = [NativeFeedbackTag::Undefined; MAX_TAGS];
+        for (slot, argument) in tags.iter_mut().zip(arguments) {
+            let tag = NativeFeedbackTag::of(*argument);
+            if matches!(
                 tag,
                 NativeFeedbackTag::Exception
                     | NativeFeedbackTag::Iterator
@@ -2964,11 +3028,12 @@ impl NativeAgentState {
                     | NativeFeedbackTag::ScopeRecord
                     | NativeFeedbackTag::ArrayHole
                     | NativeFeedbackTag::Other
-            )
-        }) {
-            return None;
+            ) {
+                return None;
+            }
+            *slot = tag;
         }
-        Some(tags)
+        Some(encode_feedback_tag_signature(&tags[..arguments.len()]))
     }
 
     fn load_feedback_slot(slot: ValidatedFeedbackSlot) -> NativeFeedbackSlot {
@@ -2988,13 +3053,12 @@ impl NativeAgentState {
         operation: u32,
         arguments: &[i64],
     ) {
-        let Some(tags) = Self::feedback_tags(arguments) else {
+        let Some(signature) = Self::feedback_tag_signature(arguments) else {
             let mut slot = Self::load_feedback_slot(feedback);
             slot.state = wjsm_ir::constants::FEEDBACK_STATE_DISABLED;
             Self::store_feedback_slot(feedback, slot);
             return;
         };
-        let signature = encode_feedback_tag_signature(&tags);
         let mut slot = Self::load_feedback_slot(feedback);
         let same = slot.last_target_image_id == 0 && slot.last_tag_signature == signature;
         slot.last_target_image_id = 0;
@@ -3018,6 +3082,14 @@ impl NativeAgentState {
     }
 
     fn drain_specialization_results(&mut self) {
+        // 绝大多数调用没有待收敛结果；先用一次原子读短路，避免搬动整个协调器。
+        if !self
+            .specialization
+            .as_ref()
+            .is_some_and(SpecializationCoordinator::has_results)
+        {
+            return;
+        }
         let Some(mut coordinator) = self.specialization.take() else {
             return;
         };
@@ -3077,13 +3149,12 @@ impl NativeAgentState {
         arguments: &[i64],
         generic_entry: i64,
     ) -> Option<i64> {
-        let Some(tags) = Self::feedback_tags(arguments) else {
+        let Some(tag_signature) = Self::feedback_tag_signature(arguments) else {
             let mut slot = Self::load_feedback_slot(feedback);
             slot.state = wjsm_ir::constants::FEEDBACK_STATE_DISABLED;
             Self::store_feedback_slot(feedback, slot);
             return Some(generic_entry);
         };
-        let tag_signature = encode_feedback_tag_signature(&tags);
         let key = VariantKey {
             caller_image_id: feedback.caller_image_id,
             site_index: feedback.site_index,
@@ -3134,7 +3205,12 @@ impl NativeAgentState {
                 key,
                 program,
                 variable_slots,
-                argument_tags: tags,
+                // 冷路径才物化 tag 数组：签名已校验过全部 tag 合法且数量在上界内。
+                argument_tags: arguments
+                    .iter()
+                    .copied()
+                    .map(NativeFeedbackTag::of)
+                    .collect(),
                 ic_epoch,
                 proto_generation,
             });
@@ -3967,101 +4043,68 @@ impl NativeAgentState {
         Some(array)
     }
 
+    /// 开启新的根快照代号。GC 取根快照时调用，之后诞生的字符串在本轮清扫中放行。
+    pub(crate) fn begin_string_epoch(&self) {
+        self.string_epoch
+            .set(self.string_epoch.get().saturating_add(1));
+    }
+
     fn intern_text(&mut self, text: String, tag: u64) -> Option<i64> {
         self.intern_runtime_string(RuntimeString::from(text), tag)
     }
 
-    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<i64> {
-        if let Some(handle) = self.string_ids.get(&text).copied() {
-            let encoded = value::encode_runtime_string_handle(handle);
-            self.gc.record_host_write(encoded, None, Some(encoded));
-            return Some(encoded);
-        }
+    /// 占用一个字符串槽位并写入内容。
+    ///
+    /// `interned` 为真时同步登记内容去重表，并在槽位上留下标记，使
+    /// [`NativeAgentState::retire_string`] 能在不接触去重表的前提下退休
+    /// 从未入表的字符串——运行时产生的长串与 rope 节点属于绝大多数。
+    fn allocate_string_slot(&mut self, text: RuntimeString, interned: bool) -> Option<u32> {
         let allocated_bytes = text.estimated_owned_bytes();
         let handle = match self.string_free.pop() {
-            Some(handle) => {
-                self.string_occupied[handle as usize] = true;
-                self.string_ages[handle as usize] = 0;
-                handle
-            }
+            Some(handle) => handle,
             None => {
                 let handle = u32::try_from(self.strings.len()).ok()?;
-                self.strings.push(RuntimeString::empty());
-                self.string_occupied.push(true);
-                self.string_ages.push(0);
+                self.strings.push(StringSlot::vacant());
                 handle
             }
         };
-        self.string_ids.insert(text.clone(), handle);
-        self.strings[handle as usize] = text;
+        if interned {
+            self.string_ids.insert(text.clone(), handle);
+        }
+        let birth_epoch = self.string_epoch.get();
+        let slot = &mut self.strings[handle as usize];
+        slot.text = text;
+        slot.occupied = true;
+        slot.age = 0;
+        slot.interned = interned;
+        slot.birth_epoch = birth_epoch;
         self.gc.observe_host_allocation(allocated_bytes);
+        Some(handle)
+    }
+
+    /// 属性名必须内容唯一：同一名字在任何路径下都要解析到同一 handle，
+    /// 否则以 handle 为键的属性表会把同名属性拆成两条。
+    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<i64> {
+        let handle = match self.string_ids.get(&text).copied() {
+            Some(handle) => handle,
+            None => self.allocate_string_slot(text, true)?,
+        };
         let encoded = value::encode_runtime_string_handle(handle);
         self.gc.record_host_write(encoded, None, Some(encoded));
         Some(encoded)
     }
 
     fn intern_utf16_slice(&mut self, units: &[u16], tag: u64) -> Option<i64> {
-        if tag == value::TAG_STRING
-            && units.len() <= 64
-            && let Some(handle) = self.string_ids.get(units).copied()
-        {
-            let encoded = value::encode_runtime_string_handle(handle);
-            self.gc.record_host_write(encoded, None, Some(encoded));
-            return Some(encoded);
-        }
         self.intern_runtime_string(RuntimeString::from_utf16_units(units.to_vec()), tag)
     }
 
     fn intern_runtime_string(&mut self, text: RuntimeString, tag: u64) -> Option<i64> {
-        let allocated_bytes = text.estimated_owned_bytes();
-        if tag == value::TAG_STRING {
-            if text.utf16_len() > 64 || !text.is_flat() {
-                let handle = match self.string_free.pop() {
-                    Some(handle) => {
-                        self.string_occupied[handle as usize] = true;
-                        self.string_ages[handle as usize] = 0;
-                        handle
-                    }
-                    None => {
-                        let handle = u32::try_from(self.strings.len()).ok()?;
-                        self.strings.push(RuntimeString::empty());
-                        self.string_occupied.push(true);
-                        self.string_ages.push(0);
-                        handle
-                    }
-                };
-                self.strings[handle as usize] = text;
-                self.gc.observe_host_allocation(allocated_bytes);
-                let encoded = value::encode_runtime_string_handle(handle);
-                self.gc.record_host_write(encoded, None, Some(encoded));
-                return Some(encoded);
-            }
-            if let Some(handle) = self.string_ids.get(&text).copied() {
-                let encoded = value::encode_runtime_string_handle(handle);
-                self.gc.record_host_write(encoded, None, Some(encoded));
-                return Some(encoded);
-            }
-        }
-        // 复用空闲槽；无空闲才扩表。TAG_STRING 且扁平小串才入 string_ids，大串/rope 节点跳过去重。
-        let handle = match self.string_free.pop() {
-            Some(handle) => {
-                self.string_occupied[handle as usize] = true;
-                self.string_ages[handle as usize] = 0;
-                handle
-            }
-            None => {
-                let handle = u32::try_from(self.strings.len()).ok()?;
-                self.strings.push(RuntimeString::empty());
-                self.string_occupied.push(true);
-                self.string_ages.push(0);
-                handle
-            }
+        // 只有扁平短串参与内容去重；长串与 rope 节点直接占槽，避免展平与哈希。
+        let dedup = tag == value::TAG_STRING && text.utf16_len() <= 64 && text.is_flat();
+        let handle = match dedup.then(|| self.string_ids.get(&text).copied()).flatten() {
+            Some(handle) => handle,
+            None => self.allocate_string_slot(text, dedup)?,
         };
-        if tag == value::TAG_STRING && text.is_flat() && text.utf16_len() <= 64 {
-            self.string_ids.insert(text.clone(), handle);
-        }
-        self.strings[handle as usize] = text;
-        self.gc.observe_host_allocation(allocated_bytes);
         let encoded = if tag == value::TAG_STRING {
             value::encode_runtime_string_handle(handle)
         } else {
@@ -5298,7 +5341,7 @@ impl NativeRuntime {
                 .state
                 .strings
                 .iter()
-                .filter(|string| !string.is_empty())
+                .filter(|slot| !slot.text.is_empty())
                 .count(),
             string_ids: self.state.string_ids.len(),
             scope_records: self.state.scope_records.len(),
