@@ -6,7 +6,7 @@ use super::runtime::{
     fail_dispatch, get_property, iterator_done, iterator_from, iterator_value, object_handle,
     ordinary_set, property_key, strict_equal, type_error,
 };
-use crate::{NativeAgentState, NativeCallableKind};
+use crate::{NativeAgentState, NativeCallableKind, PropertyKey};
 
 const ENUMERABLE: u32 = constants::FLAG_ENUMERABLE as u32;
 const CONFIGURABLE: u32 = constants::FLAG_CONFIGURABLE as u32;
@@ -330,19 +330,16 @@ fn callable_own_keys(
     enumerable_only: bool,
 ) -> Option<Vec<(i64, i64)>> {
     let callable = value::strip_gc_color(encoded);
-    let length_key = state
-        .intern_text("length".into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
-    let name_key = state
-        .intern_text("name".into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let length_key = state.intern_property_string("length".into())?;
+    let name_key = state.intern_property_string("name".into())?;
     let _ = state.callable_property(callable, length_key);
     let _ = state.callable_property(callable, name_key);
     let mut properties = Vec::new();
     for key in [length_key, name_key] {
         push_callable_own(state, callable, key, enumerable_only, &mut properties)?;
     }
-    let extras: Vec<u32> = state
+
+    let extras: Vec<PropertyKey> = state
         .callable_properties
         .keys()
         .chain(state.callable_accessors.keys())
@@ -362,7 +359,7 @@ fn callable_own_keys(
 fn push_callable_own(
     state: &mut NativeAgentState,
     callable: i64,
-    key: u32,
+    key: PropertyKey,
     enumerable_only: bool,
     properties: &mut Vec<(i64, i64)>,
 ) -> Option<()> {
@@ -459,7 +456,7 @@ pub(crate) fn own_keys(
         }
         for symbols in [false, true] {
             for key in named.iter().copied() {
-                if (key & super::runtime::SYMBOL_PROPERTY_KEY_BIT != 0) != symbols {
+                if key.is_symbol() != symbols {
                     continue;
                 }
                 let flags = state
@@ -487,10 +484,11 @@ pub(crate) fn own_keys(
     }
     let slots = state.gc.heap().own_property_slots(handle).ok()?;
     let mut properties = Vec::with_capacity(slots.len());
-    for (key, flags) in slots {
+    for (name_id, flags) in slots {
         if enumerable_only && flags & ENUMERABLE == 0 {
             continue;
         }
+        let key = PropertyKey::from_name_id(name_id);
         let property = state
             .gc
             .heap()
@@ -1160,13 +1158,13 @@ fn descriptor_object(
         ]
     };
     for (name, stored) in fields {
-        let Some(key) = state.intern_text((*name).into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string((*name).into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .set_property(handle, value::decode_handle(key), stored as u64)
+            .set_property(handle, key, stored as u64)
             .is_err()
         {
             return fail_dispatch(ctx);
@@ -1176,11 +1174,11 @@ fn descriptor_object(
 }
 
 fn descriptor_field(state: &mut NativeAgentState, descriptor: u32, name: &str) -> Option<i64> {
-    let key = state.intern_text(name.into(), value::TAG_STRING)?;
+    let key = state.intern_property_string(name.into())?;
     state
         .gc
         .heap()
-        .get_property(descriptor, value::decode_handle(key))
+        .get_property(descriptor, key)
         .ok()
         .flatten()
         .map(|stored| stored as i64)
@@ -1340,7 +1338,7 @@ fn define_ordinary_property(
     state: &mut NativeAgentState,
     object: i64,
     handle: u32,
-    key: u32,
+    key: PropertyKey,
     descriptor_handle: u32,
 ) -> i64 {
     let descriptor = match read_descriptor(ctx, state, descriptor_handle) {
@@ -1699,7 +1697,8 @@ fn seal_or_freeze(
     let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
     };
-    for (key, flags) in properties {
+    for (name_id, flags) in properties {
+        let key = PropertyKey::from_name_id(name_id);
         let flags = flags & !CONFIGURABLE & if freeze { !WRITABLE } else { u32::MAX };
         if state
             .gc

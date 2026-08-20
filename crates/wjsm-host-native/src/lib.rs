@@ -17,7 +17,7 @@ use wjsm_backend_native::cache::{NativeCacheError, NativeImageRepository};
 use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver};
 use wjsm_gc::heap_access::object_payload_bytes;
-use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL};
+use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey};
 use wjsm_host::RuntimeString;
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
@@ -1036,8 +1036,7 @@ struct NativeAgentState {
     enumerators: HashMap<u32, dispatch::enumerator::NativeEnumerator>,
     regexp_iterators: Vec<dispatch::regexp::RegExpIterator>,
     array_buffers: HashMap<u32, dispatch::buffers::NativeArrayBuffer>,
-    array_accessors: HashMap<(u32, u32), (i64, i64, u32)>,
-    array_property_flags: HashMap<(u32, u32), u32>,
+
     shared_array_buffers: HashMap<u32, dispatch::sab::NativeSharedArrayBuffer>,
     data_views: HashMap<u32, dispatch::buffers::NativeDataView>,
     typed_arrays: HashMap<u32, dispatch::typedarray::NativeTypedArray>,
@@ -1063,8 +1062,10 @@ struct NativeAgentState {
     pending_unhandled_rejections: Vec<(u32, String)>,
     microtasks: VecDeque<dispatch::promise::NativeScheduledMicrotask>,
     iterator_next: HashMap<u32, u32>,
-    array_properties: HashMap<(u32, u32), i64>,
-    array_property_order: HashMap<u32, Vec<u32>>,
+    array_properties: HashMap<(u32, PropertyKey), i64>,
+    array_property_order: HashMap<u32, Vec<PropertyKey>>,
+    array_accessors: HashMap<(u32, PropertyKey), (i64, i64, u32)>,
+    array_property_flags: HashMap<(u32, PropertyKey), u32>,
     closures: Vec<Option<NativeClosure>>,
     closure_free: Vec<u32>,
     bound_functions: Vec<Option<NativeBoundFunction>>,
@@ -1081,11 +1082,11 @@ struct NativeAgentState {
     out_of_memory_exception: Option<i64>,
     fatal_exception: Option<i64>,
     callable_prototypes: HashMap<i64, i64>,
-    private_slots: HashMap<(i64, u32), NativePrivateSlot>,
+    private_slots: HashMap<(i64, PropertyKey), NativePrivateSlot>,
     private_brands: HashMap<u32, i64>,
-    callable_properties: HashMap<(i64, u32), i64>,
-    callable_accessors: HashMap<(i64, u32), (i64, i64)>,
-    callable_property_flags: HashMap<(i64, u32), u32>,
+    callable_properties: HashMap<(i64, PropertyKey), i64>,
+    callable_accessors: HashMap<(i64, PropertyKey), (i64, i64)>,
+    callable_property_flags: HashMap<(i64, PropertyKey), u32>,
     non_extensible_objects: HashSet<u32>,
     environment: HashMap<String, String>,
     working_directory: PathBuf,
@@ -1894,7 +1895,8 @@ impl NativeAgentState {
     }
 
     fn property_value_by_name(&self, object: i64, name: &str) -> Option<i64> {
-        let key = self.string_ids.get(&RuntimeString::from(name)).copied()?;
+        let key =
+            PropertyKey::from_name_id(self.string_ids.get(&RuntimeString::from(name)).copied()?);
         self.gc
             .heap()
             .get_property(value::decode_handle(object), key)
@@ -2317,15 +2319,11 @@ impl NativeAgentState {
             ("error", wjsm_ir::Builtin::ConsoleError),
             ("trace", wjsm_ir::Builtin::ConsoleTrace),
         ] {
-            let key = self.intern_text(name.into(), value::TAG_STRING)?;
+            let key = self.intern_property_string(name.into())?;
             let callable = self.native_callable(NativeCallableKind::Builtin(builtin, false))?;
             self.gc
                 .heap()
-                .set_property(
-                    value::decode_handle(console),
-                    value::decode_handle(key),
-                    callable as u64,
-                )
+                .set_property(value::decode_handle(console), key, callable as u64)
                 .ok()?;
         }
         self.console_object = Some(console);
@@ -2339,18 +2337,13 @@ impl NativeAgentState {
         let capacity = u32::try_from(self.environment.len()).ok()?;
         let environment = self.allocate_object(capacity, false).ok()?;
         for (name, text) in self.environment.clone() {
-            let key = self.intern_text(name, value::TAG_STRING)?;
+            let key = self.intern_property_string(name.into())?;
             let stored = self.intern_text(text, value::TAG_STRING)?;
             self.gc
                 .heap()
-                .set_property(
-                    value::decode_handle(environment),
-                    value::decode_handle(key),
-                    stored as u64,
-                )
+                .set_property(value::decode_handle(environment), key, stored as u64)
                 .ok()?;
         }
-
         let exec_path = std::env::current_exe()
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
@@ -2371,14 +2364,10 @@ impl NativeAgentState {
         let return_this = self.native_callable(NativeCallableKind::ProcessStreamReturnThis)?;
         let stdin = self.allocate_object(2, false).ok()?;
         for name in ["on", "resume"] {
-            let key = self.intern_text(name.into(), value::TAG_STRING)?;
+            let key = self.intern_property_string(name.into())?;
             self.gc
                 .heap()
-                .set_property(
-                    value::decode_handle(stdin),
-                    value::decode_handle(key),
-                    return_this as u64,
-                )
+                .set_property(value::decode_handle(stdin), key, return_this as u64)
                 .ok()?;
         }
 
@@ -2388,14 +2377,10 @@ impl NativeAgentState {
             let write = self.native_callable(NativeCallableKind::ProcessWrite(is_stderr))?;
             let end = self.native_callable(NativeCallableKind::ProcessStreamEnd(is_stderr))?;
             for (name, callable) in [("write", write), ("end", end), ("on", return_this)] {
-                let key = self.intern_text(name.into(), value::TAG_STRING)?;
+                let key = self.intern_property_string(name.into())?;
                 self.gc
                     .heap()
-                    .set_property(
-                        value::decode_handle(stream),
-                        value::decode_handle(key),
-                        callable as u64,
-                    )
+                    .set_property(value::decode_handle(stream), key, callable as u64)
                     .ok()?;
             }
         }
@@ -2404,14 +2389,10 @@ impl NativeAgentState {
         let node_version = self.intern_text("22.0.0".into(), value::TAG_STRING)?;
         let wjsm_version = self.intern_text(env!("CARGO_PKG_VERSION").into(), value::TAG_STRING)?;
         for (name, stored) in [("node", node_version), ("wjsm", wjsm_version)] {
-            let key = self.intern_text(name.into(), value::TAG_STRING)?;
+            let key = self.intern_property_string(name.into())?;
             self.gc
                 .heap()
-                .set_property(
-                    value::decode_handle(versions),
-                    value::decode_handle(key),
-                    stored as u64,
-                )
+                .set_property(value::decode_handle(versions), key, stored as u64)
                 .ok()?;
         }
 
@@ -2431,9 +2412,9 @@ impl NativeAgentState {
         let next_tick = self.native_callable(NativeCallableKind::ProcessNextTick)?;
         let hrtime = self.native_callable(NativeCallableKind::ProcessHrtime)?;
         let hrtime_bigint = self.native_callable(NativeCallableKind::ProcessHrtimeBigInt)?;
-        let bigint_key = self.intern_text("bigint".into(), value::TAG_STRING)?;
+        let bigint_key = self.intern_property_string("bigint".into())?;
         self.callable_properties
-            .insert((hrtime, value::decode_handle(bigint_key)), hrtime_bigint);
+            .insert((hrtime, bigint_key), hrtime_bigint);
         let uptime = self.native_callable(NativeCallableKind::ProcessUptime)?;
         let memory_usage = self.native_callable(NativeCallableKind::ProcessMemoryUsage)?;
         let cpu_usage = self.native_callable(NativeCallableKind::ProcessCpuUsage)?;
@@ -2479,14 +2460,10 @@ impl NativeAgentState {
             ("connected", process_connected),
             ("__wjsm_packed", packed),
         ] {
-            let key = self.intern_text(name.into(), value::TAG_STRING)?;
+            let key = self.intern_property_string(name.into())?;
             self.gc
                 .heap()
-                .set_property(
-                    value::decode_handle(process),
-                    value::decode_handle(key),
-                    stored as u64,
-                )
+                .set_property(value::decode_handle(process), key, stored as u64)
                 .ok()?;
         }
         self.process_env_object = Some(environment);
@@ -2515,16 +2492,12 @@ impl NativeAgentState {
                 .native_callable(NativeCallableKind::ArrayConstructor)
                 .ok_or(HeapAccessV2Error::AddressOverflow)?;
             let prototype_key = self
-                .intern_text("prototype".into(), value::TAG_STRING)
+                .intern_property_string("prototype".into())
                 .ok_or(HeapAccessV2Error::AddressOverflow)?;
-            self.callable_properties.insert(
-                (constructor, value::decode_handle(prototype_key)),
-                prototype,
-            );
-            self.callable_property_flags.insert(
-                (constructor, value::decode_handle(prototype_key)),
-                FUNCTION_PROTOTYPE_FLAGS,
-            );
+            self.callable_properties
+                .insert((constructor, prototype_key), prototype);
+            self.callable_property_flags
+                .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
             self.install_prototype_constructor(prototype, constructor)
                 .ok_or(HeapAccessV2Error::AddressOverflow)?;
             self.array_constructor = Some(constructor);
@@ -2543,15 +2516,11 @@ impl NativeAgentState {
     fn ensure_object_constructor(&mut self) -> Option<i64> {
         self.ensure_intrinsic_prototypes().ok()?;
         let constructor = self.native_callable(NativeCallableKind::ObjectConstructor)?;
-        let prototype_key = self.intern_text("prototype".into(), value::TAG_STRING)?;
-        self.callable_properties.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            self.object_prototype?,
-        );
-        self.callable_property_flags.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            FUNCTION_PROTOTYPE_FLAGS,
-        );
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), self.object_prototype?);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
         self.install_prototype_constructor(self.object_prototype?, constructor)?;
         Some(constructor)
     }
@@ -2562,15 +2531,11 @@ impl NativeAgentState {
             wjsm_ir::Builtin::RegExpCreate,
             false,
         ))?;
-        let prototype_key = self.intern_text("prototype".into(), value::TAG_STRING)?;
-        self.callable_properties.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            self.regexp_prototype?,
-        );
-        self.callable_property_flags.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            FUNCTION_PROTOTYPE_FLAGS,
-        );
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), self.regexp_prototype?);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
         self.install_prototype_constructor(self.regexp_prototype?, constructor)?;
         Some(constructor)
     }
@@ -2582,15 +2547,11 @@ impl NativeAgentState {
         self.ensure_intrinsic_prototypes().ok()?;
         let prototype = self.array_prototype?;
         let constructor = self.native_callable(NativeCallableKind::ArrayConstructor)?;
-        let prototype_key = self.intern_text("prototype".into(), value::TAG_STRING)?;
-        self.callable_properties.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            prototype,
-        );
-        self.callable_property_flags.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            FUNCTION_PROTOTYPE_FLAGS,
-        );
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), prototype);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
         self.array_prototype = Some(prototype);
         self.array_constructor = Some(constructor);
         self.install_prototype_constructor(prototype, constructor)?;
@@ -2643,38 +2604,29 @@ impl NativeAgentState {
         let name_value = self.intern_text(name.into(), value::TAG_STRING)?;
         let message = self.intern_text(String::new(), value::TAG_STRING)?;
         for (key, stored) in [("name", name_value), ("message", message)] {
-            let key = self.intern_text(key.into(), value::TAG_STRING)?;
+            let key = self.intern_property_string(key.into())?;
             self.gc
                 .heap()
-                .set_property(
-                    value::decode_handle(prototype),
-                    value::decode_handle(key),
-                    stored as u64,
-                )
+                .set_property(value::decode_handle(prototype), key, stored as u64)
                 .ok()?;
         }
         let constructor = self.native_callable(constructor_kind)?;
-        let prototype_key = self.intern_text("prototype".into(), value::TAG_STRING)?;
-        self.callable_properties.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            prototype,
-        );
-        self.callable_property_flags.insert(
-            (constructor, value::decode_handle(prototype_key)),
-            FUNCTION_PROTOTYPE_FLAGS,
-        );
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), prototype);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
         self.error_prototypes.insert(name.to_owned(), prototype);
         self.install_prototype_constructor(prototype, constructor)?;
         Some(prototype)
     }
 
     fn install_prototype_constructor(&mut self, prototype: i64, constructor: i64) -> Option<()> {
-        let key = self.intern_text("constructor".into(), value::TAG_STRING)?;
+        let key = self.intern_property_string("constructor".into())?;
         let flags =
             wjsm_ir::constants::FLAG_WRITABLE as u32 | wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
         if value::is_array(prototype) {
             let handle = value::decode_handle(prototype);
-            let key = value::decode_handle(key);
             self.note_array_property(handle, key);
             self.array_properties.insert((handle, key), constructor);
             self.array_property_flags.insert((handle, key), flags);
@@ -2684,7 +2636,7 @@ impl NativeAgentState {
             .heap()
             .define_data_property(
                 value::decode_handle(prototype),
-                value::decode_handle(key),
+                key,
                 constructor as u64,
                 flags,
             )
@@ -3631,13 +3583,12 @@ impl NativeAgentState {
             function.image_id == self.current_image_id && function.function_index == function_index
         })
     }
-
-    fn callable_property(&mut self, callable: i64, key: u32) -> Option<i64> {
+    fn callable_property(&mut self, callable: i64, key: PropertyKey) -> Option<i64> {
         let callable = value::strip_gc_color(callable);
         if let Some(value) = self.callable_properties.get(&(callable, key)).copied() {
             return Some(value);
         }
-        if self.text_matches(value::encode_handle(value::TAG_STRING, key), "name") {
+        if self.text_matches(value::encode_handle(value::TAG_STRING, key.get()), "name") {
             let name = if let Some(function) = self.callable_function(callable) {
                 let index = usize::try_from(function.function_index).ok()?;
                 (if function.image_id == self.current_image_id {
@@ -3659,7 +3610,7 @@ impl NativeAgentState {
                 .insert((callable, key), FUNCTION_METADATA_FLAGS);
             return Some(stored);
         }
-        if self.text_matches(value::encode_handle(value::TAG_STRING, key), "length") {
+        if self.text_matches(value::encode_handle(value::TAG_STRING, key.get()), "length") {
             let length = if let Some(function) = self.callable_function(callable) {
                 if function.image_id == self.current_image_id {
                     self.function_lengths
@@ -3682,12 +3633,13 @@ impl NativeAgentState {
             return Some(stored);
         }
         if self.native_callable_kind(callable) == Some(NativeCallableKind::FunctionConstructor)
-            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            && self.text_matches(
+                value::encode_handle(value::TAG_STRING, key.get()),
+                "prototype",
+            )
         {
             let prototype = self.native_callable(NativeCallableKind::FunctionPrototype)?;
-            let constructor_key = self
-                .intern_text("constructor".into(), value::TAG_STRING)
-                .map(value::decode_handle)?;
+            let constructor_key = self.intern_property_string("constructor".into())?;
             self.callable_properties
                 .insert((prototype, constructor_key), callable);
             self.callable_property_flags.insert(
@@ -3704,16 +3656,17 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::SymbolCreate
-                    && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+                    && self.text_matches(
+                        value::encode_handle(value::TAG_STRING, key.get()),
+                        "prototype",
+                    )
             })
         {
             let prototype = if let Some(prototype) = self.symbol_prototype {
                 prototype
             } else {
                 let prototype = self.allocate_object(1, false).ok()?;
-                let constructor_key = self
-                    .intern_text("constructor".into(), value::TAG_STRING)
-                    .map(value::decode_handle)?;
+                let constructor_key = self.intern_property_string("constructor".into())?;
                 self.gc
                     .heap()
                     .set_property(
@@ -3738,7 +3691,10 @@ impl NativeAgentState {
                     | wjsm_ir::Builtin::WeakMapConstructor
                     | wjsm_ir::Builtin::WeakSetConstructor
             )
-            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            && self.text_matches(
+                value::encode_handle(value::TAG_STRING, key.get()),
+                "prototype",
+            )
         {
             let prototype = self.ensure_collection_prototype(callable, builtin)?;
             self.callable_properties.insert((callable, key), prototype);
@@ -3753,13 +3709,14 @@ impl NativeAgentState {
                 matches!(
                     builtin,
                     wjsm_ir::Builtin::ObjectKeys | wjsm_ir::Builtin::PromiseCreate
-                ) && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+                ) && self.text_matches(
+                    value::encode_handle(value::TAG_STRING, key.get()),
+                    "prototype",
+                )
             })
         {
             let prototype = self.allocate_object(1, false).ok()?;
-            let constructor_key = self
-                .intern_text("constructor".into(), value::TAG_STRING)
-                .map(value::decode_handle)?;
+            let constructor_key = self.intern_property_string("constructor".into())?;
             self.gc
                 .heap()
                 .set_property(
@@ -3775,7 +3732,10 @@ impl NativeAgentState {
         }
         if let Some(NativeCallableKind::Intl(kind)) = self.native_callable_kind(callable)
             && dispatch::intl::is_constructor(kind)
-            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            && self.text_matches(
+                value::encode_handle(value::TAG_STRING, key.get()),
+                "prototype",
+            )
         {
             let prototype = dispatch::intl::ensure_constructor_prototype(self, callable, kind)?;
             self.callable_properties.insert((callable, key), prototype);
@@ -3787,7 +3747,10 @@ impl NativeAgentState {
             == Some(NativeCallableKind::WebEncoding(
                 dispatch::web_encoding::WebEncodingCallable::TextDecoderConstructor,
             ))
-            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            && self.text_matches(
+                value::encode_handle(value::TAG_STRING, key.get()),
+                "prototype",
+            )
         {
             let prototype = dispatch::web_encoding::ensure_text_decoder_prototype(self)?;
             self.callable_properties.insert((callable, key), prototype);
@@ -3795,7 +3758,10 @@ impl NativeAgentState {
             return Some(prototype);
         }
         if self.native_callable_kind(callable) == Some(NativeCallableKind::StringConstructor)
-            && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+            && self.text_matches(
+                value::encode_handle(value::TAG_STRING, key.get()),
+                "prototype",
+            )
         {
             return dispatch::intl::ensure_string_prototype(self);
         }
@@ -3803,7 +3769,10 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::NumberConstructor
-                    && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+                    && self.text_matches(
+                        value::encode_handle(value::TAG_STRING, key.get()),
+                        "prototype",
+                    )
             })
         {
             return dispatch::intl::ensure_number_prototype(self);
@@ -3812,7 +3781,10 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::BigIntFromLiteral
-                    && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+                    && self.text_matches(
+                        value::encode_handle(value::TAG_STRING, key.get()),
+                        "prototype",
+                    )
             })
         {
             return dispatch::intl::ensure_bigint_prototype(self);
@@ -3821,13 +3793,14 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::DateConstructor
-                    && self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
+                    && self.text_matches(
+                        value::encode_handle(value::TAG_STRING, key.get()),
+                        "prototype",
+                    )
             })
         {
             let prototype = self.allocate_object(1, false).ok()?;
-            let constructor_key = self
-                .intern_text("constructor".into(), value::TAG_STRING)
-                .map(value::decode_handle)?;
+            let constructor_key = self.intern_property_string("constructor".into())?;
             self.gc
                 .heap()
                 .set_property(
@@ -3843,15 +3816,15 @@ impl NativeAgentState {
             return Some(prototype);
         }
         let function = self.callable_function(callable)?;
-        if !self.text_matches(value::encode_handle(value::TAG_STRING, key), "prototype")
-            || !function.needs_prototype
+        if !self.text_matches(
+            value::encode_handle(value::TAG_STRING, key.get()),
+            "prototype",
+        ) || !function.needs_prototype
         {
             return None;
         }
         let prototype = self.allocate_object(1, false).ok()?;
-        let constructor_key = self
-            .intern_text("constructor".into(), value::TAG_STRING)
-            .map(value::decode_handle)?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
         self.gc
             .heap()
             .set_property(
@@ -3883,9 +3856,7 @@ impl NativeAgentState {
         }
         self.ensure_intrinsic_prototypes().ok()?;
         let prototype = self.allocate_object(10, false).ok()?;
-        let constructor_key = self
-            .intern_text("constructor".into(), value::TAG_STRING)
-            .map(value::decode_handle)?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
         self.gc
             .heap()
             .set_property(
@@ -3932,10 +3903,7 @@ impl NativeAgentState {
         let constructor = self
             .native_callable(NativeCallableKind::Builtin(builtin, false))
             .ok_or(())?;
-        let prototype_key = self
-            .intern_text("prototype".into(), value::TAG_STRING)
-            .map(value::decode_handle)
-            .ok_or(())?;
+        let prototype_key = self.intern_property_string("prototype".into()).ok_or(())?;
         let prototype = self
             .callable_property(constructor, prototype_key)
             .filter(|prototype| value::is_object(*prototype))
@@ -3947,14 +3915,14 @@ impl NativeAgentState {
             .map_err(|_| ())
     }
 
-    fn note_array_property(&mut self, handle: u32, key: u32) {
+    fn note_array_property(&mut self, handle: u32, key: PropertyKey) {
         let order = self.array_property_order.entry(handle).or_default();
         if !order.contains(&key) {
             order.push(key);
         }
     }
 
-    fn forget_array_property(&mut self, handle: u32, key: u32) {
+    fn forget_array_property(&mut self, handle: u32, key: PropertyKey) {
         if let Some(order) = self.array_property_order.get_mut(&handle) {
             order.retain(|candidate| *candidate != key);
             if order.is_empty() {
@@ -4084,14 +4052,14 @@ impl NativeAgentState {
 
     /// 属性名必须内容唯一：同一名字在任何路径下都要解析到同一 handle，
     /// 否则以 handle 为键的属性表会把同名属性拆成两条。
-    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<i64> {
+    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<PropertyKey> {
         let handle = match self.string_ids.get(&text).copied() {
             Some(handle) => handle,
             None => self.allocate_string_slot(text, true)?,
         };
         let encoded = value::encode_runtime_string_handle(handle);
         self.gc.record_host_write(encoded, None, Some(encoded));
-        Some(encoded)
+        Some(PropertyKey::from_name_id(handle))
     }
 
     fn intern_utf16_slice(&mut self, units: &[u16], tag: u64) -> Option<i64> {
@@ -4432,13 +4400,13 @@ fn process_numeric_object(state: &mut NativeAgentState, fields: &[(&str, f64)]) 
         .allocate_object(u32::try_from(fields.len()).ok()?, false)
         .ok()?;
     for (name, number) in fields {
-        let key = state.intern_text((*name).into(), value::TAG_STRING)?;
+        let key = state.intern_property_string((*name).into())?;
         state
             .gc
             .heap()
             .set_property(
                 value::decode_handle(object),
-                value::decode_handle(key),
+                key,
                 value::encode_f64(*number) as u64,
             )
             .ok()?;

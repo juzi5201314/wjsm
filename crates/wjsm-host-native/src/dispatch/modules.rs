@@ -18,7 +18,7 @@ use super::promise::{
     NativeMicrotask, PromiseState, drain_microtasks, enqueue_microtask, new_promise, settle_promise,
 };
 use super::runtime::fail_dispatch;
-use crate::{NativeAgentState, NativeCallableKind, NativeHostRegistry};
+use crate::{NativeAgentState, NativeCallableKind, NativeHostRegistry, PropertyKey};
 
 #[derive(Clone, Copy)]
 enum CjsModuleStatus {
@@ -41,7 +41,7 @@ pub(crate) struct NativeScopeBinding {
 }
 
 pub(crate) struct NativeScopeRecord {
-    bindings: HashMap<u32, NativeScopeBinding>,
+    bindings: HashMap<PropertyKey, NativeScopeBinding>,
     outer: i64,
     super_base: Option<i64>,
     new_target: Option<i64>,
@@ -150,13 +150,20 @@ pub(crate) fn scope_record_set(
 }
 
 pub(crate) fn scope_record_get(
-    state: &NativeAgentState,
+    state: &mut NativeAgentState,
     record: i64,
     key: i64,
 ) -> ScopeBindingRead {
-    let Some(binding) = object_handle(record)
-        .and_then(|record| state.scope_records.get(&record))
-        .and_then(|scope| property_key(state, key).and_then(|key| scope.bindings.get(&key)))
+    let Some(record) = object_handle(record) else {
+        return ScopeBindingRead::Missing;
+    };
+    let Some(key) = property_key(state, key) else {
+        return ScopeBindingRead::Missing;
+    };
+    let Some(binding) = state
+        .scope_records
+        .get(&record)
+        .and_then(|scope| scope.bindings.get(&key))
     else {
         return ScopeBindingRead::Missing;
     };
@@ -167,12 +174,17 @@ pub(crate) fn scope_record_get(
     }
 }
 
-pub(crate) fn scope_record_contains(state: &NativeAgentState, record: i64, key: i64) -> bool {
-    object_handle(record)
-        .and_then(|record| state.scope_records.get(&record))
-        .is_some_and(|scope| {
-            property_key(state, key).is_some_and(|key| scope.bindings.contains_key(&key))
-        })
+pub(crate) fn scope_record_contains(state: &mut NativeAgentState, record: i64, key: i64) -> bool {
+    let Some(record) = object_handle(record) else {
+        return false;
+    };
+    let Some(key) = property_key(state, key) else {
+        return false;
+    };
+    state
+        .scope_records
+        .get(&record)
+        .is_some_and(|scope| scope.bindings.contains_key(&key))
 }
 
 pub(crate) fn scope_record_set_meta(
@@ -246,7 +258,6 @@ fn scope_record_is_retained_by_closure(state: &NativeAgentState, target: i64) ->
         }
     })
 }
-
 fn metadata_bool(encoded: i64) -> bool {
     if value::is_bool(encoded) {
         value::decode_bool(encoded)
@@ -256,10 +267,10 @@ fn metadata_bool(encoded: i64) -> bool {
         false
     }
 }
-fn property_key(state: &NativeAgentState, key: i64) -> Option<u32> {
-    value::is_string(key)
-        .then(|| value::decode_handle(key))
-        .or_else(|| state.string(key).map(|_| value::decode_handle(key)))
+
+fn property_key(state: &mut NativeAgentState, key: i64) -> Option<PropertyKey> {
+    let text = state.string(key)?.clone();
+    state.intern_property_string(text)
 }
 
 fn object_handle(value: i64) -> Option<u32> {
@@ -967,11 +978,7 @@ fn cache_module_object(
     state
         .gc
         .heap()
-        .set_property(
-            value::decode_handle(cache),
-            value::decode_handle(property),
-            module_object as u64,
-        )
+        .set_property(value::decode_handle(cache), property, module_object as u64)
         .ok()?;
     state.runtime_modules.cjs_modules.insert(
         key.clone(),
@@ -1002,7 +1009,7 @@ fn cache_contains(state: &mut NativeAgentState, key: &RuntimeModuleKey) -> bool 
     state
         .gc
         .heap()
-        .get_property_slot(value::decode_handle(cache), value::decode_handle(property))
+        .get_property_slot(value::decode_handle(cache), property)
         .ok()
         .flatten()
         .is_some()
@@ -1020,7 +1027,7 @@ fn remove_cached_module(state: &mut NativeAgentState, key: &RuntimeModuleKey) {
     let _ = state
         .gc
         .heap()
-        .delete_property(value::decode_handle(cache), value::decode_handle(property));
+        .delete_property(value::decode_handle(cache), property);
 }
 
 fn mark_errored_module(state: &mut NativeAgentState, key: &RuntimeModuleKey, error: i64) {
@@ -1037,14 +1044,14 @@ fn mark_errored_module(state: &mut NativeAgentState, key: &RuntimeModuleKey, err
     let _ = state
         .gc
         .heap()
-        .delete_property(value::decode_handle(cache), value::decode_handle(property));
+        .delete_property(value::decode_handle(cache), property);
 }
 
 fn module_exports(state: &mut NativeAgentState, module_object: i64) -> Option<i64> {
     named_property(state, module_object, "exports")
 }
 
-fn module_cache_key(state: &mut NativeAgentState, key: &RuntimeModuleKey) -> Option<i64> {
+fn module_cache_key(state: &mut NativeAgentState, key: &RuntimeModuleKey) -> Option<PropertyKey> {
     let text = match key {
         RuntimeModuleKey::File(path) | RuntimeModuleKey::Json(path) => {
             path.to_string_lossy().into_owned()
@@ -1059,7 +1066,7 @@ pub(crate) fn named_property(state: &mut NativeAgentState, object: i64, name: &s
     state
         .gc
         .heap()
-        .get_property_slot(value::decode_handle(object), value::decode_handle(key))
+        .get_property_slot(value::decode_handle(object), key)
         .ok()
         .flatten()
         .map(|slot| slot.value as i64)
@@ -1121,16 +1128,12 @@ pub(crate) fn set_named_property(
     stored: i64,
 ) -> Result<(), ModuleLoadFailure> {
     let key = state
-        .intern_text(name.to_string(), value::TAG_STRING)
+        .intern_property_string(RuntimeString::from(name))
         .ok_or_else(|| ModuleLoadFailure::Message("property key overflow".into()))?;
     state
         .gc
         .heap()
-        .set_property(
-            value::decode_handle(object),
-            value::decode_handle(key),
-            stored as u64,
-        )
+        .set_property(value::decode_handle(object), key, stored as u64)
         .map_err(|error| ModuleLoadFailure::Message(error.to_string()))
 }
 
@@ -1229,17 +1232,12 @@ pub(crate) fn frozen_named_error_object(
     let error = named_error_object(state, name, message)?;
     let handle = value::decode_handle(error);
     for property in ["name", "message", "stack"] {
-        let key = state.intern_text(property.into(), value::TAG_STRING)?;
-        let stored = state
-            .gc
-            .heap()
-            .get_property_slot(handle, value::decode_handle(key))
-            .ok()??
-            .value;
+        let key = state.intern_property_string(property.into())?;
+        let stored = state.gc.heap().get_property_slot(handle, key).ok()??.value;
         state
             .gc
             .heap()
-            .define_data_property(handle, value::decode_handle(key), stored, 0)
+            .define_data_property(handle, key, stored, 0)
             .ok()?;
     }
     state.non_extensible_objects.insert(handle);

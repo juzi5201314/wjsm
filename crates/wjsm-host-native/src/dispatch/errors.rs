@@ -65,10 +65,7 @@ pub(crate) fn error_constructor(
         return fail_dispatch(ctx);
     };
     if !value::is_undefined(new_target) {
-        let Some(prototype_key) = state
-            .intern_text("prototype".into(), value::TAG_STRING)
-            .map(value::decode_handle)
-        else {
+        let Some(prototype_key) = state.intern_property_string("prototype".into()) else {
             return fail_dispatch(ctx);
         };
         let prototype = state

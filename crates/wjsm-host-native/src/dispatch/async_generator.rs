@@ -114,14 +114,14 @@ fn ensure_prototypes(ctx: &mut NativeVmContext, state: &mut NativeAgentState) ->
         let _ = fail_dispatch(ctx);
         return None;
     }
-    let name = state.intern_text("Symbol.toStringTag".into(), value::TAG_STRING)?;
+    let name = state.intern_property_string("Symbol.toStringTag".into())?;
     let tag = state.intern_text("AsyncIterator".into(), value::TAG_STRING)?;
     if state
         .gc
         .heap()
         .set_property(
             value::decode_handle(async_iterator_prototype),
-            value::decode_handle(name),
+            name,
             tag as u64,
         )
         .is_err()

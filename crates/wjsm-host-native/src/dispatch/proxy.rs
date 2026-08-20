@@ -126,13 +126,13 @@ fn revocable(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     };
     let result_handle = value::decode_handle(result);
     for (name, stored) in [("proxy", proxy), ("revoke", revoke)] {
-        let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(name.into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .set_property(result_handle, value::decode_handle(key), stored as u64)
+            .set_property(result_handle, key, stored as u64)
             .is_err()
         {
             return fail_dispatch(ctx);
@@ -218,10 +218,15 @@ fn trap(
     handler: i64,
     name: &str,
 ) -> Result<Option<i64>, i64> {
-    let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+    let Some(key) = state.intern_property_string(name.into()) else {
         return Err(fail_dispatch(ctx));
     };
-    match get_property(ctx, state, handler, key) {
+    match get_property(
+        ctx,
+        state,
+        handler,
+        crate::dispatch::runtime::encoded_property_key(key),
+    ) {
         Ok(trap) if value::is_undefined(trap) => Ok(None),
         Ok(trap) if value::is_callable(trap) => Ok(Some(trap)),
         Ok(_) | Err(()) => Err(fail_dispatch(ctx)),
@@ -781,15 +786,11 @@ fn set_descriptor(state: &mut NativeAgentState, stored: i64, create: bool) -> Op
     let field_count = if create { fields.len() } else { 1 };
     let descriptor = state.allocate_object(field_count as u32, false).ok()?;
     for &(name, field) in &fields[..field_count] {
-        let key = state.intern_text(name.into(), value::TAG_STRING)?;
+        let key = state.intern_property_string(name.into())?;
         state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(descriptor),
-                value::decode_handle(key),
-                field as u64,
-            )
+            .set_property(value::decode_handle(descriptor), key, field as u64)
             .ok()?;
     }
     Some(descriptor)

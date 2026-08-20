@@ -553,12 +553,12 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     let Ok(object) = state.allocate_object(2, false) else {
         return fail_dispatch(ctx);
     };
-    let async_key = state
-        .intern_text("async".into(), value::TAG_STRING)
-        .unwrap_or_else(|| fail_dispatch(ctx));
-    let value_key = state
-        .intern_text("value".into(), value::TAG_STRING)
-        .unwrap_or_else(|| fail_dispatch(ctx));
+    let Some(async_key) = state.intern_property_string("async".into()) else {
+        return fail_dispatch(ctx);
+    };
+    let Some(value_key) = state.intern_property_string("value".into()) else {
+        return fail_dispatch(ctx);
+    };
 
     if current != expected {
         // 立即 "not-equal"。
@@ -568,18 +568,14 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
             .heap()
             .set_property(
                 value::decode_handle(object),
-                value::decode_handle(async_key),
+                async_key,
                 value::encode_bool(false) as u64,
             )
             .is_err()
             || state
                 .gc
                 .heap()
-                .set_property(
-                    value::decode_handle(object),
-                    value::decode_handle(value_key),
-                    result as u64,
-                )
+                .set_property(value::decode_handle(object), value_key, result as u64)
                 .is_err()
         {
             return fail_dispatch(ctx);
@@ -595,18 +591,14 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
             .heap()
             .set_property(
                 value::decode_handle(object),
-                value::decode_handle(async_key),
+                async_key,
                 value::encode_bool(false) as u64,
             )
             .is_err()
             || state
                 .gc
                 .heap()
-                .set_property(
-                    value::decode_handle(object),
-                    value::decode_handle(value_key),
-                    result as u64,
-                )
+                .set_property(value::decode_handle(object), value_key, result as u64)
                 .is_err()
         {
             return fail_dispatch(ctx);
@@ -649,18 +641,14 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
         .heap()
         .set_property(
             value::decode_handle(object),
-            value::decode_handle(async_key),
+            async_key,
             value::encode_bool(true) as u64,
         )
         .is_err()
         || state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(object),
-                value::decode_handle(value_key),
-                promise as u64,
-            )
+            .set_property(value::decode_handle(object), value_key, promise as u64)
             .is_err()
     {
         return fail_dispatch(ctx);

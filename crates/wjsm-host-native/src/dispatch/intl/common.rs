@@ -211,9 +211,7 @@ fn instance_prototype(
     fallback: i64,
     constructor: IntlCallable,
 ) -> Option<i64> {
-    let key = state
-        .intern_text("prototype".into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let key = state.intern_property_string("prototype".into())?;
     if value::is_callable(new_target)
         && let Some(prototype) = state
             .callable_property(new_target, key)

@@ -131,10 +131,7 @@ pub(crate) fn install_prototype_methods(
     };
     let prototype = value::decode_handle(prototype);
     for &(name, builtin) in methods {
-        let key = state
-            .intern_text(name.into(), value::TAG_STRING)
-            .map(value::decode_handle)
-            .ok_or(())?;
+        let key = state.intern_property_string(name.into()).ok_or(())?;
         let callable = state
             .native_callable(NativeCallableKind::Builtin(builtin, true))
             .ok_or(())?;

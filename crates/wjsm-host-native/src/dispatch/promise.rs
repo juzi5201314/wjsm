@@ -483,10 +483,7 @@ fn new_promise_with_trigger(
         fail_dispatch(ctx);
         return None;
     };
-    let Some(prototype_key) = state
-        .intern_text("prototype".into(), value::TAG_STRING)
-        .map(value::decode_handle)
-    else {
+    let Some(prototype_key) = state.intern_property_string("prototype".into()) else {
         fail_dispatch(ctx);
         return None;
     };
@@ -1633,17 +1630,13 @@ fn with_resolvers(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i6
         ("resolve", resolve),
         ("reject", reject),
     ] {
-        let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(name.into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(result),
-                value::decode_handle(key),
-                property as u64,
-            )
+            .set_property(value::decode_handle(result), key, property as u64)
             .is_err()
         {
             return fail_dispatch(ctx);

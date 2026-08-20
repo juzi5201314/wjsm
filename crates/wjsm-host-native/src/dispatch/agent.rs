@@ -79,48 +79,39 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
             ("monotonicNow", Test262Method::MonotonicNow),
             ("leaving", Test262Method::Leaving),
         ] {
-            let key = state.intern_text(name.into(), value::TAG_STRING)?;
+            let key = state.intern_property_string(name.into())?;
             let callable = state.native_callable(NativeCallableKind::Test262Agent(method))?;
             state
                 .gc
                 .heap()
-                .set_property(
-                    value::decode_handle(agent),
-                    value::decode_handle(key),
-                    callable as u64,
-                )
+                .set_property(value::decode_handle(agent), key, callable as u64)
                 .ok()?;
         }
         let bridge = state.allocate_object(3, false).ok()?;
-        let agent_key = state.intern_text("agent".into(), value::TAG_STRING)?;
+        let agent_key = state.intern_property_string("agent".into())?;
         state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(bridge),
-                value::decode_handle(agent_key),
-                agent as u64,
-            )
+            .set_property(value::decode_handle(bridge), agent_key, agent as u64)
             .ok()?;
         let create_realm =
             state.native_callable(NativeCallableKind::Test262Agent(Test262Method::CreateRealm))?;
-        let create_key = state.intern_text("createRealm".into(), value::TAG_STRING)?;
+        let create_key = state.intern_property_string("createRealm".into())?;
         state
             .gc
             .heap()
             .set_property(
                 value::decode_handle(bridge),
-                value::decode_handle(create_key),
+                create_key,
                 create_realm as u64,
             )
             .ok()?;
         if let Some(gc) = state.native_callable(NativeCallableKind::Gc) {
-            let gc_key = state.intern_text("gc".into(), value::TAG_STRING)?;
-            let _ = state.gc.heap().set_property(
-                value::decode_handle(bridge),
-                value::decode_handle(gc_key),
-                gc as u64,
-            );
+            let gc_key = state.intern_property_string("gc".into())?;
+            let _ = state
+                .gc
+                .heap()
+                .set_property(value::decode_handle(bridge), gc_key, gc as u64);
         }
         if let Some(test262) = state.test262_agent.as_mut() {
             test262.bridge = Some(bridge);
@@ -159,17 +150,13 @@ fn create_realm(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 
     let Ok(record) = state.allocate_object(1, false) else {
         return fail_dispatch(ctx);
     };
-    let Some(key) = state.intern_text("global".into(), value::TAG_STRING) else {
+    let Some(key) = state.intern_property_string("global".into()) else {
         return fail_dispatch(ctx);
     };
     if state
         .gc
         .heap()
-        .set_property(
-            value::decode_handle(record),
-            value::decode_handle(key),
-            global as u64,
-        )
+        .set_property(value::decode_handle(record), key, global as u64)
         .is_err()
     {
         return fail_dispatch(ctx);

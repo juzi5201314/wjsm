@@ -421,9 +421,7 @@ pub(crate) fn primitive_locale_property(
     } else if value::is_array(receiver) && key == "toLocaleString" {
         let prototype = state.array_prototype?;
         install_array_to_locale_string(state, prototype).ok()?;
-        let key = state
-            .intern_text("toLocaleString".into(), value::TAG_STRING)
-            .map(value::decode_handle)?;
+        let key = state.intern_property_string("toLocaleString".into())?;
         return state
             .array_properties
             .get(&(value::decode_handle(prototype), key))
@@ -431,9 +429,7 @@ pub(crate) fn primitive_locale_property(
     } else {
         return None;
     };
-    let key = state
-        .intern_text(key.into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let key = state.intern_property_string(key.into())?;
     state
         .gc
         .heap()
@@ -527,8 +523,7 @@ pub(crate) fn install_array_to_locale_string(
         ))
         .ok_or(())?;
     let key = state
-        .intern_text("toLocaleString".into(), value::TAG_STRING)
-        .map(value::decode_handle)
+        .intern_property_string("toLocaleString".into())
         .ok_or(())?;
     let handle = value::decode_handle(prototype);
     if state.array_properties.contains_key(&(handle, key)) {
@@ -544,9 +539,7 @@ pub(crate) fn install_array_to_locale_string(
 
 fn allocate_proto(state: &mut NativeAgentState, constructor: i64) -> Option<i64> {
     let prototype = state.allocate_object(4, false).ok()?;
-    let constructor_key = state
-        .intern_text("constructor".into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let constructor_key = state.intern_property_string("constructor".into())?;
     state
         .gc
         .heap()
@@ -557,9 +550,7 @@ fn allocate_proto(state: &mut NativeAgentState, constructor: i64) -> Option<i64>
             crate::BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
         )
         .ok()?;
-    let prototype_key = state
-        .intern_text("prototype".into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let prototype_key = state.intern_property_string("prototype".into())?;
     state
         .callable_properties
         .insert((constructor, prototype_key), prototype);

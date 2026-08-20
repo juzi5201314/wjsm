@@ -180,30 +180,30 @@ impl NativeAgentState {
     fn live_string_handles(&self, live: &HostLiveSet) -> HashSet<u32> {
         let mut live_strings = live.strings.clone();
         live_strings.extend(self.gc.heap().property_name_ids());
-        live_strings.extend(self.array_properties.keys().map(|(_, key)| *key));
-        live_strings.extend(self.array_accessors.keys().map(|(_, key)| *key));
-        live_strings.extend(self.array_property_flags.keys().map(|(_, key)| *key));
+        live_strings.extend(self.array_properties.keys().map(|(_, key)| key.get()));
+        live_strings.extend(self.array_accessors.keys().map(|(_, key)| key.get()));
+        live_strings.extend(self.array_property_flags.keys().map(|(_, key)| key.get()));
         for keys in self.array_property_order.values() {
-            live_strings.extend(keys.iter().copied());
+            live_strings.extend(keys.iter().map(|key| key.get()));
         }
         // 符号 bit 置位的 key 是符号而非字符串，不计入字符串存活集。
         live_strings.extend(
             self.callable_properties
                 .keys()
-                .map(|(_, key)| *key)
-                .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0),
+                .map(|(_, key)| key.get())
+                .filter(|key| *key & SYMBOL_PROPERTY_KEY_BIT == 0),
         );
         live_strings.extend(
             self.callable_accessors
                 .keys()
-                .map(|(_, key)| *key)
-                .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0),
+                .map(|(_, key)| key.get())
+                .filter(|key| *key & SYMBOL_PROPERTY_KEY_BIT == 0),
         );
         live_strings.extend(
             self.callable_property_flags
                 .keys()
-                .map(|(_, key)| *key)
-                .filter(|key| key & SYMBOL_PROPERTY_KEY_BIT == 0),
+                .map(|(_, key)| key.get())
+                .filter(|key| *key & SYMBOL_PROPERTY_KEY_BIT == 0),
         );
         live_strings
     }

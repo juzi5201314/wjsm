@@ -12,10 +12,8 @@ use super::js::{
 };
 use super::slots::{IntlSlot, SegmentIterSlot, SegmenterSlot, SegmentsSlot};
 use super::{IntlCallable, incompatible};
-use crate::dispatch::runtime::{
-    SYMBOL_PROPERTY_KEY_BIT, fail_dispatch, range_error, to_number_coerced, to_string_coerced,
-};
-use crate::{NativeAgentState, NativeCallableKind};
+use crate::dispatch::runtime::{fail_dispatch, range_error, to_number_coerced, to_string_coerced};
+use crate::{NativeAgentState, NativeCallableKind, PropertyKey};
 
 pub(super) fn call(
     ctx: &mut NativeVmContext,
@@ -408,7 +406,7 @@ fn ensure_segments_prototype(state: &mut NativeAgentState) -> Option<i64> {
     .ok()?;
     let iterator =
         state.native_callable(NativeCallableKind::Intl(IntlCallable::SegmentsIterator))?;
-    let key = SYMBOL_PROPERTY_KEY_BIT | wk_symbol::ITERATOR;
+    let key = PropertyKey::symbol(wk_symbol::ITERATOR);
     state
         .gc
         .heap()

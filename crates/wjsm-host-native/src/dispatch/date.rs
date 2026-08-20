@@ -143,10 +143,7 @@ fn set_date_prototype(state: &mut NativeAgentState, object: i64) -> Result<(), (
         .intern_text("Date".into(), value::TAG_STRING)
         .ok_or(())?;
     let constructor = state.global_property(global, date_key).ok_or(())?;
-    let prototype_key = state
-        .intern_text("prototype".into(), value::TAG_STRING)
-        .map(value::decode_handle)
-        .ok_or(())?;
+    let prototype_key = state.intern_property_string("prototype".into()).ok_or(())?;
     let prototype = state
         .callable_property(constructor, prototype_key)
         .filter(|prototype| value::is_object(*prototype))
@@ -270,11 +267,11 @@ pub(crate) fn parts(state: &mut NativeAgentState, encoded: i64) -> Option<(f64, 
     if !value::is_js_object(encoded) {
         return None;
     }
-    let key = state.intern_text("__date_ms__".into(), value::TAG_STRING)?;
+    let key = state.intern_property_string("__date_ms__".into())?;
     let milliseconds = state
         .gc
         .heap()
-        .get_property(value::decode_handle(encoded), value::decode_handle(key))
+        .get_property(value::decode_handle(encoded), key)
         .ok()?? as i64;
     value::is_f64(milliseconds).then_some((
         value::decode_f64(milliseconds),

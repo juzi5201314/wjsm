@@ -28,13 +28,13 @@ fn create_element(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     };
     let handle = value::decode_handle(object);
     for (name, stored) in [("type", *tag), ("props", *props), ("children", *children)] {
-        let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(name.into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .set_property(handle, value::decode_handle(key), stored as u64)
+            .set_property(handle, key, stored as u64)
             .is_err()
         {
             return fail_dispatch(ctx);

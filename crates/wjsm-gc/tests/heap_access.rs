@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use wjsm_gc::{
     BarrierEpoch, BarrierRecord, HandleGeneration, HandleTableV2, HeaderLayout, HeapAccessV2,
-    HeapBarrier, ManagedHeapLayout, Nlab, PAGE_GRANULE_BYTES, PROTO_NULL_SENTINEL,
+    HeapBarrier, ManagedHeapLayout, Nlab, PAGE_GRANULE_BYTES, PROTO_NULL_SENTINEL, PropertyKey,
     RelocationDescriptor, TestHeapMemory, ZgcBarrierSet,
 };
 use wjsm_ir::constants;
@@ -32,11 +32,12 @@ fn property_growth_consumes_exact_relocation_bytes() {
     assert_eq!(heap.object_age_at(object).unwrap(), 0);
 
     for key in 1..=PROPERTY_COUNT {
-        heap.set_property(handle, key, u64::from(key)).unwrap();
+        heap.set_property(handle, PropertyKey::from_name_id(key), u64::from(key))
+            .unwrap();
     }
 
     assert_eq!(
-        heap.get_property_slot(handle, PROPERTY_COUNT)
+        heap.get_property_slot(handle, PropertyKey::from_name_id(PROPERTY_COUNT))
             .unwrap()
             .unwrap()
             .value,
@@ -125,7 +126,7 @@ fn scan_references_reads_prototype_and_full_payload_capacity() {
         .unwrap();
     heap.set_property(
         owner,
-        1,
+        PropertyKey::from_name_id(1),
         wjsm_ir::value::encode_object_handle(target) as u64,
     )
     .unwrap();
@@ -400,24 +401,28 @@ fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
 
     // 1. 普通对象 + 自有数据属性 → Some((shape_id, value_index))
     let handle = publish(&heap);
-    heap.set_property(handle, 1, 42).unwrap();
+    heap.set_property(handle, PropertyKey::from_name_id(1), 42)
+        .unwrap();
     let (shape_id, index) = heap
-        .own_data_property_index(handle, 1)
+        .own_data_property_index(handle, PropertyKey::from_name_id(1))
         .unwrap()
         .expect("own data property must resolve");
     assert_eq!(shape_id, heap.shape_id(handle).unwrap());
     assert_eq!(
-        heap.get_property_slot(handle, 1).unwrap().unwrap().value,
+        heap.get_property_slot(handle, PropertyKey::from_name_id(1))
+            .unwrap()
+            .unwrap()
+            .value,
         42
     );
     assert!(index < constants::DICTIONARY_THRESHOLD);
 
     // 2. accessor 属性 → None（值槽里是 getter/setter，快路径不可直读）
     let accessor_handle = publish(&heap);
-    heap.define_accessor_property(accessor_handle, 2, 1, 2)
+    heap.define_accessor_property(accessor_handle, PropertyKey::from_name_id(2), 1, 2)
         .unwrap();
     assert!(
-        heap.own_data_property_index(accessor_handle, 2)
+        heap.own_data_property_index(accessor_handle, PropertyKey::from_name_id(2))
             .unwrap()
             .is_none()
     );
@@ -425,10 +430,11 @@ fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
     // 3. 超过字典阈值的对象 → None（字典 shape 独占，IC 永不回填）
     let dict_handle = publish(&heap);
     for key in 1..=constants::DICTIONARY_THRESHOLD + 1 {
-        heap.set_property(dict_handle, key, u64::from(key)).unwrap();
+        heap.set_property(dict_handle, PropertyKey::from_name_id(key), u64::from(key))
+            .unwrap();
     }
     assert!(
-        heap.own_data_property_index(dict_handle, 1)
+        heap.own_data_property_index(dict_handle, PropertyKey::from_name_id(1))
             .unwrap()
             .is_none()
     );
@@ -439,13 +445,17 @@ fn own_data_property_index_covers_data_accessor_dictionary_array_missing() {
     heap.publish_array(array_handle, array_object, PROTO_NULL_SENTINEL, 0)
         .unwrap();
     assert!(
-        heap.own_data_property_index(array_handle, 1)
+        heap.own_data_property_index(array_handle, PropertyKey::from_name_id(1))
             .unwrap()
             .is_none()
     );
 
     // 5. 缺失属性 → None
-    assert!(heap.own_data_property_index(handle, 999).unwrap().is_none());
+    assert!(
+        heap.own_data_property_index(handle, PropertyKey::from_name_id(999))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

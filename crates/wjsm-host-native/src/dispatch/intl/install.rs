@@ -3,10 +3,7 @@
 use wjsm_ir::{constants, value, wk_symbol};
 
 use super::IntlCallable;
-use crate::{
-    BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind,
-    dispatch::runtime::SYMBOL_PROPERTY_KEY_BIT,
-};
+use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind, PropertyKey};
 
 const CONFIGURABLE: u32 = constants::FLAG_CONFIGURABLE as u32;
 
@@ -56,9 +53,7 @@ pub(crate) fn ensure_constructor_prototype(
         return Some(prototype);
     }
     let prototype = state.allocate_object(8, false).ok()?;
-    let constructor_key = state
-        .intern_text("constructor".into(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let constructor_key = state.intern_property_string("constructor".into())?;
     state
         .gc
         .heap()
@@ -81,10 +76,7 @@ pub(super) fn install_data_property(
     stored: i64,
     flags: u32,
 ) -> Result<(), ()> {
-    let key = state
-        .intern_text(name.into(), value::TAG_STRING)
-        .map(value::decode_handle)
-        .ok_or(())?;
+    let key = state.intern_property_string(name.into()).ok_or(())?;
     if value::is_callable(object) {
         state.callable_properties.insert((object, key), stored);
         state.callable_property_flags.insert((object, key), flags);
@@ -126,10 +118,7 @@ pub(super) fn install_accessor(
         .native_callable(NativeCallableKind::Intl(getter))
         .ok_or(())?;
     attach_function_prototype(state, getter);
-    let key = state
-        .intern_text(name.into(), value::TAG_STRING)
-        .map(value::decode_handle)
-        .ok_or(())?;
+    let key = state.intern_property_string(name.into()).ok_or(())?;
     if value::is_callable(object) {
         state
             .callable_accessors
@@ -167,7 +156,7 @@ pub(super) fn install_to_string_tag(
     tag: &str,
 ) -> Result<(), ()> {
     let tag = state.intern_text(tag.into(), value::TAG_STRING).ok_or(())?;
-    let key = SYMBOL_PROPERTY_KEY_BIT | wk_symbol::TO_STRING_TAG;
+    let key = PropertyKey::symbol(wk_symbol::TO_STRING_TAG);
     state
         .gc
         .heap()

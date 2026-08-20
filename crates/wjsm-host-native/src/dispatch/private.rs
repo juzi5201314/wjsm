@@ -2,7 +2,7 @@ use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::{fail_dispatch, runtime};
-use crate::{NativeAgentState, NativePrivateSlot};
+use crate::{NativeAgentState, NativePrivateSlot, PropertyKey};
 
 pub(super) fn dispatch_private(
     ctx: &mut NativeVmContext,
@@ -110,14 +110,14 @@ fn bind_accessor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     value::encode_undefined()
 }
 
-fn establish_brand(state: &mut NativeAgentState, receiver: i64, key: u32) -> bool {
+fn establish_brand(state: &mut NativeAgentState, receiver: i64, key: PropertyKey) -> bool {
     let Some(brand) = receiver_brand(state, receiver) else {
         return false;
     };
-    match state.private_brands.get(&key).copied() {
+    match state.private_brands.get(&key.get()).copied() {
         Some(expected) => expected == brand,
         None => {
-            state.private_brands.insert(key, brand);
+            state.private_brands.insert(key.get(), brand);
             true
         }
     }
@@ -136,8 +136,8 @@ fn receiver_brand(state: &NativeAgentState, receiver: i64) -> Option<i64> {
     })
 }
 
-fn private_key(encoded: i64) -> Option<u32> {
-    value::is_string(encoded).then(|| value::decode_handle(encoded))
+fn private_key(encoded: i64) -> Option<PropertyKey> {
+    value::is_string(encoded).then(|| PropertyKey::from_name_id(value::decode_handle(encoded)))
 }
 
 fn type_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, message: &str) -> i64 {

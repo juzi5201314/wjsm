@@ -80,13 +80,12 @@ fn create_array_intrinsics(state: &mut NativeAgentState, context: u32) -> Option
         .ok()?;
     let array_constructor =
         state.native_callable(NativeCallableKind::RealmArrayConstructor(context))?;
-    let prototype_key = state.intern_text("prototype".into(), value::TAG_STRING)?;
-    state.callable_properties.insert(
-        (array_constructor, value::decode_handle(prototype_key)),
-        array_prototype,
-    );
+    let prototype_key = state.intern_property_string("prototype".into())?;
+    state
+        .callable_properties
+        .insert((array_constructor, prototype_key), array_prototype);
     state.callable_property_flags.insert(
-        (array_constructor, value::decode_handle(prototype_key)),
+        (array_constructor, prototype_key),
         crate::FUNCTION_PROTOTYPE_FLAGS,
     );
     Some((array_prototype, array_constructor))
@@ -454,14 +453,13 @@ fn copy_extensions(state: &mut NativeAgentState, target: i64, extensions: i64) -
             return false;
         };
         for (key, stored) in properties {
+            let Some(key) = super::runtime::property_key(state, key) else {
+                return false;
+            };
             if state
                 .gc
                 .heap()
-                .set_property(
-                    value::decode_handle(target),
-                    value::decode_handle(key),
-                    stored as u64,
-                )
+                .set_property(value::decode_handle(target), key, stored as u64)
                 .is_err()
             {
                 return false;

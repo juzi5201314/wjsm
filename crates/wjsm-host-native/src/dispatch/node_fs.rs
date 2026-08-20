@@ -58,16 +58,12 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
     ];
     let bridge = state.allocate_object(methods.len() as u32, false).ok()?;
     for (name, method) in methods {
-        let key = state.intern_text(name.into(), value::TAG_STRING)?;
+        let key = state.intern_property_string(name.into())?;
         let callable = state.native_callable(crate::NativeCallableKind::NodeFs(method))?;
         state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(bridge),
-                value::decode_handle(key),
-                callable as u64,
-            )
+            .set_property(value::decode_handle(bridge), key, callable as u64)
             .ok()?;
     }
     state.node_fs_bridge = Some(bridge);
@@ -613,15 +609,11 @@ pub(super) fn set_property(
     name: &str,
     stored: i64,
 ) -> Option<()> {
-    let key = state.intern_text(name.into(), value::TAG_STRING)?;
+    let key = state.intern_property_string(name.into())?;
     state
         .gc
         .heap()
-        .set_property(
-            value::decode_handle(object),
-            value::decode_handle(key),
-            stored as u64,
-        )
+        .set_property(value::decode_handle(object), key, stored as u64)
         .ok()
 }
 

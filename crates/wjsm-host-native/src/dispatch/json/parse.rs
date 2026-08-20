@@ -109,13 +109,13 @@ fn materialize(
             let handle = value::decode_handle(object);
             for (name, property) in properties {
                 let name = state
-                    .intern_runtime_string(name, value::TAG_STRING)
+                    .intern_property_string(name)
                     .ok_or_else(|| runtime::fail_dispatch(ctx))?;
                 let property = materialize(ctx, state, property)?;
                 state
                     .gc
                     .heap()
-                    .set_property(handle, value::decode_handle(name), property as u64)
+                    .set_property(handle, name, property as u64)
                     .map_err(|_| runtime::fail_dispatch(ctx))?;
             }
             Ok(object)

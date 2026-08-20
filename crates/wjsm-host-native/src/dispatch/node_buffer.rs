@@ -1178,15 +1178,11 @@ fn relative_offset(
 }
 
 fn set_property(state: &mut NativeAgentState, object: i64, name: &str, stored: i64) -> Option<()> {
-    let key = state.intern_text(name.into(), value::TAG_STRING)?;
+    let key = state.intern_property_string(name.into())?;
     state
         .gc
         .heap()
-        .set_property(
-            value::decode_handle(object),
-            value::decode_handle(key),
-            stored as u64,
-        )
+        .set_property(value::decode_handle(object), key, stored as u64)
         .ok()
 }
 

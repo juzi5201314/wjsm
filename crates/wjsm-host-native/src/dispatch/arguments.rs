@@ -2,7 +2,8 @@ use wjsm_ir::{Builtin, constants, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::fail_dispatch;
-use crate::{NativeAgentState, NativeCallableKind};
+use crate::{NativeAgentState, NativeCallableKind, PropertyKey};
+use wjsm_host::RuntimeString;
 
 const DATA_FLAGS: u32 =
     (constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE) as u32;
@@ -60,13 +61,13 @@ pub(super) fn create(
             .flatten()
             .map(|stored| stored as i64)
             .unwrap_or_else(value::encode_undefined);
-        let Some(key) = state.intern_text(index.to_string(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(RuntimeString::from(index.to_string())) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .define_data_property(handle, value::decode_handle(key), stored as u64, DATA_FLAGS)
+            .define_data_property(handle, key, stored as u64, DATA_FLAGS)
             .is_err()
         {
             return fail_dispatch(ctx);
@@ -86,7 +87,8 @@ pub(super) fn create(
     else {
         return fail_dispatch(ctx);
     };
-    let iterator_key = super::runtime::SYMBOL_PROPERTY_KEY_BIT | wjsm_ir::wk_symbol::ITERATOR;
+    let iterator_key = PropertyKey::symbol(wjsm_ir::wk_symbol::ITERATOR);
+
     if state
         .gc
         .heap()
@@ -108,19 +110,13 @@ pub(super) fn create(
         let Some(thrower) = state.native_callable(NativeCallableKind::ArgumentsStrictCallee) else {
             return fail_dispatch(ctx);
         };
-        let Some(key) = state.intern_text("callee".into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string("callee".into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .define_accessor_property_with_flags(
-                handle,
-                value::decode_handle(key),
-                thrower as u64,
-                thrower as u64,
-                0,
-            )
+            .define_accessor_property_with_flags(handle, key, thrower as u64, thrower as u64, 0)
             .is_err()
         {
             return fail_dispatch(ctx);
@@ -146,12 +142,12 @@ fn define_named(
     stored: i64,
     flags: u32,
 ) -> bool {
-    let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+    let Some(key) = state.intern_property_string(name.into()) else {
         return false;
     };
     state
         .gc
         .heap()
-        .define_data_property(object, value::decode_handle(key), stored as u64, flags)
+        .define_data_property(object, key, stored as u64, flags)
         .is_ok()
 }

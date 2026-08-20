@@ -255,17 +255,13 @@ pub(crate) fn deserialize(
             CloneNode::Object(properties) => {
                 for (name, stored) in properties {
                     let key = state
-                        .intern_text(name.clone(), value::TAG_STRING)
+                        .intern_property_string(name.clone().into())
                         .ok_or_else(|| "DataCloneError: string table overflow".to_string())?;
                     let stored = deserialize_value(state, stored, &objects)?;
                     state
                         .gc
                         .heap()
-                        .set_property(
-                            value::decode_handle(object),
-                            value::decode_handle(key),
-                            stored as u64,
-                        )
+                        .set_property(value::decode_handle(object), key, stored as u64)
                         .map_err(|error| error.to_string())?;
                 }
             }

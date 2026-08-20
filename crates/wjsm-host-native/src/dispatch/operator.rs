@@ -82,10 +82,7 @@ pub(super) fn dispatch_operator(
             let Some(constructor) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));
             };
-            let Some(prototype_key) = state
-                .intern_text("prototype".into(), value::TAG_STRING)
-                .map(value::decode_handle)
-            else {
+            let Some(prototype_key) = state.intern_property_string("prototype".into()) else {
                 return Some(fail_dispatch(ctx));
             };
             state

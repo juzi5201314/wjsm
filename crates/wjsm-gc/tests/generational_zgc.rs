@@ -3,7 +3,7 @@ use std::time::Duration;
 use wjsm_gc::{
     BarrierRecord, GcEdge, GcEphemeron, GcSafepointAction, GenerationalZgc, HandleGeneration,
     HandleTableV2, HeapAccessV2, HeapBarrier, ManagedHeapLayout, Nlab, PROTO_NULL_SENTINEL,
-    RootSnapshot, RuntimeGcReport, TestHeapMemory, ZgcBarrierSet,
+    PropertyKey, RootSnapshot, RuntimeGcReport, TestHeapMemory, ZgcBarrierSet,
 };
 use wjsm_ir::{constants, value};
 fn zgc_heap() -> Arc<HeapAccessV2<TestHeapMemory>> {
@@ -66,8 +66,12 @@ fn full_cycle_marks_real_heap_slots_and_encoded_host_graph() {
     let mut nlab = Nlab::new();
     let child = publish_object(&heap, &mut nlab, 0);
     let root = publish_object(&heap, &mut nlab, 1);
-    heap.set_property(root, 1, value::encode_object_handle(child) as u64)
-        .unwrap();
+    heap.set_property(
+        root,
+        PropertyKey::from_name_id(1),
+        value::encode_object_handle(child) as u64,
+    )
+    .unwrap();
 
     let host_root = value::encode_function_idx(7);
 
@@ -117,8 +121,12 @@ fn sparse_page_relocates_survivor_then_promotes_at_age_two() {
     let heap = zgc_heap();
     let mut nlab = Nlab::new();
     let survivor = publish_object(&heap, &mut nlab, 1);
-    heap.set_property(survivor, 1, value::encode_f64(42.0) as u64)
-        .unwrap();
+    heap.set_property(
+        survivor,
+        PropertyKey::from_name_id(1),
+        value::encode_f64(42.0) as u64,
+    )
+    .unwrap();
     let dead = [
         publish_object(&heap, &mut nlab, 1),
         publish_object(&heap, &mut nlab, 1),
@@ -140,7 +148,8 @@ fn sparse_page_relocates_survivor_then_promotes_at_age_two() {
     assert_eq!(first.relocated_handles, [survivor]);
     assert_ne!(heap.resolve_handle(survivor).unwrap(), source);
     assert_eq!(
-        heap.get_property(survivor, 1).unwrap(),
+        heap.get_property(survivor, PropertyKey::from_name_id(1))
+            .unwrap(),
         Some(value::encode_f64(42.0) as u64),
     );
 
@@ -164,8 +173,12 @@ fn remembered_slot_keeps_young_target_across_cycles() {
         publish_object(&heap, &mut nlab, 1),
         publish_object(&heap, &mut nlab, 1),
     ];
-    heap.set_property(owner, 1, value::encode_object_handle(target) as u64)
-        .unwrap();
+    heap.set_property(
+        owner,
+        PropertyKey::from_name_id(1),
+        value::encode_object_handle(target) as u64,
+    )
+    .unwrap();
     let collector = GenerationalZgc::new(Arc::clone(&heap), 2, 64).unwrap();
     collector.observe_allocation(1024 * 1024, Duration::from_nanos(1));
 
@@ -188,8 +201,12 @@ fn old_cycle_reaches_old_target_through_young_root() {
     let target = publish_object(&heap, &mut nlab, 8_000);
     heap.promote_to_old(target).unwrap();
     let bridge = publish_object(&heap, &mut nlab, 1);
-    heap.set_property(bridge, 1, value::encode_object_handle(target) as u64)
-        .unwrap();
+    heap.set_property(
+        bridge,
+        PropertyKey::from_name_id(1),
+        value::encode_object_handle(target) as u64,
+    )
+    .unwrap();
     let dead: Vec<_> = (0..8)
         .map(|_| {
             let handle = publish_object(&heap, &mut nlab, 8_000);
@@ -222,8 +239,12 @@ fn old_mark_remains_active_across_complete_young_cycle() {
         })
         .collect();
     for pair in old_chain.windows(2) {
-        heap.set_property(pair[0], 1, value::encode_object_handle(pair[1]) as u64)
-            .unwrap();
+        heap.set_property(
+            pair[0],
+            PropertyKey::from_name_id(1),
+            value::encode_object_handle(pair[1]) as u64,
+        )
+        .unwrap();
     }
     for _ in 0..8 {
         let handle = publish_object(&heap, &mut old_nlab, 8_000);

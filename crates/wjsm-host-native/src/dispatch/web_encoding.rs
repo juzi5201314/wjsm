@@ -562,9 +562,7 @@ fn install_accessor(
 ) -> Option<()> {
     let getter = state.native_callable(NativeCallableKind::WebEncoding(getter))?;
     attach_function_prototype(state, getter);
-    let key = state
-        .intern_text(name.to_owned(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let key = state.intern_property_string(name.to_owned().into())?;
     state
         .gc
         .heap()
@@ -585,9 +583,7 @@ fn install_data_property(
     stored: i64,
     flags: u32,
 ) -> Option<()> {
-    let key = state
-        .intern_text(name.to_owned(), value::TAG_STRING)
-        .map(value::decode_handle)?;
+    let key = state.intern_property_string(name.to_owned().into())?;
     state
         .gc
         .heap()
@@ -605,15 +601,11 @@ fn attach_function_prototype(state: &mut NativeAgentState, callable: i64) {
 }
 
 fn set_property(state: &mut NativeAgentState, object: i64, name: &str, stored: i64) -> Option<()> {
-    let key = state.intern_text(name.to_owned(), value::TAG_STRING)?;
+    let key = state.intern_property_string(name.to_owned().into())?;
     state
         .gc
         .heap()
-        .set_property(
-            value::decode_handle(object),
-            value::decode_handle(key),
-            stored as u64,
-        )
+        .set_property(value::decode_handle(object), key, stored as u64)
         .ok()
 }
 

@@ -210,7 +210,7 @@ fn build_named_groups(
     let groups = state.allocate_object(capacity, false).ok()?;
     let handle = value::decode_handle(groups);
     for (name, capture) in &info.named_captures {
-        let key = state.intern_text(name.clone(), value::TAG_STRING)?;
+        let key = state.intern_property_string(name.clone().into())?;
         let stored = match capture {
             Some(range) if indices => build_index_pair(state, input, range.clone())?,
             Some(range) => state.intern_text(input[range.clone()].to_owned(), value::TAG_STRING)?,
@@ -219,7 +219,7 @@ fn build_named_groups(
         state
             .gc
             .heap()
-            .set_property(handle, value::decode_handle(key), stored as u64)
+            .set_property(handle, key, stored as u64)
             .ok()?;
     }
     Some(groups)
@@ -249,12 +249,10 @@ fn build_match_indices(state: &mut NativeAgentState, input: &str, info: &MatchIn
         .collect::<Option<Vec<_>>>()?;
     let indices = state.allocate_array_values(&values).ok()?;
     let groups = build_named_groups(state, input, info, true)?;
-    let key = state.intern_text("groups".into(), value::TAG_STRING)?;
+    let key = state.intern_property_string("groups".into())?;
     let handle = value::decode_handle(indices);
-    state.note_array_property(handle, value::decode_handle(key));
-    state
-        .array_properties
-        .insert((handle, value::decode_handle(key)), groups);
+    state.note_array_property(handle, key);
+    state.array_properties.insert((handle, key), groups);
     Some(indices)
 }
 
@@ -305,13 +303,11 @@ fn build_match_result(
         properties.push(("indices", indices));
     }
     for (name, stored) in properties {
-        let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(name.into()) else {
             return fail_dispatch(ctx);
         };
-        state.note_array_property(result_handle, value::decode_handle(key));
-        state
-            .array_properties
-            .insert((result_handle, value::decode_handle(key)), stored);
+        state.note_array_property(result_handle, key);
+        state.array_properties.insert((result_handle, key), stored);
     }
     result
 }
@@ -340,13 +336,13 @@ fn iterator_result(
     };
     let handle = value::decode_handle(result);
     for (name, stored) in [("value", value), ("done", value::encode_bool(done))] {
-        let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(name.into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .set_property(handle, value::decode_handle(key), stored as u64)
+            .set_property(handle, key, stored as u64)
             .is_err()
         {
             return fail_dispatch(ctx);

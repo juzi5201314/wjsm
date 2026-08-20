@@ -9,6 +9,7 @@ use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
 };
 
+use crate::PropertyKey;
 use crate::specialization::ValidatedFeedbackSlot;
 use crate::{
     ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeConstantMaterializeError, NativeRuntimeError,
@@ -844,11 +845,11 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
     let activation = state.activations.last()?;
     let Some(home_object) = activation.home_object else {
         let environment = activation.environment;
-        let home_key = state.intern_text("home".into(), value::TAG_STRING)?;
+        let home_key = state.intern_property_string("home".into())?;
         let home = state
             .gc
             .heap()
-            .get_property(object_handle(environment)?, value::decode_handle(home_key))
+            .get_property(object_handle(environment)?, home_key)
             .ok()?? as i64;
         let prototype = state.gc.heap().prototype(object_handle(home)?).ok()?;
         return Some(if prototype == u32::MAX {
@@ -865,8 +866,8 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
     match home_object {
         wjsm_ir::HomeObject::Constructor(_) => state.callable_prototypes.get(&constructor).copied(),
         wjsm_ir::HomeObject::Prototype(_) => {
-            let prototype_key = state.intern_text("prototype".into(), value::TAG_STRING)?;
-            let home = state.callable_property(constructor, value::decode_handle(prototype_key))?;
+            let prototype_key = state.intern_property_string("prototype".into())?;
+            let home = state.callable_property(constructor, prototype_key)?;
             let prototype = state.gc.heap().prototype(value::decode_handle(home)).ok()?;
             Some(if prototype == u32::MAX {
                 value::encode_null()
@@ -935,7 +936,7 @@ fn ordinary_set_key(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     target: i64,
-    key: u32,
+    key: PropertyKey,
     stored: i64,
     receiver: i64,
 ) -> Result<bool, i64> {
@@ -1138,22 +1139,23 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
     }
 }
 
-pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<u32> {
-    let text = if value::is_string(encoded) {
-        state.string(encoded)?.clone()
+pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {
+    if value::is_string(encoded) {
+        let text = state.string(encoded)?.clone();
+        state.intern_property_string(text)
     } else if value::is_symbol(encoded) {
-        return Some(value::decode_handle(encoded) | SYMBOL_PROPERTY_KEY_BIT);
+        Some(PropertyKey::symbol(value::decode_handle(encoded)))
     } else {
-        RuntimeString::from(render_value(state, encoded))
-    };
-    state.intern_property_string(text).map(value::decode_handle)
+        state.intern_property_string(RuntimeString::from(render_value(state, encoded)))
+    }
 }
 
-pub(super) fn encoded_property_key(key: u32) -> i64 {
-    if key & SYMBOL_PROPERTY_KEY_BIT == 0 {
-        value::encode_handle(value::TAG_STRING, key)
+pub(crate) fn encoded_property_key(key: PropertyKey) -> i64 {
+    let raw = key.get();
+    if raw & SYMBOL_PROPERTY_KEY_BIT == 0 {
+        value::encode_handle(value::TAG_STRING, raw)
     } else {
-        value::encode_handle(value::TAG_SYMBOL, key & !SYMBOL_PROPERTY_KEY_BIT)
+        value::encode_handle(value::TAG_SYMBOL, raw & !SYMBOL_PROPERTY_KEY_BIT)
     }
 }
 
@@ -1399,7 +1401,7 @@ pub(super) fn get_property_with_receiver(
 fn set_callable_data_property(
     state: &mut NativeAgentState,
     object: i64,
-    key: u32,
+    key: PropertyKey,
     stored: i64,
 ) -> i64 {
     let object = value::strip_gc_color(object);
@@ -1421,7 +1423,7 @@ fn set_callable_data_property(
 fn callable_accessor_on_chain(
     state: &NativeAgentState,
     callable: i64,
-    key: u32,
+    key: PropertyKey,
 ) -> Option<(i64, i64)> {
     let mut current = Some(value::strip_gc_color(callable));
     while let Some(candidate) = current {
@@ -1913,17 +1915,13 @@ pub(crate) fn create_iterator_result(
         return fail_dispatch(ctx);
     };
     for (name, stored) in [("value", result), ("done", value::encode_bool(done))] {
-        let Some(key) = state.intern_text(name.into(), value::TAG_STRING) else {
+        let Some(key) = state.intern_property_string(name.into()) else {
             return fail_dispatch(ctx);
         };
         if state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(object),
-                value::decode_handle(key),
-                stored as u64,
-            )
+            .set_property(value::decode_handle(object), key, stored as u64)
             .is_err()
         {
             return fail_dispatch(ctx);
@@ -1999,13 +1997,8 @@ fn ensure_custom_current(
 }
 
 fn array_like_length(state: &mut NativeAgentState, source: u32) -> Option<u32> {
-    let key = state.intern_text("length".into(), value::TAG_STRING)?;
-    let stored = state
-        .gc
-        .heap()
-        .get_property(source, value::decode_handle(key))
-        .ok()
-        .flatten()? as i64;
+    let key = state.intern_property_string("length".into())?;
+    let stored = state.gc.heap().get_property(source, key).ok().flatten()? as i64;
     to_number(state, stored).and_then(|length| {
         (length.is_finite() && length >= 0.0 && length <= u32::MAX as f64)
             .then_some(length.floor() as u32)
@@ -2094,7 +2087,7 @@ fn set_property_or_out_of_memory(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     handle: u32,
-    key: u32,
+    key: PropertyKey,
     stored: u64,
 ) -> Result<(), i64> {
     match state.gc.heap().set_property(handle, key, stored) {

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::PropertyKey;
 use crate::heap::{
     Allocation, AllocatorError, GrowableHeapMemory, HandleGeneration, HandleId, HandleTableError,
     HandleTableV2, HeapAddress, HeapMemoryError, ManagedHeap, ManagedHeapLayout, Nlab, ObjectRef,
@@ -529,7 +530,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn own_data_property_index(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
     ) -> Result<Option<(u32, u32)>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
@@ -539,9 +540,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if self.shapes.is_dictionary(shape_id) {
             return Ok(None);
         }
-        let Some(prop) = self.shapes.lookup(shape_id, key) else {
+        let Some(prop) = self.shapes.lookup(shape_id, key.get()) else {
             return Ok(None);
         };
+
         if prop.is_accessor() {
             return Ok(None);
         }
@@ -886,13 +888,18 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
 
     /// 删除自有属性：对象退化为字典 shape，被删属性的值槽清零。
     /// 值槽不回收——其余属性的下标必须保持稳定，否则已发射的 IC 会读错槽。
-    pub fn delete_property(&self, handle: u32, key: u32) -> Result<bool, HeapAccessV2Error> {
+    pub fn delete_property(
+        &self,
+        handle: u32,
+        key: PropertyKey,
+    ) -> Result<bool, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
         let shape_id = self.shape_id_at(object)?;
-        let Some((dictionary_id, (index, span))) = self.shapes.remove_prop(shape_id, key) else {
+        let Some((dictionary_id, (index, span))) = self.shapes.remove_prop(shape_id, key.get())
+        else {
             return Ok(true);
         };
         self.write_shape_id(handle, dictionary_id)?;
@@ -1233,7 +1240,11 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map_err(HeapAccessV2Error::Memory)? as u32)
     }
 
-    pub fn get_property(&self, handle: u32, key: u32) -> Result<Option<u64>, HeapAccessV2Error> {
+    pub fn get_property(
+        &self,
+        handle: u32,
+        key: PropertyKey,
+    ) -> Result<Option<u64>, HeapAccessV2Error> {
         Ok(self
             .get_property_slot(handle, key)?
             .map(|property| property.value))
@@ -1243,14 +1254,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn get_property_slot(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
     ) -> Result<Option<HeapAccessV2Property>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Ok(None);
         }
         let shape_id = self.shape_id_at(object)?;
-        let Some(prop) = self.shapes.lookup(shape_id, key) else {
+        let Some(prop) = self.shapes.lookup(shape_id, key.get()) else {
             return Ok(None);
         };
         self.read_prop(object, &prop).map(Some)
@@ -1275,7 +1286,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn update_property_flags(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
         flags: u32,
     ) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
@@ -1283,7 +1294,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Ok(());
         }
         let shape_id = self.shape_id_at(object)?;
-        let Some(transition) = self.shapes.update_flags(shape_id, key, flags) else {
+        let Some(transition) = self.shapes.update_flags(shape_id, key.get(), flags) else {
             return Ok(());
         };
         // flags 收紧不改属性种类时下标不变，无需扩容；改变种类时按 transition 处理。
@@ -1294,7 +1305,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn get_property_slot_on_proto_chain(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
     ) -> Result<Option<HeapAccessV2Property>, HeapAccessV2Error> {
         let mut current = handle;
         loop {
@@ -1336,7 +1347,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn get_property_slot_on_proto_chain_for_ic(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
     ) -> Result<Option<(u32, u32, HeapAccessV2Property)>, HeapAccessV2Error> {
         let mut current = handle;
         loop {
@@ -1359,7 +1370,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             if self.shapes.is_dictionary(shape_id) {
                 return Ok(None);
             }
-            if let Some(property) = self.shapes.lookup(shape_id, key) {
+            if let Some(property) = self.shapes.lookup(shape_id, key.get()) {
                 let value_slot_index = property.index;
                 return self
                     .read_prop(object, &property)
@@ -1379,7 +1390,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn define_accessor_property(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
         getter: u64,
         setter: u64,
     ) -> Result<(), HeapAccessV2Error> {
@@ -1395,14 +1406,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn define_accessor_property_with_flags(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
         getter: u64,
         setter: u64,
         flags: u32,
     ) -> Result<(), HeapAccessV2Error> {
         self.define_property_slot(
             handle,
-            key,
+            key.get(),
             flags | constants::FLAG_IS_ACCESSOR as u32,
             value::encode_undefined() as u64,
             getter,
@@ -1413,13 +1424,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn define_data_property(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
         property_value: u64,
         flags: u32,
     ) -> Result<(), HeapAccessV2Error> {
         self.define_property_slot(
             handle,
-            key,
+            key.get(),
             flags,
             property_value,
             value::encode_undefined() as u64,
@@ -1430,7 +1441,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     pub fn get_property_on_proto_chain(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
     ) -> Result<Option<u64>, HeapAccessV2Error> {
         Ok(self
             .get_property_slot_on_proto_chain(handle, key)?
@@ -1438,20 +1449,25 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     /// 写自有属性：命中现有 shape 槽则原地覆写，否则按默认数据属性 flags 定义。
-    pub fn set_property(&self, handle: u32, key: u32, value: u64) -> Result<(), HeapAccessV2Error> {
+    pub fn set_property(
+        &self,
+        handle: u32,
+        key: PropertyKey,
+        value: u64,
+    ) -> Result<(), HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
         let shape_id = self.shape_id_at(object)?;
-        if let Some(prop) = self.shapes.lookup(shape_id, key)
+        if let Some(prop) = self.shapes.lookup(shape_id, key.get())
             && !prop.is_accessor()
         {
             return self.store_value_slot(handle, object, prop.index, value);
         }
         self.define_property_slot(
             handle,
-            key,
+            key.get(),
             (constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE)
                 as u32,
             value,

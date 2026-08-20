@@ -9,10 +9,12 @@
 //! 只消费后端无关的 `RootSnapshot` 与 `HeapMemory`。
 
 pub mod api;
+
 pub mod g1;
 pub mod heap;
 pub mod heap_access;
 pub mod mark_sweep;
+pub mod property_key;
 pub mod shape;
 pub mod stop_the_world;
 pub mod telemetry;
@@ -44,6 +46,7 @@ pub use heap_access::{
 };
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
+pub use property_key::PropertyKey;
 pub use registry::GcAlgorithmKind;
 pub use shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot, ShapeTransition};
 pub use stop_the_world::{RuntimeGcReport, StopTheWorldCollector, StopTheWorldCollectorError};

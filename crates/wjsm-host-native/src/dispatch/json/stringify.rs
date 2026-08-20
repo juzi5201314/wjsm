@@ -325,7 +325,7 @@ fn enumerable_property_names(
         let mut names = Vec::new();
         for (&(callable, key), flags) in &state.callable_property_flags {
             if callable == object && flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32 != 0 {
-                let encoded = value::encode_handle(value::TAG_STRING, key);
+                let encoded = value::encode_handle(value::TAG_STRING, key.get());
                 if let Some(name) = state.string(encoded).map(|name| name.to_utf8_lossy()) {
                     names.push(name);
                 }

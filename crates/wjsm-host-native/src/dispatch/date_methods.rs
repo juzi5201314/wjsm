@@ -103,20 +103,14 @@ pub(super) fn install_prototype_methods(
     prototype: i64,
 ) -> Result<(), ()> {
     for &(name, kind) in DATE_METHODS {
-        let key = state
-            .intern_text(name.into(), value::TAG_STRING)
-            .ok_or(())?;
+        let key = state.intern_property_string(name.into()).ok_or(())?;
         let callable = state
             .native_callable(NativeCallableKind::DateMethod(kind))
             .ok_or(())?;
         state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(prototype),
-                value::decode_handle(key),
-                callable as u64,
-            )
+            .set_property(value::decode_handle(prototype), key, callable as u64)
             .map_err(|_| ())?;
     }
     Ok(())

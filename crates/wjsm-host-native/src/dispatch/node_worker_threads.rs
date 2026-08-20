@@ -633,16 +633,12 @@ pub(crate) fn ensure_bridge(state: &mut NativeAgentState) -> Option<i64> {
     ];
     let bridge = state.allocate_object(methods.len() as u32, false).ok()?;
     for (name, method) in methods {
-        let key = state.intern_text(name.into(), value::TAG_STRING)?;
+        let key = state.intern_property_string(name.into())?;
         let callable = state.native_callable(NativeCallableKind::NodeWorkerThreads(method))?;
         state
             .gc
             .heap()
-            .set_property(
-                value::decode_handle(bridge),
-                value::decode_handle(key),
-                callable as u64,
-            )
+            .set_property(value::decode_handle(bridge), key, callable as u64)
             .ok()?;
     }
     state.node_worker_threads.bridge = Some(bridge);

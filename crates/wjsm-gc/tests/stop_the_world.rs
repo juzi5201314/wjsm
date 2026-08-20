@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use wjsm_gc::{
     GcAlgorithmKind, HandleGeneration, HandleTableV2, HeapAccessV2, ManagedHeapLayout, Nlab,
-    PROTO_NULL_SENTINEL, RootSnapshot, StopTheWorldCollector, TestHeapMemory,
+    PROTO_NULL_SENTINEL, PropertyKey, RootSnapshot, StopTheWorldCollector, TestHeapMemory,
 };
 use wjsm_ir::constants;
 
 const HEAP_BYTES: u64 = 1024 * 1024;
-const PROPERTY_KEY: u32 = 17;
+const PROPERTY_KEY: PropertyKey = PropertyKey::from_name_id(17);
 
 struct TestHeap {
     access: HeapAccessV2<TestHeapMemory>,

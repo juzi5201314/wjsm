@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use wjsm_ir::value;
 
-use crate::NativeAgentState;
+use crate::{NativeAgentState, PropertyKey};
 
 pub(super) fn remote_object(state: &NativeAgentState, encoded: i64) -> Value {
     if value::is_undefined(encoded) {
@@ -155,9 +155,10 @@ fn object_properties(state: &NativeAgentState, encoded: i64) -> Vec<Value> {
     };
     slots
         .into_iter()
-        .filter_map(|(key, flags)| {
+        .filter_map(|(name_id, flags)| {
+            let key = PropertyKey::from_name_id(name_id);
             let name = state
-                .string(value::encode_handle(value::TAG_STRING, key))?
+                .string(crate::dispatch::encoded_property_key(key))?
                 .to_utf8()?;
             let property = state.gc.heap().get_property_slot(handle, key).ok()??;
             let stored = if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
