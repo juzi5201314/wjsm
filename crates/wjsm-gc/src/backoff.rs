@@ -26,6 +26,11 @@ pub struct Backoff {
     spin_left: u32,
     sleep: Duration,
 }
+impl Default for Backoff {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Backoff {
     pub fn new() -> Self {

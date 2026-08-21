@@ -554,6 +554,7 @@ fn root_values(
             .iter()
             .copied(),
     );
+    queue.extend(state.latin1_char_strings.iter().copied());
     queue.extend(state.global_object);
     queue.extend(state.object_prototype);
     queue.extend(state.array_prototype);

@@ -44,6 +44,7 @@ impl NativeAgentState {
         self.gc.reset_nlab();
         self.global_object = Some(restored.global_object);
         self.rebuild_string_ids()?;
+        self.rebuild_latin1_char_strings()?;
         self.native_callables = restored.native_callables;
         self.native_callable_ids = self
             .native_callables

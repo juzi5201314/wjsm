@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 12;
+pub const NATIVE_ABI_VERSION: u32 = 13;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -102,6 +102,9 @@ pub struct NativeVmContext {
     /// handle region 基址（8 字节对齐）；generated code 用它把句柄下标换算成
     /// 8 字节 entry 地址。由宿主在 image 激活时与 `ic_slots_base` 同步设置。
     pub handle_table_base: *mut u8,
+    /// Latin-1 单码元字符串的规范句柄表，固定 256 项，由宿主持有并作为 GC 根。
+    /// generated code 仅在码元已证明位于 `0..=255` 后按 `unit * 8` 读取。
+    pub latin1_char_strings: *const i64,
     /// 当前 image 的 IC 区基址（16 字节对齐）；无 IC 槽的 image 为 null。
     /// 槽大小 32 字节，槽内 `+0/+8/+16` 的 i64 load 仍满足 8 字节对齐。
     pub ic_slots_base: *mut u8,
@@ -148,6 +151,7 @@ impl Default for NativeVmContext {
             suspend_status: 0,
             proto_generation: 0,
             handle_table_base: std::ptr::null_mut(),
+            latin1_char_strings: std::ptr::null(),
             ic_slots_base: std::ptr::null_mut(),
             feedback_slots_base: std::ptr::null_mut(),
             heap_object_delta: 0,
@@ -746,7 +750,7 @@ pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v12\0");
+        hasher.update(b"wjsm-native-abi-v13\0");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -769,6 +773,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, raw_access_depth),
             offset_of!(NativeVmContext, proto_generation),
             offset_of!(NativeVmContext, handle_table_base),
+            offset_of!(NativeVmContext, latin1_char_strings),
             offset_of!(NativeVmContext, ic_slots_base),
             offset_of!(NativeVmContext, feedback_slots_base),
             offset_of!(NativeVmContext, heap_object_delta),

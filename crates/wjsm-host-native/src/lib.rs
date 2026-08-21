@@ -56,6 +56,7 @@ use specialization::{
 
 const DEFAULT_CALL_ARENA_SLOTS: usize = 64 * 1024;
 const FIRST_USER_SYMBOL_HANDLE: u32 = wjsm_ir::wk_symbol::UNSCOPABLES + 1;
+const LATIN1_CHAR_COUNT: usize = 256;
 const DEFAULT_MAX_HEAP_BYTES: u64 = 64 * 1024 * 1024;
 const OUT_OF_MEMORY_MESSAGE: &str = "JavaScript heap out of memory";
 const MAX_JS_CALL_DEPTH: u32 = 1024;
@@ -968,6 +969,8 @@ struct NativeAgentState {
     runtime_modules: dispatch::modules::NativeModuleState,
     scope_records: HashMap<u32, dispatch::modules::NativeScopeRecord>,
     string_ids: HashMap<(u32, u32), u32>,
+    /// 码元值是密集的 `0..=255`，JIT 按值直接索引；固定数组避免热路径哈希与分配。
+    latin1_char_strings: Box<[i64; LATIN1_CHAR_COUNT]>,
     activations: Vec<NativeActivation>,
     pending_stack_trace: Option<String>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
@@ -1162,6 +1165,7 @@ impl NativeAgentState {
             runtime_modules: dispatch::modules::NativeModuleState::default(),
             scope_records: HashMap::new(),
             string_ids: HashMap::new(),
+            latin1_char_strings: Box::new([value::encode_undefined(); LATIN1_CHAR_COUNT]),
             activations: Vec::new(),
             maps: HashMap::new(),
             sets: HashMap::new(),
@@ -1443,6 +1447,7 @@ impl NativeAgentState {
         self.array_properties.clear();
         self.array_property_order.clear();
         self.string_ids.clear();
+        self.latin1_char_strings.fill(value::encode_undefined());
         self.array_accessors.clear();
         self.array_property_flags.clear();
         self.activations.clear();
@@ -3998,6 +4003,23 @@ impl NativeAgentState {
         }
         Ok(())
     }
+    fn rebuild_latin1_char_strings(&mut self) -> Result<(), NativeRuntimeError> {
+        for unit in 0_u16..=u16::from(u8::MAX) {
+            let encoded = self
+                .publish_string_bytes(
+                    &[u8::try_from(unit).expect("Latin-1 码元不超过 u8")],
+                    value::TAG_STRING,
+                    true,
+                )
+                .ok_or_else(|| {
+                    NativeRuntimeError::Invariant(
+                        "failed to materialize Latin-1 character cache".into(),
+                    )
+                })?;
+            self.latin1_char_strings[usize::from(unit)] = encoded;
+        }
+        Ok(())
+    }
     pub(crate) fn property_name_handles(&self) -> Vec<i64> {
         let mut names = self.gc.heap().property_name_ids();
         names.extend(self.array_properties.keys().map(|(_, key)| key.get()));
@@ -5062,6 +5084,7 @@ impl NativeRuntime {
         // 句柄表基址：generated code 属性快链用；snapshot 恢复替换 heap 后由
         // `activate_image` 重新同步（每次 execute 必经）。
         context.handle_table_base = state.gc.heap().handle_table_base();
+        context.latin1_char_strings = state.latin1_char_strings.as_ptr();
         state.gc.bind_context(context);
         Ok(Self {
             state,
