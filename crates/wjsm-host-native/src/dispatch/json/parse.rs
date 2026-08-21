@@ -45,7 +45,8 @@ fn to_json_string(
     encoded: i64,
 ) -> Result<String, i64> {
     if value::is_string(encoded) {
-        return state.string_owned(encoded)
+        return state
+            .string_owned(encoded)
             .map(|text| text.to_utf8_lossy())
             .ok_or_else(|| runtime::fail_dispatch(ctx));
     }

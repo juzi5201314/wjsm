@@ -182,7 +182,8 @@ pub(crate) fn process_on(
 ) -> i64 {
     let event = args
         .first()
-        .and_then(|event| state.string_owned(*event)).and_then(|text| text.to_utf8())
+        .and_then(|event| state.string_owned(*event))
+        .and_then(|text| text.to_utf8())
         .unwrap_or_default();
     if event == "message" {
         let callback = args.get(1).copied().unwrap_or_else(value::encode_undefined);
@@ -249,7 +250,8 @@ fn shutdown_entries(entries: &mut [Option<ChildProcessEntry>]) {
 fn spawn(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(command) = args
         .first()
-        .and_then(|command| state.string_owned(*command)).and_then(|text| text.to_utf8())
+        .and_then(|command| state.string_owned(*command))
+        .and_then(|text| text.to_utf8())
     else {
         return type_error(ctx, state, "spawn command must be a string");
     };
@@ -270,7 +272,8 @@ fn spawn(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     }
     let cwd = modules::named_property(state, options, "cwd")
         .filter(|value| !value::is_undefined(*value))
-        .and_then(|value| state.string_owned(value)).and_then(|text| text.to_utf8());
+        .and_then(|value| state.string_owned(value))
+        .and_then(|text| text.to_utf8());
     let env_pairs = match modules::named_property(state, options, "envPairs") {
         Some(pairs) => match string_array(ctx, state, pairs) {
             Ok(pairs) => pairs,
@@ -672,7 +675,8 @@ fn encode_message(
     if value::is_exception(encoded) {
         return Err(encoded);
     }
-    state.string_owned(encoded)
+    state
+        .string_owned(encoded)
         .map(|text| text.to_utf8_lossy())
         .ok_or_else(|| type_error(ctx, state, "IPC message is not JSON serializable"))
 }

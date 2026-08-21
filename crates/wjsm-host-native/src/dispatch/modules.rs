@@ -512,10 +512,16 @@ fn runtime_dynamic_import(
     let [referrer, specifier] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(referrer) = state.string_owned(*referrer).and_then(|text| text.to_utf8()) else {
+    let Some(referrer) = state
+        .string_owned(*referrer)
+        .and_then(|text| text.to_utf8())
+    else {
         return fail_dispatch(ctx);
     };
-    let Some(specifier) = state.string_owned(*specifier).and_then(|text| text.to_utf8()) else {
+    let Some(specifier) = state
+        .string_owned(*specifier)
+        .and_then(|text| text.to_utf8())
+    else {
         return fail_dispatch(ctx);
     };
     let referrer = normalize_referrer(state, Path::new(&referrer));
@@ -577,7 +583,10 @@ fn register_cjs_module(
     let [filename, module_object, _initial_exports] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(filename) = state.string_owned(*filename).and_then(|text| text.to_utf8()) else {
+    let Some(filename) = state
+        .string_owned(*filename)
+        .and_then(|text| text.to_utf8())
+    else {
         return fail_dispatch(ctx);
     };
     let path = normalize_referrer(state, Path::new(&filename));

@@ -157,7 +157,8 @@ fn object_proto_to_string(
         if value::is_exception(custom) {
             return custom;
         }
-        state.string_owned(custom)
+        state
+            .string_owned(custom)
             .and_then(|text| text.to_utf8())
             .unwrap_or_else(|| default_tag.to_owned())
     };

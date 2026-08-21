@@ -107,7 +107,8 @@ fn serialize_value(
         ));
     }
     if value::is_string(encoded) {
-        return state.string_owned(encoded)
+        return state
+            .string_owned(encoded)
             .map(|text| JsonOutput::Text(text.to_json_quoted()))
             .ok_or_else(|| runtime::fail_dispatch(ctx));
     }
@@ -257,7 +258,8 @@ fn indentation(state: &NativeAgentState, encoded: i64) -> String {
         let width = value::decode_f64(encoded).trunc().clamp(0.0, 10.0) as usize;
         " ".repeat(width)
     } else if value::is_string(encoded) {
-        state.string_owned(encoded)
+        state
+            .string_owned(encoded)
             .map(|text| {
                 text.slice_units(0..text.utf16_len().min(10))
                     .to_utf8_lossy()

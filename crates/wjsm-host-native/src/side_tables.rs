@@ -3,13 +3,11 @@
 //! GC 标记期在 [`HostLiveSet`] 里边标边收活下标；`collect_garbage` 完成堆
 //! sweep 后由 [`NativeAgentState::sweep_host_index_tables`] 清理宿主下标表。
 //! 字符串已经完全位于 ManagedHeap，其存活与退休由 GC 统一负责。
- 
 
 use std::collections::HashSet;
 
-use wjsm_ir::value;
 use crate::{NativeAgentState, NativeCallableKind};
-
+use wjsm_ir::value;
 
 /// 标记期收集的宿主侧活下标集合。sweep 只放行出现在这里的槽位。
 #[derive(Default)]
@@ -123,7 +121,6 @@ impl NativeAgentState {
         self.async_iterator_objects
             .retain(|encoded| host_value_is_live(retired, live, *encoded));
     }
-
 }
 
 /// 判定一个宿主编码值是否仍存活。堆对象/数组按 retired handle 判定；

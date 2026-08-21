@@ -66,7 +66,8 @@ fn one_argument_millis(state: &mut NativeAgentState, argument: i64) -> f64 {
         return time_clip(value::decode_f64(argument));
     }
     if value::is_string(argument) {
-        return state.string_owned(argument)
+        return state
+            .string_owned(argument)
             .and_then(|text| text.to_utf8())
             .and_then(|text| wjsm_builtins::parse_date_string(&text))
             .map_or(f64::NAN, time_clip);
@@ -83,7 +84,8 @@ fn parse_date(state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(argument) = args.first().copied() else {
         return value::encode_f64(f64::NAN);
     };
-    let milliseconds = state.string_owned(argument)
+    let milliseconds = state
+        .string_owned(argument)
         .and_then(|text| text.to_utf8())
         .and_then(|text| wjsm_builtins::parse_date_string(&text))
         .map_or(f64::NAN, time_clip);

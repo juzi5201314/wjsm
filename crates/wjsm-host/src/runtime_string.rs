@@ -687,13 +687,14 @@ pub fn rfind_units_before(hay: &[u16], needle: &[u16], end: usize) -> Option<usi
     if needle.len() > end {
         return None;
     }
-    hay[..end].windows(needle.len()).rposition(|window| window == needle)
+    hay[..end]
+        .windows(needle.len())
+        .rposition(|window| window == needle)
 }
 
 /// 判断 UTF-16 子序列是否从指定位置开始。
 pub fn starts_with_units(hay: &[u16], needle: &[u16], from: usize) -> bool {
-    from
-        .checked_add(needle.len())
+    from.checked_add(needle.len())
         .is_some_and(|end| end <= hay.len())
         && hay[from..from + needle.len()] == *needle
 }
@@ -726,9 +727,7 @@ pub fn json_quote_units(units: &[u16]) -> String {
     let mut index = 0usize;
     while index < units.len() {
         let unit = units[index];
-        if is_high_surrogate(unit)
-            && index + 1 < units.len()
-            && is_low_surrogate(units[index + 1])
+        if is_high_surrogate(unit) && index + 1 < units.len() && is_low_surrogate(units[index + 1])
         {
             let cp = decode_surrogate_pair(unit, units[index + 1]);
             push_json_char(&mut out, char::from_u32(cp).expect("valid surrogate pair"));

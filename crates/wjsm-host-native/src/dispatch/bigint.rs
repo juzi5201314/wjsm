@@ -116,7 +116,9 @@ fn from_value(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     } else if value::is_bool(input) {
         Some(BigInt::from(u8::from(value::decode_bool(input))))
     } else if value::is_string(input) {
-        state.string_owned(input).and_then(|text| text.to_utf8())
+        state
+            .string_owned(input)
+            .and_then(|text| text.to_utf8())
             .and_then(|text| text.trim().parse().ok())
     } else {
         None

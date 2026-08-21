@@ -98,7 +98,9 @@ fn compile_regexp(
 
 fn subject(state: &NativeAgentState, encoded: i64) -> String {
     if value::is_string(encoded) {
-        state.string_owned(encoded).map(|text| text.to_utf8_lossy())
+        state
+            .string_owned(encoded)
+            .map(|text| text.to_utf8_lossy())
             .unwrap_or_default()
     } else {
         render_value(state, encoded)

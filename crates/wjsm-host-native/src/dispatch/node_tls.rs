@@ -383,7 +383,8 @@ fn handle(state: &NativeAgentState, encoded: Option<i64>) -> Option<u32> {
 
 fn text_arg(state: &NativeAgentState, args: &[i64], index: usize) -> Option<String> {
     args.get(index)
-        .and_then(|encoded| state.string_owned(*encoded)).and_then(|text| text.to_utf8())
+        .and_then(|encoded| state.string_owned(*encoded))
+        .and_then(|text| text.to_utf8())
 }
 
 fn resolved(ctx: &mut NativeVmContext, state: &mut NativeAgentState, result: i64) -> i64 {

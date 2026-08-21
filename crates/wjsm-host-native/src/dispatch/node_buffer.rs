@@ -509,7 +509,8 @@ fn from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
         None => return type_error(ctx, state, "Unknown encoding"),
     };
     let bytes = if value::is_string(input) {
-        state.string_owned(input)
+        state
+            .string_owned(input)
             .and_then(|text| text.to_utf8())
             .map(|text| encode_text(&text, encoding))
     } else if let Some(buffer) = state.buffers.get(&value::decode_handle(input)) {
@@ -1057,7 +1058,8 @@ fn value_bytes(state: &mut NativeAgentState, encoded: i64, encoding: Encoding) -
         return Some(visible(buffer));
     }
     if value::is_string(encoded) {
-        return state.string_owned(encoded)
+        return state
+            .string_owned(encoded)
             .and_then(|text| text.to_utf8())
             .map(|text| encode_text(&text, encoding));
     }

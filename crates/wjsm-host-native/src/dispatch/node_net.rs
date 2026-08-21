@@ -293,7 +293,8 @@ fn write(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     };
     let input = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let bytes = super::node_buffer::bytes(state, input).unwrap_or_else(|| {
-        state.string_owned(input)
+        state
+            .string_owned(input)
             .and_then(|text| text.to_utf8())
             .unwrap_or_else(|| render_value(state, input))
             .into_bytes()

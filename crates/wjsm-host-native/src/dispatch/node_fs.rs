@@ -134,7 +134,8 @@ fn write_file(
     }
     let data = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let bytes = super::node_buffer::bytes(state, data).unwrap_or_else(|| {
-        state.string_owned(data)
+        state
+            .string_owned(data)
             .and_then(|text| text.to_utf8())
             .unwrap_or_else(|| render_value(state, data))
             .into_bytes()
@@ -563,7 +564,8 @@ fn argument_path(state: &NativeAgentState, encoded: Option<i64>) -> Option<PathB
 }
 
 pub(super) fn argument_path_raw(state: &NativeAgentState, encoded: Option<i64>) -> Option<PathBuf> {
-    state.string_owned(encoded?)
+    state
+        .string_owned(encoded?)
         .and_then(|path| path.to_utf8())
         .map(PathBuf::from)
 }

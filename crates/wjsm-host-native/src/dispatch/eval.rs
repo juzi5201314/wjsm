@@ -185,7 +185,9 @@ fn eval_binding_exists(
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {
-    state.string_owned(key).and_then(|text| text.to_utf8())
+    state
+        .string_owned(key)
+        .and_then(|text| text.to_utf8())
         .unwrap_or_else(|| runtime::render_value(state, key))
 }
 
