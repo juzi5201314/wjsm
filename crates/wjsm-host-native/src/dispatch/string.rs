@@ -278,16 +278,25 @@ fn append_builder_parts(
     if !state.string_is_builder(current) {
         return None;
     }
+    let handle = value::decode_handle(current);
     let mut units = state.with_string_units(current, |units| units.to_vec())?;
     let added = parts.iter().map(BuilderPart::capacity).sum::<usize>();
     let needed = units.len().checked_add(added)?;
     let byte_capacity = u32::try_from(needed.checked_mul(2)?.checked_add(7)? & !7).ok()?;
-    let handle = value::decode_handle(current);
-    if state.gc.heap().string_capacity(handle).ok()? < byte_capacity
-        && state.gc.heap().grow_string_capacity(handle, byte_capacity).is_err()
+    let capacity = state.gc.heap().string_capacity(handle).ok()?;
+    if capacity < byte_capacity
+        && state
+            .gc
+            .heap()
+            .grow_string_capacity(handle, byte_capacity)
+            .is_err()
     {
         state.collect_garbage(ctx).ok()?;
-        state.gc.heap().grow_string_capacity(handle, byte_capacity).ok()?;
+        state
+            .gc
+            .heap()
+            .grow_string_capacity(handle, byte_capacity)
+            .ok()?;
     }
     for part in parts {
         match part {
@@ -303,7 +312,11 @@ fn append_builder_parts(
     for unit in units.iter().copied() {
         bytes.extend_from_slice(&unit.to_le_bytes());
     }
-    state.gc.heap().write_string_payload(handle, 0, &bytes).ok()?;
+    state
+        .gc
+        .heap()
+        .write_string_payload(handle, 0, &bytes)
+        .ok()?;
     state
         .gc
         .heap()
@@ -563,8 +576,7 @@ fn string_repeat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 }
 
 fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) =
-        runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
+    let Some(text) = runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
     else {
         return fail_dispatch(ctx);
     };
@@ -586,8 +598,7 @@ fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
 }
 
 fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) =
-        runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
+    let Some(text) = runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
     else {
         return fail_dispatch(ctx);
     };

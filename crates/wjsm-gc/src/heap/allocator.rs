@@ -86,7 +86,9 @@ impl Nlab {
             return None;
         }
         let object = ObjectRef::new(self.top);
-        debug_assert!(page.record(object, bytes));
+        if !page.record(object, bytes) {
+            return None;
+        }
         self.top = end;
         allocated_bytes.fetch_add(bytes, Ordering::Relaxed);
         Some(Allocation {
@@ -293,12 +295,13 @@ impl ManagedAllocator {
                 .try_allocate(bytes, &self.allocated_bytes)
                 .ok_or(AllocatorError::NlabRefillTooSmall { bytes });
         }
-
         let page_count = u32::try_from(bytes.div_ceil(self.config.bytes))
             .map_err(|_| AllocatorError::RequestTooLarge { bytes })?;
         let page = self.acquire_relocation_pages(nlab, page_count, true)?;
         let object = ObjectRef::new(page.base_offset);
-        debug_assert!(page.record(object, bytes));
+        if !page.record(object, bytes) {
+            return Err(AllocatorError::DuplicateObject { object });
+        }
         self.allocated_bytes.fetch_add(bytes, Ordering::Relaxed);
         Ok(Allocation {
             object,
@@ -532,7 +535,9 @@ impl ManagedAllocator {
             u32::try_from(page_count).map_err(|_| AllocatorError::RequestTooLarge { bytes })?;
         let page = self.acquire_pages(page_count, true)?;
         let object = ObjectRef::new(page.base_offset);
-        debug_assert!(page.record(object, bytes));
+        if !page.record(object, bytes) {
+            return Err(AllocatorError::DuplicateObject { object });
+        }
         self.allocated_bytes.fetch_add(bytes, Ordering::Relaxed);
         Ok(Allocation {
             object,

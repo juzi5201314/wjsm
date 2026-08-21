@@ -122,7 +122,6 @@ impl NativeGc {
         }
     }
 
-
     pub(super) fn take_pacing_poll_request(&self) -> bool {
         self.pacing_poll_requested.replace(false)
     }
@@ -173,7 +172,7 @@ impl NativeGc {
         &mut self,
         snapshot: Option<RootSnapshot>,
     ) -> Result<Option<RuntimeGcReport>, NativeGcError> {
-        if snapshot.is_some() && matches!(self.collector, NativeCollector::StopTheWorld(_)) {
+        if snapshot.is_some() {
             self.reset_nlab();
         }
         let report = match &mut self.collector {
@@ -183,6 +182,9 @@ impl NativeGc {
                 .transpose()?,
             NativeCollector::Zgc(collector) => collector.at_safepoint(snapshot)?,
         };
+        if report.is_some() {
+            self.reset_nlab();
+        }
         self.sync_barrier_state();
         Ok(report)
     }
@@ -198,6 +200,7 @@ impl NativeGc {
             }
             NativeCollector::Zgc(collector) => collector.collect_full(snapshot)?,
         };
+        self.reset_nlab();
         self.sync_barrier_state();
         Ok(report)
     }

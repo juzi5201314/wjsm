@@ -111,6 +111,7 @@ pub struct RelocationReport {
 pub struct ConcurrentRelocator {
     pages: Mutex<BTreeMap<u64, AtomicU8>>,
     descriptors: Mutex<BTreeMap<HandleId, Arc<RelocationDescriptor>>>,
+    relocation_lock: Mutex<()>,
     access_epoch: AtomicU64,
     report: Mutex<RelocationReport>,
     young_relocating: AtomicBool,
@@ -124,12 +125,32 @@ impl ConcurrentRelocator {
         Self {
             pages: Mutex::new(BTreeMap::new()),
             descriptors: Mutex::new(BTreeMap::new()),
+            relocation_lock: Mutex::new(()),
             access_epoch: AtomicU64::new(0),
             report: Mutex::new(RelocationReport::default()),
             young_relocating: AtomicBool::new(false),
             old_relocating: AtomicBool::new(false),
             waiters: Condvar::new(),
             wait_mutex: Mutex::new(()),
+        }
+    }
+
+    pub fn acquire_mutator_relocation<M: HeapMemory>(
+        &self,
+        handles: &HandleTableV2,
+        memory: &M,
+        handle: HandleId,
+    ) -> Result<parking_lot::MutexGuard<'_, ()>, String> {
+        loop {
+            let guard = self.relocation_lock.lock();
+            if let Some(descriptor) = self.descriptor(handle)
+                && !descriptor.is_done()
+            {
+                drop(guard);
+                let _ = self.assist(handles, memory, handle)?;
+                continue;
+            }
+            return Ok(guard);
         }
     }
 
@@ -204,12 +225,12 @@ impl ConcurrentRelocator {
         descriptor: &RelocationDescriptor,
         worker_id: u64,
     ) -> Result<bool, String> {
+        let relocation_guard = self.relocation_lock.lock();
         if !descriptor.try_claim_copy(worker_id) {
-            // wait for owner
+            drop(relocation_guard);
             self.wait_until_done(descriptor);
             return Ok(false);
         }
-
         let state = handles
             .resolve(descriptor.handle)
             .ok_or_else(|| "relocation handle disappeared before copy".to_string())?
@@ -224,10 +245,7 @@ impl ConcurrentRelocator {
         ) {
             return Err(format!("invalid relocation copy state {state:?}"));
         }
-
-        // immutable byte-copy regions + mutable word snapshot
         self.atomic_snapshot_copy(memory, descriptor)?;
-
         handles
             .complete_relocation(descriptor.handle, descriptor.destination)
             .map_err(|error| error.to_string())?;

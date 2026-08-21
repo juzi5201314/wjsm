@@ -923,7 +923,6 @@ enum NativePrivateSlot {
     Accessor { getter: i64, setter: i64 },
 }
 
-
 struct NativeAgentState {
     output: RefCell<Vec<u8>>,
     stderr: RefCell<Vec<u8>>,
@@ -1780,7 +1779,6 @@ impl NativeAgentState {
             .and_then(|regexp| regexp.as_mut())
     }
 
-
     fn create_symbol(&mut self, description: Option<RuntimeString>) -> Option<i64> {
         let handle = self.next_symbol_handle;
         self.next_symbol_handle = handle.checked_add(1)?;
@@ -1864,7 +1862,8 @@ impl NativeAgentState {
     }
 
     pub(crate) fn string_to_utf8(&self, encoded: i64) -> Option<String> {
-        self.with_string_bytes(encoded, |view| view.to_utf8()).flatten()
+        self.with_string_bytes(encoded, |view| view.to_utf8())
+            .flatten()
     }
 
     pub(crate) fn string_to_utf8_lossy(&self, encoded: i64) -> Option<String> {
@@ -1881,7 +1880,9 @@ impl NativeAgentState {
     }
 
     pub(crate) fn string_owned(&self, encoded: i64) -> Option<RuntimeString> {
-        self.with_string_units(encoded, |units| RuntimeString::from_utf16_units(units.to_vec()))
+        self.with_string_units(encoded, |units| {
+            RuntimeString::from_utf16_units(units.to_vec())
+        })
     }
 
     pub(crate) fn string_is_builder(&self, encoded: i64) -> bool {
@@ -3980,16 +3981,13 @@ impl NativeAgentState {
         let (entries, _) = self.gc.heap().capture_handles()?;
         for entry in entries {
             let handle = entry.handle.get();
-            if self.gc.heap().object_type(handle).ok()
-                != Some(u32::from(wjsm_ir::HEAP_TYPE_STRING))
+            if self.gc.heap().object_type(handle).ok() != Some(u32::from(wjsm_ir::HEAP_TYPE_STRING))
                 || self
                     .gc
                     .heap()
                     .string_flags(handle)
                     .ok()
-                    .is_none_or(|flags| {
-                        flags & wjsm_ir::constants::STRING_FLAG_INTERNED == 0
-                    })
+                    .is_none_or(|flags| flags & wjsm_ir::constants::STRING_FLAG_INTERNED == 0)
             {
                 continue;
             }
@@ -4004,7 +4002,12 @@ impl NativeAgentState {
         names.extend(self.array_properties.keys().map(|(_, key)| key.get()));
         names.extend(self.array_accessors.keys().map(|(_, key)| key.get()));
         names.extend(self.array_property_flags.keys().map(|(_, key)| key.get()));
-        names.extend(self.array_property_order.values().flatten().map(|key| key.get()));
+        names.extend(
+            self.array_property_order
+                .values()
+                .flatten()
+                .map(|key| key.get()),
+        );
         names.extend(
             self.callable_properties
                 .keys()
@@ -4050,7 +4053,6 @@ impl NativeAgentState {
         });
     }
 
-
     fn intern_text(&mut self, text: String, tag: u64) -> Option<i64> {
         let units = text.encode_utf16().collect::<Vec<_>>();
         self.publish_string_units(&units, tag, true)
@@ -4071,7 +4073,10 @@ impl NativeAgentState {
         for unit in units {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        let address = self.gc.allocate(string_payload_bytes(capacity).ok()?).ok()?;
+        let address = self
+            .gc
+            .allocate(string_payload_bytes(capacity).ok()?)
+            .ok()?;
         let handle = self.gc.heap().allocate_handle().ok()?;
         let flags = if interned {
             wjsm_ir::constants::STRING_FLAG_INTERNED
@@ -4090,7 +4095,10 @@ impl NativeAgentState {
                 capacity,
             )
             .ok()?;
-        self.gc.heap().write_string_payload(handle, 0, &bytes).ok()?;
+        self.gc
+            .heap()
+            .write_string_payload(handle, 0, &bytes)
+            .ok()?;
         self.gc.mark_black_allocation(handle).ok()?;
         if interned && tag == value::TAG_STRING {
             self.gc.heap().string_content_hash(handle).ok()?;
@@ -4111,7 +4119,10 @@ impl NativeAgentState {
         for unit in units {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        let address = self.gc.allocate(string_payload_bytes(capacity).ok()?).ok()?;
+        let address = self
+            .gc
+            .allocate(string_payload_bytes(capacity).ok()?)
+            .ok()?;
         let handle = self.gc.heap().allocate_handle().ok()?;
         self.gc
             .heap()
@@ -4125,7 +4136,10 @@ impl NativeAgentState {
                 capacity,
             )
             .ok()?;
-        self.gc.heap().write_string_payload(handle, 0, &bytes).ok()?;
+        self.gc
+            .heap()
+            .write_string_payload(handle, 0, &bytes)
+            .ok()?;
         self.gc.mark_black_allocation(handle).ok()?;
         Some(if tag == value::TAG_STRING {
             value::encode_runtime_string_handle(handle)
@@ -4136,7 +4150,10 @@ impl NativeAgentState {
 
     fn publish_string_bytes(&mut self, bytes: &[u8], tag: u64, interned: bool) -> Option<i64> {
         let length = u32::try_from(bytes.len()).ok()?;
-        let units = bytes.iter().map(|&byte| u16::from(byte)).collect::<Vec<_>>();
+        let units = bytes
+            .iter()
+            .map(|&byte| u16::from(byte))
+            .collect::<Vec<_>>();
         let key = (content_hash_units(&units), length);
         if interned
             && tag == value::TAG_STRING
@@ -4145,7 +4162,10 @@ impl NativeAgentState {
             return Some(value::encode_runtime_string_handle(handle));
         }
         let capacity = u32::try_from(bytes.len().checked_add(7)? & !7).ok()?;
-        let address = self.gc.allocate(string_payload_bytes(capacity).ok()?).ok()?;
+        let address = self
+            .gc
+            .allocate(string_payload_bytes(capacity).ok()?)
+            .ok()?;
         let handle = self.gc.heap().allocate_handle().ok()?;
         let flags = if interned {
             wjsm_ir::constants::STRING_FLAG_INTERNED
@@ -4812,13 +4832,14 @@ unsafe extern "C" fn native_callable_call(
             let Some((body, parameters)) = arguments.split_last() else {
                 return dispatch::node_vm::compile_dynamic_function(ctx, state, "", &[], global);
             };
-            let Some(body) = state.string_owned(*body).and_then(|text| text.to_utf8())
-            else {
+            let Some(body) = state.string_owned(*body).and_then(|text| text.to_utf8()) else {
                 return dispatch::fail_dispatch(ctx);
             };
             let mut parameter_names = Vec::with_capacity(parameters.len());
             for parameter in parameters {
-                let Some(parameter) = state.string_owned(*parameter).and_then(|text| text.to_utf8())
+                let Some(parameter) = state
+                    .string_owned(*parameter)
+                    .and_then(|text| text.to_utf8())
                 else {
                     return dispatch::fail_dispatch(ctx);
                 };
@@ -5429,7 +5450,6 @@ impl NativeRuntime {
             scope_records: self.state.scope_records.len(),
         }
     }
-
 
     fn assert_owner_thread(&self) -> Result<(), NativeRuntimeError> {
         if self.owner_thread == std::thread::current().id() {

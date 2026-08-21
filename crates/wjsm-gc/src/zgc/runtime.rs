@@ -283,7 +283,11 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
                 let age = heap.object_age_at(object)?.saturating_add(1);
                 heap.set_object_age(handle, age)?;
                 if age >= 2 || page.dedicated || !sparse {
-                    heap.promote_to_old(handle)?;
+                    if collection == MarkGeneration::Full {
+                        heap.promote_to_old_preserving_mark(handle)?;
+                    } else {
+                        heap.promote_to_old(handle)?;
+                    }
                     promoted.push(handle);
                     continue;
                 }
@@ -990,7 +994,10 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
                         self.begin_relocation_selection()?;
                     }
                 }
-                RuntimePhase::ConcurrentSelectRelocationSet => self.begin_relocation()?,
+                RuntimePhase::ConcurrentSelectRelocationSet => {
+                    self.finalize_dead_candidates()?;
+                    self.begin_relocation()?;
+                }
                 RuntimePhase::ConcurrentRelocate => {
                     self.shared.state.lock().phase = RuntimePhase::EpochReclaim;
                 }
@@ -1216,7 +1223,9 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
         let mut route = |encoded: i64| {
             let encoded = value::strip_gc_color(encoded);
             if value::is_heap_reference(encoded)
-                && heap.handle_generation(value::decode_handle(encoded)).is_some()
+                && heap
+                    .handle_generation(value::decode_handle(encoded))
+                    .is_some()
             {
                 if let Some(generation) = heap.handle_generation(value::decode_handle(encoded)) {
                     if main_generation.is_some_and(|mark| mark.includes(generation)) {
@@ -1344,7 +1353,6 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
         }
         Ok(())
     }
-
     fn finalize_dead_candidates(&self) -> Result<(), GenerationalZgcError> {
         let generation = self.shared.state.lock().generation;
         let mut candidates = self.shared.state.lock().retired_handles.clone();
@@ -1362,7 +1370,8 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
             let Some(object_generation) = heap.handle_generation(handle) else {
                 continue;
             };
-            if heap.is_marked_handle(handle, object_generation)? {
+            let marked = heap.is_marked_handle(handle, object_generation)?;
+            if marked {
                 continue;
             }
             freed_bytes = freed_bytes.saturating_add(heap.retire_handle(handle)?);

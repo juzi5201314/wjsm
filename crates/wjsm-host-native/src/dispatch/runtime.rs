@@ -1208,7 +1208,8 @@ pub(super) fn get_property_with_receiver(
         .typed_arrays
         .contains_key(&value::decode_handle(object))
     {
-        let property_name = state.string_owned(key)
+        let property_name = state
+            .string_owned(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
         if property_name == "buffer"
@@ -1238,7 +1239,8 @@ pub(super) fn get_property_with_receiver(
         .contains_key(&value::decode_handle(object))
         || state.data_views.contains_key(&value::decode_handle(object))
     {
-        let property_name = state.string_owned(key)
+        let property_name = state
+            .string_owned(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
         if state
@@ -1269,7 +1271,8 @@ pub(super) fn get_property_with_receiver(
         .shared_array_buffers
         .get(&value::decode_handle(object))
     {
-        let property_name = state.string_owned(key)
+        let property_name = state
+            .string_owned(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
         let builtin = match property_name.as_str() {
@@ -1726,7 +1729,8 @@ pub(super) fn iterator_done(
         super::super::NativeIteratorSource::ArrayLike(source) => {
             iterator.index >= array_like_length(state, source).unwrap_or(0)
         }
-        super::super::NativeIteratorSource::String(source) => state.string_owned(source)
+        super::super::NativeIteratorSource::String(source) => state
+            .string_owned(source)
             .is_none_or(|text| iterator.index as usize >= text.utf16_len()),
         super::super::NativeIteratorSource::TypedArray(source) => state
             .typed_arrays
@@ -1804,9 +1808,9 @@ pub(super) fn iterator_value(
             else {
                 return value::encode_undefined();
             };
-            let Some(units) = state.with_string_units(source, |units| {
-                units[index..index + width].to_vec()
-            }) else {
+            let Some(units) =
+                state.with_string_units(source, |units| units[index..index + width].to_vec())
+            else {
                 return fail_dispatch(ctx);
             };
             let Some(result) = state.intern_runtime_string(
@@ -2364,7 +2368,8 @@ fn primitive_to_runtime_string(
         ));
     }
     if value::is_string(primitive) || value::is_bigint(primitive) {
-        return state.string_owned(primitive)
+        return state
+            .string_owned(primitive)
             .ok_or_else(|| fail_dispatch(ctx));
     }
     // number 是字符串拼接里最热的来源，直连整数快路径而非绕道 `String`。
@@ -2525,7 +2530,9 @@ pub(super) fn abstract_equal(
             .is_some_and(|(left, right)| left == right));
     }
     if value::is_bigint(left) && value::is_string(right) {
-        let right = state.string_owned(right).and_then(|text| text.to_utf8())
+        let right = state
+            .string_owned(right)
+            .and_then(|text| text.to_utf8())
             .and_then(|text| text.trim().parse::<BigInt>().ok());
         return Ok(super::bigint::read(state, left)
             .zip(right)
@@ -2665,7 +2672,9 @@ pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
     } else if value::is_bool(encoded) {
         value::decode_bool(encoded).to_string()
     } else if value::is_string(encoded) || value::is_bigint(encoded) {
-        state.string_owned(encoded).map(|text| text.to_utf8_lossy())
+        state
+            .string_owned(encoded)
+            .map(|text| text.to_utf8_lossy())
             .unwrap_or_default()
     } else if value::is_regexp(encoded) {
         state.regexp(encoded).map_or_else(String::new, |regexp| {
@@ -2686,11 +2695,13 @@ pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
     {
         let name = state
             .property_value_by_name(encoded, "name")
-            .and_then(|name| state.string_owned(name)).map(|text| text.to_utf8_lossy())
+            .and_then(|name| state.string_owned(name))
+            .map(|text| text.to_utf8_lossy())
             .unwrap_or_else(|| "Error".into());
         let message = state
             .property_value_by_name(encoded, "message")
-            .and_then(|message| state.string_owned(message)).map(|text| text.to_utf8_lossy())
+            .and_then(|message| state.string_owned(message))
+            .map(|text| text.to_utf8_lossy())
             .unwrap_or_default();
         if name.is_empty() {
             message
