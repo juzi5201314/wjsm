@@ -13,7 +13,6 @@
 #[derive(Clone, Copy)]
 pub enum StrView<'a> {
     /// 单字节载荷。
-
     Latin1(&'a [u8]),
     /// 双字节小端载荷。
     Utf16(&'a [u16]),
@@ -32,7 +31,6 @@ impl<'a> StrView<'a> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
 
     /// 读第 `index` 个码元；越界返回 `None`。
     pub fn unit(&self, index: usize) -> Option<u16> {

@@ -8,6 +8,8 @@
 //! roots、safepoint 与 native frame 的接合由 `wjsm-host-native` 负责；本 crate
 //! 只消费后端无关的 `RootSnapshot` 与 `HeapMemory`。
 
+pub mod backoff;
+
 pub mod api;
 
 pub mod g1;
@@ -46,13 +48,13 @@ pub use heap::{
 pub use heap_access::{
     CollectorHeapCapability, HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property,
 };
-pub use string_view::StrView;
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
 pub use property_key::PropertyKey;
 pub use registry::GcAlgorithmKind;
 pub use shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot, ShapeTransition};
 pub use stop_the_world::{RuntimeGcReport, StopTheWorldCollector, StopTheWorldCollectorError};
+pub use string_view::StrView;
 pub use telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,
 };

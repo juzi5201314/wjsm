@@ -16,6 +16,7 @@ use wjsm_artifact_format::{
 use wjsm_backend_native::cache::{NativeCacheError, NativeImageRepository};
 use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver};
+use wjsm_gc::backoff::Backoff;
 use wjsm_gc::heap_access::{object_payload_bytes, string_payload_bytes};
 use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey, StrView};
 use wjsm_host::{RuntimeString, content_hash_units};
@@ -4465,9 +4466,10 @@ impl NativeAgentState {
         self.intl.slots.retain(|handle, _| is_live(handle));
     }
     fn drain_gc_cycle(&mut self, ctx: &NativeVmContext) -> Result<(), NativeRuntimeError> {
+        let mut backoff = Backoff::new();
         while self.gc.cycle_active() {
             self.poll_gc(ctx)?;
-            std::thread::yield_now();
+            backoff.wait();
         }
         Ok(())
     }

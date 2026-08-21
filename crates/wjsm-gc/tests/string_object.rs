@@ -31,7 +31,10 @@ fn allocate<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, bytes: u64) -> u64 {
 fn publish_utf16<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, units: &[u16]) -> u32 {
     let handle = heap.allocate_handle().unwrap();
     let capacity = units.len().next_multiple_of(4) as u32 * 2;
-    let object = allocate(heap, constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64);
+    let object = allocate(
+        heap,
+        constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64,
+    );
     heap.publish_string(
         handle,
         object,
@@ -53,7 +56,10 @@ fn publish_utf16<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, units: &[u16]) -
 fn publish_latin1<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, bytes: &[u8]) -> u32 {
     let handle = heap.allocate_handle().unwrap();
     let capacity = bytes.len().next_multiple_of(8) as u32;
-    let object = allocate(heap, constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64);
+    let object = allocate(
+        heap,
+        constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64,
+    );
     heap.publish_string(
         handle,
         object,
@@ -71,7 +77,10 @@ fn publish_latin1<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, bytes: &[u8]) -
 /// 发布一个 Builder 字符串（Utf16 载荷），初始容量给定。
 fn publish_builder(heap: &HeapAccessV2<TestHeapMemory>, capacity: u32) -> u32 {
     let handle = heap.allocate_handle().unwrap();
-    let object = allocate(heap, constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64);
+    let object = allocate(
+        heap,
+        constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64,
+    );
     heap.publish_string(
         handle,
         object,
@@ -225,7 +234,8 @@ fn cons_children_survive_relocation_and_scan() {
 
     // scan_references 产出两个子句柄（以及 prototype；本测试 proto 为哨兵，不产出）。
     let mut references = Vec::new();
-    heap.scan_references(handle, |encoded| references.push(encoded)).unwrap();
+    heap.scan_references(handle, |encoded| references.push(encoded))
+        .unwrap();
     let mut children: Vec<u32> = references
         .iter()
         .map(|value| {
@@ -249,8 +259,7 @@ fn cons_children_survive_relocation_and_scan() {
     assert_eq!(heap.cons_children(handle).unwrap(), Some((left, right)));
     assert_eq!(
         heap.object_size(handle).unwrap(),
-        constants::HEAP_STRING_HEADER_SIZE as u64
-            + constants::HEAP_STRING_CONS_PAYLOAD_SIZE as u64
+        constants::HEAP_STRING_HEADER_SIZE as u64 + constants::HEAP_STRING_CONS_PAYLOAD_SIZE as u64
     );
 }
 
@@ -262,7 +271,8 @@ fn slice_parts_survive_relocation() {
     let handle = heap.allocate_handle().unwrap();
     let object = allocate(
         &heap,
-        constants::HEAP_STRING_HEADER_SIZE as u64 + constants::HEAP_STRING_SLICE_PAYLOAD_SIZE as u64,
+        constants::HEAP_STRING_HEADER_SIZE as u64
+            + constants::HEAP_STRING_SLICE_PAYLOAD_SIZE as u64,
     );
     heap.publish_string(
         handle,
@@ -279,7 +289,8 @@ fn slice_parts_survive_relocation() {
 
     // scan_references 产出 base 句柄。
     let mut references = Vec::new();
-    heap.scan_references(handle, |encoded| references.push(encoded)).unwrap();
+    heap.scan_references(handle, |encoded| references.push(encoded))
+        .unwrap();
     let decoded: Vec<u32> = references
         .iter()
         .map(|value| {
@@ -404,10 +415,18 @@ fn with_string_units_reads_utf16_and_latin1() {
     let utf16 = publish_utf16(&heap, &utf16_units);
     let latin1 = publish_latin1(&heap, b"latin1\xff");
 
-    assert_eq!(heap.with_string_units(utf16, |units| units.to_vec()).unwrap(), utf16_units);
     assert_eq!(
-        heap.with_string_units(latin1, |units| units.to_vec()).unwrap(),
-        b"latin1\xff".iter().map(|&byte| u16::from(byte)).collect::<Vec<_>>()
+        heap.with_string_units(utf16, |units| units.to_vec())
+            .unwrap(),
+        utf16_units
+    );
+    assert_eq!(
+        heap.with_string_units(latin1, |units| units.to_vec())
+            .unwrap(),
+        b"latin1\xff"
+            .iter()
+            .map(|&byte| u16::from(byte))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -425,13 +444,8 @@ fn with_string_bytes_reads_latin1_on_copy_and_native_views() {
     let layout = Arc::new(ManagedHeapLayout::new(HEAP_BYTES, 64 * 1024).unwrap());
     let memory = NativeHeapMemory::for_layout(&layout).unwrap();
     let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
-    let native_heap = HeapAccessV2::with_handles(
-        memory,
-        layout,
-        handles,
-        HeapBarrier::Disabled,
-    )
-    .unwrap();
+    let native_heap =
+        HeapAccessV2::with_handles(memory, layout, handles, HeapBarrier::Disabled).unwrap();
     let native_handle = publish_latin1(&native_heap, b"native path");
     assert_eq!(
         native_heap

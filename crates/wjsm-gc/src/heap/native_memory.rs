@@ -168,7 +168,6 @@ impl HeapMemory for NativeHeapMemory {
         Some(unsafe { std::slice::from_raw_parts(self.inner.virtual_base.add(offset), length) })
     }
 
-
     fn copy_nonoverlapping_unpublished(
         &self,
         source: HeapAddress,

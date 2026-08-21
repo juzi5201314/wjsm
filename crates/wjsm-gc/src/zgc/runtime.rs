@@ -963,6 +963,7 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
         &self,
         roots: RootSnapshot,
     ) -> Result<RuntimeGcReport, GenerationalZgcError> {
+        let mut backoff = crate::backoff::Backoff::new();
         loop {
             let idle = self.shared.state.lock().phase == RuntimePhase::Idle
                 && !self.shared.old.lock().active;
@@ -977,7 +978,7 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
                 | GcSafepointAction::FinishCycle => None,
             };
             let _ = self.at_safepoint(roots)?;
-            std::thread::yield_now();
+            backoff.wait();
         }
         self.begin_mark(MarkGeneration::Full, roots)?;
         loop {
