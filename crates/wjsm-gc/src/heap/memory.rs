@@ -15,6 +15,10 @@ pub trait HeapMemory: Send + Sync {
     fn store_word(&self, address: HeapAddress, value: u64) -> Result<(), HeapMemoryError>;
     fn copy_from(&self, address: HeapAddress, bytes: &[u8]) -> Result<(), HeapMemoryError>;
     fn copy_to(&self, address: HeapAddress, length: u64) -> Result<Vec<u8>, HeapMemoryError>;
+    /// 借读已提交堆内存区间；后端不支持零拷贝视图时返回 `None`。
+    fn try_bytes(&self, _address: HeapAddress, _length: u64) -> Option<&[u8]> {
+        None
+    }
 
     /// 复制两个不重叠、尚未 publish 的范围；调用方保证期间没有并发访问。
     fn copy_nonoverlapping_unpublished(

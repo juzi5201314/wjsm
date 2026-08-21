@@ -119,7 +119,7 @@ fn server_listen(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
         .map_or(0, |port| port as u16);
     let host = args
         .get(1)
-        .and_then(|host| state.string(*host))
+        .and_then(|host| state.string_owned(*host))
         .and_then(|host| host.to_utf8())
         .unwrap_or_else(|| "127.0.0.1".into());
     let result = TcpListener::bind((host.as_str(), port)).and_then(|listener| {
@@ -241,7 +241,7 @@ fn connect(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         .map_or(0, |port| port as u16);
     let host = args
         .get(1)
-        .and_then(|host| state.string(*host))
+        .and_then(|host| state.string_owned(*host))
         .and_then(|host| host.to_utf8())
         .unwrap_or_else(|| "127.0.0.1".into());
     match TcpStream::connect((host.as_str(), port)) {
@@ -293,8 +293,7 @@ fn write(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     };
     let input = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let bytes = super::node_buffer::bytes(state, input).unwrap_or_else(|| {
-        state
-            .string(input)
+        state.string_owned(input)
             .and_then(|text| text.to_utf8())
             .unwrap_or_else(|| render_value(state, input))
             .into_bytes()

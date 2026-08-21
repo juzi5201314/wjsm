@@ -20,6 +20,8 @@ pub mod stop_the_world;
 pub mod telemetry;
 pub mod zgc;
 
+pub mod string_view;
+
 pub mod collector_context;
 pub mod control;
 pub mod cpu_time;
@@ -44,6 +46,7 @@ pub use heap::{
 pub use heap_access::{
     CollectorHeapCapability, HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property,
 };
+pub use string_view::StrView;
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;
 pub use property_key::PropertyKey;

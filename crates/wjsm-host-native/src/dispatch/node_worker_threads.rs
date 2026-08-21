@@ -843,7 +843,7 @@ fn receive_message_on_port(
 fn create_worker(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let filename = args
         .first()
-        .and_then(|filename| state.string(*filename))
+        .and_then(|filename| state.string_owned(*filename))
         .and_then(|filename| filename.to_utf8())
         .unwrap_or_else(|| {
             args.first()

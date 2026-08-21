@@ -7,7 +7,7 @@ use super::runtime::{
     PrimitiveHint, fail_dispatch, range_error, render_value, to_number, to_primitive,
     to_string_coerced, to_uint32, type_error,
 };
-use crate::{NativeAgentState, StringSlot};
+use crate::NativeAgentState;
 
 pub(super) fn dispatch_string(
     ctx: &mut NativeVmContext,
@@ -93,7 +93,7 @@ fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         return type_error(ctx, state, "Cannot convert a Symbol value to a string");
     }
     let text = if value::is_string(primitive) {
-        let Some(text) = state.string(primitive).cloned() else {
+        let Some(text) = state.string_owned(primitive) else {
             return fail_dispatch(ctx);
         };
         text
@@ -115,28 +115,29 @@ fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
 }
 
 fn runtime_string(state: &NativeAgentState, value: i64) -> Option<RuntimeString> {
-    borrow_runtime_string(state, value).map(|cow| cow.into_owned())
-}
-
-fn borrow_runtime_string<'a>(
-    state: &'a NativeAgentState,
-    value: i64,
-) -> Option<std::borrow::Cow<'a, RuntimeString>> {
-    if value::is_string(value) {
-        state.string(value).map(std::borrow::Cow::Borrowed)
+    if value::is_string(value) || value::is_bigint(value) {
+        state.string_owned(value)
     } else if value::is_symbol(value) {
         None
     } else {
-        Some(std::borrow::Cow::Owned(RuntimeString::from(render_value(
-            state, value,
-        ))))
+        Some(RuntimeString::from(render_value(state, value)))
     }
 }
 
 fn intern(ctx: &mut NativeVmContext, state: &mut NativeAgentState, string: RuntimeString) -> i64 {
-    state
-        .intern_runtime_string(string, value::TAG_STRING)
-        .unwrap_or_else(|| fail_dispatch(ctx))
+    if let Some(encoded) = state.intern_runtime_string(string.clone(), value::TAG_STRING) {
+        return encoded;
+    }
+    if state.collect_garbage(ctx).is_ok() {
+        let _ = state.gc.heap().finish_relocation_epoch();
+        for _ in 0..8 {
+            let _ = state.gc.heap().advance_epoch_and_reclaim();
+        }
+        if let Some(encoded) = state.intern_runtime_string(string, value::TAG_STRING) {
+            return encoded;
+        }
+    }
+    fail_dispatch(ctx)
 }
 
 fn integer(state: &NativeAgentState, value: Option<i64>, default: i64) -> Option<i64> {
@@ -158,22 +159,22 @@ fn integer(state: &NativeAgentState, value: Option<i64>, default: i64) -> Option
 fn receiver(state: &NativeAgentState, args: &[i64]) -> Option<RuntimeString> {
     runtime_string(state, *args.first()?)
 }
-
 fn string_at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) = receiver(state, args) else {
+    let Some(encoded) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
     let Some(mut index) = integer(state, args.get(1).copied(), 0) else {
         return fail_dispatch(ctx);
     };
-    let length = text.utf16_len() as i64;
+    let length = state.string_len(encoded).unwrap_or(0) as i64;
     if index < 0 {
         index += length;
     }
     let Ok(index) = usize::try_from(index) else {
         return value::encode_undefined();
     };
-    text.code_unit_at(index)
+    state
+        .string_code_unit(encoded, index)
         .map(RuntimeString::from_utf16_code_unit)
         .map(|result| intern(ctx, state, result))
         .unwrap_or_else(value::encode_undefined)
@@ -234,7 +235,7 @@ enum BuilderPart {
 impl BuilderPart {
     fn from_value(state: &NativeAgentState, encoded: i64) -> Option<Self> {
         if value::is_string(encoded) || value::is_bigint(encoded) {
-            state.string(encoded).cloned().map(Self::String)
+            state.string_owned(encoded).map(Self::String)
         } else if value::is_f64(encoded) {
             Some(Self::Number(value::decode_f64(encoded)))
         } else if value::is_bool(encoded) {
@@ -268,58 +269,47 @@ impl BuilderPart {
         }
     }
 }
-#[derive(Clone, Copy)]
-enum DirectBuilderPart {
-    Number(f64),
-    Static(&'static str),
-    String(usize),
-}
-
-impl DirectBuilderPart {
-    fn from_value(state: &NativeAgentState, encoded: i64) -> Option<Self> {
-        if value::is_string(encoded) || value::is_bigint(encoded) {
-            let index = usize::try_from(value::decode_handle(encoded)).ok()?;
-            state.strings.get(index)?;
-            Some(Self::String(index))
-        } else if value::is_f64(encoded) {
-            Some(Self::Number(value::decode_f64(encoded)))
-        } else if value::is_bool(encoded) {
-            Some(Self::Static(if value::decode_bool(encoded) {
-                "true"
-            } else {
-                "false"
-            }))
-        } else if value::is_null(encoded) {
-            Some(Self::Static("null"))
-        } else if value::is_undefined(encoded) {
-            Some(Self::Static("undefined"))
-        } else {
-            None
+fn append_builder_parts(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    current: i64,
+    parts: &[BuilderPart],
+) -> Option<()> {
+    if !state.string_is_builder(current) {
+        return None;
+    }
+    let mut units = state.with_string_units(current, |units| units.to_vec())?;
+    let added = parts.iter().map(BuilderPart::capacity).sum::<usize>();
+    let needed = units.len().checked_add(added)?;
+    let byte_capacity = u32::try_from(needed.checked_mul(2)?.checked_add(7)? & !7).ok()?;
+    let handle = value::decode_handle(current);
+    if state.gc.heap().string_capacity(handle).ok()? < byte_capacity
+        && state.gc.heap().grow_string_capacity(handle, byte_capacity).is_err()
+    {
+        state.collect_garbage(ctx).ok()?;
+        state.gc.heap().grow_string_capacity(handle, byte_capacity).ok()?;
+    }
+    for part in parts {
+        match part {
+            BuilderPart::Number(number) => {
+                let text = RuntimeString::from_number(*number);
+                units.extend_from_slice(text.as_flat_slice());
+            }
+            BuilderPart::Static(text) => units.extend(text.encode_utf16()),
+            BuilderPart::String(text) => units.extend_from_slice(text.as_flat_slice()),
         }
     }
-
-    fn append_to(
-        self,
-        strings: &mut [StringSlot],
-        builder_index: usize,
-        aliased_builder: Option<&RuntimeString>,
-    ) -> bool {
-        match self {
-            Self::Number(number) => strings[builder_index].text.append_builder_number(number),
-            Self::Static(text) => strings[builder_index].text.append_builder_utf8(text),
-            Self::String(part_index) if part_index == builder_index => {
-                aliased_builder.is_some_and(|part| strings[builder_index].text.append_builder(part))
-            }
-            Self::String(part_index) if builder_index < part_index => {
-                let (left, right) = strings.split_at_mut(part_index);
-                left[builder_index].text.append_builder(&right[0].text)
-            }
-            Self::String(part_index) => {
-                let (left, right) = strings.split_at_mut(builder_index);
-                right[0].text.append_builder(&left[part_index].text)
-            }
-        }
+    let mut bytes = Vec::with_capacity(units.len() * 2);
+    for unit in units.iter().copied() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
     }
+    state.gc.heap().write_string_payload(handle, 0, &bytes).ok()?;
+    state
+        .gc
+        .heap()
+        .set_string_length(handle, u32::try_from(units.len()).ok()?)
+        .ok()?;
+    Some(())
 }
 
 pub(super) fn string_builder_append_direct(
@@ -329,29 +319,7 @@ pub(super) fn string_builder_append_direct(
     first: i64,
     second: i64,
 ) -> i64 {
-    let is_builder = state.string(current).is_some_and(RuntimeString::is_builder);
-    if !is_builder {
-        return string_builder_append(ctx, state, &[current, first, second]);
-    }
-    let Some(builder_index) = usize::try_from(value::decode_handle(current)).ok() else {
-        return fail_dispatch(ctx);
-    };
-    let (Some(first), Some(second)) = (
-        DirectBuilderPart::from_value(state, first),
-        DirectBuilderPart::from_value(state, second),
-    ) else {
-        return fail_dispatch(ctx);
-    };
-    let aliased_builder = matches!(first, DirectBuilderPart::String(index) if index == builder_index)
-        || matches!(second, DirectBuilderPart::String(index) if index == builder_index);
-    let aliased_builder = aliased_builder.then(|| state.strings[builder_index].text.clone());
-    if first.append_to(&mut state.strings, builder_index, aliased_builder.as_ref())
-        && second.append_to(&mut state.strings, builder_index, aliased_builder.as_ref())
-    {
-        current
-    } else {
-        fail_dispatch(ctx)
-    }
+    string_builder_append(ctx, state, &[current, first, second])
 }
 
 pub(super) fn string_builder_append_number_direct(
@@ -361,38 +329,7 @@ pub(super) fn string_builder_append_number_direct(
     first: i64,
     second: f64,
 ) -> i64 {
-    if !state.string(current).is_some_and(RuntimeString::is_builder) {
-        return string_builder_append(ctx, state, &[current, first, value::encode_f64(second)]);
-    }
-    let (Some(builder_index), Some(part_index)) = (
-        usize::try_from(value::decode_handle(current)).ok(),
-        (value::is_string(first) || value::is_bigint(first))
-            .then(|| value::decode_handle(first))
-            .and_then(|handle| usize::try_from(handle).ok()),
-    ) else {
-        return fail_dispatch(ctx);
-    };
-    let appended = if builder_index == part_index {
-        let part = state.strings[part_index].text.clone();
-        state.strings[builder_index]
-            .text
-            .append_builder_string_number(&part, second)
-    } else if builder_index < part_index {
-        let (left, right) = state.strings.split_at_mut(part_index);
-        left[builder_index]
-            .text
-            .append_builder_string_number(&right[0].text, second)
-    } else {
-        let (left, right) = state.strings.split_at_mut(builder_index);
-        right[0]
-            .text
-            .append_builder_string_number(&left[part_index].text, second)
-    };
-    if appended {
-        current
-    } else {
-        fail_dispatch(ctx)
-    }
+    string_builder_append(ctx, state, &[current, first, value::encode_f64(second)])
 }
 
 pub(super) fn string_builder_append(
@@ -403,40 +340,45 @@ pub(super) fn string_builder_append(
     let Some((current, rest)) = args.split_first() else {
         return fail_dispatch(ctx);
     };
-    let is_builder = state
-        .string(*current)
-        .is_some_and(RuntimeString::is_builder);
-    let prefix = (!is_builder)
-        .then(|| BuilderPart::from_value(state, *current))
-        .flatten();
-    if !is_builder && prefix.is_none() {
-        return fail_dispatch(ctx);
+    let is_builder = state.string_is_builder(*current);
+    if is_builder {
+        let mut parts = SmallVec::<[BuilderPart; 4]>::new();
+        for encoded in rest {
+            let Some(part) = BuilderPart::from_value(state, *encoded) else {
+                return fail_dispatch(ctx);
+            };
+            parts.push(part);
+        }
+        if append_builder_parts(ctx, state, *current, &parts).is_some() {
+            return *current;
+        }
+        let Some(mut rebuilt) = state.string_owned(*current) else {
+            return fail_dispatch(ctx);
+        };
+        for part in &parts {
+            if !part.append_to(&mut rebuilt) {
+                return fail_dispatch(ctx);
+            }
+        }
+        return intern(ctx, state, rebuilt);
     }
-    let mut suffix = SmallVec::<[BuilderPart; 4]>::new();
+    let Some(prefix) = BuilderPart::from_value(state, *current) else {
+        return fail_dispatch(ctx);
+    };
+    let mut parts = SmallVec::<[BuilderPart; 4]>::new();
+    parts.push(prefix);
     for encoded in rest {
         let Some(part) = BuilderPart::from_value(state, *encoded) else {
             return fail_dispatch(ctx);
         };
-        suffix.push(part);
+        parts.push(part);
     }
-
-    if is_builder {
-        let Some(builder) = state.string_mut(*current) else {
-            return fail_dispatch(ctx);
-        };
-        if suffix.iter().all(|part| part.append_to(builder)) {
-            return *current;
-        }
-        return fail_dispatch(ctx);
-    }
-
-    let prefix = prefix.expect("non-builder path validates the prefix");
-    let capacity = suffix.iter().fold(prefix.capacity(), |capacity, part| {
-        capacity.saturating_add(part.capacity())
-    });
+    let capacity = parts.iter().map(BuilderPart::capacity).sum();
     let mut builder = RuntimeString::builder(capacity);
-    if !prefix.append_to(&mut builder) || !suffix.iter().all(|part| part.append_to(&mut builder)) {
-        return fail_dispatch(ctx);
+    for part in &parts {
+        if !part.append_to(&mut builder) {
+            return fail_dispatch(ctx);
+        }
     }
     intern(ctx, state, builder)
 }
@@ -449,11 +391,24 @@ pub(super) fn string_builder_finish(
     let [encoded] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(string) = state.string_mut(*encoded) else {
+    if !value::is_string(*encoded) {
+        return fail_dispatch(ctx);
+    }
+    let handle = value::decode_handle(*encoded);
+    let Ok(repr) = state.gc.heap().string_repr(handle) else {
         return fail_dispatch(ctx);
     };
-    string.finish_builder();
-    *encoded
+    if repr == wjsm_ir::constants::STRING_REPR_UTF16_FLAT {
+        return *encoded;
+    }
+    if repr != wjsm_ir::constants::STRING_REPR_BUILDER {
+        return fail_dispatch(ctx);
+    }
+    state
+        .gc
+        .heap()
+        .set_string_repr(handle, wjsm_ir::constants::STRING_REPR_UTF16_FLAT)
+        .map_or_else(|_| fail_dispatch(ctx), |_| *encoded)
 }
 
 fn string_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -609,7 +564,7 @@ fn string_repeat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 
 fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(text) =
-        borrow_runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
+        runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
     else {
         return fail_dispatch(ctx);
     };
@@ -632,7 +587,7 @@ fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
 
 fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(text) =
-        borrow_runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
+        runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
     else {
         return fail_dispatch(ctx);
     };

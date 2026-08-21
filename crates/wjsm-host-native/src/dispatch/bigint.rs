@@ -55,7 +55,7 @@ pub(super) fn read(state: &NativeAgentState, encoded: i64) -> Option<BigInt> {
     if !value::is_bigint(encoded) {
         return None;
     }
-    state.string(encoded)?.to_utf8()?.parse().ok()
+    state.string_owned(encoded)?.to_utf8()?.parse().ok()
 }
 fn proto_to_string(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(receiver) = args.first().copied() else {
@@ -116,9 +116,7 @@ fn from_value(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     } else if value::is_bool(input) {
         Some(BigInt::from(u8::from(value::decode_bool(input))))
     } else if value::is_string(input) {
-        state
-            .string(input)
-            .and_then(wjsm_host::RuntimeString::to_utf8)
+        state.string_owned(input).and_then(|text| text.to_utf8())
             .and_then(|text| text.trim().parse().ok())
     } else {
         None

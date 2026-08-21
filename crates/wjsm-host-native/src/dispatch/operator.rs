@@ -205,10 +205,9 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
 
 fn abstract_compare(state: &NativeAgentState, left: i64, right: i64) -> Option<Ordering> {
     if value::is_string(left) && value::is_string(right) {
-        return state
-            .string(left)?
-            .as_flat_slice()
-            .partial_cmp(state.string(right)?.as_flat_slice());
+        let left = state.with_string_units(left, |units| units.to_vec())?;
+        let right = state.with_string_units(right, |units| units.to_vec())?;
+        return Some(left.cmp(&right));
     }
     match (value::is_bigint(left), value::is_bigint(right)) {
         (true, true) => bigint_compare(state, left, right),

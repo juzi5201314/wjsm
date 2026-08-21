@@ -373,7 +373,7 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
         self.enqueue_snapshot_edges(encoded)?;
         let heap = self.heap.read();
         let generation = self.state.lock().generation;
-        if value::is_object(encoded) || value::is_array(encoded) {
+        if value::is_heap_reference(encoded) && heap.handle_generation(handle).is_some() {
             let Some(object_generation) = heap.handle_generation(handle) else {
                 return Ok(());
             };
@@ -403,6 +403,9 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
                 }
             })?;
             return Ok(());
+        }
+        if value::is_string(encoded) || value::is_bigint(encoded) {
+            self.state.lock().live_host_values.insert(encoded);
         }
         drop(heap);
         Ok(())
@@ -436,15 +439,11 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
 
     fn value_is_live(&self, encoded: i64) -> Result<bool, GenerationalZgcError> {
         let encoded = value::strip_gc_color(encoded);
-        if !value::is_handle_backed_reference(encoded) {
-            return Ok(true);
-        }
-        if value::is_object(encoded) || value::is_array(encoded) {
+        if value::is_heap_reference(encoded) {
             let heap = self.heap.read();
             let handle = value::decode_handle(encoded);
-
             let Some(generation) = heap.handle_generation(handle) else {
-                return Ok(false);
+                return Ok(self.state.lock().live_host_values.contains(&encoded));
             };
             return heap
                 .is_marked_handle(handle, generation)
@@ -459,16 +458,19 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
             (state.phase == RuntimePhase::ConcurrentMark).then_some(state.generation)
         };
         let old_active = self.old.lock().active;
-        if value::is_object(encoded) || value::is_array(encoded) {
-            if let Some(generation) = heap.handle_generation(value::decode_handle(encoded)) {
-                if main_generation.is_some_and(|mark| mark.includes(generation)) {
-                    self.state.lock().pending.push_back(encoded);
-                }
-                if old_active && generation == HandleGeneration::Old {
-                    self.old.lock().pending.push_back(encoded);
-                }
+        if value::is_heap_reference(encoded)
+            && let Some(generation) = heap.handle_generation(value::decode_handle(encoded))
+        {
+            if main_generation.is_some_and(|mark| mark.includes(generation)) {
+                self.state.lock().pending.push_back(encoded);
             }
-        } else if value::is_handle_backed_reference(encoded) {
+            if old_active && generation == HandleGeneration::Old {
+                self.old.lock().pending.push_back(encoded);
+            }
+        } else if value::is_handle_backed_reference(encoded)
+            && !value::is_string(encoded)
+            && !value::is_bigint(encoded)
+        {
             if main_generation.is_some() {
                 self.state.lock().pending.push_back(encoded);
             }
@@ -558,8 +560,10 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
         }
         let handle = value::decode_handle(encoded);
         let heap = self.heap.read();
-        if value::is_object(encoded) || value::is_array(encoded) {
+        if value::is_heap_reference(encoded) {
             let Some(generation) = heap.handle_generation(handle) else {
+                drop(heap);
+                self.old.lock().live_host_values.insert(encoded);
                 return Ok(());
             };
             if generation == HandleGeneration::Young {
@@ -590,7 +594,6 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
             return Ok(());
         }
         drop(heap);
-
         let snapshot = {
             let mut old = self.old.lock();
             if !old.live_host_values.insert(encoded) {
@@ -639,7 +642,7 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
         if !value::is_handle_backed_reference(encoded) {
             return Ok(true);
         }
-        if value::is_object(encoded) || value::is_array(encoded) {
+        if value::is_heap_reference(encoded) {
             let heap = self.heap.read();
             let handle = value::decode_handle(encoded);
             return match heap.handle_generation(handle) {
@@ -649,7 +652,7 @@ impl<M: GrowableHeapMemory> RuntimeShared<M> {
                 Some(HandleGeneration::Old) => heap
                     .is_marked_handle(handle, HandleGeneration::Old)
                     .map_err(GenerationalZgcError::Heap),
-                None => Ok(false),
+                None => Ok(self.old.lock().live_host_values.contains(&encoded)),
             };
         }
         Ok(self.old.lock().live_host_values.contains(&encoded))
@@ -785,7 +788,14 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
             if !value::is_handle_backed_reference(encoded) {
                 continue;
             }
-            if value::is_object(encoded) || value::is_array(encoded) {
+            let is_heap = value::is_heap_reference(encoded)
+                && self
+                    .shared
+                    .heap
+                    .read()
+                    .handle_generation(value::decode_handle(encoded))
+                    .is_some();
+            if is_heap {
                 self.shared.state.lock().pending.push_back(encoded);
             } else {
                 self.shared.state.lock().live_host_values.insert(encoded);
@@ -1205,7 +1215,9 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
         let mut remembered_owners = Vec::new();
         let mut route = |encoded: i64| {
             let encoded = value::strip_gc_color(encoded);
-            if value::is_object(encoded) || value::is_array(encoded) {
+            if value::is_heap_reference(encoded)
+                && heap.handle_generation(value::decode_handle(encoded)).is_some()
+            {
                 if let Some(generation) = heap.handle_generation(value::decode_handle(encoded)) {
                     if main_generation.is_some_and(|mark| mark.includes(generation)) {
                         main_pending.push(encoded);
@@ -1214,7 +1226,10 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
                         old_pending.push(encoded);
                     }
                 }
-            } else if value::is_handle_backed_reference(encoded) {
+            } else if value::is_handle_backed_reference(encoded)
+                && !value::is_string(encoded)
+                && !value::is_bigint(encoded)
+            {
                 if main_generation.is_some() {
                     main_pending.push(encoded);
                 }
@@ -1331,15 +1346,23 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
     }
 
     fn finalize_dead_candidates(&self) -> Result<(), GenerationalZgcError> {
-        let candidates = self.shared.state.lock().retired_handles.clone();
+        let generation = self.shared.state.lock().generation;
+        let mut candidates = self.shared.state.lock().retired_handles.clone();
         let heap = self.shared.heap.read();
+        if generation == MarkGeneration::Full {
+            for page in heap.page_stats() {
+                candidates.extend(heap.handles_in_page(page.page)?);
+            }
+            candidates.sort_unstable();
+            candidates.dedup();
+        }
         let mut retired = Vec::with_capacity(candidates.len());
         let mut freed_bytes = 0_u64;
         for handle in candidates {
-            let Some(generation) = heap.handle_generation(handle) else {
+            let Some(object_generation) = heap.handle_generation(handle) else {
                 continue;
             };
-            if heap.is_marked_handle(handle, generation)? {
+            if heap.is_marked_handle(handle, object_generation)? {
                 continue;
             }
             freed_bytes = freed_bytes.saturating_add(heap.retire_handle(handle)?);

@@ -4,6 +4,8 @@ use std::error::Error;
 use std::fmt;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use parking_lot::Mutex;
 
@@ -18,6 +20,7 @@ use crate::zgc::{
     BarrierRecord, HeaderLayout, HeapBarrier, LoadBarrierOutcome, RelocationDescriptor,
     color_stored_value, load_barrier,
 };
+use crate::StrView;
 use wjsm_ir::{constants, value};
 
 /// V2 dynamic heap 的唯一 host access owner；所有地址均为 memory64 byte offset。
@@ -30,6 +33,8 @@ pub struct HeapAccessV2<M: GrowableHeapMemory> {
     shapes: ShapeTable,
     /// 属性/数组扩容与 mutator 共享同一 bump，避免每次 reserve 都吞掉一整页。
     nlab: Mutex<Nlab>,
+    #[cfg(debug_assertions)]
+    string_read_scope: AtomicUsize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +50,16 @@ pub struct CollectorHeapCapability<'a, M: GrowableHeapMemory> {
     heap: &'a HeapAccessV2<M>,
 }
 
+
+struct StringReadScope<'a, M: GrowableHeapMemory> {
+    owner: &'a HeapAccessV2<M>,
+}
+
+impl<M: GrowableHeapMemory> Drop for StringReadScope<'_, M> {
+    fn drop(&mut self) {
+        self.owner.exit_string_read();
+    }
+}
 impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     /// 构造唯一 heap access owner；memory、allocator 与 handle table 共享同一 layout。
     pub fn with_handles(
@@ -80,11 +95,37 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             barrier,
             shapes: ShapeTable::new(),
             nlab: Mutex::new(Nlab::new()),
+            #[cfg(debug_assertions)]
+            string_read_scope: AtomicUsize::new(0),
         })
     }
 
     pub fn collector_capability(&self) -> CollectorHeapCapability<'_, M> {
         CollectorHeapCapability { heap: self }
+    }
+
+    fn enter_string_read(&self) {
+        #[cfg(debug_assertions)]
+        self.string_read_scope.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn exit_string_read(&self) {
+        #[cfg(debug_assertions)]
+        self.string_read_scope.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn string_read_scope(&self) -> StringReadScope<'_, M> {
+        self.enter_string_read();
+        StringReadScope { owner: self }
+    }
+
+    fn assert_not_in_string_read(&self) {
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            self.string_read_scope.load(Ordering::SeqCst),
+            0,
+            "with_string_* 闭包内禁止 JS 堆分配"
+        );
     }
 
     pub const fn barrier(&self) -> &HeapBarrier<M> {
@@ -97,6 +138,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
 
     /// 从 mutator 私有 NLAB 分配；命中快链不获取 allocator lock。
     pub fn allocate(&self, nlab: &mut Nlab, bytes: u64) -> Result<Allocation, HeapAccessV2Error> {
+        self.assert_not_in_string_read();
         let allocation = self.heap.allocate(nlab, bytes).map_err(|error| {
             if matches!(error, AllocatorError::OutOfPages { .. }) {
                 HeapAccessV2Error::HeapExhausted {
@@ -174,6 +216,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     pub fn allocate_handle(&self) -> Result<u32, HeapAccessV2Error> {
+        self.assert_not_in_string_read();
         self.handles
             .allocate_handle()
             .map(HandleId::get)
@@ -1036,6 +1079,30 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.store_header_word(handle, constants::HEAP_STRING_LENGTH_OFFSET, packed)
     }
 
+    /// 覆写字符串 repr 字节；Builder 完成后冻结为 UTF-16 Flat。
+    pub fn set_string_repr(&self, handle: u32, repr: u8) -> Result<(), HeapAccessV2Error> {
+        if !matches!(
+            repr,
+            constants::STRING_REPR_LATIN1_FLAT
+                | constants::STRING_REPR_UTF16_FLAT
+                | constants::STRING_REPR_BUILDER
+        ) {
+            return Err(HeapAccessV2Error::InvalidStringRepr { repr });
+        }
+        let object = self.resolve_handle(handle)?;
+        let word = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let shift = constants::HEAP_STRING_REPR_OFFSET * 8;
+        self.store_header_word(
+            handle,
+            0,
+            (word & !(0xFF_u64 << shift)) | (u64::from(repr) << shift),
+        )
+    }
+
     /// 读 payload 字节容量（header `+12`；Cons/Slice 为固定子引用区大小）。
     pub fn string_capacity(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
@@ -1063,6 +1130,94 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             ))
             .map(|word| word as u32)
             .map_err(HeapAccessV2Error::Memory)
+    }
+
+    /// 读取扁平字符串的字节视图；闭包内不得触发 JS 堆分配。
+    pub fn with_string_bytes<R>(
+        &self,
+        handle: u32,
+        f: impl FnOnce(StrView<'_>) -> R,
+    ) -> Result<R, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let repr = self.string_repr_at(object)?;
+        let length = usize::try_from(self.string_length_at(object)?)
+            .map_err(|_| HeapAccessV2Error::AddressOverflow)?;
+        let byte_length = match repr {
+            constants::STRING_REPR_LATIN1_FLAT => length,
+            constants::STRING_REPR_UTF16_FLAT | constants::STRING_REPR_BUILDER => length
+                .checked_mul(2)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?,
+            constants::STRING_REPR_CONS | constants::STRING_REPR_SLICE => {
+                return Err(HeapAccessV2Error::StringFlattenRequired { handle });
+            }
+            _ => return Err(HeapAccessV2Error::InvalidStringRepr { repr }),
+        };
+        let payload = self.string_payload_address(object)?;
+        let address = HeapAddress::new(payload);
+        if self.direct_string_access_safe()
+            && let Some(bytes) = self.heap.memory().try_bytes(address, byte_length as u64)
+        {
+            let _scope = self.string_read_scope();
+            return match repr {
+                constants::STRING_REPR_LATIN1_FLAT => Ok(f(StrView::Latin1(&bytes[..length]))),
+                constants::STRING_REPR_UTF16_FLAT | constants::STRING_REPR_BUILDER => {
+                    // SAFETY: payload 起点由 8 字节对齐的对象地址加 32 字节得到，满足
+                    // u16 对齐；byte_length 已由 length * 2 精确校验，区间在堆内。
+                    let units =
+                        unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<u16>(), length) };
+                    Ok(f(StrView::Utf16(units)))
+                }
+                _ => unreachable!("repr validated above"),
+            };
+        }
+
+        let bytes = self
+            .heap
+            .memory()
+            .copy_to(address, u64::try_from(byte_length).expect("usize always fits u64"))
+            .map_err(HeapAccessV2Error::Memory)?;
+        let _scope = self.string_read_scope();
+        match repr {
+            constants::STRING_REPR_LATIN1_FLAT => Ok(f(StrView::Latin1(&bytes[..length]))),
+            constants::STRING_REPR_UTF16_FLAT | constants::STRING_REPR_BUILDER => {
+                let (pairs, remainder) = bytes.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                let units = pairs
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair))
+                    .collect::<Vec<_>>();
+                Ok(f(StrView::Utf16(&units)))
+            }
+            _ => unreachable!("repr validated above"),
+        }
+    }
+
+    /// 读取字符串 UTF-16 码元；Latin-1 在读取作用域内展开为 owned 码元。
+    pub fn with_string_units<R>(
+        &self,
+        handle: u32,
+        f: impl FnOnce(&[u16]) -> R,
+    ) -> Result<R, HeapAccessV2Error> {
+        self.with_string_bytes(handle, |view| {
+            if let Some(units) = view.as_utf16() {
+                f(units)
+            } else {
+                let units = view.to_utf16();
+                f(&units)
+            }
+        })
+    }
+
+    fn direct_string_access_safe(&self) -> bool {
+        match &self.barrier {
+            HeapBarrier::Disabled => true,
+            HeapBarrier::Zgc(barrier) => {
+                let epoch = barrier.epoch();
+                !epoch.young_marking
+                    && !epoch.old_marking
+                    && barrier.access_epoch().is_multiple_of(2)
+            }
+        }
     }
 
     /// 读整个 payload（`capacity` 字节）；测试与宿主迁移期读取原始字节用。
@@ -2484,6 +2639,10 @@ pub enum HeapAccessV2Error {
     StringHashRequiresFlatten {
         handle: u32,
     },
+    /// Cons/Slice 不是扁平载荷，读取前必须先展平。
+    StringFlattenRequired {
+        handle: u32,
+    },
 }
 
 impl fmt::Display for HeapAccessV2Error {
@@ -2590,6 +2749,10 @@ impl fmt::Display for HeapAccessV2Error {
             Self::StringHashRequiresFlatten { handle } => write!(
                 formatter,
                 "string handle {handle} must be flattened before hashing (Cons/Slice)"
+            ),
+            Self::StringFlattenRequired { handle } => write!(
+                formatter,
+                "string handle {handle} must be flattened before reading (Cons/Slice)"
             ),
         }
     }

@@ -17,9 +17,7 @@ pub(super) fn remote_object(state: &NativeAgentState, encoded: i64) -> Value {
         return number_object(value::decode_f64(encoded));
     }
     if value::is_string(encoded) {
-        let text = state
-            .string(encoded)
-            .and_then(wjsm_host::RuntimeString::to_utf8)
+        let text = state.string_owned(encoded).and_then(|text| text.to_utf8())
             .unwrap_or_default();
         return json!({"type": "string", "value": text, "description": text});
     }
@@ -157,8 +155,7 @@ fn object_properties(state: &NativeAgentState, encoded: i64) -> Vec<Value> {
         .into_iter()
         .filter_map(|(name_id, flags)| {
             let key = PropertyKey::from_name_id(name_id);
-            let name = state
-                .string(crate::dispatch::encoded_property_key(key))?
+            let name = state.string_owned(crate::dispatch::encoded_property_key(key))?
                 .to_utf8()?;
             let property = state.gc.heap().get_property_slot(handle, key).ok()??;
             let stored = if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {

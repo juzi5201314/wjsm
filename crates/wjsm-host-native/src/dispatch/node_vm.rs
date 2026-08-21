@@ -170,8 +170,7 @@ fn create_context(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     };
     let options = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let after_evaluate = modules::named_property(state, options, "microtaskMode")
-        .and_then(|mode| state.string(mode))
-        .and_then(wjsm_host::RuntimeString::to_utf8)
+        .and_then(|mode| state.string_owned(mode)).and_then(|text| text.to_utf8())
         .is_some_and(|mode| mode == "afterEvaluate");
     let strings_enabled = context_strings_enabled(state, options);
     let context = value::decode_handle(sandbox);
@@ -204,8 +203,7 @@ fn run(
 ) -> i64 {
     let Some(source) = args
         .first()
-        .and_then(|source| state.string(*source))
-        .and_then(wjsm_host::RuntimeString::to_utf8)
+        .and_then(|source| state.string_owned(*source)).and_then(|text| text.to_utf8())
     else {
         return type_error(ctx, state, "The code argument must be a string");
     };
@@ -287,8 +285,7 @@ fn run(
 fn compile_function(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(body) = args
         .first()
-        .and_then(|body| state.string(*body))
-        .and_then(wjsm_host::RuntimeString::to_utf8)
+        .and_then(|body| state.string_owned(*body)).and_then(|text| text.to_utf8())
     else {
         return type_error(ctx, state, "The code argument must be a string");
     };
@@ -406,8 +403,7 @@ fn string_array(state: &NativeAgentState, array: i64) -> Option<Vec<String>> {
                 .ok()
                 .flatten()
                 .map(|entry| entry as i64)
-                .and_then(|entry| state.string(entry))
-                .and_then(wjsm_host::RuntimeString::to_utf8)
+                .and_then(|entry| state.string_owned(entry)).and_then(|text| text.to_utf8())
         })
         .collect()
 }

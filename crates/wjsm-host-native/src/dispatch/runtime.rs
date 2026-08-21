@@ -1141,7 +1141,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
 
 pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {
     if value::is_string(encoded) {
-        let text = state.string(encoded)?.clone();
+        let text = state.string_owned(encoded)?;
         state.intern_property_string(text)
     } else if value::is_symbol(encoded) {
         Some(PropertyKey::symbol(value::decode_handle(encoded)))
@@ -1183,7 +1183,7 @@ pub(super) fn get_property_with_receiver(
     }
     // WHATWG URL 全局：惰性加载 node:url，与模块导出共享同一构造器。
     if state.global_object == Some(object) || super::node_vm::is_context(state, object) {
-        let name = state.string(key).and_then(|text| text.to_utf8());
+        let name = state.string_owned(key).and_then(|text| text.to_utf8());
         if let Some(name) = name.as_deref()
             && matches!(name, "URL" | "URLSearchParams")
             && let Some(property) = super::modules::ensure_url_global(ctx, state, name)
@@ -1194,9 +1194,7 @@ pub(super) fn get_property_with_receiver(
     if value::is_string(object)
         && let Some(index) = array_index(state, key)
     {
-        let unit = state
-            .string(object)
-            .and_then(|text| text.code_unit_at(index as usize));
+        let unit = state.string_code_unit(object, index as usize);
         return Ok(unit
             .and_then(|unit| {
                 state.intern_runtime_string(
@@ -1210,8 +1208,7 @@ pub(super) fn get_property_with_receiver(
         .typed_arrays
         .contains_key(&value::decode_handle(object))
     {
-        let property_name = state
-            .string(key)
+        let property_name = state.string_owned(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
         if property_name == "buffer"
@@ -1241,8 +1238,7 @@ pub(super) fn get_property_with_receiver(
         .contains_key(&value::decode_handle(object))
         || state.data_views.contains_key(&value::decode_handle(object))
     {
-        let property_name = state
-            .string(key)
+        let property_name = state.string_owned(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
         if state
@@ -1273,8 +1269,7 @@ pub(super) fn get_property_with_receiver(
         .shared_array_buffers
         .get(&value::decode_handle(object))
     {
-        let property_name = state
-            .string(key)
+        let property_name = state.string_owned(key)
             .and_then(|text| text.to_utf8())
             .unwrap_or_default();
         let builtin = match property_name.as_str() {
@@ -1297,8 +1292,8 @@ pub(super) fn get_property_with_receiver(
     }
     if value::is_string(object) && state.text_matches(key, "length") {
         return state
-            .string(object)
-            .map(|text| value::encode_f64(text.utf16_len() as f64))
+            .string_len(object)
+            .map(|length| value::encode_f64(length as f64))
             .ok_or(());
     }
     if value::is_array(object) && state.text_matches(key, "length") {
@@ -1731,8 +1726,7 @@ pub(super) fn iterator_done(
         super::super::NativeIteratorSource::ArrayLike(source) => {
             iterator.index >= array_like_length(state, source).unwrap_or(0)
         }
-        super::super::NativeIteratorSource::String(source) => state
-            .string(source)
+        super::super::NativeIteratorSource::String(source) => state.string_owned(source)
             .is_none_or(|text| iterator.index as usize >= text.utf16_len()),
         super::super::NativeIteratorSource::TypedArray(source) => state
             .typed_arrays
@@ -1800,16 +1794,25 @@ pub(super) fn iterator_value(
             (result, 1)
         }
         super::super::NativeIteratorSource::String(source) => {
-            let Some(text) = state.string(source) else {
-                return fail_dispatch(ctx);
-            };
             let index = iterator.index as usize;
-            let Some(code_point) = text.code_point_at(index) else {
+            let Some(width) = state
+                .with_string_units(source, |units| {
+                    wjsm_host::code_point_at(units, index)
+                        .map(|code_point| usize::from(code_point > 0xffff) + 1)
+                })
+                .flatten()
+            else {
                 return value::encode_undefined();
             };
-            let width = usize::from(code_point > 0xffff) + 1;
-            let units = text.slice_units(index..index + width);
-            let Some(result) = state.intern_runtime_string(units, value::TAG_STRING) else {
+            let Some(units) = state.with_string_units(source, |units| {
+                units[index..index + width].to_vec()
+            }) else {
+                return fail_dispatch(ctx);
+            };
+            let Some(result) = state.intern_runtime_string(
+                wjsm_host::RuntimeString::from_utf16_units(units),
+                value::TAG_STRING,
+            ) else {
                 return fail_dispatch(ctx);
             };
             (result, width as u32)
@@ -2129,7 +2132,7 @@ pub(super) fn allocate_object_or_out_of_memory(
 
 pub(super) fn array_index(state: &NativeAgentState, encoded: i64) -> Option<u32> {
     let text = if value::is_string(encoded) || value::is_bigint(encoded) {
-        state.string(encoded)?.to_utf8()?
+        state.string_owned(encoded)?.to_utf8()?
     } else if value::is_f64(encoded) {
         render_value(state, encoded)
     } else {
@@ -2361,9 +2364,7 @@ fn primitive_to_runtime_string(
         ));
     }
     if value::is_string(primitive) || value::is_bigint(primitive) {
-        return state
-            .string(primitive)
-            .cloned()
+        return state.string_owned(primitive)
             .ok_or_else(|| fail_dispatch(ctx));
     }
     // number 是字符串拼接里最热的来源，直连整数快路径而非绕道 `String`。
@@ -2403,7 +2404,7 @@ pub(crate) fn to_number(state: &NativeAgentState, encoded: i64) -> Option<f64> {
     } else if value::is_undefined(encoded) {
         Some(f64::NAN)
     } else if value::is_string(encoded) {
-        let text = state.string(encoded)?.to_utf8_lossy();
+        let text = state.string_owned(encoded)?.to_utf8_lossy();
         let text = text.trim();
         if text.is_empty() {
             return Some(0.0);
@@ -2460,7 +2461,7 @@ pub(super) fn is_truthy(state: &NativeAgentState, encoded: i64) -> bool {
     } else if value::is_bigint(encoded) {
         super::bigint::read(state, encoded).is_some_and(|number| !number.is_zero())
     } else if value::is_string(encoded) {
-        state.string(encoded).is_some_and(|text| !text.is_empty())
+        state.string_len(encoded).is_some_and(|length| length != 0)
     } else {
         true
     }
@@ -2472,10 +2473,13 @@ pub(super) fn strict_equal(state: &NativeAgentState, left: i64, right: i64) -> b
     if value::is_f64(left) && value::is_f64(right) {
         value::decode_f64(left) == value::decode_f64(right)
     } else if value::is_string(left) && value::is_string(right) {
-        state
-            .string(left)
-            .zip(state.string(right))
-            .is_some_and(|(left, right)| left == right)
+        let left_handle = value::decode_handle(left);
+        let right_handle = value::decode_handle(right);
+        left_handle == right_handle
+            || state
+                .with_string_units(left, |units| units.to_vec())
+                .zip(state.with_string_units(right, |units| units.to_vec()))
+                .is_some_and(|(left_units, right_units)| left_units == right_units)
     } else if value::is_bigint(left) && value::is_bigint(right) {
         super::bigint::read(state, left) == super::bigint::read(state, right)
     } else {
@@ -2521,9 +2525,7 @@ pub(super) fn abstract_equal(
             .is_some_and(|(left, right)| left == right));
     }
     if value::is_bigint(left) && value::is_string(right) {
-        let right = state
-            .string(right)
-            .and_then(wjsm_host::RuntimeString::to_utf8)
+        let right = state.string_owned(right).and_then(|text| text.to_utf8())
             .and_then(|text| text.trim().parse::<BigInt>().ok());
         return Ok(super::bigint::read(state, left)
             .zip(right)
@@ -2663,9 +2665,7 @@ pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
     } else if value::is_bool(encoded) {
         value::decode_bool(encoded).to_string()
     } else if value::is_string(encoded) || value::is_bigint(encoded) {
-        state
-            .string(encoded)
-            .map(wjsm_host::RuntimeString::to_utf8_lossy)
+        state.string_owned(encoded).map(|text| text.to_utf8_lossy())
             .unwrap_or_default()
     } else if value::is_regexp(encoded) {
         state.regexp(encoded).map_or_else(String::new, |regexp| {
@@ -2686,13 +2686,11 @@ pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
     {
         let name = state
             .property_value_by_name(encoded, "name")
-            .and_then(|name| state.string(name))
-            .map(wjsm_host::RuntimeString::to_utf8_lossy)
+            .and_then(|name| state.string_owned(name)).map(|text| text.to_utf8_lossy())
             .unwrap_or_else(|| "Error".into());
         let message = state
             .property_value_by_name(encoded, "message")
-            .and_then(|message| state.string(message))
-            .map(wjsm_host::RuntimeString::to_utf8_lossy)
+            .and_then(|message| state.string_owned(message)).map(|text| text.to_utf8_lossy())
             .unwrap_or_default();
         if name.is_empty() {
             message

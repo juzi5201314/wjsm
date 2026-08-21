@@ -107,8 +107,7 @@ fn serialize_value(
         ));
     }
     if value::is_string(encoded) {
-        return state
-            .string(encoded)
+        return state.string_owned(encoded)
             .map(|text| JsonOutput::Text(text.to_json_quoted()))
             .ok_or_else(|| runtime::fail_dispatch(ctx));
     }
@@ -212,7 +211,7 @@ fn serialize_object(
                 let separator = if serialize.gap.is_empty() { ":" } else { ": " };
                 let name = state
                     .intern_text(name, value::TAG_STRING)
-                    .and_then(|name| state.string(name).map(|name| name.to_json_quoted()))
+                    .and_then(|name| state.string_owned(name).map(|name| name.to_json_quoted()))
                     .ok_or_else(|| runtime::fail_dispatch(ctx))?;
                 properties.push(format!("{name}{separator}{serialized}"));
             }
@@ -258,8 +257,7 @@ fn indentation(state: &NativeAgentState, encoded: i64) -> String {
         let width = value::decode_f64(encoded).trunc().clamp(0.0, 10.0) as usize;
         " ".repeat(width)
     } else if value::is_string(encoded) {
-        state
-            .string(encoded)
+        state.string_owned(encoded)
             .map(|text| {
                 text.slice_units(0..text.utf16_len().min(10))
                     .to_utf8_lossy()
@@ -295,7 +293,7 @@ fn replacer_property_list(
             continue;
         };
         let name = if value::is_string(encoded) {
-            state.string(encoded).map(|text| text.to_utf8_lossy())
+            state.string_owned(encoded).map(|text| text.to_utf8_lossy())
         } else if value::is_f64(encoded) {
             let number = value::decode_f64(encoded);
             number
@@ -326,7 +324,7 @@ fn enumerable_property_names(
         for (&(callable, key), flags) in &state.callable_property_flags {
             if callable == object && flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32 != 0 {
                 let encoded = value::encode_handle(value::TAG_STRING, key.get());
-                if let Some(name) = state.string(encoded).map(|name| name.to_utf8_lossy()) {
+                if let Some(name) = state.string_owned(encoded).map(|name| name.to_utf8_lossy()) {
                     names.push(name);
                 }
             }
@@ -336,7 +334,7 @@ fn enumerable_property_names(
     let keys = object::own_keys(state, object, true).ok_or_else(|| runtime::fail_dispatch(ctx))?;
     Ok(keys
         .into_iter()
-        .filter_map(|(key, _)| state.string(key).map(|name| name.to_utf8_lossy()))
+        .filter_map(|(key, _)| state.string_owned(key).map(|name| name.to_utf8_lossy()))
         .collect())
 }
 

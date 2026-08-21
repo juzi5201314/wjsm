@@ -160,6 +160,14 @@ impl HeapMemory for NativeHeapMemory {
         }
         Ok(bytes)
     }
+    fn try_bytes(&self, address: HeapAddress, length: u64) -> Option<&[u8]> {
+        let offset = usize::try_from(self.checked_offset(address, length).ok()?).ok()?;
+        let length = usize::try_from(length).ok()?;
+        // SAFETY: checked_offset 证明区间落在已提交窗口内；reservation 的虚拟基址
+        // 在整个 NativeHeapMemory 生命周期内稳定，调用方只在无搬迁读取作用域内借用。
+        Some(unsafe { std::slice::from_raw_parts(self.inner.virtual_base.add(offset), length) })
+    }
+
 
     fn copy_nonoverlapping_unpublished(
         &self,

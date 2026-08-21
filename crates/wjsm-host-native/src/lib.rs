@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -16,9 +16,9 @@ use wjsm_artifact_format::{
 use wjsm_backend_native::cache::{NativeCacheError, NativeImageRepository};
 use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver};
-use wjsm_gc::heap_access::object_payload_bytes;
-use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey};
-use wjsm_host::RuntimeString;
+use wjsm_gc::heap_access::{object_payload_bytes, string_payload_bytes};
+use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey, StrView};
+use wjsm_host::{RuntimeString, content_hash_units};
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
     MAX_NATIVE_ROOT_BITMAP_WORDS, NativeFeedbackSlot, NativeFeedbackTag, NativeHostSymbol,
@@ -923,59 +923,6 @@ enum NativePrivateSlot {
     Accessor { getter: i64, setter: i64 },
 }
 
-/// 字符串槽位：内容与回收簿记合一。
-///
-/// 占用位、存活代数与「是否登记在 `string_ids` 去重表」曾是三张与 `strings`
-/// 平行的 `Vec`，任何一处扩容遗漏都会让下标错位；合并成单一元素后长度不变式
-/// 由类型保证。`interned` 让退休路径无需为从未入表的字符串计算内容哈希。
-pub(crate) struct StringSlot {
-    text: RuntimeString,
-    /// 已占用；false 表示槽位在 `string_free` 中等待复用。
-    occupied: bool,
-    /// young sweep 的连续存活轮数，`u8::MAX` 表示已晋升。
-    age: u8,
-    /// 是否登记在 `string_ids` 内容去重表。
-    interned: bool,
-    /// 诞生时的根快照代号，见 [`NativeAgentState::string_epoch`]。
-    birth_epoch: u64,
-}
-
-impl StringSlot {
-    /// 连续存活到这个代数即晋升，后续 young sweep 不再重复扫描。
-    const AGE_PROMOTE_AT: u8 = 2;
-    /// 已晋升，只有 full/old sweep 才会处理。
-    const AGE_PROMOTED: u8 = u8::MAX;
-
-    /// 本槽是否诞生于当前 GC 周期的根快照之后。
-    ///
-    /// ZGC 并发标记，live set 由「根快照 + 标记期写屏障补录」构成；快照之后诞生
-    /// 的字符串不在其覆盖范围内，按「不在 live set」回收会静默丢掉仍被栈根引用的
-    /// 字符串。这类槽必须放行一轮——下一轮的根快照必然覆盖它。
-    fn born_after(&self, snapshot_epoch: u64) -> bool {
-        self.birth_epoch >= snapshot_epoch
-    }
-
-    fn vacant() -> Self {
-        Self {
-            text: RuntimeString::empty(),
-            occupied: false,
-            age: 0,
-            interned: false,
-            birth_epoch: 0,
-        }
-    }
-
-    /// 启动快照恢复出的种子字符串：已占用、已晋升、且全部登记在去重表内。
-    fn promoted_interned(text: RuntimeString) -> Self {
-        Self {
-            text,
-            occupied: true,
-            age: Self::AGE_PROMOTED,
-            interned: true,
-            birth_epoch: 0,
-        }
-    }
-}
 
 struct NativeAgentState {
     output: RefCell<Vec<u8>>,
@@ -998,9 +945,6 @@ struct NativeAgentState {
     function_needs_prototype: Vec<bool>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     current_image_id: u64,
-    /// 根快照代号：每次 GC 取根快照时递增。字符串槽记录诞生时的代号，
-    /// 清扫据此区分「快照已覆盖」与「快照之后才诞生」。
-    string_epoch: Cell<u64>,
     /// 当前 image 反馈区的 `(基址, 字节长度)`，随 image 激活刷新。
     /// 每次宿主调用都要校验生成代码传入的反馈槽指针；走 `images` 哈希表会给
     /// 每次调用摊上一次 SipHash 查表。
@@ -1023,9 +967,7 @@ struct NativeAgentState {
     repository: NativeImageRepository,
     runtime_modules: dispatch::modules::NativeModuleState,
     scope_records: HashMap<u32, dispatch::modules::NativeScopeRecord>,
-    strings: Vec<StringSlot>,
-    string_ids: HashMap<RuntimeString, u32>,
-    string_free: Vec<u32>,
+    string_ids: HashMap<(u32, u32), u32>,
     activations: Vec<NativeActivation>,
     pending_stack_trace: Option<String>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
@@ -1199,7 +1141,6 @@ impl NativeAgentState {
             function_needs_prototype: Vec::new(),
             function_home_objects: Vec::new(),
             current_image_id: 0,
-            string_epoch: Cell::new(1),
             current_feedback_region: (0, 0),
             programs: HashMap::new(),
             program_snapshots: HashMap::new(),
@@ -1220,9 +1161,7 @@ impl NativeAgentState {
             repository,
             runtime_modules: dispatch::modules::NativeModuleState::default(),
             scope_records: HashMap::new(),
-            strings: Vec::new(),
             string_ids: HashMap::new(),
-            string_free: Vec::new(),
             activations: Vec::new(),
             maps: HashMap::new(),
             sets: HashMap::new(),
@@ -1501,11 +1440,9 @@ impl NativeAgentState {
         self.function_ids.clear();
         self.runtime_modules.clear();
         self.scope_records.clear();
-        self.strings.clear();
         self.array_properties.clear();
         self.array_property_order.clear();
         self.string_ids.clear();
-        self.string_free.clear();
         self.array_accessors.clear();
         self.array_property_flags.clear();
         self.activations.clear();
@@ -1843,21 +1780,6 @@ impl NativeAgentState {
             .and_then(|regexp| regexp.as_mut())
     }
 
-    fn string(&self, encoded: i64) -> Option<&RuntimeString> {
-        (value::is_string(encoded) || value::is_bigint(encoded))
-            .then(|| value::decode_handle(encoded))
-            .and_then(|handle| usize::try_from(handle).ok())
-            .and_then(|handle| self.strings.get(handle))
-            .map(|slot| &slot.text)
-    }
-
-    fn string_mut(&mut self, encoded: i64) -> Option<&mut RuntimeString> {
-        (value::is_string(encoded) || value::is_bigint(encoded))
-            .then(|| value::decode_handle(encoded))
-            .and_then(|handle| usize::try_from(handle).ok())
-            .and_then(|handle| self.strings.get_mut(handle))
-            .map(|slot| &mut slot.text)
-    }
 
     fn create_symbol(&mut self, description: Option<RuntimeString>) -> Option<i64> {
         let handle = self.next_symbol_handle;
@@ -1886,17 +1808,20 @@ impl NativeAgentState {
     }
 
     fn text_matches(&self, encoded: i64, expected: &str) -> bool {
-        self.string(encoded).is_some_and(|text| {
-            text.as_flat_slice()
-                .iter()
-                .copied()
-                .eq(expected.encode_utf16())
+        self.with_string_bytes(encoded, |view| {
+            view.len() == expected.encode_utf16().count()
+                && expected
+                    .encode_utf16()
+                    .enumerate()
+                    .all(|(index, unit)| view.unit(index) == Some(unit))
         })
+        .unwrap_or(false)
     }
 
     fn property_value_by_name(&self, object: i64, name: &str) -> Option<i64> {
-        let key =
-            PropertyKey::from_name_id(self.string_ids.get(&RuntimeString::from(name)).copied()?);
+        let units = name.encode_utf16().collect::<Vec<_>>();
+        let key = (content_hash_units(&units), u32::try_from(units.len()).ok()?);
+        let key = PropertyKey::from_name_id(self.string_ids.get(&key).copied()?);
         self.gc
             .heap()
             .get_property(value::decode_handle(object), key)
@@ -1912,13 +1837,61 @@ impl NativeAgentState {
             .get(usize::try_from(function.function_index).ok()?)?;
         i64::try_from(entry.slow_entry as usize).ok()
     }
-
     fn bump_ic_epoch(&mut self, image_id: u64) {
         if let Some(epoch) = self.ic_epochs.get_mut(&image_id) {
             *epoch = epoch.saturating_add(1);
         }
     }
 
+    pub(crate) fn with_string_bytes<R>(
+        &self,
+        encoded: i64,
+        f: impl FnOnce(StrView<'_>) -> R,
+    ) -> Option<R> {
+        (value::is_string(encoded) || value::is_bigint(encoded))
+            .then(|| value::decode_handle(encoded))
+            .and_then(|handle| self.gc.heap().with_string_bytes(handle, f).ok())
+    }
+
+    pub(crate) fn with_string_units<R>(
+        &self,
+        encoded: i64,
+        f: impl FnOnce(&[u16]) -> R,
+    ) -> Option<R> {
+        (value::is_string(encoded) || value::is_bigint(encoded))
+            .then(|| value::decode_handle(encoded))
+            .and_then(|handle| self.gc.heap().with_string_units(handle, f).ok())
+    }
+
+    pub(crate) fn string_to_utf8(&self, encoded: i64) -> Option<String> {
+        self.with_string_bytes(encoded, |view| view.to_utf8()).flatten()
+    }
+
+    pub(crate) fn string_to_utf8_lossy(&self, encoded: i64) -> Option<String> {
+        self.with_string_bytes(encoded, |view| view.to_utf8_lossy())
+    }
+
+    pub(crate) fn string_len(&self, encoded: i64) -> Option<usize> {
+        self.with_string_units(encoded, <[u16]>::len)
+    }
+
+    pub(crate) fn string_code_unit(&self, encoded: i64, index: usize) -> Option<u16> {
+        self.with_string_units(encoded, |units| units.get(index).copied())
+            .flatten()
+    }
+
+    pub(crate) fn string_owned(&self, encoded: i64) -> Option<RuntimeString> {
+        self.with_string_units(encoded, |units| RuntimeString::from_utf16_units(units.to_vec()))
+    }
+
+    pub(crate) fn string_is_builder(&self, encoded: i64) -> bool {
+        value::is_string(encoded)
+            && self
+                .gc
+                .heap()
+                .string_repr(value::decode_handle(encoded))
+                .is_ok_and(|repr| repr == wjsm_ir::constants::STRING_REPR_BUILDER)
+    }
     fn callable_function(&self, callable: i64) -> Option<NativeFunctionRef> {
         let function_id = if value::is_function(callable) {
             value::decode_function_idx(callable)
@@ -1952,34 +1925,7 @@ impl NativeAgentState {
         let index = u32::try_from(self.native_callables.len()).ok()?;
         self.native_callables.push(kind);
         self.native_callable_ids.insert(kind, index);
-        let encoded = value::encode_native_callable_idx(index);
-        if matches!(
-            kind,
-            NativeCallableKind::Intl(_) | NativeCallableKind::DateMethod(_)
-        ) && let Some(prototype) = self.native_callable(NativeCallableKind::FunctionPrototype)
-        {
-            self.callable_prototypes.entry(encoded).or_insert(prototype);
-        }
-        Some(encoded)
-    }
-
-    fn heap_chain_contains(&self, receiver: i64, prototype: i64) -> bool {
-        let target = value::decode_handle(prototype);
-        let mut current = value::decode_handle(receiver);
-        let mut visited = HashSet::new();
-        while visited.insert(current) {
-            if current == target {
-                return true;
-            }
-            let Ok(parent) = self.gc.heap().prototype(current) else {
-                return false;
-            };
-            if parent == PROTO_NULL_SENTINEL || parent & 0x8000_0000 != 0 {
-                return false;
-            }
-            current = parent;
-        }
-        false
+        Some(value::encode_native_callable_idx(index))
     }
 
     fn prototype_chain_contains_value(&self, mut current: i64, target: i64) -> bool {
@@ -2022,6 +1968,24 @@ impl NativeAgentState {
             } else {
                 current = value::encode_object_handle(parent);
             }
+        }
+        false
+    }
+    fn heap_chain_contains(&self, current: i64, target: i64) -> bool {
+        let mut current = value::decode_handle(current);
+        let target = value::decode_handle(target);
+        let mut visited = HashSet::new();
+        while visited.insert(current) {
+            if current == target {
+                return true;
+            }
+            let Ok(parent) = self.gc.heap().prototype(current) else {
+                return false;
+            };
+            if parent == PROTO_NULL_SENTINEL {
+                return false;
+            }
+            current = parent;
         }
         false
     }
@@ -2082,7 +2046,7 @@ impl NativeAgentState {
         {
             return self.intern_text("Symbol".into(), value::TAG_STRING);
         }
-        let key = self.string(key)?.to_utf8()?;
+        let key = self.string_owned(key)?.to_utf8()?;
         if let Some(symbol) = self.symbol_value(receiver) {
             return match key.as_str() {
                 "description" => Some(
@@ -2648,7 +2612,7 @@ impl NativeAgentState {
         if !is_realm_global {
             return None;
         }
-        let name = self.string(key)?.to_utf8()?;
+        let name = self.string_owned(key)?.to_utf8()?;
         if matches!(name.as_str(), "globalThis" | "global") {
             return Some(receiver);
         }
@@ -4011,72 +3975,235 @@ impl NativeAgentState {
         Some(array)
     }
 
-    /// 开启新的根快照代号。GC 取根快照时调用，之后诞生的字符串在本轮清扫中放行。
-    pub(crate) fn begin_string_epoch(&self) {
-        self.string_epoch
-            .set(self.string_epoch.get().saturating_add(1));
+    pub(crate) fn rebuild_string_ids(&mut self) -> Result<(), NativeRuntimeError> {
+        self.string_ids.clear();
+        let (entries, _) = self.gc.heap().capture_handles()?;
+        for entry in entries {
+            let handle = entry.handle.get();
+            if self.gc.heap().object_type(handle).ok()
+                != Some(u32::from(wjsm_ir::HEAP_TYPE_STRING))
+                || self
+                    .gc
+                    .heap()
+                    .string_flags(handle)
+                    .ok()
+                    .is_none_or(|flags| {
+                        flags & wjsm_ir::constants::STRING_FLAG_INTERNED == 0
+                    })
+            {
+                continue;
+            }
+            let hash = self.gc.heap().string_content_hash(handle)?;
+            let length = self.gc.heap().string_length(handle)?;
+            self.string_ids.insert((hash, length), handle);
+        }
+        Ok(())
     }
+    pub(crate) fn property_name_handles(&self) -> Vec<i64> {
+        let mut names = self.gc.heap().property_name_ids();
+        names.extend(self.array_properties.keys().map(|(_, key)| key.get()));
+        names.extend(self.array_accessors.keys().map(|(_, key)| key.get()));
+        names.extend(self.array_property_flags.keys().map(|(_, key)| key.get()));
+        names.extend(self.array_property_order.values().flatten().map(|key| key.get()));
+        names.extend(
+            self.callable_properties
+                .keys()
+                .map(|(_, key)| key.get())
+                .filter(|key| *key & wjsm_ir::constants::NAME_ID_SYMBOL_FLAG == 0),
+        );
+        names.extend(
+            self.callable_accessors
+                .keys()
+                .map(|(_, key)| key.get())
+                .filter(|key| *key & wjsm_ir::constants::NAME_ID_SYMBOL_FLAG == 0),
+        );
+        names.extend(
+            self.callable_property_flags
+                .keys()
+                .map(|(_, key)| key.get())
+                .filter(|key| *key & wjsm_ir::constants::NAME_ID_SYMBOL_FLAG == 0),
+        );
+        self.string_ids
+            .values()
+            .copied()
+            .filter(|handle| names.contains(handle))
+            .map(value::encode_runtime_string_handle)
+            .collect()
+    }
+
+    pub(crate) fn prune_string_ids(&mut self, retired: &[u32]) {
+        self.string_ids
+            .retain(|_, handle| retired.binary_search(handle).is_err());
+    }
+
+    pub(crate) fn prune_unmarked_string_ids(&mut self) {
+        self.string_ids.retain(|_, handle| {
+            self.gc
+                .heap()
+                .handle_generation(*handle)
+                .is_some_and(|generation| {
+                    self.gc
+                        .heap()
+                        .is_marked_handle(*handle, generation)
+                        .unwrap_or(false)
+                })
+        });
+    }
+
 
     fn intern_text(&mut self, text: String, tag: u64) -> Option<i64> {
-        self.intern_runtime_string(RuntimeString::from(text), tag)
+        let units = text.encode_utf16().collect::<Vec<_>>();
+        self.publish_string_units(&units, tag, true)
     }
 
-    /// 占用一个字符串槽位并写入内容。
-    ///
-    /// `interned` 为真时同步登记内容去重表，并在槽位上留下标记，使
-    /// [`NativeAgentState::retire_string`] 能在不接触去重表的前提下退休
-    /// 从未入表的字符串——运行时产生的长串与 rope 节点属于绝大多数。
-    fn allocate_string_slot(&mut self, text: RuntimeString, interned: bool) -> Option<u32> {
-        let allocated_bytes = text.estimated_owned_bytes();
-        let handle = match self.string_free.pop() {
-            Some(handle) => handle,
-            None => {
-                let handle = u32::try_from(self.strings.len()).ok()?;
-                self.strings.push(StringSlot::vacant());
-                handle
-            }
-        };
-        if interned {
-            self.string_ids.insert(text.clone(), handle);
+    fn publish_string_units(&mut self, units: &[u16], tag: u64, interned: bool) -> Option<i64> {
+        let length = u32::try_from(units.len()).ok()?;
+        let key = (content_hash_units(units), length);
+        if interned
+            && tag == value::TAG_STRING
+            && let Some(handle) = self.string_ids.get(&key).copied()
+        {
+            return Some(value::encode_runtime_string_handle(handle));
         }
-        let birth_epoch = self.string_epoch.get();
-        let slot = &mut self.strings[handle as usize];
-        slot.text = text;
-        slot.occupied = true;
-        slot.age = 0;
-        slot.interned = interned;
-        slot.birth_epoch = birth_epoch;
-        self.gc.observe_host_allocation(allocated_bytes);
-        Some(handle)
+        let payload_len = units.len().checked_mul(2)?;
+        let capacity = u32::try_from(payload_len.checked_add(7)? & !7).ok()?;
+        let mut bytes = Vec::with_capacity(payload_len);
+        for unit in units {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let address = self.gc.allocate(string_payload_bytes(capacity).ok()?).ok()?;
+        let handle = self.gc.heap().allocate_handle().ok()?;
+        let flags = if interned {
+            wjsm_ir::constants::STRING_FLAG_INTERNED
+        } else {
+            0
+        };
+        self.gc
+            .heap()
+            .publish_string(
+                handle,
+                address,
+                PROTO_NULL_SENTINEL,
+                wjsm_ir::constants::STRING_REPR_UTF16_FLAT,
+                flags,
+                length,
+                capacity,
+            )
+            .ok()?;
+        self.gc.heap().write_string_payload(handle, 0, &bytes).ok()?;
+        self.gc.mark_black_allocation(handle).ok()?;
+        if interned && tag == value::TAG_STRING {
+            self.gc.heap().string_content_hash(handle).ok()?;
+            self.string_ids.insert(key, handle);
+        }
+        Some(if tag == value::TAG_STRING {
+            value::encode_runtime_string_handle(handle)
+        } else {
+            value::encode_handle(tag, handle)
+        })
     }
 
-    /// 属性名必须内容唯一：同一名字在任何路径下都要解析到同一 handle，
-    /// 否则以 handle 为键的属性表会把同名属性拆成两条。
-    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<PropertyKey> {
-        let handle = match self.string_ids.get(&text).copied() {
-            Some(handle) => handle,
-            None => self.allocate_string_slot(text, true)?,
+    fn publish_builder_units(&mut self, units: &[u16], tag: u64) -> Option<i64> {
+        let length = u32::try_from(units.len()).ok()?;
+        let payload_len = units.len().checked_mul(2)?;
+        let capacity = u32::try_from(payload_len.max(4 * 1024).checked_add(7)? & !7).ok()?;
+        let mut bytes = Vec::with_capacity(payload_len);
+        for unit in units {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let address = self.gc.allocate(string_payload_bytes(capacity).ok()?).ok()?;
+        let handle = self.gc.heap().allocate_handle().ok()?;
+        self.gc
+            .heap()
+            .publish_string(
+                handle,
+                address,
+                PROTO_NULL_SENTINEL,
+                wjsm_ir::constants::STRING_REPR_BUILDER,
+                0,
+                length,
+                capacity,
+            )
+            .ok()?;
+        self.gc.heap().write_string_payload(handle, 0, &bytes).ok()?;
+        self.gc.mark_black_allocation(handle).ok()?;
+        Some(if tag == value::TAG_STRING {
+            value::encode_runtime_string_handle(handle)
+        } else {
+            value::encode_handle(tag, handle)
+        })
+    }
+
+    fn publish_string_bytes(&mut self, bytes: &[u8], tag: u64, interned: bool) -> Option<i64> {
+        let length = u32::try_from(bytes.len()).ok()?;
+        let units = bytes.iter().map(|&byte| u16::from(byte)).collect::<Vec<_>>();
+        let key = (content_hash_units(&units), length);
+        if interned
+            && tag == value::TAG_STRING
+            && let Some(handle) = self.string_ids.get(&key).copied()
+        {
+            return Some(value::encode_runtime_string_handle(handle));
+        }
+        let capacity = u32::try_from(bytes.len().checked_add(7)? & !7).ok()?;
+        let address = self.gc.allocate(string_payload_bytes(capacity).ok()?).ok()?;
+        let handle = self.gc.heap().allocate_handle().ok()?;
+        let flags = if interned {
+            wjsm_ir::constants::STRING_FLAG_INTERNED
+        } else {
+            0
         };
-        let encoded = value::encode_runtime_string_handle(handle);
+        self.gc
+            .heap()
+            .publish_string(
+                handle,
+                address,
+                PROTO_NULL_SENTINEL,
+                wjsm_ir::constants::STRING_REPR_LATIN1_FLAT,
+                flags,
+                length,
+                capacity,
+            )
+            .ok()?;
+        self.gc.heap().write_string_payload(handle, 0, bytes).ok()?;
+        self.gc.mark_black_allocation(handle).ok()?;
+        if interned && tag == value::TAG_STRING {
+            self.gc.heap().string_content_hash(handle).ok()?;
+            self.string_ids.insert(key, handle);
+        }
+        Some(if tag == value::TAG_STRING {
+            value::encode_runtime_string_handle(handle)
+        } else {
+            value::encode_handle(tag, handle)
+        })
+    }
+
+    /// 属性名必须内容唯一：同一名字在任何路径下都要解析到同一 handle。
+    pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<PropertyKey> {
+        let units = text.as_flat_slice().to_vec();
+        let encoded = self.publish_string_units(&units, value::TAG_STRING, true)?;
+        let handle = value::decode_handle(encoded);
         self.gc.record_host_write(encoded, None, Some(encoded));
         Some(PropertyKey::from_name_id(handle))
     }
 
     fn intern_utf16_slice(&mut self, units: &[u16], tag: u64) -> Option<i64> {
-        self.intern_runtime_string(RuntimeString::from_utf16_units(units.to_vec()), tag)
+        self.publish_string_units(units, tag, tag == value::TAG_STRING)
     }
 
     fn intern_runtime_string(&mut self, text: RuntimeString, tag: u64) -> Option<i64> {
-        // 只有扁平短串参与内容去重；长串与 rope 节点直接占槽，避免展平与哈希。
+        let is_builder = text.is_builder();
         let dedup = tag == value::TAG_STRING && text.utf16_len() <= 64 && text.is_flat();
-        let handle = match dedup.then(|| self.string_ids.get(&text).copied()).flatten() {
-            Some(handle) => handle,
-            None => self.allocate_string_slot(text, dedup)?,
-        };
-        let encoded = if tag == value::TAG_STRING {
-            value::encode_runtime_string_handle(handle)
+        let units = text.as_flat_slice().to_vec();
+        let encoded = if is_builder {
+            self.publish_builder_units(&units, tag)?
+        } else if units.iter().all(|unit| *unit <= u16::from(u8::MAX)) {
+            let bytes = units
+                .iter()
+                .map(|&unit| u8::try_from(unit).expect("Latin-1 unit is byte-sized"))
+                .collect::<Vec<_>>();
+            self.publish_string_bytes(&bytes, tag, dedup)?
         } else {
-            value::encode_handle(tag, handle)
+            self.publish_string_units(&units, tag, dedup)?
         };
         self.gc.record_host_write(encoded, None, Some(encoded));
         Some(encoded)
@@ -4157,10 +4284,6 @@ impl NativeAgentState {
         &mut self,
         ctx: &NativeVmContext,
     ) -> Result<bool, NativeRuntimeError> {
-        if self.gc.host_collection_requested() {
-            self.collect_garbage(ctx)?;
-            return Ok(true);
-        }
         if !self.gc.take_safepoint_poll_request() {
             return Ok(false);
         }
@@ -4689,17 +4812,13 @@ unsafe extern "C" fn native_callable_call(
             let Some((body, parameters)) = arguments.split_last() else {
                 return dispatch::node_vm::compile_dynamic_function(ctx, state, "", &[], global);
             };
-            let Some(body) = state
-                .string(*body)
-                .and_then(wjsm_host::RuntimeString::to_utf8)
+            let Some(body) = state.string_owned(*body).and_then(|text| text.to_utf8())
             else {
                 return dispatch::fail_dispatch(ctx);
             };
             let mut parameter_names = Vec::with_capacity(parameters.len());
             for parameter in parameters {
-                let Some(parameter) = state
-                    .string(*parameter)
-                    .and_then(wjsm_host::RuntimeString::to_utf8)
+                let Some(parameter) = state.string_owned(*parameter).and_then(|text| text.to_utf8())
                 else {
                     return dispatch::fail_dispatch(ctx);
                 };
@@ -5305,16 +5424,12 @@ impl NativeRuntime {
             live_closures: self.state.closures.iter().filter(|c| c.is_some()).count(),
             function_closures: self.state.function_closures.len(),
             latest_function_closures: self.state.latest_function_closures.len(),
-            live_strings: self
-                .state
-                .strings
-                .iter()
-                .filter(|slot| !slot.text.is_empty())
-                .count(),
+            live_strings: self.state.string_ids.len(),
             string_ids: self.state.string_ids.len(),
             scope_records: self.state.scope_records.len(),
         }
     }
+
 
     fn assert_owner_thread(&self) -> Result<(), NativeRuntimeError> {
         if self.owner_thread == std::thread::current().id() {

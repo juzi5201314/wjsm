@@ -465,9 +465,10 @@ pub(crate) fn snapshot_gc_graph(
     frame_roots: impl IntoIterator<Item = i64>,
     epoch: u64,
 ) -> RootSnapshot {
-    // 本次快照之后诞生的字符串不在 live set 覆盖范围内，清扫必须放行它们。
-    state.begin_string_epoch();
-    let roots = root_values(ctx, state, frame_roots);
+    let roots = root_values(ctx, state, frame_roots)
+        .into_iter()
+        .chain(state.property_name_handles())
+        .collect();
     let (strong_edges, ephemerons) = host_edges(state);
     RootSnapshot::new(epoch, roots, strong_edges, ephemerons)
 }
@@ -525,10 +526,14 @@ pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcRe
     }
     let live = host_live_set(state, &live_host_values);
     state.cleanup_retired_handles(retired);
+    state.prune_string_ids(retired);
+    if report.stats.cycle_kind == CycleKind::Full
+        && state.runtime_config.gc_algorithm == wjsm_gc::GcAlgorithmKind::Zgc
+    {
+        state.prune_unmarked_string_ids();
+    }
     if report.cleans_host_tables {
         state.sweep_host_index_tables(retired, &live);
-    } else if report.stats.cycle_kind == CycleKind::Young {
-        state.sweep_young_strings(&live);
     }
 }
 
@@ -777,8 +782,6 @@ fn host_live_set(state: &NativeAgentState, values: &[i64]) -> HostLiveSet {
             live.regexps.insert(value::decode_regexp_handle(*encoded));
         } else if value::is_exception(*encoded) {
             live.exceptions.insert(value::decode_handle(*encoded));
-        } else if value::is_string(*encoded) || value::is_bigint(*encoded) {
-            live.strings.insert(value::decode_handle(*encoded));
         }
     }
     live

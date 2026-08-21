@@ -168,7 +168,7 @@ fn create_realm(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 
 fn start(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(script) = args
         .first()
-        .and_then(|encoded| state.string(*encoded))
+        .and_then(|encoded| state.string_owned(*encoded))
         .and_then(|text| text.to_utf8())
     else {
         return type_error(ctx, state, "start: script must be a string");

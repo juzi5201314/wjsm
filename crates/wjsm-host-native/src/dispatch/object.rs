@@ -157,8 +157,7 @@ fn object_proto_to_string(
         if value::is_exception(custom) {
             return custom;
         }
-        state
-            .string(custom)
+        state.string_owned(custom)
             .and_then(|text| text.to_utf8())
             .unwrap_or_else(|| default_tag.to_owned())
     };
@@ -390,10 +389,10 @@ pub(crate) fn own_keys(
         return callable_own_keys(state, encoded, enumerable_only);
     }
     if value::is_string(encoded) {
-        let len = state.string(encoded)?.utf16_len();
+        let len = state.string_owned(encoded)?.utf16_len();
         let mut properties = Vec::with_capacity(len);
         for index in 0..len {
-            let unit = state.string(encoded)?.code_unit_at(index)?;
+            let unit = state.string_owned(encoded)?.code_unit_at(index)?;
             let key = state.intern_text(index.to_string(), value::TAG_STRING)?;
             let stored = state.intern_runtime_string(
                 wjsm_host::RuntimeString::from_utf16_units(vec![unit]),

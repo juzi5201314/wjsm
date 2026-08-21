@@ -114,9 +114,7 @@ fn to_runtime_string(
         ));
     }
     if value::is_string(primitive) {
-        return state
-            .string(primitive)
-            .cloned()
+        return state.string_owned(primitive)
             .ok_or_else(|| fail_dispatch(ctx));
     }
     Ok(RuntimeString::from(render_value(state, primitive)))

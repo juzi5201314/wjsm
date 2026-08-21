@@ -10,7 +10,7 @@ use wjsm_snapshot_format::{
     SnapshotLimits, decode_snapshot,
 };
 
-use crate::{NativeAgentState, NativeCallableKind, NativeRuntimeError, StringSlot, gc};
+use crate::{NativeAgentState, NativeCallableKind, NativeRuntimeError, gc};
 
 include!(concat!(env!("OUT_DIR"), "/bootstrap_hash.rs"));
 
@@ -25,7 +25,6 @@ const MAX_BOOTSTRAP_STRING_UNITS: u32 = 16 * 1024 * 1024;
 struct RestoredBootstrap {
     heap: Arc<HeapAccessV2<NativeHeapMemory>>,
     global_object: i64,
-    strings: Vec<RuntimeString>,
     native_callables: Vec<NativeCallableKind>,
 }
 
@@ -44,20 +43,7 @@ impl NativeAgentState {
         self.gc.reset_heap(restored.heap)?;
         self.gc.reset_nlab();
         self.global_object = Some(restored.global_object);
-        // 种子字符串全部是内部化的常驻值：登记去重表，并直接置为已晋升，
-        // 免得 young sweep 每轮重扫这批永不回收的槽位。
-        self.string_ids = restored
-            .strings
-            .iter()
-            .cloned()
-            .enumerate()
-            .map(|(index, string)| (string, index as u32))
-            .collect();
-        self.strings = restored
-            .strings
-            .into_iter()
-            .map(StringSlot::promoted_interned)
-            .collect();
+        self.rebuild_string_ids()?;
         self.native_callables = restored.native_callables;
         self.native_callable_ids = self
             .native_callables
@@ -105,7 +91,7 @@ fn restore(
     let shape_table: ShapeTableSnapshot = serde_json::from_slice(&snapshot.shape_table_bytes)
         .context("native snapshot shape table is invalid")
         .map_err(snapshot_error)?;
-    let (strings, native_callables) = decode_host_state(&snapshot.host_state_bytes)
+    let (_legacy_strings, native_callables) = decode_host_state(&snapshot.host_state_bytes)
         .context("native snapshot host state is invalid")
         .map_err(snapshot_error)?;
     validate_global_object(&snapshot)?;
@@ -128,7 +114,6 @@ fn restore(
     Ok(RestoredBootstrap {
         heap,
         global_object: snapshot.global_object,
-        strings,
         native_callables,
     })
 }

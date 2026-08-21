@@ -510,6 +510,14 @@ pub fn is_handle_backed_reference(value: i64) -> bool {
     tag_needs_root(value)
 }
 
+/// 判定是否为直接位于 ManagedHeap 的堆引用。
+///
+/// 数据段字符串指针是编译期静态数据，不属于堆引用；运行时字符串和 BigInt
+/// 句柄则与对象、数组一样需要进入 GC 的堆引用扫描路径。
+pub fn is_heap_reference(value: i64) -> bool {
+    is_object(value) || is_array(value) || is_string(value) || is_bigint(value)
+}
+
 // ── Bound function ────────────────────────────────────────────────────
 
 pub fn encode_bound_idx(idx: u32) -> i64 {

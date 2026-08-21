@@ -333,7 +333,7 @@ fn input_bytes(state: &NativeAgentState, encoded: i64) -> Option<Vec<u8>> {
 }
 
 fn string(state: &NativeAgentState, encoded: i64) -> Option<String> {
-    state.string(encoded)?.to_utf8()
+    state.string_owned(encoded)?.to_utf8()
 }
 
 fn intern(state: &mut NativeAgentState, text: String) -> Option<i64> {

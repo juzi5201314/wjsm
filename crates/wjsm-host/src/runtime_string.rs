@@ -659,6 +659,96 @@ fn compute_hash(units: &[u16]) -> u32 {
     if hash == HASH_UNCOMPUTED { 1 } else { hash }
 }
 
+/// 计算 UTF-16 码元序列的内容哈希。
+pub fn content_hash_units(units: &[u16]) -> u32 {
+    compute_hash(units)
+}
+
+/// 在 UTF-16 码元序列中查找子序列。
+pub fn find_units(hay: &[u16], needle: &[u16], from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(from.min(hay.len()));
+    }
+    if from > hay.len() || needle.len() > hay.len() {
+        return None;
+    }
+    hay[from..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| from + offset)
+}
+
+/// 从指定结束位置向前查找 UTF-16 子序列。
+pub fn rfind_units_before(hay: &[u16], needle: &[u16], end: usize) -> Option<usize> {
+    let end = end.min(hay.len());
+    if needle.is_empty() {
+        return Some(end);
+    }
+    if needle.len() > end {
+        return None;
+    }
+    hay[..end].windows(needle.len()).rposition(|window| window == needle)
+}
+
+/// 判断 UTF-16 子序列是否从指定位置开始。
+pub fn starts_with_units(hay: &[u16], needle: &[u16], from: usize) -> bool {
+    from
+        .checked_add(needle.len())
+        .is_some_and(|end| end <= hay.len())
+        && hay[from..from + needle.len()] == *needle
+}
+
+/// 判断 UTF-16 子序列是否在指定结束位置结束。
+pub fn ends_with_units(hay: &[u16], needle: &[u16], end: usize) -> bool {
+    let end = end.min(hay.len());
+    let Some(start) = end.checked_sub(needle.len()) else {
+        return false;
+    };
+    hay[start..end] == *needle
+}
+
+/// 读取 UTF-16 码元序列中的 Unicode 码点。
+pub fn code_point_at(units: &[u16], index: usize) -> Option<u32> {
+    let unit = *units.get(index)?;
+    if is_high_surrogate(unit)
+        && let Some(next) = units.get(index + 1).copied()
+        && is_low_surrogate(next)
+    {
+        return Some(decode_surrogate_pair(unit, next));
+    }
+    Some(u32::from(unit))
+}
+
+/// 将 UTF-16 码元序列编码为 JSON 字符串字面量。
+pub fn json_quote_units(units: &[u16]) -> String {
+    let mut out = String::with_capacity(units.len() + 2);
+    out.push('"');
+    let mut index = 0usize;
+    while index < units.len() {
+        let unit = units[index];
+        if is_high_surrogate(unit)
+            && index + 1 < units.len()
+            && is_low_surrogate(units[index + 1])
+        {
+            let cp = decode_surrogate_pair(unit, units[index + 1]);
+            push_json_char(&mut out, char::from_u32(cp).expect("valid surrogate pair"));
+            index += 2;
+            continue;
+        }
+        if is_high_surrogate(unit) || is_low_surrogate(unit) {
+            push_json_u_escape(&mut out, unit);
+        } else {
+            push_json_char(
+                &mut out,
+                char::from_u32(u32::from(unit)).expect("valid BMP scalar"),
+            );
+        }
+        index += 1;
+    }
+    out.push('"');
+    out
+}
+
 /// 把 4 个 UTF-16 码元打包成一个机器字。
 fn pack_four(units: &[u16]) -> u64 {
     debug_assert_eq!(units.len(), 4, "pack_four 只接受 4 个码元");

@@ -45,8 +45,7 @@ fn to_json_string(
     encoded: i64,
 ) -> Result<String, i64> {
     if value::is_string(encoded) {
-        return state
-            .string(encoded)
+        return state.string_owned(encoded)
             .map(|text| text.to_utf8_lossy())
             .ok_or_else(|| runtime::fail_dispatch(ctx));
     }
@@ -180,7 +179,7 @@ fn own_property_names(
         .ok_or_else(|| runtime::fail_dispatch(ctx))
         .map(|keys| {
             keys.into_iter()
-                .filter_map(|(key, _)| state.string(key).map(|name| name.to_utf8_lossy()))
+                .filter_map(|(key, _)| state.string_owned(key).map(|name| name.to_utf8_lossy()))
                 .collect()
         })
 }

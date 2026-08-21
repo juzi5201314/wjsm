@@ -231,7 +231,9 @@ fn trace_snapshot<M: GrowableHeapMemory>(
                 let end = edges.partition_point(|edge| edge.owner <= encoded);
                 pending.extend(edges[start..end].iter().map(|edge| edge.target));
             }
-            if value::is_object(encoded) || value::is_array(encoded) {
+            let is_heap = value::is_heap_reference(encoded)
+                && heap.generation(value::decode_handle(encoded)).is_some();
+            if is_heap {
                 let handle = value::decode_handle(encoded);
                 if !reachable.insert(handle) {
                     continue;
@@ -256,7 +258,9 @@ fn trace_snapshot<M: GrowableHeapMemory>(
                 let encoded = value::strip_gc_color(encoded);
                 if !value::is_handle_backed_reference(encoded) {
                     true
-                } else if value::is_object(encoded) || value::is_array(encoded) {
+                } else if value::is_heap_reference(encoded)
+                    && heap.generation(value::decode_handle(encoded)).is_some()
+                {
                     reachable.contains(&value::decode_handle(encoded))
                 } else {
                     live_host_values.contains(&encoded)

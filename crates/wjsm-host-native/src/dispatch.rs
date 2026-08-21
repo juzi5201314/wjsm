@@ -66,7 +66,6 @@ pub(super) use self::math::{
     native_math_tanh,
 };
 pub(crate) use self::object::construct_object;
-pub(crate) use self::runtime::SYMBOL_PROPERTY_KEY_BIT;
 use self::runtime::dispatch_runtime;
 pub(crate) use self::runtime::encoded_property_key;
 use self::runtime::object_handle;

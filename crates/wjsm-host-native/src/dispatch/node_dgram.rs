@@ -123,7 +123,7 @@ fn bind(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
         .map_or(0, |port| port as u16);
     let host = args
         .get(1)
-        .and_then(|host| state.string(*host))
+        .and_then(|host| state.string_owned(*host))
         .and_then(|host| host.to_utf8())
         .unwrap_or_else(|| "127.0.0.1".into());
     let result = resolve_address(&host, port).and_then(|address| {
@@ -198,7 +198,7 @@ fn send(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     };
     let host = args
         .get(3)
-        .and_then(|host| state.string(*host))
+        .and_then(|host| state.string_owned(*host))
         .and_then(|host| host.to_utf8())
         .unwrap_or_else(|| "127.0.0.1".into());
     let result = resolve_address(&host, port).and_then(|address| {

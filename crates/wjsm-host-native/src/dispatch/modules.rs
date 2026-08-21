@@ -269,7 +269,7 @@ fn metadata_bool(encoded: i64) -> bool {
 }
 
 fn property_key(state: &mut NativeAgentState, key: i64) -> Option<PropertyKey> {
-    let text = state.string(key)?.clone();
+    let text = state.string_owned(key)?.clone();
     state.intern_property_string(text)
 }
 
@@ -512,10 +512,10 @@ fn runtime_dynamic_import(
     let [referrer, specifier] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(referrer) = state.string(*referrer).and_then(|text| text.to_utf8()) else {
+    let Some(referrer) = state.string_owned(*referrer).and_then(|text| text.to_utf8()) else {
         return fail_dispatch(ctx);
     };
-    let Some(specifier) = state.string(*specifier).and_then(|text| text.to_utf8()) else {
+    let Some(specifier) = state.string_owned(*specifier).and_then(|text| text.to_utf8()) else {
         return fail_dispatch(ctx);
     };
     let referrer = normalize_referrer(state, Path::new(&referrer));
@@ -541,7 +541,7 @@ fn create_import_meta_resolve(
     let Some(filename) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(filename) = state.string(filename).and_then(|text| text.to_utf8()) else {
+    let Some(filename) = state.string_owned(filename).and_then(|text| text.to_utf8()) else {
         return fail_dispatch(ctx);
     };
     let referrer = intern_referrer(state, normalize_referrer(state, Path::new(&filename)));
@@ -554,7 +554,7 @@ fn create_require(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     let Some(filename) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(filename) = state.string(filename).and_then(|text| text.to_utf8()) else {
+    let Some(filename) = state.string_owned(filename).and_then(|text| text.to_utf8()) else {
         return fail_dispatch(ctx);
     };
     let path = normalize_referrer(state, Path::new(&filename));
@@ -577,7 +577,7 @@ fn register_cjs_module(
     let [filename, module_object, _initial_exports] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(filename) = state.string(*filename).and_then(|text| text.to_utf8()) else {
+    let Some(filename) = state.string_owned(*filename).and_then(|text| text.to_utf8()) else {
         return fail_dispatch(ctx);
     };
     let path = normalize_referrer(state, Path::new(&filename));
@@ -594,7 +594,7 @@ fn require(
     referrer: u32,
     args: &[i64],
 ) -> i64 {
-    let Some(specifier) = args.first().and_then(|value| state.string(*value)) else {
+    let Some(specifier) = args.first().and_then(|value| state.string_owned(*value)) else {
         return fail_dispatch(ctx);
     };
     let Some(specifier) = specifier.to_utf8() else {
@@ -652,7 +652,7 @@ fn resolve_callable(
     kind: RuntimeResolveKind,
     as_url: bool,
 ) -> i64 {
-    let Some(specifier) = args.first().and_then(|value| state.string(*value)) else {
+    let Some(specifier) = args.first().and_then(|value| state.string_owned(*value)) else {
         return fail_dispatch(ctx);
     };
     let Some(specifier) = specifier.to_utf8() else {
@@ -686,7 +686,7 @@ fn resolve_paths_for_require(
     referrer: u32,
     args: &[i64],
 ) -> i64 {
-    let Some(specifier) = args.first().and_then(|value| state.string(*value)) else {
+    let Some(specifier) = args.first().and_then(|value| state.string_owned(*value)) else {
         return fail_dispatch(ctx);
     };
     let Some(specifier) = specifier.to_utf8() else {
@@ -1457,11 +1457,11 @@ impl ModuleLoadFailure {
 pub(crate) fn exception_text(state: &mut NativeAgentState, exception: i64) -> String {
     let value = state.exception_value(exception).unwrap_or(exception);
     let Some(name) = named_property(state, value, "name")
-        .and_then(|name| state.string(name))
+        .and_then(|name| state.string_owned(name))
         .and_then(|name| name.to_utf8())
     else {
         if let Some(message) = named_property(state, value, "message")
-            .and_then(|message| state.string(message))
+            .and_then(|message| state.string_owned(message))
             .and_then(|message| message.to_utf8())
         {
             return message;
@@ -1469,13 +1469,13 @@ pub(crate) fn exception_text(state: &mut NativeAgentState, exception: i64) -> St
         return super::runtime::render_value(state, value);
     };
     if let Some(stack) = named_property(state, value, "stack")
-        .and_then(|stack| state.string(stack))
+        .and_then(|stack| state.string_owned(stack))
         .and_then(|stack| stack.to_utf8())
     {
         return stack;
     }
     let message = named_property(state, value, "message")
-        .and_then(|message| state.string(message))
+        .and_then(|message| state.string_owned(message))
         .and_then(|message| message.to_utf8())
         .unwrap_or_default();
     if message.is_empty() {
@@ -1488,17 +1488,17 @@ pub(crate) fn exception_text(state: &mut NativeAgentState, exception: i64) -> St
 pub(crate) fn named_exception_text(state: &mut NativeAgentState, exception: i64) -> String {
     let value = state.exception_value(exception).unwrap_or(exception);
     let name = named_property(state, value, "name")
-        .and_then(|name| state.string(name))
+        .and_then(|name| state.string_owned(name))
         .and_then(|name| name.to_utf8())
         .unwrap_or_else(|| "Error".into());
     if let Some(stack) = named_property(state, value, "stack")
-        .and_then(|stack| state.string(stack))
+        .and_then(|stack| state.string_owned(stack))
         .and_then(|stack| stack.to_utf8())
     {
         return stack;
     }
     let message = named_property(state, value, "message")
-        .and_then(|message| state.string(message))
+        .and_then(|message| state.string_owned(message))
         .and_then(|message| message.to_utf8())
         .unwrap_or_else(|| super::runtime::render_value(state, value));
     if message.is_empty() {

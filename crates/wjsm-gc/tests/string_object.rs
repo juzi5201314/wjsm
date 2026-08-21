@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use wjsm_gc::{
-    BarrierEpoch, HandleTableV2, HeapAccessV2, HeapBarrier, ManagedHeapLayout, Nlab,
-    PROTO_NULL_SENTINEL, TestHeapMemory, ZgcBarrierSet,
+    BarrierEpoch, GrowableHeapMemory, HandleTableV2, HeapAccessV2, HeapBarrier, ManagedHeapLayout,
+    NativeHeapMemory, Nlab, PROTO_NULL_SENTINEL, TestHeapMemory, ZgcBarrierSet,
 };
 use wjsm_ir::constants;
 
@@ -21,15 +21,14 @@ fn heap_disabled() -> HeapAccessV2<TestHeapMemory> {
     HeapAccessV2::with_handles(memory, layout, handles, HeapBarrier::Disabled).unwrap()
 }
 
-fn allocate(heap: &HeapAccessV2<TestHeapMemory>, bytes: u64) -> u64 {
+fn allocate<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, bytes: u64) -> u64 {
     heap.allocate(&mut Nlab::new(), bytes)
         .unwrap()
         .object()
         .offset()
 }
 
-/// 发布一个 Utf16Flat 字符串并写入载荷。
-fn publish_utf16(heap: &HeapAccessV2<TestHeapMemory>, units: &[u16]) -> u32 {
+fn publish_utf16<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, units: &[u16]) -> u32 {
     let handle = heap.allocate_handle().unwrap();
     let capacity = units.len().next_multiple_of(4) as u32 * 2;
     let object = allocate(heap, constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64);
@@ -51,8 +50,7 @@ fn publish_utf16(heap: &HeapAccessV2<TestHeapMemory>, units: &[u16]) -> u32 {
     handle
 }
 
-/// 发布一个 Latin1Flat 字符串并写入载荷。
-fn publish_latin1(heap: &HeapAccessV2<TestHeapMemory>, bytes: &[u8]) -> u32 {
+fn publish_latin1<M: GrowableHeapMemory>(heap: &HeapAccessV2<M>, bytes: &[u8]) -> u32 {
     let handle = heap.allocate_handle().unwrap();
     let capacity = bytes.len().next_multiple_of(8) as u32;
     let object = allocate(heap, constants::HEAP_STRING_HEADER_SIZE as u64 + capacity as u64);
@@ -397,4 +395,87 @@ fn update_string_flags_and_length_survive_zgc_epoch() {
     );
     assert_eq!(heap.string_length(handle).unwrap(), 7);
     assert_eq!(heap.string_capacity(handle).unwrap(), 64);
+}
+
+#[test]
+fn with_string_units_reads_utf16_and_latin1() {
+    let heap = heap_disabled();
+    let utf16_units = "读取 UTF16".encode_utf16().collect::<Vec<_>>();
+    let utf16 = publish_utf16(&heap, &utf16_units);
+    let latin1 = publish_latin1(&heap, b"latin1\xff");
+
+    assert_eq!(heap.with_string_units(utf16, |units| units.to_vec()).unwrap(), utf16_units);
+    assert_eq!(
+        heap.with_string_units(latin1, |units| units.to_vec()).unwrap(),
+        b"latin1\xff".iter().map(|&byte| u16::from(byte)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn with_string_bytes_reads_latin1_on_copy_and_native_views() {
+    let test_heap = heap_disabled();
+    let test_handle = publish_latin1(&test_heap, b"copy path");
+    assert_eq!(
+        test_heap
+            .with_string_bytes(test_handle, |view| view.as_latin1().unwrap().to_vec())
+            .unwrap(),
+        b"copy path"
+    );
+
+    let layout = Arc::new(ManagedHeapLayout::new(HEAP_BYTES, 64 * 1024).unwrap());
+    let memory = NativeHeapMemory::for_layout(&layout).unwrap();
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let native_heap = HeapAccessV2::with_handles(
+        memory,
+        layout,
+        handles,
+        HeapBarrier::Disabled,
+    )
+    .unwrap();
+    let native_handle = publish_latin1(&native_heap, b"native path");
+    assert_eq!(
+        native_heap
+            .with_string_bytes(native_handle, |view| view.as_latin1().unwrap().len())
+            .unwrap(),
+        b"native path".len()
+    );
+}
+
+#[test]
+fn with_string_flatten_required() {
+    let heap = heap_disabled();
+    let left = publish_utf16(&heap, &"left".encode_utf16().collect::<Vec<_>>());
+    let handle = heap.allocate_handle().unwrap();
+    let object = allocate(
+        &heap,
+        constants::HEAP_STRING_HEADER_SIZE as u64 + constants::HEAP_STRING_CONS_PAYLOAD_SIZE as u64,
+    );
+    heap.publish_string(
+        handle,
+        object,
+        PROTO_NULL_SENTINEL,
+        constants::STRING_REPR_CONS,
+        0,
+        8,
+        constants::HEAP_STRING_CONS_PAYLOAD_SIZE,
+    )
+    .unwrap();
+    heap.set_cons_children(handle, left, left).unwrap();
+
+    assert!(matches!(
+        heap.with_string_units(handle, |_| ()),
+        Err(wjsm_gc::HeapAccessV2Error::StringFlattenRequired { .. })
+    ));
+}
+
+#[cfg(debug_assertions)]
+#[test]
+fn with_string_closure_no_alloc_guard() {
+    let heap = heap_disabled();
+    let handle = publish_utf16(&heap, &[u16::from(b'x')]);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = heap.with_string_units(handle, |_| heap.allocate_handle());
+    }));
+    assert!(panic.is_err());
+    assert!(heap.allocate_handle().is_ok());
 }

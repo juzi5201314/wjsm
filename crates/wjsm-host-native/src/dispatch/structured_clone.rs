@@ -403,15 +403,13 @@ fn serialize_value(
         return Ok(CloneValue::Number(value::decode_f64(encoded)));
     }
     if value::is_string(encoded) {
-        return state
-            .string(encoded)
+        return state.string_owned(encoded)
             .and_then(|text| text.to_utf8())
             .map(CloneValue::String)
             .ok_or_else(|| "DataCloneError: invalid string".to_string());
     }
     if value::is_bigint(encoded) {
-        return state
-            .string(encoded)
+        return state.string_owned(encoded)
             .and_then(|text| text.to_utf8())
             .map(CloneValue::BigInt)
             .ok_or_else(|| "DataCloneError: invalid bigint".to_string());
@@ -541,8 +539,7 @@ fn serialize_node(
         if !value::is_string(key) {
             return Err("DataCloneError: symbol keys cannot be cloned".into());
         }
-        let name = state
-            .string(key)
+        let name = state.string_owned(key)
             .and_then(|name| name.to_utf8())
             .ok_or_else(|| "DataCloneError: invalid property key".to_string())?;
         let stored = runtime::get_property(ctx, state, encoded, key)

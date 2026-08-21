@@ -1,6 +1,5 @@
 //! eval 桥接 builtin 的宿主实现：直接/间接 eval、作用域绑定读写。
 
-use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext};
 
@@ -53,7 +52,7 @@ fn eval_indirect(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
         .and_then(|error| state.create_exception(error))
         .unwrap_or_else(|| fail_dispatch(ctx));
     }
-    let Some(source) = state.string(*code).and_then(RuntimeString::to_utf8) else {
+    let Some(source) = state.string_to_utf8(*code) else {
         return *code;
     };
     let Some(environment) = modules::create_scope_record_with_outer(state, global) else {
@@ -80,7 +79,7 @@ fn eval_dynamic(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         .and_then(|error| state.create_exception(error))
         .unwrap_or_else(|| fail_dispatch(ctx));
     }
-    let Some(source) = state.string(*code).and_then(RuntimeString::to_utf8) else {
+    let Some(source) = state.string_to_utf8(*code) else {
         return *code;
     };
     let result =
@@ -186,9 +185,7 @@ fn eval_binding_exists(
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {
-    state
-        .string(key)
-        .and_then(RuntimeString::to_utf8)
+    state.string_owned(key).and_then(|text| text.to_utf8())
         .unwrap_or_else(|| runtime::render_value(state, key))
 }
 

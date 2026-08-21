@@ -1,18 +1,15 @@
 //! 宿主侧下标表回收。
 //!
 //! GC 标记期在 [`HostLiveSet`] 里边标边收活下标；`collect_garbage` 完成堆
-//! sweep 后由 [`NativeAgentState::sweep_host_index_tables`] 把不可达槽位
-//! tombstone、归还空闲表，并清掉指向它们的 callable / string intern 侧表。
-//! 这样 `closures` / `bound_functions` / `proxies` / `regexps` / `exceptions` /
-//! `strings` 不再只增不缩，高频闭包与 RegExp 负载下固定时间窗 RSS 不再无界上涨。
+//! sweep 后由 [`NativeAgentState::sweep_host_index_tables`] 清理宿主下标表。
+//! 字符串已经完全位于 ManagedHeap，其存活与退休由 GC 统一负责。
+ 
 
 use std::collections::HashSet;
 
-use wjsm_host::RuntimeString;
 use wjsm_ir::value;
+use crate::{NativeAgentState, NativeCallableKind};
 
-use crate::dispatch::SYMBOL_PROPERTY_KEY_BIT;
-use crate::{NativeAgentState, NativeCallableKind, StringSlot};
 
 /// 标记期收集的宿主侧活下标集合。sweep 只放行出现在这里的槽位。
 #[derive(Default)]
@@ -22,22 +19,17 @@ pub(crate) struct HostLiveSet {
     pub proxies: HashSet<u32>,
     pub regexps: HashSet<u32>,
     pub exceptions: HashSet<u32>,
-    pub strings: HashSet<u32>,
 }
 
 impl NativeAgentState {
-    /// GC 后清宿主下标表：tombstone 不可达槽位、归还空闲槽、清对应 callable
-    /// 侧表与 string intern 表。`retired` 是堆 handle 的 retired 集合（已排序）。
+    /// GC 后清宿主下标表；字符串对象由 ManagedHeap GC 统一清理。
     pub(crate) fn sweep_host_index_tables(&mut self, retired: &[u32], live: &HostLiveSet) {
         self.sweep_closures(live);
         self.sweep_bound_functions(live);
         self.sweep_proxies(live);
         self.sweep_regexps(live);
         self.sweep_exceptions(live);
-        // 闭包/bound/proxy 的 callable_* 已按 owner 清掉；此后再取 callable_* 的
-        // name_id 只剩活 callable，可直接作为存活字符串的钉扎来源。
         self.sweep_private_side_tables(retired, live);
-        self.sweep_strings(live);
     }
 
     /// 删除 callable 侧表里 owner 为指定编码值的所有条目。
@@ -132,102 +124,6 @@ impl NativeAgentState {
             .retain(|encoded| host_value_is_live(retired, live, *encoded));
     }
 
-    /// young ZGC 后只处理年轻字符串：新值连续存活两轮后晋升，避免每轮重复扫描。
-    pub(crate) fn sweep_young_strings(&mut self, live: &HostLiveSet) {
-        let live_strings = self.live_string_handles(live);
-        let snapshot_epoch = self.string_epoch.get();
-        for index in 0..self.strings.len() {
-            let slot = &mut self.strings[index];
-            if !slot.occupied || slot.age == StringSlot::AGE_PROMOTED {
-                continue;
-            }
-            if live_strings.contains(&(index as u32)) {
-                slot.age = slot.age.saturating_add(1);
-                if slot.age >= StringSlot::AGE_PROMOTE_AT {
-                    slot.age = StringSlot::AGE_PROMOTED;
-                }
-                continue;
-            }
-            if slot.born_after(snapshot_epoch) {
-                continue;
-            }
-            self.retire_string(index);
-        }
-    }
-
-    /// full/old GC 已建立完整 live set，可同时回收年轻和晋升字符串。
-    fn sweep_strings(&mut self, live: &HostLiveSet) {
-        let live_strings = self.live_string_handles(live);
-        let snapshot_epoch = self.string_epoch.get();
-        for index in 0..self.strings.len() {
-            let slot = &mut self.strings[index];
-            if !slot.occupied {
-                continue;
-            }
-            if live_strings.contains(&(index as u32)) {
-                slot.age = StringSlot::AGE_PROMOTED;
-                continue;
-            }
-            if slot.born_after(snapshot_epoch) {
-                continue;
-            }
-            self.retire_string(index);
-        }
-    }
-
-    /// managed young/old bridge与宿主边都已在 ZGC mark 中展开，report 的 host live set
-    /// 对字符串完整；属性名及专用侧表键另行钉扎。
-    fn live_string_handles(&self, live: &HostLiveSet) -> HashSet<u32> {
-        let mut live_strings = live.strings.clone();
-        live_strings.extend(self.gc.heap().property_name_ids());
-        live_strings.extend(self.array_properties.keys().map(|(_, key)| key.get()));
-        live_strings.extend(self.array_accessors.keys().map(|(_, key)| key.get()));
-        live_strings.extend(self.array_property_flags.keys().map(|(_, key)| key.get()));
-        for keys in self.array_property_order.values() {
-            live_strings.extend(keys.iter().map(|key| key.get()));
-        }
-        // 符号 bit 置位的 key 是符号而非字符串，不计入字符串存活集。
-        live_strings.extend(
-            self.callable_properties
-                .keys()
-                .map(|(_, key)| key.get())
-                .filter(|key| *key & SYMBOL_PROPERTY_KEY_BIT == 0),
-        );
-        live_strings.extend(
-            self.callable_accessors
-                .keys()
-                .map(|(_, key)| key.get())
-                .filter(|key| *key & SYMBOL_PROPERTY_KEY_BIT == 0),
-        );
-        live_strings.extend(
-            self.callable_property_flags
-                .keys()
-                .map(|(_, key)| key.get())
-                .filter(|key| *key & SYMBOL_PROPERTY_KEY_BIT == 0),
-        );
-        live_strings
-    }
-    /// 退休一个字符串槽位。
-    ///
-    /// 只有登记过去重表的槽位才回表删除：运行时产生的长串与 rope 节点从未入表，
-    /// 而查表本身要展平整串并计算内容哈希，字符串累加负载下这是 O(n²) 的主要来源。
-    fn retire_string(&mut self, index: usize) {
-        let slot = &mut self.strings[index];
-        let interned = slot.interned;
-        slot.occupied = false;
-        slot.age = 0;
-        slot.interned = false;
-        if interned {
-            let text = std::mem::replace(&mut self.strings[index].text, RuntimeString::empty());
-            // 去重表可能已因同内容的其它槽位而改指他处，只摘除仍指向本槽的映射。
-            if self.string_ids.get(&text).copied() == Some(index as u32) {
-                self.string_ids.remove(&text);
-            }
-        } else {
-            slot.text = RuntimeString::empty();
-        }
-        self.string_free.push(index as u32);
-    }
 }
 
 /// 判定一个宿主编码值是否仍存活。堆对象/数组按 retired handle 判定；

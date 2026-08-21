@@ -47,7 +47,7 @@ fn enumerable_keys(state: &mut NativeAgentState, source: i64) -> Option<Vec<i64>
         return Some(Vec::new());
     }
     if value::is_string(source) {
-        let length = state.string(source)?.utf16_len();
+        let length = state.string_len(source)?;
         let mut keys = Vec::with_capacity(length);
         for index in 0..length {
             keys.push(state.intern_text(index.to_string(), value::TAG_STRING)?);

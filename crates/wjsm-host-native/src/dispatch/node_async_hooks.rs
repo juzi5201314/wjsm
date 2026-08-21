@@ -498,7 +498,7 @@ fn resource_init(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     let Some(resource_handle) = super::object_handle(*resource) else {
         return fail_dispatch(ctx);
     };
-    let Some(type_name) = state.string(*type_value) else {
+    let Some(type_name) = state.string_owned(*type_value) else {
         return type_error(ctx, state, "The type argument must be a string");
     };
     let type_name = type_name.to_utf8_lossy();
@@ -536,7 +536,7 @@ fn resource_init(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 }
 
 fn resource_new(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(type_name) = args.first().and_then(|value| state.string(*value)) else {
+    let Some(type_name) = args.first().and_then(|value| state.string_owned(*value)) else {
         return type_error(ctx, state, "The type argument must be a string");
     };
     let type_name = type_name.to_utf8_lossy();

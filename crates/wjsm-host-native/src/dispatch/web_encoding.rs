@@ -680,7 +680,7 @@ fn to_boolean(state: &NativeAgentState, encoded: i64) -> bool {
         return number != 0.0 && !number.is_nan();
     }
     if value::is_string(encoded) {
-        return state.string(encoded).is_some_and(|text| !text.is_empty());
+        return state.string_owned(encoded).is_some_and(|text| !text.is_empty());
     }
     true
 }

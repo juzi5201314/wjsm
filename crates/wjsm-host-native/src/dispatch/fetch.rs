@@ -367,8 +367,7 @@ pub(super) fn register_object(state: &mut NativeAgentState, object: i64, kind: F
 
 pub(super) fn to_string(state: &NativeAgentState, encoded: i64) -> String {
     state
-        .string(encoded)
-        .map(wjsm_host::RuntimeString::to_utf8_lossy)
+        .string_to_utf8_lossy(encoded)
         .unwrap_or_else(|| runtime::render_value(state, encoded))
 }
 

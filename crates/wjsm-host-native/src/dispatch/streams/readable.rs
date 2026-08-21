@@ -24,9 +24,7 @@ pub(super) fn construct(
     let strategy = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     let byte_stream = if value::is_js_object(source) {
         let stream_type = read_named(ctx, state, source, "type");
-        state
-            .string(stream_type)
-            .and_then(wjsm_host::RuntimeString::to_utf8)
+        state.string_owned(stream_type).and_then(|text| text.to_utf8())
             .is_some_and(|kind| kind == "bytes")
     } else {
         false
@@ -338,9 +336,7 @@ fn get_reader(
             return false;
         }
         let mode = read_named(ctx, state, options, "mode");
-        state
-            .string(mode)
-            .and_then(wjsm_host::RuntimeString::to_utf8)
+        state.string_owned(mode).and_then(|text| text.to_utf8())
             .is_some_and(|mode| mode == "byob")
     });
     let Some((locked, byte_stream, status)) =

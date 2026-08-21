@@ -509,8 +509,7 @@ fn from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
         None => return type_error(ctx, state, "Unknown encoding"),
     };
     let bytes = if value::is_string(input) {
-        state
-            .string(input)
+        state.string_owned(input)
             .and_then(|text| text.to_utf8())
             .map(|text| encode_text(&text, encoding))
     } else if let Some(buffer) = state.buffers.get(&value::decode_handle(input)) {
@@ -569,7 +568,7 @@ fn byte_length(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     };
     let length = if let Some(buffer) = state.buffers.get(&value::decode_handle(input)) {
         buffer.length
-    } else if let Some(text) = state.string(input).and_then(|text| text.to_utf8()) {
+    } else if let Some(text) = state.string_owned(input).and_then(|text| text.to_utf8()) {
         encode_text(&text, encoding).len()
     } else {
         return type_error(ctx, state, "Invalid Buffer.byteLength input");
@@ -782,7 +781,7 @@ fn write_string(
     };
     let text = args
         .first()
-        .and_then(|input| state.string(*input))
+        .and_then(|input| state.string_owned(*input))
         .and_then(|text| text.to_utf8())
         .unwrap_or_else(|| {
             render_value(
@@ -1058,8 +1057,7 @@ fn value_bytes(state: &mut NativeAgentState, encoded: i64, encoding: Encoding) -
         return Some(visible(buffer));
     }
     if value::is_string(encoded) {
-        return state
-            .string(encoded)
+        return state.string_owned(encoded)
             .and_then(|text| text.to_utf8())
             .map(|text| encode_text(&text, encoding));
     }
@@ -1073,7 +1071,7 @@ fn encoding(state: &NativeAgentState, encoded: Option<i64>) -> Option<Encoding> 
     let Some(encoded) = encoded.filter(|encoded| !value::is_undefined(*encoded)) else {
         return Some(Encoding::Utf8);
     };
-    let label = state.string(encoded)?.to_utf8()?.to_ascii_lowercase();
+    let label = state.string_owned(encoded)?.to_utf8()?.to_ascii_lowercase();
     match label.as_str() {
         "ascii" => Some(Encoding::Ascii),
         "base64" => Some(Encoding::Base64),
