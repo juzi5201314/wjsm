@@ -32,9 +32,6 @@ use crate::{NativeCompileError, NativeObject};
 
 const HOST_OPERATION_SYMBOL: NativeHostSymbol = NativeHostSymbol::HostOperationDispatcher;
 const STRING_ADD_SYMBOL: NativeHostSymbol = NativeHostSymbol::StringAdd;
-const STRING_BUILDER_APPEND_SYMBOL: NativeHostSymbol = NativeHostSymbol::StringBuilderAppend;
-const STRING_BUILDER_APPEND_NUMBER_SYMBOL: NativeHostSymbol =
-    NativeHostSymbol::StringBuilderAppendNumber;
 const STRING_BUILDER_FINISH_SYMBOL: NativeHostSymbol = NativeHostSymbol::StringBuilderFinish;
 const DYNAMIC_BINARY_BASE: u32 = 0x1_0000;
 const DYNAMIC_UNARY_BASE: u32 = 0x1_0100;
@@ -686,8 +683,6 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub dispatcher: &'a DeclaredFunction,
     pub barrier_thunks: &'a DeclaredBarrierThunks,
     pub string_add: &'a DeclaredFunction,
-    pub string_builder_append: &'a DeclaredFunction,
-    pub string_builder_append_number: &'a DeclaredFunction,
     pub string_builder_finish: &'a DeclaredFunction,
     pub math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
     pub root_bitmaps: &'a [DeclaredData],
@@ -710,8 +705,6 @@ struct LoweringCx<'a, 'f> {
     root_frame: &'a mut FrameLowering,
     dispatcher: ir::FuncRef,
     string_add: ir::FuncRef,
-    string_builder_append: ir::FuncRef,
-    string_builder_append_number: ir::FuncRef,
     string_builder_finish: ir::FuncRef,
     ctx: ir::Value,
     target_config: cranelift_codegen::isa::TargetFrontendConfig,
@@ -753,7 +746,6 @@ struct InstructionTables<'a> {
     function_index: u32,
     barrier_thunks: &'a BarrierThunks,
     f64_values: &'a HashSet<ValueId>,
-    string_values: &'a HashSet<ValueId>,
     constant_defs: &'a HashMap<ValueId, ConstantId>,
     math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
     hoisted_constants: &'a HashMap<ConstantId, ir::Value>,
@@ -809,8 +801,6 @@ fn compile_program_inner(
     let function_ids = declare_functions(&mut module, program, &signature)?;
     let host_dispatcher = declare_host_dispatcher(&mut module)?;
     let string_add = declare_string_add_thunk(&mut module)?;
-    let string_builder_append = declare_string_builder_append_thunk(&mut module)?;
-    let string_builder_append_number = declare_string_builder_append_number_thunk(&mut module)?;
     let string_builder_finish = declare_string_builder_finish_thunk(&mut module)?;
     let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
@@ -850,10 +840,6 @@ fn compile_program_inner(
 
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
     let string_add_decl = DeclaredFunction::snapshot(module.declarations(), string_add);
-    let string_builder_append_decl =
-        DeclaredFunction::snapshot(module.declarations(), string_builder_append);
-    let string_builder_append_number_decl =
-        DeclaredFunction::snapshot(module.declarations(), string_builder_append_number);
     let string_builder_finish_decl =
         DeclaredFunction::snapshot(module.declarations(), string_builder_finish);
     let barrier_thunks =
@@ -895,8 +881,6 @@ fn compile_program_inner(
                 function_id: function_ids[index],
                 dispatcher: &dispatcher_decl,
                 string_add: &string_add_decl,
-                string_builder_append: &string_builder_append_decl,
-                string_builder_append_number: &string_builder_append_number_decl,
                 string_builder_finish: &string_builder_finish_decl,
                 barrier_thunks: &barrier_thunks,
                 math_thunks: &math_thunk_decls,
@@ -1117,44 +1101,6 @@ pub(crate) fn declare_string_add_thunk(
         .declare_function(STRING_ADD_SYMBOL.symbol_name(), Linkage::Import, &signature)
         .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
 }
-pub(crate) fn declare_string_builder_append_thunk(
-    module: &mut ObjectModule,
-) -> Result<FuncId, NativeCompileError> {
-    let pointer_type = module.target_config().pointer_type();
-    let mut signature = module.make_signature();
-    signature.params.push(AbiParam::new(pointer_type));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.returns.push(AbiParam::new(types::I64));
-    module
-        .declare_function(
-            STRING_BUILDER_APPEND_SYMBOL.symbol_name(),
-            Linkage::Import,
-            &signature,
-        )
-        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
-}
-
-pub(crate) fn declare_string_builder_append_number_thunk(
-    module: &mut ObjectModule,
-) -> Result<FuncId, NativeCompileError> {
-    let pointer_type = module.target_config().pointer_type();
-    let mut signature = module.make_signature();
-    signature.params.push(AbiParam::new(pointer_type));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::I64));
-    signature.params.push(AbiParam::new(types::F64));
-    signature.returns.push(AbiParam::new(types::I64));
-    module
-        .declare_function(
-            STRING_BUILDER_APPEND_NUMBER_SYMBOL.symbol_name(),
-            Linkage::Import,
-            &signature,
-        )
-        .map_err(|error| NativeCompileError::Cranelift(error.to_string()))
-}
-
 pub(crate) fn declare_string_builder_finish_thunk(
     module: &mut ObjectModule,
 ) -> Result<FuncId, NativeCompileError> {
@@ -1310,8 +1256,6 @@ pub(crate) fn lower_function(
     let function_index = u32::try_from(input.index).context("function index exceeds u32")?;
     let host_dispatcher = input.dispatcher;
     let string_add = input.string_add;
-    let string_builder_append = input.string_builder_append;
-    let string_builder_append_number = input.string_builder_append_number;
     let string_builder_finish = input.string_builder_finish;
     let math_thunks = input.math_thunks;
     let f64_values = input.f64_values;
@@ -1346,8 +1290,6 @@ pub(crate) fn lower_function(
     let phi_edges = collect_phi_edges(ir_function);
     let dispatcher_ref = host_dispatcher.import(builder.func);
     let string_add_ref = string_add.import(builder.func);
-    let string_builder_append_ref = string_builder_append.import(builder.func);
-    let string_builder_append_number_ref = string_builder_append_number.import(builder.func);
     let string_builder_finish_ref = string_builder_finish.import(builder.func);
     let mut imported_math_thunks: HashMap<Builtin, ir::FuncRef> =
         HashMap::with_capacity(math_thunks.len());
@@ -1356,7 +1298,6 @@ pub(crate) fn lower_function(
     let ctx_value = builder.block_params(entry)[0];
     let constants = program.constants();
     let boolean_values = infer_boolean_values(ir_function, constants);
-    let string_values = immutable_string_values(ir_function, constants);
     let constant_defs = ir_function
         .blocks()
         .iter()
@@ -1386,8 +1327,6 @@ pub(crate) fn lower_function(
             root_frame: &mut root_frame,
             dispatcher: dispatcher_ref,
             string_add: string_add_ref,
-            string_builder_append: string_builder_append_ref,
-            string_builder_append_number: string_builder_append_number_ref,
             string_builder_finish: string_builder_finish_ref,
             ctx: ctx_value,
             target_config,
@@ -1422,7 +1361,6 @@ pub(crate) fn lower_function(
             function_index,
             barrier_thunks: &barrier_thunks,
             f64_values,
-            string_values: &string_values,
             constant_defs: &constant_defs,
             math_thunks,
             hoisted_constants: &hoisted_constants,
@@ -1497,26 +1435,6 @@ pub(crate) fn lower_function(
         ids.sort_unstable_by_key(|constant| constant.0);
 
         ids
-    }
-    fn immutable_string_values(
-        function: &wjsm_ir::Function,
-        constants: &[Constant],
-    ) -> HashSet<ValueId> {
-        function
-            .blocks()
-            .iter()
-            .flat_map(|block| block.instructions())
-            .filter_map(|instruction| {
-                let Instruction::Const { dest, constant } = instruction else {
-                    return None;
-                };
-                matches!(
-                    constants.get(usize::try_from(constant.0).ok()?),
-                    Some(Constant::String(_) | Constant::BigInt(_))
-                )
-                .then_some(*dest)
-            })
-            .collect()
     }
     builder.finalize(target_config);
     Ok(())
@@ -1879,45 +1797,14 @@ fn lower_instruction(
             },
             feedback_ptr,
         ),
+        // 非逃逸累加器追加：JIT 内联写入 payload 并就地更新 length；最后片段
+        // 按运行时类型分派字符串直拷 / 安全整数 itoa，容量不足、builder 首建
+        // 或其余形态回落宿主 thunk。
         Instruction::CallBuiltin {
             dest: Some(dest),
             builtin: Builtin::StringBuilderAppend,
             args,
-        } if args.len() == 3
-            && tables.string_values.contains(&args[1])
-            && tables.f64_values.contains(&args[2]) =>
-        {
-            let current = use_value(cx.builder, cx.variables, args[0])?;
-            let first = use_value(cx.builder, cx.variables, args[1])?;
-            let second = use_value(cx.builder, cx.variables, args[2])?;
-            let second = cx
-                .builder
-                .ins()
-                .bitcast(types::F64, ir::MemFlagsData::new(), second);
-            cx.flush()?;
-            let call = cx.builder.ins().call(
-                cx.string_builder_append_number,
-                &[cx.ctx, current, first, second],
-            );
-            let result = cx.builder.inst_results(call)[0];
-            define_value(cx.builder, cx.variables, *dest, result)
-        }
-        Instruction::CallBuiltin {
-            dest: Some(dest),
-            builtin: Builtin::StringBuilderAppend,
-            args,
-        } if args.len() == 3 => {
-            let current = use_value(cx.builder, cx.variables, args[0])?;
-            let first = use_value(cx.builder, cx.variables, args[1])?;
-            let second = use_value(cx.builder, cx.variables, args[2])?;
-            cx.flush()?;
-            let call = cx
-                .builder
-                .ins()
-                .call(cx.string_builder_append, &[cx.ctx, current, first, second]);
-            let result = cx.builder.inst_results(call)[0];
-            define_value(cx.builder, cx.variables, *dest, result)
-        }
+        } if args.len() >= 2 => lower_string_builder_append(cx, *dest, args, feedback_ptr),
         Instruction::CallBuiltin {
             dest,
             builtin: Builtin::StringBuilderFinish,
@@ -3151,6 +3038,718 @@ fn lower_string_char_builtin(
     )?;
     define_value(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+    Ok(())
+}
+
+// ── 非逃逸字符串累加器的内联追加（阶段 3）──
+//
+// 快路径条件：current 是堆内 BUILDER、全部片段为 flat 字符串（数字片段要求
+// 安全整数）、剩余容量充足，并且 entry 稳定 + ZGC 搬迁未激活（access epoch
+// 为偶）。满足时直接把码元写入 payload 并就地更新 length，零宿主往返；容量
+// 不足（增长走宿主搬迁）或任何守卫不满足时回落宿主 thunk，语义与未内联时
+// 完全一致。并发标记期间照常直写：payload 与 length 属纯数据，标记器不扫描
+// builder 载荷，宿主侧 `write_string_payload` 同样不因标记活跃而阻塞。
+
+/// 写入路径专用的保守字符串地址解析。
+///
+/// 与 `emit_string_address` 的差异：不做 load assist。assist 之后并发搬迁仍
+/// 可能与随后的直写竞争，因此只有在 entry 稳定且 ZGC 的 access epoch 为偶
+/// （搬迁未激活）时才返回地址，其余一律进 miss 块。
+fn emit_idle_string_address(
+    cx: &mut LoweringCx<'_, '_>,
+    encoded: ir::Value,
+    miss_block: ir::Block,
+) -> Result<ir::Value> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let entry_block = cx.builder.create_block();
+    let boxed_bits = cx
+        .builder
+        .ins()
+        .band_imm_s(encoded, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
+    let is_boxed = cx.builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        boxed_bits,
+        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
+    );
+    let tag_word = cx.builder.ins().ushr_imm_u(encoded, 32);
+    let tag = cx.builder.ins().band_imm_u(
+        tag_word,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_string = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_STRING).expect("string tag fits i64"),
+    );
+    let runtime_flag = cx.builder.ins().band_imm_u(
+        tag_word,
+        i64::try_from(value::STRING_RUNTIME_HANDLE_FLAG).expect("runtime flag fits i64"),
+    );
+    let is_runtime = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
+    let valid = cx.builder.ins().band(is_boxed, is_string);
+    let valid = cx.builder.ins().band(valid, is_runtime);
+    cx.builder
+        .ins()
+        .brif(valid, entry_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(entry_block);
+    cx.builder.seal_block(entry_block);
+    let handle = cx.builder.ins().band_imm_u(encoded, i64::from(u32::MAX));
+    let handle_table = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle, 3);
+    let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
+    let entry = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_address, 0);
+    let state = cx.builder.ins().band_imm_u(entry, 0xffff);
+    let stable = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    let logical_address = cx.builder.ins().ushr_imm_u(entry, 16);
+    let barrier_state = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
+    );
+    let barrier_disabled =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    let legacy_block = cx.builder.create_block();
+    let zgc_block = cx.builder.create_block();
+    let fast_block = cx.builder.create_block();
+    let resolved_block = cx.builder.create_block();
+    cx.builder.append_block_param(resolved_block, types::I64);
+    cx.builder
+        .ins()
+        .brif(barrier_disabled, legacy_block, &[], zgc_block, &[]);
+
+    cx.builder.switch_to_block(legacy_block);
+    cx.builder.seal_block(legacy_block);
+    cx.builder.ins().brif(
+        stable,
+        resolved_block,
+        &[ir::BlockArg::Value(logical_address)],
+        miss_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(zgc_block);
+    cx.builder.seal_block(zgc_block);
+    let epoch_address = cx.builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let epoch = cx
+        .builder
+        .ins()
+        .atomic_load(types::I64, MemFlagsData::trusted(), epoch_address);
+    let epoch_bit = cx.builder.ins().band_imm_u(epoch, 1);
+    let epoch_even = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
+    let direct = cx.builder.ins().band(stable, epoch_even);
+    cx.builder
+        .ins()
+        .brif(direct, fast_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(fast_block);
+    cx.builder.seal_block(fast_block);
+    increment_barrier_counter(
+        cx.builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, store_fast_events),
+    );
+    cx.builder
+        .ins()
+        .jump(resolved_block, &[ir::BlockArg::Value(logical_address)]);
+
+    cx.builder.switch_to_block(resolved_block);
+    cx.builder.seal_block(resolved_block);
+    let logical_address = cx.builder.block_params(resolved_block)[0];
+    let heap_delta = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    Ok(cx.builder.ins().iadd(logical_address, heap_delta))
+}
+
+/// 读字符串头 `+0` word 并提取 repr 字节（`+5`）。
+fn emit_string_repr(builder: &mut FunctionBuilder<'_>, address: ir::Value) -> ir::Value {
+    let first_word = builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), address, 0);
+    let repr = builder.ins().ushr_imm_u(
+        first_word,
+        i64::from(constants::HEAP_STRING_REPR_OFFSET * 8),
+    );
+    builder.ins().band_imm_u(repr, 0xff)
+}
+
+/// 内联追加的 builder 状态：对象地址、当前码元长度与字节容量。
+struct InlineBuilderState {
+    address: ir::Value,
+    length: ir::Value,
+    capacity: ir::Value,
+}
+
+/// 解析累加器 current 为 BUILDER repr 的堆对象并读出长度/容量；其余形态进
+/// miss（首建 builder、flat 化后的再追加都由宿主处理）。
+fn emit_inline_builder_state(
+    cx: &mut LoweringCx<'_, '_>,
+    current: ir::Value,
+    miss_block: ir::Block,
+) -> Result<InlineBuilderState> {
+    let address = emit_idle_string_address(cx, current, miss_block)?;
+    let repr = emit_string_repr(cx.builder, address);
+    let is_builder = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        repr,
+        i64::from(constants::STRING_REPR_BUILDER),
+    );
+    let builder_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(is_builder, builder_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(builder_block);
+    cx.builder.seal_block(builder_block);
+    let length_capacity = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        address,
+        i32::try_from(constants::HEAP_STRING_LENGTH_OFFSET).expect("length offset fits i32"),
+    );
+    let length = cx
+        .builder
+        .ins()
+        .band_imm_u(length_capacity, i64::from(u32::MAX));
+    let capacity = cx.builder.ins().ushr_imm_u(length_capacity, 32);
+    Ok(InlineBuilderState {
+        address,
+        length,
+        capacity,
+    })
+}
+
+/// 已解析的 flat 字符串片段：payload 地址、是否 Latin-1、码元数。
+struct InlineStringPart {
+    payload: ir::Value,
+    is_latin1: ir::Value,
+    units: ir::Value,
+}
+
+/// 解析字符串片段；仅 Latin-1/UTF-16 flat 直拷，Cons/Slice/builder 片段进 miss。
+fn emit_inline_string_part(
+    cx: &mut LoweringCx<'_, '_>,
+    encoded: ir::Value,
+    miss_block: ir::Block,
+) -> Result<InlineStringPart> {
+    let address = emit_idle_string_address(cx, encoded, miss_block)?;
+    let repr = emit_string_repr(cx.builder, address);
+    let is_latin1 = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        repr,
+        i64::from(constants::STRING_REPR_LATIN1_FLAT),
+    );
+    let is_utf16 = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        repr,
+        i64::from(constants::STRING_REPR_UTF16_FLAT),
+    );
+    let flat = cx.builder.ins().bor(is_latin1, is_utf16);
+    let flat_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(flat, flat_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(flat_block);
+    cx.builder.seal_block(flat_block);
+    let length_word = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        address,
+        i32::try_from(constants::HEAP_STRING_LENGTH_OFFSET).expect("length offset fits i32"),
+    );
+    let units = cx
+        .builder
+        .ins()
+        .band_imm_u(length_word, i64::from(u32::MAX));
+    let payload = cx
+        .builder
+        .ins()
+        .iadd_imm_s(address, i64::from(constants::HEAP_STRING_PAYLOAD_OFFSET));
+    Ok(InlineStringPart {
+        payload,
+        is_latin1,
+        units,
+    })
+}
+
+/// UTF-16 flat 片段 → builder payload 的逐码元拷贝循环。
+fn emit_copy_utf16_part(
+    cx: &mut LoweringCx<'_, '_>,
+    part: &InlineStringPart,
+    dst: ir::Value,
+    done_block: ir::Block,
+) {
+    let head = cx.builder.create_block();
+    cx.builder.append_block_param(head, types::I64);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.ins().jump(head, &[ir::BlockArg::Value(zero)]);
+
+    cx.builder.switch_to_block(head);
+    let index = cx.builder.block_params(head)[0];
+    let more = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::UnsignedLessThan, index, part.units);
+    let body = cx.builder.create_block();
+    cx.builder.ins().brif(more, body, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(body);
+    let byte_offset = cx.builder.ins().ishl_imm_u(index, 1);
+    let src = cx.builder.ins().iadd(part.payload, byte_offset);
+    let unit = cx
+        .builder
+        .ins()
+        .load(types::I16, MemFlagsData::trusted(), src, 0);
+    let dst_unit = cx.builder.ins().iadd(dst, byte_offset);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), unit, dst_unit, 0);
+    let next = cx.builder.ins().iadd_imm_u(index, 1);
+    cx.builder.ins().jump(head, &[ir::BlockArg::Value(next)]);
+    cx.builder.seal_block(head);
+    cx.builder.seal_block(body);
+}
+
+/// Latin-1 flat 片段 → builder UTF-16 payload 的逐码元加宽拷贝循环。
+fn emit_copy_latin1_part(
+    cx: &mut LoweringCx<'_, '_>,
+    part: &InlineStringPart,
+    dst: ir::Value,
+    done_block: ir::Block,
+) {
+    let head = cx.builder.create_block();
+    cx.builder.append_block_param(head, types::I64);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.ins().jump(head, &[ir::BlockArg::Value(zero)]);
+
+    cx.builder.switch_to_block(head);
+    let index = cx.builder.block_params(head)[0];
+    let more = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::UnsignedLessThan, index, part.units);
+    let body = cx.builder.create_block();
+    cx.builder.ins().brif(more, body, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(body);
+    let src = cx.builder.ins().iadd(part.payload, index);
+    let unit = cx
+        .builder
+        .ins()
+        .load(types::I8, MemFlagsData::trusted(), src, 0);
+    let unit = cx.builder.ins().uextend(types::I16, unit);
+    let dst_byte_offset = cx.builder.ins().ishl_imm_u(index, 1);
+    let dst_unit = cx.builder.ins().iadd(dst, dst_byte_offset);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), unit, dst_unit, 0);
+    let next = cx.builder.ins().iadd_imm_u(index, 1);
+    cx.builder.ins().jump(head, &[ir::BlockArg::Value(next)]);
+    cx.builder.seal_block(head);
+    cx.builder.seal_block(body);
+}
+
+/// 按片段表示分派拷贝循环，返回继续块。
+fn emit_copy_part_dispatch(
+    cx: &mut LoweringCx<'_, '_>,
+    part: &InlineStringPart,
+    dst: ir::Value,
+) -> ir::Block {
+    let done = cx.builder.create_block();
+    let latin1_head = cx.builder.create_block();
+    let utf16_head = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(part.is_latin1, latin1_head, &[], utf16_head, &[]);
+
+    cx.builder.switch_to_block(latin1_head);
+    cx.builder.seal_block(latin1_head);
+    emit_copy_latin1_part(cx, part, dst, done);
+
+    cx.builder.switch_to_block(utf16_head);
+    cx.builder.seal_block(utf16_head);
+    emit_copy_utf16_part(cx, part, dst, done);
+
+    cx.builder.switch_to_block(done);
+    cx.builder.seal_block(done);
+    done
+}
+
+/// `0 ≤ magnitude ≤ 2^53-1` 的十进制位数（1..=16）：对 10 的幂做比较阶梯，
+/// 无除法。
+fn emit_decimal_digit_count(builder: &mut FunctionBuilder<'_>, magnitude: ir::Value) -> ir::Value {
+    let mut digits = builder.ins().iconst(types::I64, 1);
+    for exponent in 1..=15 {
+        let threshold = builder.ins().iconst(
+            types::I64,
+            10_i64.pow(u32::try_from(exponent).expect("≤15")),
+        );
+        let reached = builder.ins().icmp(
+            ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+            magnitude,
+            threshold,
+        );
+        let count = builder.ins().iconst(types::I64, i64::from(exponent) + 1);
+        digits = builder.ins().select(reached, count, digits);
+    }
+    digits
+}
+
+/// 宿主回落的统一出口：dispatcher 承载全部通用语义（builder 首建、增长、
+/// 非安全整数格式化、非字符串片段）。
+fn emit_string_builder_append_miss(
+    cx: &mut LoweringCx<'_, '_>,
+    dest: ValueId,
+    args: &[ir::Value],
+    feedback_ptr: Option<ir::Value>,
+    miss_block: ir::Block,
+    merge_block: ir::Block,
+) -> Result<()> {
+    cx.builder.switch_to_block(miss_block);
+    cx.builder.seal_block(miss_block);
+    let result = cx.call(
+        u32::from(Builtin::StringBuilderAppend.wire_id()),
+        args,
+        feedback_ptr,
+    )?;
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+    Ok(())
+}
+
+/// 内联更新 builder length（`+8` word 低 32 位，高 32 位 capacity 不动）。
+fn emit_store_builder_length(
+    cx: &mut LoweringCx<'_, '_>,
+    builder: &InlineBuilderState,
+    total_units: ir::Value,
+) {
+    let length = cx.builder.ins().ireduce(types::I32, total_units);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        length,
+        builder.address,
+        i32::try_from(constants::HEAP_STRING_LENGTH_OFFSET).expect("length offset fits i32"),
+    );
+}
+
+/// `string + f64` 片段的数字位写入:负号、位数阶梯与两位一组的 itoa 反向
+/// 写入。调用后当前块保持打开,由调用方收尾。
+fn emit_append_number_digits(
+    cx: &mut LoweringCx<'_, '_>,
+    payload_base: ir::Value,
+    start_units: ir::Value,
+    negative: ir::Value,
+    magnitude: ir::Value,
+    digits: ir::Value,
+    len_store_block: ir::Block,
+) {
+    let minus_block = cx.builder.create_block();
+    let digits_entry = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(negative, minus_block, &[], digits_entry, &[]);
+
+    cx.builder.switch_to_block(minus_block);
+    cx.builder.seal_block(minus_block);
+    let minus_offset_bytes = cx.builder.ins().ishl_imm_u(start_units, 1);
+    let minus_address = cx.builder.ins().iadd(payload_base, minus_offset_bytes);
+    let minus = cx.builder.ins().iconst(types::I16, i64::from(b'-'));
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), minus, minus_address, 0);
+    cx.builder.ins().jump(digits_entry, &[]);
+
+    cx.builder.switch_to_block(digits_entry);
+    cx.builder.seal_block(digits_entry);
+    let write_pos = cx.builder.ins().iadd(start_units, digits);
+    let digit_loop = cx.builder.create_block();
+    cx.builder.append_block_param(digit_loop, types::I64);
+    cx.builder.append_block_param(digit_loop, types::I64);
+    let is_zero = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, magnitude, 0);
+    let zero_block = cx.builder.create_block();
+    cx.builder.ins().brif(
+        is_zero,
+        zero_block,
+        &[],
+        digit_loop,
+        &[
+            ir::BlockArg::Value(magnitude),
+            ir::BlockArg::Value(write_pos),
+        ],
+    );
+
+    cx.builder.switch_to_block(zero_block);
+    cx.builder.seal_block(zero_block);
+    let zero_char = cx.builder.ins().iconst(types::I16, i64::from(b'0'));
+    let zero_pos = cx.builder.ins().iadd_imm_u(write_pos, -1);
+    let zero_offset = cx.builder.ins().ishl_imm_u(zero_pos, 1);
+    let zero_address = cx.builder.ins().iadd(payload_base, zero_offset);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), zero_char, zero_address, 0);
+    cx.builder.ins().jump(len_store_block, &[]);
+
+    cx.builder.switch_to_block(digit_loop);
+    let m = cx.builder.block_params(digit_loop)[0];
+    let pos = cx.builder.block_params(digit_loop)[1];
+    let done = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, m, 0);
+    let leading_block = cx.builder.create_block();
+    let single_block = cx.builder.create_block();
+    let pair_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(done, len_store_block, &[], leading_block, &[]);
+
+    cx.builder.switch_to_block(leading_block);
+    cx.builder.seal_block(leading_block);
+    let leading = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::UnsignedLessThan, m, 10);
+    cx.builder
+        .ins()
+        .brif(leading, single_block, &[], pair_block, &[]);
+
+    cx.builder.switch_to_block(pair_block);
+    cx.builder.seal_block(pair_block);
+    let high = cx.builder.ins().udiv_imm_u(m, 100);
+    let pair = cx.builder.ins().urem_imm_u(m, 100);
+    let tens = cx.builder.ins().udiv_imm_u(pair, 10);
+    let ones = cx.builder.ins().urem_imm_u(pair, 10);
+    emit_store_digit(cx, payload_base, pos, -1, ones);
+    emit_store_digit(cx, payload_base, pos, -2, tens);
+    let next_pos = cx.builder.ins().iadd_imm_u(pos, -2);
+    cx.builder.ins().jump(
+        digit_loop,
+        &[ir::BlockArg::Value(high), ir::BlockArg::Value(next_pos)],
+    );
+    cx.builder.seal_block(digit_loop);
+
+    cx.builder.switch_to_block(single_block);
+    cx.builder.seal_block(single_block);
+    emit_store_digit(cx, payload_base, pos, -1, m);
+    cx.builder.ins().jump(len_store_block, &[]);
+}
+
+/// 在 payload 起算的 `pos + delta` 绝对码元位写入一个 '0' 起始的数字码元。
+fn emit_store_digit(
+    cx: &mut LoweringCx<'_, '_>,
+    payload_base: ir::Value,
+    pos: ir::Value,
+    delta: i64,
+    digit: ir::Value,
+) {
+    let at = cx.builder.ins().iadd_imm_u(pos, delta);
+    let offset = cx.builder.ins().ishl_imm_u(at, 1);
+    let address = cx.builder.ins().iadd(payload_base, offset);
+    let ascii_zero = cx.builder.ins().iconst(types::I64, i64::from(b'0'));
+    let unit = cx.builder.ins().iadd(digit, ascii_zero);
+    let unit = cx.builder.ins().ireduce(types::I16, unit);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), unit, address, 0);
+}
+
+/// 非逃逸累加器的内联追加:前缀片段必须为 flat 字符串;最后一个片段按运行时
+/// 类型分派——字符串直拷、数字走安全整数 itoa,其余形态(对象/BigInt/非 flat
+/// 数字、需要增长)回落宿主 thunk,语义与未内联时完全一致。
+fn lower_string_builder_append(
+    cx: &mut LoweringCx<'_, '_>,
+    dest: ValueId,
+    args: &[ValueId],
+    feedback_ptr: Option<ir::Value>,
+) -> Result<()> {
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        values.push(use_value(cx.builder, cx.variables, *arg)?);
+    }
+    let last = *values
+        .last()
+        .context("string builder append needs a part")?;
+    let miss_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+
+    let builder_state = emit_inline_builder_state(cx, values[0], miss_block)?;
+    let mut prefix_parts = Vec::with_capacity(values.len() - 2);
+    for encoded in &values[1..values.len() - 1] {
+        prefix_parts.push(emit_inline_string_part(cx, *encoded, miss_block)?);
+    }
+
+    // 最后片段:先按 flat 字符串解析,tag/repr 不符再进数字分派。
+    let number_check_block = cx.builder.create_block();
+    let last_part = emit_inline_string_part(cx, last, number_check_block)?;
+
+    // ── 字符串路径:全部片段直拷。──
+    let mut string_total = builder_state.length;
+    for part in &prefix_parts {
+        string_total = cx.builder.ins().iadd(string_total, part.units);
+    }
+    string_total = cx.builder.ins().iadd(string_total, last_part.units);
+    let string_bytes = cx.builder.ins().ishl_imm_u(string_total, 1);
+    let string_fits = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        string_bytes,
+        builder_state.capacity,
+    );
+    let string_write_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(string_fits, string_write_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(string_write_block);
+    cx.builder.seal_block(string_write_block);
+    let payload_base = cx.builder.ins().iadd_imm_s(
+        builder_state.address,
+        i64::from(constants::HEAP_STRING_PAYLOAD_OFFSET),
+    );
+    let mut cursor_units = builder_state.length;
+    for part in prefix_parts.iter().chain(std::iter::once(&last_part)) {
+        let cursor_bytes = cx.builder.ins().ishl_imm_u(cursor_units, 1);
+        let part_dst = cx.builder.ins().iadd(payload_base, cursor_bytes);
+        let done = emit_copy_part_dispatch(cx, part, part_dst);
+        cx.builder.switch_to_block(done);
+        cursor_units = cx.builder.ins().iadd(cursor_units, part.units);
+    }
+    emit_store_builder_length(cx, &builder_state, string_total);
+    define_value(cx.builder, cx.variables, dest, values[0])?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    // ── 数字路径:末片段是 Number 且为安全整数时内联 itoa。──
+    cx.builder.switch_to_block(number_check_block);
+    cx.builder.seal_block(number_check_block);
+    let is_number = emit_is_number(cx.builder, last);
+    let classify_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(is_number, classify_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(classify_block);
+    cx.builder.seal_block(classify_block);
+    // NaN/±Inf 超出安全整数范围(有序比较对 NaN 恒假),小数无法经 i64
+    // roundtrip,全部回落宿主的完整 Number→String 语义。
+    let number = cx
+        .builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), last);
+    let magnitude_f64 = cx.builder.ins().fabs(number);
+    let bound = cx.builder.ins().f64const(9_007_199_254_740_991.0);
+    let in_range = cx.builder.ins().fcmp(
+        ir::condcodes::FloatCC::LessThanOrEqual,
+        magnitude_f64,
+        bound,
+    );
+    let as_int = cx.builder.ins().fcvt_to_sint_sat(types::I64, number);
+    let roundtrip = cx.builder.ins().fcvt_from_sint(types::F64, as_int);
+    let exact = cx
+        .builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::Equal, number, roundtrip);
+    let number_ok = cx.builder.ins().band(in_range, exact);
+    let number_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(number_ok, number_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(number_block);
+    cx.builder.seal_block(number_block);
+    let negative = cx
+        .builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::SignedLessThan, as_int, 0);
+    let negated = cx.builder.ins().ineg(as_int);
+    let magnitude = cx.builder.ins().select(negative, negated, as_int);
+    let digits = emit_decimal_digit_count(cx.builder, magnitude);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let zero_units = cx.builder.ins().iconst(types::I64, 0);
+    let negative_units = cx.builder.ins().select(negative, one, zero_units);
+    let mut number_total = builder_state.length;
+    for part in &prefix_parts {
+        number_total = cx.builder.ins().iadd(number_total, part.units);
+    }
+    number_total = cx.builder.ins().iadd(number_total, negative_units);
+    number_total = cx.builder.ins().iadd(number_total, digits);
+    let number_bytes = cx.builder.ins().ishl_imm_u(number_total, 1);
+    let number_fits = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        number_bytes,
+        builder_state.capacity,
+    );
+    let number_write_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(number_fits, number_write_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(number_write_block);
+    cx.builder.seal_block(number_write_block);
+    let payload_base = cx.builder.ins().iadd_imm_s(
+        builder_state.address,
+        i64::from(constants::HEAP_STRING_PAYLOAD_OFFSET),
+    );
+    let mut cursor_units = builder_state.length;
+    for part in &prefix_parts {
+        let cursor_bytes = cx.builder.ins().ishl_imm_u(cursor_units, 1);
+        let part_dst = cx.builder.ins().iadd(payload_base, cursor_bytes);
+        let done = emit_copy_part_dispatch(cx, part, part_dst);
+        cx.builder.switch_to_block(done);
+        cursor_units = cx.builder.ins().iadd(cursor_units, part.units);
+    }
+    let len_store_block = cx.builder.create_block();
+    emit_append_number_digits(
+        cx,
+        payload_base,
+        cursor_units,
+        negative,
+        magnitude,
+        digits,
+        len_store_block,
+    );
+
+    cx.builder.switch_to_block(len_store_block);
+    cx.builder.seal_block(len_store_block);
+    emit_store_builder_length(cx, &builder_state, number_total);
+    define_value(cx.builder, cx.variables, dest, values[0])?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    emit_string_builder_append_miss(cx, dest, &values, feedback_ptr, miss_block, merge_block)?;
 
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);

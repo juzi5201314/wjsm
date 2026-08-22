@@ -4200,10 +4200,7 @@ impl NativeAgentState {
                 capacity,
             )
             .ok()?;
-        self.gc
-            .heap()
-            .write_string_payload(handle, 0, bytes)
-            .ok()?;
+        self.gc.heap().write_string_payload(handle, 0, bytes).ok()?;
         self.gc.mark_black_allocation(handle).ok()?;
         if interned && tag == value::TAG_STRING {
             self.gc.heap().string_content_hash(handle).ok()?;

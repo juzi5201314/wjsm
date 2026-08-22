@@ -31,24 +31,163 @@ pub(crate) fn run(module: &mut Module) {
         .map(|names| names.into_iter().map(str::to_owned).collect())
         .collect();
 
+    // 第一轮:帧局部候选 + 模块级候选(const 写入播种)跨函数联立不动点。
+    // 累加器种类依赖其 add 结果种类、add 又依赖累加器 load 种类的环,靠
+    // const 播种与「全部写入同种类」验证在不动点里收敛。
+    let module_kinds = infer_module_scope_kinds(module, &constants, &locals_by_function);
+    let touching_functions = collect_variable_touch(module);
+
     for (index, local_names) in locals_by_function.into_iter().enumerate() {
         let function_id = FunctionId(u32::try_from(index).expect("function index fits u32"));
         let Some(function) = module.functions().get(index) else {
             continue;
         };
-        let (kinds, local_kinds) = infer_stable_kinds(function, &constants, &local_names);
+        // 模块级种子并入本函数候选联立验证:块级累加器是帧局部,但其 add 链
+        // 可能引用模块级 const(发布名,不是任何函数的局部),不并入就会因
+        // 链上种类缺失而丢候选。
+        let (_, stable_kinds) =
+            infer_stable_kinds(function, &constants, &local_names, &module_kinds);
+        // 模块级累加器只有在全部触达都落在本函数时才可 builder 化;帧局部
+        // 变量天然只有本函数可见。
+        let module_private: HashSet<String> = module_kinds
+            .keys()
+            .filter(|name| {
+                touching_functions
+                    .get(*name)
+                    .is_some_and(|functions| functions.iter().all(|f| *f == index))
+            })
+            .cloned()
+            .collect();
+        let kinds = infer_value_kinds(function, &constants, &stable_kinds);
         let Some(function) = module.function_mut(function_id) else {
             continue;
         };
         fuse_function(function, &kinds);
-        lower_builders(function, &kinds, &local_kinds);
+        lower_builders(
+            function,
+            &kinds,
+            &stable_kinds,
+            &local_names,
+            &module_private,
+        );
     }
+}
+
+/// 模块级变量(不属于任何函数帧局部)的稳定种类。
+///
+/// 候选从全部写入中的 const 种类播种(帧内分析与 `seed_local_kinds` 同理),
+/// 每轮把候选并入各函数的种子重推值种类,再要求该变量的全部跨函数写入都
+/// 证明为候选种类;不再收敛(或候选清空)时返回。
+fn infer_module_scope_kinds(
+    module: &Module,
+    constants: &[Constant],
+    locals_by_function: &[HashSet<String>],
+) -> HashMap<String, PrimitiveKind> {
+    let owned: HashSet<&str> = locals_by_function
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    let mut stores: HashMap<String, Vec<(usize, ValueId)>> = HashMap::new();
+    let mut definitions_by_function = Vec::with_capacity(module.functions().len());
+    for (index, function) in module.functions().iter().enumerate() {
+        definitions_by_function.push(collect_definitions(function));
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let Instruction::StoreVar { name, value } = instruction else {
+                    continue;
+                };
+                if !owned.contains(name.as_str()) {
+                    stores
+                        .entry(name.clone())
+                        .or_default()
+                        .push((index, *value));
+                }
+            }
+        }
+    }
+
+    // 播种:任一写入为 Const 且全部 Const 写入种类一致。
+    let mut candidates: HashMap<String, PrimitiveKind> = HashMap::new();
+    for (name, entries) in &stores {
+        let mut seed: Option<PrimitiveKind> = None;
+        let mut conflict = false;
+        for (index, value) in entries {
+            let Some(Instruction::Const { constant, .. }) =
+                definitions_by_function[*index].get(value)
+            else {
+                continue;
+            };
+            let Some(kind) = usize::try_from(constant.0)
+                .ok()
+                .and_then(|index| constants.get(index))
+                .and_then(constant_kind)
+            else {
+                conflict = true;
+                break;
+            };
+            match seed {
+                None => seed = Some(kind),
+                Some(current) if current != kind => {
+                    conflict = true;
+                    break;
+                }
+                Some(_) => {}
+            }
+        }
+        if !conflict && let Some(kind) = seed {
+            candidates.insert(name.clone(), kind);
+        }
+    }
+
+    loop {
+        let mut value_kinds_by_function = Vec::with_capacity(module.functions().len());
+        for (index, function) in module.functions().iter().enumerate() {
+            let Some(local_names) = locals_by_function.get(index) else {
+                continue;
+            };
+            let (kinds, _) = infer_stable_kinds(function, constants, local_names, &candidates);
+            value_kinds_by_function.push(kinds);
+        }
+        let before = candidates.len();
+        candidates.retain(|name, expected| {
+            stores.get(name).is_some_and(|entries| {
+                entries.iter().all(|(index, value)| {
+                    value_kinds_by_function
+                        .get(*index)
+                        .and_then(|kinds| kinds.get(value))
+                        == Some(expected)
+                })
+            })
+        });
+        if candidates.len() == before {
+            return candidates;
+        }
+    }
+}
+
+/// 每个变量名被哪些函数 LoadVar/StoreVar 触达(模块级累加器私有性检查)。
+fn collect_variable_touch(module: &Module) -> HashMap<String, HashSet<usize>> {
+    let mut touching: HashMap<String, HashSet<usize>> = HashMap::new();
+    for (index, function) in module.functions().iter().enumerate() {
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let name = match instruction {
+                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
+                    _ => continue,
+                };
+                touching.entry(name.clone()).or_default().insert(index);
+            }
+        }
+    }
+    touching
 }
 
 fn infer_stable_kinds(
     function: &Function,
     constants: &[Constant],
     local_names: &HashSet<String>,
+    module_seeds: &HashMap<String, PrimitiveKind>,
 ) -> (
     HashMap<ValueId, PrimitiveKind>,
     HashMap<String, PrimitiveKind>,
@@ -56,12 +195,17 @@ fn infer_stable_kinds(
     let definitions = collect_definitions(function);
     let stores = collect_local_stores(function, local_names);
     let mut candidates = seed_local_kinds(&stores, &definitions, constants);
+    for (name, kind) in module_seeds {
+        candidates.entry(name.clone()).or_insert(*kind);
+    }
 
     loop {
         let kinds = infer_value_kinds(function, constants, &candidates);
         let before = candidates.len();
+        // 模块级种子在本函数无写入时保留;跨函数的写入验证由模块层不动点
+        // 负责。
         candidates.retain(|name, expected| {
-            stores.get(name).is_some_and(|values| {
+            stores.get(name).is_none_or(|values| {
                 values
                     .iter()
                     .all(|value| kinds.get(value) == Some(expected))
@@ -329,7 +473,9 @@ fn fuse_function(function: &mut Function, kinds: &HashMap<ValueId, PrimitiveKind
 fn lower_builders(
     function: &mut Function,
     kinds: &HashMap<ValueId, PrimitiveKind>,
-    local_kinds: &HashMap<String, PrimitiveKind>,
+    stable_kinds: &HashMap<String, PrimitiveKind>,
+    local_names: &HashSet<String>,
+    module_private: &HashSet<String>,
 ) {
     let definitions = collect_definitions(function);
     let use_counts = collect_use_counts(function);
@@ -347,7 +493,11 @@ fn lower_builders(
             let Some(Instruction::LoadVar { name, .. }) = definitions.get(first) else {
                 continue;
             };
-            if local_kinds.get(name) != Some(&PrimitiveKind::String)
+            // 帧局部变量的可见性天然限于本函数;模块级变量还要求全部触达都
+            // 在本函数内,否则 builder 形态可能逃逸到未插入 Finish 的读者。
+            let accumulator_private = local_names.contains(name) || module_private.contains(name);
+            if !accumulator_private
+                || stable_kinds.get(name) != Some(&PrimitiveKind::String)
                 || kinds.get(dest) != Some(&PrimitiveKind::String)
                 || parts.iter().any(|part| !kinds.contains_key(part))
                 || use_counts.get(first) != Some(&1)
@@ -588,9 +738,11 @@ mod tests {
         function.push_block(block);
 
         let locals = HashSet::from(["$1.s".to_owned(), "$1.i".to_owned()]);
-        let (kinds, local_kinds) = infer_stable_kinds(&function, &constants, &locals);
+        let empty_seeds = HashMap::new();
+        let (kinds, local_kinds) = infer_stable_kinds(&function, &constants, &locals, &empty_seeds);
         fuse_function(&mut function, &kinds);
-        lower_builders(&mut function, &kinds, &local_kinds);
+        let empty_private = HashSet::new();
+        lower_builders(&mut function, &kinds, &local_kinds, &locals, &empty_private);
 
         assert!(function.blocks()[0].instructions().iter().any(|instruction| {
             matches!(instruction, Instruction::CallBuiltin { dest: Some(ValueId(6)), builtin: Builtin::StringBuilderAppend, args } if args == &[ValueId(2), ValueId(3), ValueId(4)])
@@ -638,7 +790,8 @@ mod tests {
         });
         function.push_block(block);
 
-        let (kinds, _) = infer_stable_kinds(&function, &constants, &HashSet::new());
+        let empty_seeds = HashMap::new();
+        let (kinds, _) = infer_stable_kinds(&function, &constants, &HashSet::new(), &empty_seeds);
         fuse_function(&mut function, &kinds);
 
         assert!(matches!(
@@ -655,5 +808,145 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// 构造「模块级累加器 + 模块级字符串 const」的顶层形状:$0.s 与 $0.BASE
+    /// 被标记为 captured(与真实管线中发布名/模块作用域同效,不进入任何
+    /// 函数的帧局部集合),只有 module_main 触达。
+    fn module_scope_accumulator_module() -> Module {
+        let mut module = Module::new();
+        let c_empty = module.add_constant(Constant::String(String::new()));
+        let c_base = module.add_constant(Constant::String("b".into()));
+        let c_zero = module.add_constant(Constant::Number(0.0));
+
+        let mut function = Function::new("$module_main", BasicBlockId(0));
+        function.set_captured_names(vec!["$0.s".into(), "$0.BASE".into()]);
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: c_empty,
+        });
+        block.push_instruction(Instruction::StoreVar {
+            name: "$0.s".into(),
+            value: ValueId(0),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: c_base,
+        });
+        block.push_instruction(Instruction::StoreVar {
+            name: "$0.BASE".into(),
+            value: ValueId(1),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(2),
+            constant: c_zero,
+        });
+        block.push_instruction(Instruction::StoreVar {
+            name: "$1.i".into(),
+            value: ValueId(2),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(3),
+            name: "$0.s".into(),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(4),
+            name: "$0.BASE".into(),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(5),
+            name: "$1.i".into(),
+        });
+        block.push_instruction(Instruction::Binary {
+            dest: ValueId(6),
+            op: BinaryOp::Add,
+            lhs: ValueId(4),
+            rhs: ValueId(5),
+        });
+        block.push_instruction(Instruction::Binary {
+            dest: ValueId(7),
+            op: BinaryOp::Add,
+            lhs: ValueId(3),
+            rhs: ValueId(6),
+        });
+        block.push_instruction(Instruction::StoreVar {
+            name: "$0.s".into(),
+            value: ValueId(7),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(8),
+            name: "$0.s".into(),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(8)),
+        });
+        function.push_block(block);
+        module.push_function(function);
+        module
+    }
+
+    #[test]
+    fn fuses_module_scope_string_accumulator() {
+        let mut module = module_scope_accumulator_module();
+        run(&mut module);
+        let function = &module.functions()[0];
+        assert!(
+            function.blocks()[0]
+                .instructions()
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Instruction::CallBuiltin {
+                        dest: Some(ValueId(7)),
+                        builtin: Builtin::StringBuilderAppend,
+                        args
+                    } if args == &[ValueId(3), ValueId(4), ValueId(5)]
+                ))
+        );
+        assert!(
+            function.blocks()[0]
+                .instructions()
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Instruction::CallBuiltin {
+                        dest: None,
+                        builtin: Builtin::StringBuilderFinish,
+                        args
+                    } if args == &[ValueId(8)]
+                ))
+        );
+    }
+
+    #[test]
+    fn keeps_module_scope_accumulator_unshared_with_other_functions() {
+        let mut module = module_scope_accumulator_module();
+        let mut reader = Function::new("reader", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$0.s".into(),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(0)),
+        });
+        reader.push_block(block);
+        module.push_function(reader);
+
+        run(&mut module);
+        let function = &module.functions()[0];
+        assert!(
+            !function.blocks()[0]
+                .instructions()
+                .iter()
+                .any(|instruction| matches!(
+                    instruction,
+                    Instruction::CallBuiltin {
+                        builtin: Builtin::StringBuilderAppend,
+                        ..
+                    }
+                ))
+        );
     }
 }

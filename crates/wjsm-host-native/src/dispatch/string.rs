@@ -126,7 +126,11 @@ fn runtime_string(state: &NativeAgentState, value: i64) -> Option<RuntimeString>
 
 /// 发布字符串，zgc 分配需推进 GC 时收集后重试（实现见
 /// [`super::runtime::intern_string_with_gc_retry`]）。
-pub(super) fn intern(ctx: &mut NativeVmContext, state: &mut NativeAgentState, string: RuntimeString) -> i64 {
+pub(super) fn intern(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    string: RuntimeString,
+) -> i64 {
     super::runtime::intern_string_with_gc_retry(ctx, state, string)
 }
 
