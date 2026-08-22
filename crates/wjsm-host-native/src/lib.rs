@@ -5680,6 +5680,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn unbounded_string_accumulation_survives_gc_pressure() {
+        // 单个 builder 无界增长 + 循环内小字符串拼接：zgc 年代耗尽时 mutator 必须
+        // 推进 GC 后重试发布，而非误报 InternalInvariant（回归：binary_add 裸 intern）。
+        let artifact = artifact(
+            r#"
+                let s = "";
+                for (let i = 0; i < 5000; i++) {
+                    s += "x" + i;
+                }
+                console.log(s.length);
+            "#,
+        );
+        for algorithm in [
+            GcAlgorithmKind::MarkSweep,
+            GcAlgorithmKind::G1,
+            GcAlgorithmKind::Zgc,
+        ] {
+            let config = NativeRuntimeConfig::default()
+                .with_gc_algorithm(algorithm)
+                .with_max_heap_size(16 * 1024 * 1024);
+            let mut runtime = NativeRuntime::new_with_config(config)
+                .unwrap_or_else(|error| panic!("{algorithm:?} runtime should initialize: {error}"));
+            let execution = runtime
+                .execute(
+                    &artifact,
+                    std::path::Path::new("."),
+                    std::path::Path::new("."),
+                )
+                .unwrap_or_else(|error| {
+                    panic!("{algorithm:?} accumulation should complete: {error:?}")
+                });
+            assert_eq!(execution.stdout, b"23890\n", "{algorithm:?}");
+            assert_eq!(execution.exit_code, 0, "{algorithm:?}");
+        }
+    }
+
     fn assert_live_set_exhaustion_is_observable_range_error(algorithm: GcAlgorithmKind) {
         let oom_artifact = artifact(
             r#"

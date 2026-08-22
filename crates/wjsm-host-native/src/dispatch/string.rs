@@ -124,20 +124,14 @@ fn runtime_string(state: &NativeAgentState, value: i64) -> Option<RuntimeString>
     }
 }
 
-fn intern(ctx: &mut NativeVmContext, state: &mut NativeAgentState, string: RuntimeString) -> i64 {
-    if let Some(encoded) = state.intern_runtime_string(string.clone(), value::TAG_STRING) {
-        return encoded;
-    }
-    if state.collect_garbage(ctx).is_ok() {
-        let _ = state.gc.heap().finish_relocation_epoch();
-        for _ in 0..8 {
-            let _ = state.gc.heap().advance_epoch_and_reclaim();
-        }
-        if let Some(encoded) = state.intern_runtime_string(string, value::TAG_STRING) {
-            return encoded;
-        }
-    }
-    fail_dispatch(ctx)
+/// 发布字符串，zgc 分配需推进 GC 时收集后重试（实现见
+/// [`super::runtime::intern_string_with_gc_retry`]）。
+pub(super) fn intern(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    string: RuntimeString,
+) -> i64 {
+    super::runtime::intern_string_with_gc_retry(ctx, state, string)
 }
 
 fn integer(state: &NativeAgentState, value: Option<i64>, default: i64) -> Option<i64> {

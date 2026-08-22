@@ -121,9 +121,7 @@ pub(super) fn dispatch_runtime(
                 };
                 parts.push(part);
             }
-            state
-                .intern_runtime_string(RuntimeString::concat_many(parts), value::TAG_STRING)
-                .unwrap_or_else(|| fail_dispatch(ctx))
+            super::string::intern(ctx, state, RuntimeString::concat_many(parts))
         }
         NativeRuntimeOp::NewObject | NativeRuntimeOp::NewArray => {
             let [capacity] = args else {
@@ -671,9 +669,7 @@ pub(super) fn binary_add(
             Ok(text) => text,
             Err(exception) => return exception,
         };
-        state
-            .intern_runtime_string(RuntimeString::concat(left, right), value::TAG_STRING)
-            .unwrap_or_else(|| fail_dispatch(ctx))
+        super::string::intern(ctx, state, RuntimeString::concat(left, right))
     } else if value::is_bigint(left) || value::is_bigint(right) {
         super::bigint::dispatch_bigint(ctx, state, wjsm_ir::Builtin::BigIntAdd, &[left, right])
             .expect("BigIntAdd is handled")
@@ -1195,14 +1191,14 @@ pub(super) fn get_property_with_receiver(
         && let Some(index) = array_index(state, key)
     {
         let unit = state.string_code_unit(object, index as usize);
-        return Ok(unit
-            .and_then(|unit| {
-                state.intern_runtime_string(
-                    wjsm_host::RuntimeString::from_utf16_units(vec![unit]),
-                    value::TAG_STRING,
-                )
-            })
-            .unwrap_or_else(value::encode_undefined));
+        return Ok(match unit {
+            Some(unit) => intern_string_with_gc_retry(
+                ctx,
+                state,
+                wjsm_host::RuntimeString::from_utf16_units(vec![unit]),
+            ),
+            None => value::encode_undefined(),
+        });
     }
     if state
         .typed_arrays
@@ -1813,12 +1809,11 @@ pub(super) fn iterator_value(
             else {
                 return fail_dispatch(ctx);
             };
-            let Some(result) = state.intern_runtime_string(
+            let result = intern_string_with_gc_retry(
+                ctx,
+                state,
                 wjsm_host::RuntimeString::from_utf16_units(units),
-                value::TAG_STRING,
-            ) else {
-                return fail_dispatch(ctx);
-            };
+            );
             (result, width as u32)
         }
         super::super::NativeIteratorSource::TypedArray(source) => {
@@ -2742,4 +2737,28 @@ pub(crate) fn fail_dispatch(ctx: &mut NativeVmContext) -> i64 {
     }
     ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
     value::encode_handle(value::TAG_EXCEPTION, 0)
+}
+
+/// 发布字符串失败（典型为 zgc 年代耗尽需 mutator 先推进 GC 再分配）时的统一
+/// 重试：全量收集 + 推进搬迁/回收 epoch 后重试一次，仍失败才判 invariant。
+/// 所有在循环内产生新字符串的分派路径都必须经此入口，裸
+/// `intern_runtime_string(..).unwrap_or_else(fail_dispatch)` 会在 GC 压力下误报。
+pub(crate) fn intern_string_with_gc_retry(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    string: wjsm_host::RuntimeString,
+) -> i64 {
+    if let Some(encoded) = state.intern_runtime_string(string.clone(), value::TAG_STRING) {
+        return encoded;
+    }
+    if state.collect_garbage(ctx).is_ok() {
+        let _ = state.gc.heap().finish_relocation_epoch();
+        for _ in 0..8 {
+            let _ = state.gc.heap().advance_epoch_and_reclaim();
+        }
+        if let Some(encoded) = state.intern_runtime_string(string, value::TAG_STRING) {
+            return encoded;
+        }
+    }
+    fail_dispatch(ctx)
 }
