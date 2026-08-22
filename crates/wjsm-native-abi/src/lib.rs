@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 13;
+pub const NATIVE_ABI_VERSION: u32 = 14;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -115,6 +115,11 @@ pub struct NativeVmContext {
     /// 对象地址的「逻辑 → 虚拟」偏移：handle entry 里的对象地址是 memory64
     /// 逻辑偏移，属性快链须加此值才能直接 load 真实映射。
     pub heap_object_delta: i64,
+    /// 当前 image 的字符串常量盒装值数组基址（8 字节对齐，元素为 NaN-boxed
+    /// 运行时字符串句柄，install 期发布后不再变化）；无字符串常量时为 null。
+    /// 生成代码在函数入口按 `常量下标 * 8` 直读，替代旧的 MaterializeString
+    /// 宿主往返。由宿主在 image 激活时与 `ic_slots_base` 同步设置。
+    pub string_constants_base: *const i64,
 }
 
 impl Default for NativeVmContext {
@@ -155,6 +160,7 @@ impl Default for NativeVmContext {
             ic_slots_base: std::ptr::null_mut(),
             feedback_slots_base: std::ptr::null_mut(),
             heap_object_delta: 0,
+            string_constants_base: std::ptr::null(),
         }
     }
 }
@@ -374,7 +380,7 @@ pub enum NativeRuntimeOp {
     CompareStrictNotEq = 0x1_0201,
     StoreVar = 0x1_0300,
     LoadVar = 0x1_0301,
-    MaterializeString = 0x1_0400,
+    // 0x1_0400（原 MaterializeString）已随 install 期字符串常量发布退役。
     MaterializeBigInt = 0x1_0401,
     MaterializeRegExp = 0x1_0402,
     MaterializeFunction = 0x1_0403,
@@ -447,7 +453,6 @@ impl NativeRuntimeOp {
             0x1_0201 => Some(Self::CompareStrictNotEq),
             0x1_0300 => Some(Self::StoreVar),
             0x1_0301 => Some(Self::LoadVar),
-            0x1_0400 => Some(Self::MaterializeString),
             0x1_0401 => Some(Self::MaterializeBigInt),
             0x1_0402 => Some(Self::MaterializeRegExp),
             0x1_0403 => Some(Self::MaterializeFunction),
@@ -777,6 +782,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, ic_slots_base),
             offset_of!(NativeVmContext, feedback_slots_base),
             offset_of!(NativeVmContext, heap_object_delta),
+            offset_of!(NativeVmContext, string_constants_base),
         ] {
             hasher.update(
                 u64::try_from(offset)
@@ -862,7 +868,6 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::CompareStrictNotEq,
             NativeRuntimeOp::StoreVar,
             NativeRuntimeOp::LoadVar,
-            NativeRuntimeOp::MaterializeString,
             NativeRuntimeOp::MaterializeBigInt,
             NativeRuntimeOp::MaterializeRegExp,
             NativeRuntimeOp::MaterializeFunction,

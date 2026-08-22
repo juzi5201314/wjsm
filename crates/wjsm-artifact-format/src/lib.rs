@@ -11,7 +11,8 @@ use thiserror::Error;
 use wjsm_ir::{Builtin, Program};
 
 const MAGIC: &[u8; 8] = b"WJSMART\0";
-const FORMAT_VERSION: u16 = 3;
+// v4：String 常量改为烘焙编码（repr + hash + 码元长 + Latin-1/UTF-16 载荷）。
+const FORMAT_VERSION: u16 = 4;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;
@@ -270,6 +271,8 @@ pub enum ArtifactFormatError {
     InvalidBoolean(u8),
     #[error("invalid UTF-8 string")]
     InvalidUtf8,
+    #[error("invalid string constant payload: {0}")]
+    InvalidStringPayload(&'static str),
     #[error("section has {0} trailing bytes")]
     TrailingBytes(usize),
     #[error("invalid semantic IR: {0}")]

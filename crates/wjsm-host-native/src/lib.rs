@@ -911,6 +911,9 @@ struct NativeFunctionRef {
 struct NativeProgramState {
     constants: Vec<Constant>,
     materialized_constants: Vec<Option<i64>>,
+    /// 字符串常量的盒装值（NaN-boxed 运行时字符串句柄），install 期一次发布；
+    /// 非字符串槽位为 `undefined`。生成代码经 vmctx `string_constants_base` 直读。
+    string_constants: Vec<i64>,
     function_slots: Vec<Vec<usize>>,
     function_lengths: Vec<u32>,
     function_names: Vec<String>,
@@ -942,6 +945,8 @@ struct NativeAgentState {
     user_function_count: Option<u32>,
     constants: Vec<Constant>,
     materialized_constants: Vec<Option<i64>>,
+    /// 当前 image 的字符串常量盒装值（见 `NativeProgramState::string_constants`）。
+    string_constants: Vec<i64>,
     function_slots: Vec<Vec<usize>>,
     function_needs_prototype: Vec<bool>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
@@ -950,6 +955,9 @@ struct NativeAgentState {
     /// 每次宿主调用都要校验生成代码传入的反馈槽指针；走 `images` 哈希表会给
     /// 每次调用摊上一次 SipHash 查表。
     current_feedback_region: (usize, usize),
+    /// install_program 批量发布期间的临时字符串根；提交到 program state 前也必须
+    /// 覆盖中途分配触发的 GC。
+    install_string_roots: Vec<i64>,
     programs: HashMap<u64, NativeProgramState>,
     retained_images: HashMap<u64, Arc<CompiledImage>>,
     program_snapshots: HashMap<u64, Arc<wjsm_ir::Program>>,
@@ -1140,11 +1148,13 @@ impl NativeAgentState {
             user_function_count: None,
             constants: Vec::new(),
             materialized_constants: Vec::new(),
+            string_constants: Vec::new(),
             function_slots: Vec::new(),
             function_needs_prototype: Vec::new(),
             function_home_objects: Vec::new(),
             current_image_id: 0,
             current_feedback_region: (0, 0),
+            install_string_roots: Vec::new(),
             programs: HashMap::new(),
             program_snapshots: HashMap::new(),
             variable_slot_snapshots: HashMap::new(),
@@ -1285,6 +1295,8 @@ impl NativeAgentState {
         NativeProgramState {
             constants: program.constants().to_vec(),
             materialized_constants: vec![None; program.constants().len()],
+            // install_program 随后按烘焙元数据填充字符串槽位。
+            string_constants: Vec::new(),
             function_slots: function_slots_for_program(
                 program,
                 variable_slots,
@@ -1374,15 +1386,21 @@ impl NativeAgentState {
         }
     }
 
-    fn install_isolated_program(&mut self, image: Arc<CompiledImage>, program: &wjsm_ir::Program) {
+    fn install_isolated_program(
+        &mut self,
+        ctx: &NativeVmContext,
+        image: Arc<CompiledImage>,
+        program: &wjsm_ir::Program,
+    ) -> Result<(), NativeRuntimeError> {
         let slots = whole_program_slots(program);
         let image_id = image.image_id();
-        self.install_program(image, program, &slots, &HashSet::new());
+        self.install_program(ctx, image, program, &slots, &HashSet::new())?;
         self.isolated_variable_images.insert(image_id);
         self.isolated_variable_tables.insert(
             image_id,
             vec![value::encode_undefined(); slot_table_len(&slots)],
         );
+        Ok(())
     }
 
     fn swap_isolated_variables(&mut self, image_id: u64) {
@@ -1416,6 +1434,7 @@ impl NativeAgentState {
         self.shared_variables_backup = None;
         self.constants.clear();
         self.materialized_constants.clear();
+        self.string_constants.clear();
         self.function_slots.clear();
         self.function_needs_prototype.clear();
         self.function_home_objects.clear();
@@ -1424,6 +1443,7 @@ impl NativeAgentState {
         self.function_source_spans.clear();
         self.current_image_id = 0;
         self.current_feedback_region = (0, 0);
+        self.install_string_roots.clear();
         self.builtin_image_id = None;
         self.user_image_id = None;
         self.user_function_count = None;
@@ -1562,6 +1582,7 @@ impl NativeAgentState {
             function_names: std::mem::take(&mut self.function_names),
             function_source_spans: std::mem::take(&mut self.function_source_spans),
             materialized_constants: std::mem::take(&mut self.materialized_constants),
+            string_constants: std::mem::take(&mut self.string_constants),
             function_slots: std::mem::take(&mut self.function_slots),
             function_needs_prototype: std::mem::take(&mut self.function_needs_prototype),
             function_home_objects: std::mem::take(&mut self.function_home_objects),
@@ -1571,6 +1592,7 @@ impl NativeAgentState {
     fn set_program_state(&mut self, state: NativeProgramState) {
         self.constants = state.constants;
         self.materialized_constants = state.materialized_constants;
+        self.string_constants = state.string_constants;
         self.function_slots = state.function_slots;
         self.function_lengths = state.function_lengths;
         self.function_names = state.function_names;
@@ -1581,26 +1603,92 @@ impl NativeAgentState {
 
     fn install_program(
         &mut self,
+        ctx: &NativeVmContext,
         image: Arc<CompiledImage>,
         program: &wjsm_ir::Program,
         variable_slots: &HashMap<String, u32>,
         shared_module_slots: &HashSet<&str>,
-    ) {
+    ) -> Result<(), NativeRuntimeError> {
         let image_id = image.image_id();
+        // 字符串常量 install 期一次发布（烘焙 hash + 载荷直发，运行时零哈希零转换）；
+        // 分配耗尽按 2.6 的统一模式先收集再重试一次。
+        let mut string_constants = Vec::with_capacity(program.constants().len());
+        self.install_string_roots.clear();
+        for constant in program.constants() {
+            let encoded = match constant {
+                Constant::String(text) => {
+                    let owned;
+                    let meta = match program.string_constant_meta(wjsm_ir::ConstantId(
+                        u32::try_from(string_constants.len()).expect("常量下标在 u32 内"),
+                    )) {
+                        Some(meta) => meta,
+                        // 元数据缺失（serde 兼容回退）时从文本重算；种子固定，同值。
+                        None => {
+                            owned = wjsm_ir::StringConstantMeta::from_text(text);
+                            &owned
+                        }
+                    };
+                    self.publish_baked_string(ctx, meta)?
+                }
+                _ => value::encode_undefined(),
+            };
+            string_constants.push(encoded);
+            if encoded != value::encode_undefined() {
+                self.install_string_roots.push(encoded);
+            }
+        }
+        self.install_string_roots.clear();
         self.images.insert(image_id, image);
         self.program_snapshots
             .insert(image_id, Arc::new(program.clone()));
         self.variable_slot_snapshots
             .insert(image_id, Arc::new(variable_slots.clone()));
         self.ic_epochs.insert(image_id, 0);
-        self.programs.insert(
-            image_id,
-            Self::program_state(program, variable_slots, shared_module_slots),
-        );
+        let mut state = Self::program_state(program, variable_slots, shared_module_slots);
+        state.string_constants = string_constants;
+        self.programs.insert(image_id, state);
         if let Some(source_file) = program.source_file() {
             self.image_source_files
                 .insert(image_id, source_file.to_owned());
         }
+        Ok(())
+    }
+
+    /// 发布烘焙的字符串常量：去重命中复用既有句柄；否则按编译期元数据直发。
+    /// 分配耗尽时全量收集并推进搬迁/回收 epoch 后重试一次（与
+    /// `dispatch::runtime::intern_string_with_gc_retry` 同一模式）。
+    fn publish_baked_string(
+        &mut self,
+        ctx: &NativeVmContext,
+        meta: &wjsm_ir::StringConstantMeta,
+    ) -> Result<i64, NativeRuntimeError> {
+        if let Some(encoded) = self.try_publish_baked_string(meta) {
+            return Ok(encoded);
+        }
+        self.collect_garbage(ctx)?;
+        let _ = self.gc.heap().finish_relocation_epoch();
+        for _ in 0..8 {
+            let _ = self.gc.heap().advance_epoch_and_reclaim();
+        }
+        self.try_publish_baked_string(meta).ok_or_else(|| {
+            NativeRuntimeError::Invariant("install 期字符串常量发布在收集重试后仍然失败".into())
+        })
+    }
+
+    fn try_publish_baked_string(&mut self, meta: &wjsm_ir::StringConstantMeta) -> Option<i64> {
+        let length = meta.unit_len();
+        let key = (meta.hash, length);
+        if let Some(encoded) = self.dedup_string_handle(&key) {
+            return Some(encoded);
+        }
+        self.publish_flat_string(
+            &key,
+            length,
+            &meta.payload,
+            value::TAG_STRING,
+            true,
+            meta.latin1,
+        )
     }
 
     fn activate_image(&mut self, ctx: &mut NativeVmContext, image_id: u64) -> Option<()> {
@@ -1622,6 +1710,13 @@ impl NativeAgentState {
         // 生成代码的属性快链依赖这些基址，必须在每次 image 激活时刷新。
         ctx.handle_table_base = self.gc.heap().handle_table_base();
         ctx.ic_slots_base = image.ic_slots().cast::<u8>().cast_mut();
+        // 字符串常量数组与 ic_slots 同步：install 期已填充且不再变化，
+        // 生成代码的函数入口直读替代旧的 MaterializeString 宿主往返。
+        ctx.string_constants_base = if self.string_constants.is_empty() {
+            std::ptr::null()
+        } else {
+            self.string_constants.as_ptr()
+        };
         ctx.feedback_slots_base = image.feedback_slots();
         self.current_feedback_region = (
             image.feedback_slots().addr(),
@@ -1656,9 +1751,6 @@ impl NativeAgentState {
             .cloned()
             .ok_or(NativeConstantMaterializeError::InternalInvariant)?;
         let encoded = match (operation, constant) {
-            (NativeRuntimeOp::MaterializeString, Constant::String(text)) => self
-                .intern_text(text, value::TAG_STRING)
-                .ok_or(NativeConstantMaterializeError::InternalInvariant)?,
             (NativeRuntimeOp::MaterializeBigInt, Constant::BigInt(text)) => self
                 .intern_text(text, value::TAG_BIGINT)
                 .ok_or(NativeConstantMaterializeError::InternalInvariant)?,
@@ -4203,7 +4295,9 @@ impl NativeAgentState {
         self.gc.heap().write_string_payload(handle, 0, bytes).ok()?;
         self.gc.mark_black_allocation(handle).ok()?;
         if interned && tag == value::TAG_STRING {
-            self.gc.heap().string_content_hash(handle).ok()?;
+            // key.0 即调用方按同函数算好的内容哈希，直写堆头即可，无需再从
+            // 载荷重算一遍（旧路径的 string_content_hash 是重复计算）。
+            self.gc.heap().write_string_hash(handle, key.0).ok()?;
             self.string_ids.insert(*key, handle);
         }
         Some(if tag == value::TAG_STRING {
@@ -5295,17 +5389,19 @@ impl NativeRuntime {
             .filter(|name| is_module_scope_var(name))
             .collect::<HashSet<_>>();
         self.state.install_program(
+            &self.vmctx,
             builtin_image,
             &builtin_program,
             &builtin_slots,
             &shared_module_slots,
-        );
+        )?;
         self.state.install_program(
+            &self.vmctx,
             user_image.clone(),
             &user_program,
             &user_slots,
             &shared_module_slots,
-        );
+        )?;
         self.state.builtin_image_id = Some(builtin_image_id);
         self.state.user_image_id = Some(user_image_id);
         self.state.user_function_count = u32::try_from(user_program.functions().len()).ok();
@@ -5357,8 +5453,13 @@ impl NativeRuntime {
             artifact.manifest(),
         )
         .map_err(NativeRuntimeError::Invariant)?;
-        self.state
-            .install_program(image, artifact.program(), &slots, &HashSet::new());
+        self.state.install_program(
+            &self.vmctx,
+            image,
+            artifact.program(),
+            &slots,
+            &HashSet::new(),
+        )?;
         Ok((entry, image_id))
     }
 

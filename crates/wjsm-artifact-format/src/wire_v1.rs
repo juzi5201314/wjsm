@@ -106,8 +106,10 @@ pub(crate) fn encode_program(program: &Program) -> Result<Vec<u8>, ArtifactForma
     encoder.bool(program.script_mode());
     encoder.optional_string(program.source_file())?;
     encoder.len(program.constants().len())?;
-    for constant in program.constants() {
-        encode_constant(&mut encoder, constant)?;
+    for (index, constant) in program.constants().iter().enumerate() {
+        let id = ConstantId(u32::try_from(index).map_err(|_| ArtifactFormatError::LengthOverflow)?);
+        let meta = program.string_constant_meta(id);
+        encode_constant(&mut encoder, constant, meta)?;
     }
     encoder.len(program.functions().len())?;
     for function in program.functions() {
@@ -130,7 +132,9 @@ pub(crate) fn decode_program(
         program.set_source_file(source_file);
     }
     for _ in 0..constant_count {
-        program.add_constant(decode_constant(&mut decoder)?);
+        let (constant, meta) = decode_constant(&mut decoder, limits)?;
+        // wire 已携带烘焙元数据，直接填充：解码侧零哈希、零表示转换。
+        program.add_constant_with_meta(constant, meta);
     }
     let function_count = decoder.count(limits.max_functions)?;
     for _ in 0..function_count {
@@ -140,7 +144,11 @@ pub(crate) fn decode_program(
     Ok(program)
 }
 
-fn encode_constant(encoder: &mut Encoder, constant: &Constant) -> Result<(), ArtifactFormatError> {
+fn encode_constant(
+    encoder: &mut Encoder,
+    constant: &Constant,
+    meta: Option<&wjsm_ir::StringConstantMeta>,
+) -> Result<(), ArtifactFormatError> {
     match constant {
         Constant::Number(value) => {
             encoder.u16(0);
@@ -148,7 +156,20 @@ fn encode_constant(encoder: &mut Encoder, constant: &Constant) -> Result<(), Art
         }
         Constant::String(value) => {
             encoder.u16(1);
-            encoder.string(value)?;
+            // 元数据缺失（serde 兼容回退路径）时就地重算，保证编码形状一致。
+            let owned;
+            let meta = match meta {
+                Some(meta) => meta,
+                None => {
+                    owned = wjsm_ir::StringConstantMeta::from_text(value);
+                    &owned
+                }
+            };
+            encoder.u8(if meta.latin1 { 1 } else { 2 });
+            encoder.u32(meta.hash);
+            encoder.len(meta.unit_len() as usize)?;
+            encoder.len(meta.payload.len())?;
+            encoder.bytes(&meta.payload);
         }
         Constant::Bool(value) => {
             encoder.u16(2);
@@ -178,22 +199,66 @@ fn encode_constant(encoder: &mut Encoder, constant: &Constant) -> Result<(), Art
     Ok(())
 }
 
-fn decode_constant(decoder: &mut Decoder<'_>) -> Result<Constant, ArtifactFormatError> {
+/// 解码常量；String 变体同时返回烘焙元数据（hash 与载荷直接来自 wire）。
+fn decode_constant(
+    decoder: &mut Decoder<'_>,
+    limits: &ArtifactLimits,
+) -> Result<(Constant, Option<wjsm_ir::StringConstantMeta>), ArtifactFormatError> {
     let tag = decoder.u16()?;
     match tag {
-        0 => Ok(Constant::Number(f64::from_bits(decoder.u64()?))),
-        1 => Ok(Constant::String(decoder.string()?)),
-        2 => Ok(Constant::Bool(decoder.bool()?)),
-        3 => Ok(Constant::Null),
-        4 => Ok(Constant::Undefined),
-        5 => Ok(Constant::FunctionRef(FunctionId(decoder.u32()?))),
-        6 => Ok(Constant::NativeCallableEval),
-        7 => Ok(Constant::BigInt(decoder.string()?)),
-        8 => Ok(Constant::RegExp {
-            pattern: decoder.string()?,
-            flags: decoder.string()?,
-        }),
-        9 => Ok(Constant::ModuleId(ModuleId(decoder.u32()?))),
+        0 => Ok((Constant::Number(f64::from_bits(decoder.u64()?)), None)),
+        1 => {
+            let repr = decoder.u8()?;
+            let hash = decoder.u32()?;
+            let unit_len = decoder.count(limits.max_string_bytes)?;
+            let payload_len = decoder.count(limits.max_string_bytes.saturating_mul(2))?;
+            let payload = decoder.take(payload_len)?.to_vec();
+            let (latin1, expected_len) = match repr {
+                1 => (true, unit_len),
+                2 => (
+                    false,
+                    unit_len
+                        .checked_mul(2)
+                        .ok_or(ArtifactFormatError::LengthOverflow)?,
+                ),
+                _ => return Err(ArtifactFormatError::InvalidStringPayload("repr")),
+            };
+            if payload.len() != expected_len {
+                return Err(ArtifactFormatError::InvalidStringPayload("length"));
+            }
+            let units: Vec<u16> = if latin1 {
+                payload.iter().map(|byte| u16::from(*byte)).collect()
+            } else {
+                payload
+                    .chunks(2)
+                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                    .collect()
+            };
+            let text = String::from_utf16(&units)
+                .map_err(|_| ArtifactFormatError::InvalidStringPayload("utf16"))?;
+            Ok((
+                Constant::String(text),
+                Some(wjsm_ir::StringConstantMeta {
+                    hash,
+                    latin1,
+                    payload,
+                }),
+            ))
+        }
+        2 => Ok((Constant::Bool(decoder.bool()?), None)),
+        3 => Ok((Constant::Null, None)),
+        4 => Ok((Constant::Undefined, None)),
+        5 => Ok((Constant::FunctionRef(FunctionId(decoder.u32()?)), None)),
+        6 => Ok((Constant::NativeCallableEval, None)),
+        7 => Ok((Constant::BigInt(decoder.string()?), None)),
+        8 => Ok((
+            Constant::RegExp {
+                pattern: decoder.string()?,
+                flags: decoder.string()?,
+            },
+            None,
+        )),
+        9 => Ok((Constant::ModuleId(ModuleId(decoder.u32()?)), None)),
         _ => Err(ArtifactFormatError::UnknownTag("constant", tag.into())),
     }
 }
@@ -1063,6 +1128,9 @@ impl Encoder {
     fn finish(self) -> Vec<u8> {
         self.bytes
     }
+    fn u8(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
     fn u16(&mut self, value: u16) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -1071,6 +1139,9 @@ impl Encoder {
     }
     fn u64(&mut self, value: u64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    fn bytes(&mut self, value: &[u8]) {
+        self.bytes.extend_from_slice(value);
     }
     fn bool(&mut self, value: bool) {
         self.bytes.push(u8::from(value));
@@ -1136,6 +1207,9 @@ impl<'a> Decoder<'a> {
             .ok_or(ArtifactFormatError::Truncated)?;
         self.cursor = end;
         Ok(slice)
+    }
+    fn u8(&mut self) -> Result<u8, ArtifactFormatError> {
+        Ok(self.take(1)?[0])
     }
     fn u16(&mut self) -> Result<u16, ArtifactFormatError> {
         let bytes: [u8; 2] = self.take(2)?.try_into().expect("fixed-width slice");

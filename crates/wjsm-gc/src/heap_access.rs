@@ -2,7 +2,6 @@
 
 use std::error::Error;
 use std::fmt;
-use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1540,8 +1539,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     // ── 字符串内容哈希 ────────────────────────────────────────────────────────
-    /// 惰性计算并缓存内容哈希；语义与宿主 `RuntimeString::content_hash` 一致
-    /// （进程级随机种子抗碰撞构造、0 表示未计算、真实哈希归一化到非 0）。
+    /// 惰性计算并缓存内容哈希；权威实现在 `wjsm_ir::string_hash`（固定种子，
+    /// 与编译期烘焙的常量哈希同函数同种子；0 表示未计算、真实哈希归一化到非 0）。
     ///
     /// 只支持扁平载荷（Latin1/Utf16 Flat 与 Builder）；Cons/Slice 需先扁平化
     /// （宿主 `with_string_units` 作用域，2.2 落地）后哈希。
@@ -1567,7 +1566,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                     .memory()
                     .copy_to(HeapAddress::new(payload), length as u64)
                     .map_err(HeapAccessV2Error::Memory)?;
-                compute_string_hash(length, |index| u16::from(bytes[index]))
+                wjsm_ir::string_hash::compute_hash_by_len(length, |index| u16::from(bytes[index]))
             }
             constants::STRING_REPR_UTF16_FLAT | constants::STRING_REPR_BUILDER => {
                 let bytes = self
@@ -1575,7 +1574,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                     .memory()
                     .copy_to(HeapAddress::new(payload), (length as u64) * 2)
                     .map_err(HeapAccessV2Error::Memory)?;
-                compute_string_hash(length, |index| {
+                wjsm_ir::string_hash::compute_hash_by_len(length, |index| {
                     u16::from_le_bytes([bytes[index * 2], bytes[index * 2 + 1]])
                 })
             }
@@ -1585,6 +1584,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         };
         self.store_header_word(handle, constants::HEAP_STRING_HASH_OFFSET, u64::from(hash))?;
         Ok(hash)
+    }
+
+    /// 直写烘焙好的内容哈希（install 期常量发布用）：值来自编译期 `.wjsm` 烘焙，
+    /// 与 [`HeapAccessV2::string_content_hash`] 惰性计算同函数同种子，跳过重算。
+    /// 调用方须保证 `hash != 0`（归一化语义）。
+    pub fn write_string_hash(&self, handle: u32, hash: u32) -> Result<(), HeapAccessV2Error> {
+        debug_assert_ne!(hash, 0);
+        self.store_header_word(handle, constants::HEAP_STRING_HASH_OFFSET, u64::from(hash))
     }
 
     /// ZGC 重定位按对象类型选择 header 布局：字符串的 `+24` hash 在发布后仍可能
@@ -2583,62 +2590,6 @@ pub fn string_payload_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
     u64::from(capacity)
         .checked_add(u64::from(constants::HEAP_STRING_HEADER_SIZE))
         .ok_or(HeapAccessV2Error::AddressOverflow)
-}
-
-/// 进程级哈希种子：与宿主 `wjsm-host::runtime_string` 同一来源（`RandomState`），
-/// 使内容哈希不可被外部构造碰撞。字符串归入 ManagedHeap 后哈希由本层唯一计算，
-/// 种子语义必须与宿主保持同构，迁移期才不会出现同内容不同哈希。
-fn string_hash_seed() -> u32 {
-    static SEED: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *SEED.get_or_init(|| {
-        let mut hasher = std::hash::RandomState::new().build_hasher();
-        hasher.write_u8(0);
-        (hasher.finish() as u32) | 1
-    })
-}
-
-/// UTF-16 码元序列内容哈希；算法与宿主 `RuntimeString` 的 `compute_hash` 完全一致
-/// （每 8 码元两组打包进双累加器，murmur 风格收尾），保证堆内字符串与宿主侧
-/// 旧表示的哈希值语义等价。按码元下标读取（Latin-1 逐字节、UTF-16 逐字），
-/// 闭包在编译期内联；哈希惰性只算一次，非热路径。
-fn compute_string_hash(len: usize, mut read_unit: impl FnMut(usize) -> u16) -> u32 {
-    const K1: u64 = 0xff51_afd7_ed55_8ccd;
-    const K2: u64 = 0xc4ce_b9fe_1a85_ec53;
-
-    let mut left = u64::from(string_hash_seed()) ^ (len as u64).wrapping_mul(K1);
-    let mut right = K2;
-    let full_chunks = len / 8;
-    for chunk in 0..full_chunks {
-        let base = chunk * 8;
-        let mut low = 0_u64;
-        let mut high = 0_u64;
-        for j in 0..4 {
-            low |= u64::from(read_unit(base + j)) << (j * 16);
-        }
-        for j in 0..4 {
-            high |= u64::from(read_unit(base + 4 + j)) << (j * 16);
-        }
-        left = (left ^ low).wrapping_mul(K1).rotate_left(31);
-        right = (right ^ high).wrapping_mul(K2).rotate_left(29);
-    }
-    let mut tail = 0_u64;
-    let mut tail_units = 0;
-    for index in (full_chunks * 8)..len {
-        tail |= u64::from(read_unit(index)) << ((tail_units % 4) * 16);
-        tail_units += 1;
-        if tail_units % 4 == 0 {
-            left = (left ^ tail).wrapping_mul(K1).rotate_left(31);
-            tail = 0;
-        }
-    }
-    right ^= tail;
-
-    let mut mixed = left ^ right.wrapping_mul(K1);
-    mixed ^= mixed >> 33;
-    mixed = mixed.wrapping_mul(K2);
-    mixed ^= mixed >> 29;
-    let hash = (mixed as u32) ^ ((mixed >> 32) as u32);
-    if hash == 0 { 1 } else { hash }
 }
 
 /// 数组元素地址；与对象值槽同构，故直接复用同一公式。

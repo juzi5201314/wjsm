@@ -1,5 +1,7 @@
 //! 数据段布局常量和属性槽相关常量
 
+use crate::string_hash;
+
 // ── TYPEOF 字符串区域 ──────────────────────────────────────────────────────
 // 6 个类型字符串（nul 终止）预分配在 data segment 开头
 pub const TYPEOF_UNDEFINED_OFFSET: u32 = 0; // "undefined\0" (10 bytes)
@@ -470,6 +472,8 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
             "heap_string_slice_payload_size",
             HEAP_STRING_SLICE_PAYLOAD_SIZE,
         ),
+        // 字符串内容哈希种子：堆快照内烘焙的哈希值随种子变化 → 进 ABI。
+        ("string_content_hash_seed", string_hash::STRING_HASH_SEED),
         ("handle_table_entry_size", HANDLE_TABLE_ENTRY_SIZE),
         ("handle_table_min_entries", HANDLE_TABLE_MIN_ENTRIES),
         ("gc_initial_trigger_bytes", GC_INITIAL_TRIGGER_BYTES),

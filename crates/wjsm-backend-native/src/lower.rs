@@ -1344,16 +1344,34 @@ pub(crate) fn lower_function(
         for constant_id in &immutable_constant_ids {
             let constant = &constants
                 [usize::try_from(constant_id.0).context("constant index does not fit usize")?];
-            let operation = match constant {
-                Constant::String(_) => NativeRuntimeOp::MaterializeString,
-                Constant::BigInt(_) => NativeRuntimeOp::MaterializeBigInt,
+            let result = match constant {
+                // 字符串常量 install 期已发布进 vmctx 常量数组：入口两条 load 直读，
+                // 替代旧的 MaterializeString 宿主往返（每次函数调用 ~40ns/常量）。
+                Constant::String(_) => {
+                    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+                    let base = cx.builder.ins().load(
+                        pointer_type,
+                        MemFlagsData::trusted(),
+                        cx.ctx,
+                        vmctx_offset(offset_of!(NativeVmContext, string_constants_base))?,
+                    );
+                    let address = cx
+                        .builder
+                        .ins()
+                        .iadd_imm_u(base, i64::from(constant_id.0) * 8);
+                    cx.builder
+                        .ins()
+                        .load(types::I64, MemFlagsData::trusted(), address, 0)
+                }
+                Constant::BigInt(_) => {
+                    let index = cx
+                        .builder
+                        .ins()
+                        .iconst(types::I64, i64::from(constant_id.0));
+                    cx.call(NativeRuntimeOp::MaterializeBigInt.id(), &[index], None)?
+                }
                 _ => unreachable!("immutable constant collector only returns strings and BigInts"),
             };
-            let index = cx
-                .builder
-                .ins()
-                .iconst(types::I64, i64::from(constant_id.0));
-            let result = cx.call(operation.id(), &[index], None)?;
             hoisted_constants.insert(*constant_id, result);
         }
         let mut tables = InstructionTables {

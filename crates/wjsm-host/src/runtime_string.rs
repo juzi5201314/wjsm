@@ -10,7 +10,7 @@
 //! 查表/退表时重新展平并遍历整串。
 
 use std::cmp::Ordering;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
@@ -613,60 +613,11 @@ impl From<Vec<u16>> for RuntimeString {
     }
 }
 
-/// 进程级哈希种子：`RandomState` 提供随机性，使内容哈希不可被外部构造碰撞。
-fn hash_seed() -> u32 {
-    static SEED: OnceLock<u32> = OnceLock::new();
-    *SEED.get_or_init(|| {
-        let mut hasher = std::hash::RandomState::new().build_hasher();
-        hasher.write_u8(0);
-        (hasher.finish() as u32) | 1
-    })
-}
-
-/// UTF-16 内容哈希：每次吃 4 个码元（8 字节），双累加器交替。
-///
-/// 逐码元做一次乘法会形成长度成正比的串行乘法依赖链，中等长度串上比它要取代的
-/// SipHash 还慢；按机器字打包并拆成两条独立链后，吞吐由乘法端口而非延迟决定。
-/// 结果归一化到非 [`HASH_UNCOMPUTED`]。
+/// 计算结果归一化到非 [`HASH_UNCOMPUTED`]；种子与算法的唯一权威实现在
+/// `wjsm_ir::string_hash`（固定种子）——编译期烘焙的常量哈希与运行时哈希必须
+/// 同函数同种子，同内容属性键的去重才不会分裂成两个句柄。
 fn compute_hash(units: &[u16]) -> u32 {
-    compute_hash_by_len(units.len(), |index| units[index])
-}
-
-/// 按码元下标计算内容哈希；`read_unit` 必须与切片读取同值（Latin-1 字节零扩展）。
-fn compute_hash_by_len(len: usize, mut read_unit: impl FnMut(usize) -> u16) -> u32 {
-    const K1: u64 = 0xff51_afd7_ed55_8ccd;
-    const K2: u64 = 0xc4ce_b9fe_1a85_ec53;
-
-    let mut left = u64::from(hash_seed()) ^ (len as u64).wrapping_mul(K1);
-    let mut right = K2;
-    let full_chunks = len / 8;
-    for chunk in 0..full_chunks {
-        let base = chunk * 8;
-        let mut low = 0_u64;
-        let mut high = 0_u64;
-        for j in 0..4 {
-            low |= u64::from(read_unit(base + j)) << (j * 16);
-            high |= u64::from(read_unit(base + 4 + j)) << (j * 16);
-        }
-        left = (left ^ low).wrapping_mul(K1).rotate_left(31);
-        right = (right ^ high).wrapping_mul(K2).rotate_left(29);
-    }
-    let mut tail = 0_u64;
-    for index in (full_chunks * 8)..len {
-        tail |= u64::from(read_unit(index)) << ((index % 4) * 16);
-        if index % 4 == 3 {
-            left = (left ^ tail).wrapping_mul(K1).rotate_left(31);
-            tail = 0;
-        }
-    }
-    right ^= tail;
-
-    let mut mixed = left ^ right.wrapping_mul(K1);
-    mixed ^= mixed >> 33;
-    mixed = mixed.wrapping_mul(K2);
-    mixed ^= mixed >> 29;
-    let hash = (mixed as u32) ^ ((mixed >> 32) as u32);
-    if hash == HASH_UNCOMPUTED { 1 } else { hash }
+    wjsm_ir::string_hash::content_hash_units(units)
 }
 
 /// 计算 UTF-16 码元序列的内容哈希。
@@ -677,7 +628,7 @@ pub fn content_hash_units(units: &[u16]) -> u32 {
 /// 计算 Latin-1 单字节载荷的内容哈希；字节零扩展为码元，与
 /// [`content_hash_units`] 对同内容给出同值（跨表示去重的键一致性）。
 pub fn content_hash_latin1(bytes: &[u8]) -> u32 {
-    compute_hash_by_len(bytes.len(), |index| u16::from(bytes[index]))
+    wjsm_ir::string_hash::content_hash_latin1(bytes)
 }
 
 /// 在 UTF-16 码元序列中查找子序列。
@@ -983,7 +934,10 @@ mod tests {
     fn content_hash_latin1_matches_unit_hash() {
         let bytes: &[u8] = b"ascii-payload-with-tail";
         let units: Vec<u16> = bytes.iter().map(|&byte| u16::from(byte)).collect();
-        assert_eq!(super::content_hash_latin1(bytes), super::content_hash_units(&units));
+        assert_eq!(
+            super::content_hash_latin1(bytes),
+            super::content_hash_units(&units)
+        );
         // 空、恰好 4/8 对齐与超长尾部三种长度形态都覆盖。
         for len in [0_usize, 1, 3, 4, 8, 9, 12, 33] {
             let bytes: Vec<u8> = (0..len as u8).collect();

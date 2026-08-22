@@ -86,9 +86,9 @@ pub(super) fn dispatch_runtime(
             .first()
             .map(|input| value::encode_bool(is_truthy(state, *input)))
             .unwrap_or_else(|| fail_dispatch(ctx)),
-        NativeRuntimeOp::MaterializeString
-        | NativeRuntimeOp::MaterializeBigInt
-        | NativeRuntimeOp::MaterializeRegExp => {
+        // MaterializeString 已随 install 期常量发布（4.1）退役；字符串常量由
+        // 生成代码经 vmctx `string_constants_base` 直读，BigInt/RegExp 仍惰性物化。
+        NativeRuntimeOp::MaterializeBigInt | NativeRuntimeOp::MaterializeRegExp => {
             let [index] = args else {
                 return fail_dispatch(ctx);
             };

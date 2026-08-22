@@ -1,6 +1,7 @@
 pub mod builtin;
 pub mod cfg;
 pub mod constants;
+pub mod string_hash;
 pub mod types;
 pub mod value;
 pub mod variable_ssa;
@@ -24,6 +25,11 @@ pub fn is_host_shared_variable(name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Module {
     constants: Vec<Constant>,
+    /// 与 `constants` 下标对齐的字符串烘焙元数据；仅 `Constant::String` 槽位有值。
+    /// 编译期由 [`Module::add_constant`] 即时计算，制品解码则直接填充 wire 里的
+    /// 烘焙值——运行时（install 期发布）因此零哈希、零表示转换。
+    #[serde(default)]
+    string_constant_metas: Vec<Option<StringConstantMeta>>,
     functions: Vec<Function>,
     script_mode: bool,
     /// 源文件路径（用于运行时错误堆栈映射）。
@@ -32,14 +38,67 @@ pub struct Module {
 
 pub type Program = Module;
 
+/// 字符串常量的编译期烘焙元数据（4.1 常量段）。
+///
+/// 哈希与表示选择在编译期一次算定并随制品分发；install 期发布照此直写堆头，
+/// 不再经 UTF-8 → UTF-16 转换与内容哈希。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StringConstantMeta {
+    /// 内容哈希（与 `wjsm_ir::string_hash` 权威实现同函数同种子，已归一化非 0）。
+    pub hash: u32,
+    /// true = payload 是 Latin-1 单字节载荷；false = UTF-16LE 码元序列。
+    pub latin1: bool,
+    /// 扁平载荷：Latin-1 每码元 1 字节，UTF-16 每码元 2 字节（小端）。
+    pub payload: Vec<u8>,
+}
+
+impl StringConstantMeta {
+    /// 从 UTF-8 文本构造：全 Latin-1 即选单字节载荷；哈希跨表示同值。
+    pub fn from_text(text: &str) -> Self {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let latin1 = units.iter().all(|unit| *unit <= u8::MAX as u16);
+        let payload = if latin1 {
+            units.iter().map(|unit| *unit as u8).collect()
+        } else {
+            units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+        };
+        Self {
+            hash: string_hash::content_hash_units(&units),
+            latin1,
+            payload,
+        }
+    }
+
+    /// UTF-16 码元长度。
+    pub fn unit_len(&self) -> u32 {
+        let bytes = u32::try_from(self.payload.len()).unwrap_or(u32::MAX);
+        if self.latin1 { bytes } else { bytes / 2 }
+    }
+}
+
 impl Module {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn add_constant(&mut self, constant: Constant) -> ConstantId {
+        let meta = match &constant {
+            Constant::String(text) => Some(StringConstantMeta::from_text(text)),
+            _ => None,
+        };
+        self.add_constant_with_meta(constant, meta)
+    }
+
+    /// 制品解码专用：wire 已携带烘焙元数据，直接填充不再重算。
+    pub fn add_constant_with_meta(
+        &mut self,
+        constant: Constant,
+        meta: Option<StringConstantMeta>,
+    ) -> ConstantId {
         let id = ConstantId(self.constants.len() as u32);
         self.constants.push(constant);
+        self.string_constant_metas.push(meta);
+        debug_assert_eq!(self.constants.len(), self.string_constant_metas.len());
         id
     }
 
@@ -53,6 +112,12 @@ impl Module {
         &self.constants
     }
 
+    /// 取字符串常量的烘焙元数据；非字符串槽位或元数据缺失（serde 兼容回退）为 None，
+    /// 调用方需自行从文本重算。
+    pub fn string_constant_meta(&self, id: ConstantId) -> Option<&StringConstantMeta> {
+        self.string_constant_metas.get(id.0 as usize)?.as_ref()
+    }
+
     pub fn functions(&self) -> &[Function] {
         &self.functions
     }
@@ -64,6 +129,8 @@ impl Module {
     /// 因此段内 `Constant::FunctionRef` 引用在合并后的模块中依然有效。
     pub fn append_builtin(&mut self, other: &Program) {
         self.constants.extend(other.constants.iter().cloned());
+        self.string_constant_metas
+            .extend(other.string_constant_metas.iter().cloned());
         self.functions.extend(other.functions.iter().cloned());
     }
 
@@ -111,8 +178,13 @@ impl Module {
             Some(max) => self.constants[..=max].to_vec(),
             None => Vec::new(),
         };
+        let builtin_metas = match builtin_used {
+            Some(max) => self.string_constant_metas[..=max].to_vec(),
+            None => Vec::new(),
+        };
         let builtin = Program {
             constants: builtin_constants,
+            string_constant_metas: builtin_metas,
             functions: self.functions[..split].to_vec(),
             script_mode: self.script_mode,
             source_file: None,
@@ -125,6 +197,7 @@ impl Module {
                 .cloned()
                 .map(|constant| remap_user_function_ref(constant, split_id, user_count))
                 .collect(),
+            string_constant_metas: self.string_constant_metas.clone(),
             functions: self.functions[split..].to_vec(),
             script_mode: self.script_mode,
             source_file: self.source_file.clone(),

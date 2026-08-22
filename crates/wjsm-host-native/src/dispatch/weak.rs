@@ -600,6 +600,13 @@ fn root_values(
     for program in state.programs.values() {
         queue.extend(program.materialized_constants.iter().copied().flatten());
     }
+    // install 期发布的字符串常量同理：数组里的盒装句柄是生成代码直读的根，
+    // 非 handle 值（undefined 填充槽）在根队列下游按 tag 甄别，无害。
+    queue.extend(state.string_constants.iter().copied());
+    queue.extend(state.install_string_roots.iter().copied());
+    for program in state.programs.values() {
+        queue.extend(program.string_constants.iter().copied());
+    }
     // 宿主侧持久的 JS 值（微任务/计时器/挂起 promise/continuation/回调等）同样
     // 是根：下标表回收后，仍被这些结构引用的闭包/字符串不得被 tombstone。
     extend_host_roots(state, &mut queue);
