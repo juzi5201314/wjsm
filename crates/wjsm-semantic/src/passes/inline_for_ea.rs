@@ -180,6 +180,9 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
         NewArray { dest, .. } => {
             add(dest);
         }
+        CloneArrayTemplate { dest, .. } => {
+            add(dest);
+        }
         GetElem {
             dest,
             object,
@@ -396,6 +399,7 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(value);
         }
         NewArray { dest, .. } => rep(dest),
+        CloneArrayTemplate { dest, .. } => rep(dest),
         GetElem {
             dest,
             object,
@@ -567,7 +571,9 @@ fn classify_construct_return(
     value: ValueId,
 ) -> Option<bool> {
     match definitions.get(&value) {
-        Some(Instruction::NewObject { .. }) | Some(Instruction::NewArray { .. }) => Some(true),
+        Some(Instruction::NewObject { .. })
+        | Some(Instruction::NewArray { .. })
+        | Some(Instruction::CloneArrayTemplate { .. }) => Some(true),
         Some(Instruction::LoadVar { name, .. }) if is_this_name(name) => Some(false),
         Some(Instruction::Const { constant, .. }) => match constants.get(constant.0 as usize) {
             Some(

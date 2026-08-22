@@ -331,6 +331,8 @@ impl Module {
 pub enum Constant {
     Number(f64),
     String(String),
+    /// 编译期 split 产生的不可变数组模板；运行时必须 clone 成独立数组。
+    ArrayTemplate(Vec<ConstantId>),
     Bool(bool),
     Null,
     Undefined,
@@ -353,6 +355,7 @@ impl fmt::Display for Constant {
         match self {
             Self::Number(value) => write!(formatter, "number({value})"),
             Self::String(value) => write!(formatter, "string({value:?})"),
+            Self::ArrayTemplate(elements) => write!(formatter, "array_template({elements:?})"),
             Self::Bool(value) => write!(formatter, "bool({value})"),
             Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
@@ -1188,6 +1191,11 @@ pub enum Instruction {
         dest: ValueId,
         capacity: u32,
     },
+    /// 从编译期常量模板克隆一个新的可变数组对象。
+    CloneArrayTemplate {
+        dest: ValueId,
+        template: ConstantId,
+    },
     /// 按数字索引读取数组元素
     GetElem {
         dest: ValueId,
@@ -1445,6 +1453,9 @@ impl fmt::Display for Instruction {
             Self::NewArray { dest, capacity } => {
                 write!(formatter, "{dest} = new_array(capacity={capacity})")
             }
+            Self::CloneArrayTemplate { dest, template } => {
+                write!(formatter, "{dest} = clone_array_template({template})")
+            }
             Self::GetElem {
                 dest,
                 object,
@@ -1630,7 +1641,9 @@ impl Instruction {
                     *arg = f(*arg);
                 }
             }
-            Self::NewObject { dest, .. } | Self::NewArray { dest, .. } => *dest = f(*dest),
+            Self::NewObject { dest, .. }
+            | Self::NewArray { dest, .. }
+            | Self::CloneArrayTemplate { dest, .. } => *dest = f(*dest),
             Self::GetProp { dest, object, key } => {
                 *dest = f(*dest);
                 *object = f(*object);

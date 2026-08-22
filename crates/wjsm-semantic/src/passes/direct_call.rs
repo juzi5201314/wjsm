@@ -103,6 +103,7 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         | LoadVar { .. }
         | NewObject { .. }
         | NewArray { .. }
+        | CloneArrayTemplate { .. }
         | GetSuperBase { .. }
         | GetSuperConstructor { .. }
         | NewPromise { .. }
@@ -159,6 +160,7 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | CreateDataProperty { dest, .. }
         | DeleteProp { dest, .. }
         | NewArray { dest, .. }
+        | CloneArrayTemplate { dest, .. }
         | GetElem { dest, .. }
         | SetElem { dest, .. }
         | OptionalGetProp { dest, .. }

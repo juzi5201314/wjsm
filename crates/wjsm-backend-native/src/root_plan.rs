@@ -182,6 +182,7 @@ fn instruction_destination(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::CreateDataProperty { dest, .. }
         | Instruction::DeleteProp { dest, .. }
         | Instruction::NewArray { dest, .. }
+        | Instruction::CloneArrayTemplate { dest, .. }
         | Instruction::GetElem { dest, .. }
         | Instruction::SetElem { dest, .. }
         | Instruction::OptionalGetProp { dest, .. }

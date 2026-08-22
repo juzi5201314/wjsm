@@ -474,6 +474,7 @@ fn verify_instruction_uses(
         }
         Instruction::NewObject { .. }
         | Instruction::NewArray { .. }
+        | Instruction::CloneArrayTemplate { .. }
         | Instruction::GetSuperBase { .. }
         | Instruction::GetSuperConstructor { .. }
         | Instruction::NewPromise { .. }
@@ -703,6 +704,7 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::SetProp { dest, .. }
         | Instruction::DeleteProp { dest, .. }
         | Instruction::NewArray { dest, .. }
+        | Instruction::CloneArrayTemplate { dest, .. }
         | Instruction::GetElem { dest, .. }
         | Instruction::SetElem { dest, .. }
         | Instruction::OptionalGetProp { dest, .. }

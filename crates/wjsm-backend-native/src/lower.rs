@@ -1618,6 +1618,9 @@ fn lower_instruction(
                     .get(constant_id)
                     .copied()
                     .context("immutable constant was not hoisted")?,
+                Constant::ArrayTemplate(_) => {
+                    bail!("array templates are materialized by clone_array_template")
+                }
                 Constant::RegExp { .. } => {
                     let index = cx
                         .builder
@@ -2131,6 +2134,11 @@ fn lower_instruction(
         Instruction::NewArray { dest, capacity } => {
             let capacity = cx.builder.ins().iconst(types::I64, i64::from(*capacity));
             let result = cx.call(NativeRuntimeOp::NewArray.id(), &[capacity], None)?;
+            define_value(cx.builder, cx.variables, *dest, result)
+        }
+        Instruction::CloneArrayTemplate { dest, template } => {
+            let template = cx.builder.ins().iconst(types::I64, i64::from(template.0));
+            let result = cx.call(NativeRuntimeOp::CloneArrayTemplate.id(), &[template], None)?;
             define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::GetElem {
@@ -5600,6 +5608,7 @@ fn switch_constant_immediate(constant: &Constant) -> Result<i64> {
         Constant::String(_) | Constant::BigInt(_) | Constant::RegExp { .. } => {
             bail!("materialized constants are not valid switch keys")
         }
+        Constant::ArrayTemplate(_) => bail!("array templates are not valid switch keys"),
     }
 }
 

@@ -4,7 +4,7 @@ use wjsm_gc::{HeapAccessV2Error, StopTheWorldCollectorError};
 
 use crate::gc::NativeGcError;
 use wjsm_host::RuntimeString;
-use wjsm_ir::{constants, value};
+use wjsm_ir::{Constant, constants, value};
 use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
 };
@@ -122,6 +122,39 @@ pub(super) fn dispatch_runtime(
                 parts.push(part);
             }
             super::string::intern(ctx, state, RuntimeString::concat_many(parts))
+        }
+        NativeRuntimeOp::CloneArrayTemplate => {
+            let [template] = args else {
+                return fail_dispatch(ctx);
+            };
+            let Ok(template) = usize::try_from(*template) else {
+                return fail_dispatch(ctx);
+            };
+            let Some(Constant::ArrayTemplate(elements)) = state.constants.get(template) else {
+                return fail_dispatch(ctx);
+            };
+            let mut values = Vec::with_capacity(elements.len());
+            for element in elements {
+                let Some(constant) = state.constants.get(element.0 as usize) else {
+                    return fail_dispatch(ctx);
+                };
+                let encoded = match constant {
+                    Constant::String(_) => state
+                        .string_constants
+                        .get(element.0 as usize)
+                        .copied()
+                        .unwrap_or_else(value::encode_undefined),
+                    Constant::Number(number) => value::encode_f64(*number),
+                    Constant::Bool(boolean) => value::encode_bool(*boolean),
+                    Constant::Null => value::encode_null(),
+                    Constant::Undefined => value::encode_undefined(),
+                    _ => return fail_dispatch(ctx),
+                };
+                values.push(encoded);
+            }
+            state
+                .allocate_array_values(&values)
+                .unwrap_or_else(|_| fail_dispatch(ctx))
         }
         NativeRuntimeOp::NewObject | NativeRuntimeOp::NewArray => {
             let [capacity] = args else {

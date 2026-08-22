@@ -195,6 +195,13 @@ fn encode_constant(
             encoder.u16(9);
             encoder.u32(id.0);
         }
+        Constant::ArrayTemplate(elements) => {
+            encoder.u16(10);
+            encoder.len(elements.len())?;
+            for element in elements {
+                encoder.u32(element.0);
+            }
+        }
     }
     Ok(())
 }
@@ -259,6 +266,14 @@ fn decode_constant(
             None,
         )),
         9 => Ok((Constant::ModuleId(ModuleId(decoder.u32()?)), None)),
+        10 => {
+            let count = decoder.count(limits.max_constants)?;
+            let mut elements = Vec::with_capacity(count);
+            for _ in 0..count {
+                elements.push(ConstantId(decoder.u32()?));
+            }
+            Ok((Constant::ArrayTemplate(elements), None))
+        }
         _ => Err(ArtifactFormatError::UnknownTag("constant", tag.into())),
     }
 }
@@ -489,6 +504,11 @@ fn encode_instruction(
             encoder.u16(17);
             value_id(encoder, *dest);
             encoder.u32(*capacity);
+        }
+        Instruction::CloneArrayTemplate { dest, template } => {
+            encoder.u16(38);
+            value_id(encoder, *dest);
+            encoder.u32(template.0);
         }
         Instruction::GetElem {
             dest,
@@ -825,6 +845,10 @@ fn decode_instruction(
                 value,
             })
         }
+        38 => Ok(Instruction::CloneArrayTemplate {
+            dest: next_value(decoder)?,
+            template: ConstantId(decoder.u32()?),
+        }),
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),
     }
 }

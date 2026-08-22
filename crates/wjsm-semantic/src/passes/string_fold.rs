@@ -12,6 +12,12 @@ use std::collections::HashMap;
 
 use wjsm_ir::{Builtin, Constant, ConstantId, Instruction, Module, ValueId};
 
+#[derive(Debug)]
+enum FoldedResult {
+    Constant(Constant),
+    ArrayTemplate(Vec<Constant>),
+}
+
 pub(crate) fn run(module: &mut Module) {
     let constants = module.constants().to_vec();
     let mut folded: Vec<Constant> = Vec::new();
@@ -32,7 +38,7 @@ pub(crate) fn run(module: &mut Module) {
             }
         }
 
-        let mut rewrites: Vec<(usize, usize, Constant)> = Vec::new();
+        let mut rewrites: Vec<(usize, usize, FoldedResult)> = Vec::new();
         for (block_index, block) in function.blocks().iter().enumerate() {
             for (instruction_index, instruction) in block.instructions().iter().enumerate() {
                 let Instruction::CallBuiltin {
@@ -52,11 +58,40 @@ pub(crate) fn run(module: &mut Module) {
         if rewrites.is_empty() {
             continue;
         }
-        for (block_index, instruction_index, value) in rewrites {
+        for (block_index, instruction_index, result) in rewrites {
             let constant = ConstantId(
                 u32::try_from(constants.len() + folded.len()).expect("constant index fits u32"),
             );
-            folded.push(value);
+            let replacement = match result {
+                FoldedResult::Constant(value) => {
+                    folded.push(value);
+                    Instruction::Const {
+                        dest: ValueId(0),
+                        constant,
+                    }
+                }
+                FoldedResult::ArrayTemplate(elements) => {
+                    let ids = elements
+                        .into_iter()
+                        .map(|value| {
+                            let id = ConstantId(
+                                u32::try_from(constants.len() + folded.len())
+                                    .expect("constant index fits u32"),
+                            );
+                            folded.push(value);
+                            id
+                        })
+                        .collect();
+                    folded.push(Constant::ArrayTemplate(ids));
+                    Instruction::CloneArrayTemplate {
+                        dest: ValueId(0),
+                        template: ConstantId(
+                            u32::try_from(constants.len() + folded.len() - 1)
+                                .expect("constant index fits u32"),
+                        ),
+                    }
+                }
+            };
             let blocks = function.blocks_mut();
             let Instruction::CallBuiltin {
                 dest: Some(dest), ..
@@ -64,8 +99,14 @@ pub(crate) fn run(module: &mut Module) {
             else {
                 continue;
             };
-            blocks[block_index].instructions_mut()[instruction_index] =
-                Instruction::Const { dest, constant };
+            let replacement = match replacement {
+                Instruction::Const { constant, .. } => Instruction::Const { dest, constant },
+                Instruction::CloneArrayTemplate { template, .. } => {
+                    Instruction::CloneArrayTemplate { dest, template }
+                }
+                _ => unreachable!(),
+            };
+            blocks[block_index].instructions_mut()[instruction_index] = replacement;
         }
     }
 
@@ -127,7 +168,7 @@ fn fold_call(
     defined: &HashMap<ValueId, ConstantId>,
     constants: &[Constant],
     folded: &[Constant],
-) -> Option<Constant> {
+) -> Option<FoldedResult> {
     // 变长拼接单独处理：它没有固定 receiver 形态。
     if builtin == Builtin::StringConcatVa {
         let mut out: Vec<u16> = Vec::new();
@@ -137,12 +178,23 @@ fn fold_call(
                 return None;
             }
         }
-        return from_units(&out);
+        return from_units(&out).map(FoldedResult::Constant);
     }
 
     let receiver = string_arg(*args.first()?, defined, constants, folded)?;
     let length = receiver.len();
-    match builtin {
+    if builtin == Builtin::StringSplit {
+        let separator = string_arg(*args.get(1)?, defined, constants, folded)?;
+        let limit = split_limit(args, defined, constants, folded)?;
+        let parts = split_units(&receiver, &separator, limit)?;
+        return Some(FoldedResult::ArrayTemplate(
+            parts
+                .into_iter()
+                .map(|units| String::from_utf16(&units).ok().map(Constant::String))
+                .collect::<Option<Vec<_>>>()?,
+        ));
+    }
+    let result = match builtin {
         Builtin::StringSlice => {
             let start =
                 relative_index(integer_arg(args, 1, defined, constants, folded, 0)?, length);
@@ -240,10 +292,51 @@ fn fold_call(
             from_units(&out)
         }
         _ => None,
-    }
+    };
+    result.map(FoldedResult::Constant)
 }
 
-/// 取第 `position` 个实参并按 `ToIntegerOrInfinity` 截断；缺省时返回 `default`。
+fn split_limit(
+    args: &[ValueId],
+    defined: &HashMap<ValueId, ConstantId>,
+    constants: &[Constant],
+    folded: &[Constant],
+) -> Option<usize> {
+    let Some(value) = args.get(2) else {
+        return Some(usize::MAX);
+    };
+    let number = number_arg(*value, defined, constants, folded)?;
+    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
+        return None;
+    }
+    Some((number as u64).min(usize::MAX as u64) as usize)
+}
+
+fn split_units(input: &[u16], separator: &[u16], limit: usize) -> Option<Vec<Vec<u16>>> {
+    if limit == 0 {
+        return Some(Vec::new());
+    }
+    let mut parts = Vec::new();
+    if separator.is_empty() {
+        for unit in input.iter().take(limit) {
+            parts.push(vec![*unit]);
+        }
+    } else {
+        let mut start = 0;
+        while parts.len() + 1 < limit {
+            let Some(pos) = find_units(input, separator, start) else {
+                break;
+            };
+            parts.push(input[start..pos].to_vec());
+            start = pos + separator.len();
+        }
+        parts.push(input[start..].to_vec());
+    }
+    if parts.len() > 256 || parts.iter().map(Vec::len).sum::<usize>() > MAX_FOLDED_UNITS {
+        return None;
+    }
+    Some(parts)
+}
 fn integer_arg(
     args: &[ValueId],
     position: usize,
@@ -420,6 +513,50 @@ mod tests {
         );
         run(&mut module);
         assert_eq!(folded_result(&module), Some(Constant::String("abc".into())));
+    }
+
+    #[test]
+    fn folds_split_to_array_template() {
+        let mut module = module_with(
+            Builtin::StringSplit,
+            vec![
+                Constant::String("a,b,c".into()),
+                Constant::String(",".into()),
+                Constant::Number(2.0),
+            ],
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+        );
+        run(&mut module);
+        let instruction = module.functions()[0].blocks()[0].instructions().last();
+        let Some(Instruction::CloneArrayTemplate { template, .. }) = instruction else {
+            panic!("split should lower to a fresh array clone");
+        };
+        let Constant::ArrayTemplate(elements) = &module.constants()[template.0 as usize] else {
+            panic!("missing split template");
+        };
+        assert_eq!(elements.len(), 2);
+    }
+
+    #[test]
+    fn split_zero_limit_is_empty_template() {
+        let mut module = module_with(
+            Builtin::StringSplit,
+            vec![
+                Constant::String("a,b".into()),
+                Constant::String(",".into()),
+                Constant::Number(0.0),
+            ],
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+        );
+        run(&mut module);
+        let instruction = module.functions()[0].blocks()[0].instructions().last();
+        let Some(Instruction::CloneArrayTemplate { template, .. }) = instruction else {
+            panic!("split should lower to a fresh array clone");
+        };
+        assert_eq!(
+            module.constants()[template.0 as usize],
+            Constant::ArrayTemplate(Vec::new())
+        );
     }
 
     #[test]

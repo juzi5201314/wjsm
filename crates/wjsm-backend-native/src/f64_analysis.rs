@@ -517,6 +517,7 @@ fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
         | Instruction::LoadVar { .. }
         | Instruction::NewObject { .. }
         | Instruction::NewArray { .. }
+        | Instruction::CloneArrayTemplate { .. }
         | Instruction::GetSuperBase { .. }
         | Instruction::GetSuperConstructor { .. }
         | Instruction::NewPromise { .. }
