@@ -1897,6 +1897,65 @@ mod tests {
         Instruction, Module, Terminator, UnaryOp, ValueId,
     };
 
+    /// 构造标准方法调用者 `$main`：单块依次 NewObject、取方法 `name`、实参 `arg`、
+    /// Call、Return 调用结果。此形状触发守卫式推测方法内联站点。
+    fn caller_with_method_call(module: &mut Module, name: &str, arg: ConstantId) -> Function {
+        let c_name = module.add_constant(Constant::String(name.to_string()));
+        let mut caller = Function::new("$main", BasicBlockId(0));
+        caller.set_params(vec!["$env".to_string(), "$this".to_string()]);
+        let mut bb = BasicBlock::new(BasicBlockId(0));
+        let v_obj = ValueId(0);
+        let v_key = ValueId(1);
+        let v_callee = ValueId(2);
+        let v_arg = ValueId(3);
+        let v_res = ValueId(4);
+        bb.push_instruction(Instruction::NewObject {
+            dest: v_obj,
+            capacity: 4,
+        });
+        bb.push_instruction(Instruction::Const {
+            dest: v_key,
+            constant: c_name,
+        });
+        bb.push_instruction(Instruction::GetProp {
+            dest: v_callee,
+            object: v_obj,
+            key: v_key,
+        });
+        bb.push_instruction(Instruction::Const {
+            dest: v_arg,
+            constant: arg,
+        });
+        bb.push_instruction(Instruction::Call {
+            dest: Some(v_res),
+            callee: v_callee,
+            this_val: v_obj,
+            args: vec![v_arg],
+        });
+        bb.set_terminator(Terminator::Return { value: Some(v_res) });
+        caller.push_block(bb);
+        caller
+    }
+
+    /// 断言 caller 快路径内含指向 `target` 方法的 GuardSameFunction 守卫。
+    fn assert_has_guard(caller: &Function, target: FunctionId) {
+        let has_guard = caller.blocks().iter().any(|b| {
+            b.instructions().iter().any(|ins| {
+                matches!(
+                    ins,
+                    Instruction::GuardSameFunction {
+                        function: target,
+                        ..
+                    }
+                )
+            })
+        });
+        assert!(
+            has_guard,
+            "caller must have GuardSameFunction for target function {target:?}"
+        );
+    }
+
     #[test]
     fn test_classify_construct_return_primitives() {
         let mut defs = HashMap::new();
@@ -2027,7 +2086,6 @@ mod tests {
         let mut module = Module::new();
 
         // 常量表
-        let c_calc_name = module.add_constant(Constant::String("calc".to_string()));
         let c_10 = module.add_constant(Constant::Number(10.0));
         let c_20 = module.add_constant(Constant::Number(20.0));
 
@@ -2077,40 +2135,7 @@ mod tests {
         module.push_function(target_func);
 
         // 函数 1：caller
-        let mut caller_func = Function::new("$main", BasicBlockId(0));
-        caller_func.set_params(vec!["$env".to_string(), "$this".to_string()]);
-        let mut c_bb0 = BasicBlock::new(BasicBlockId(0));
-        let v_obj = ValueId(0);
-        let v_key = ValueId(1);
-        let v_callee = ValueId(2);
-        let v_arg = ValueId(3);
-        let v_res = ValueId(4);
-
-        c_bb0.push_instruction(Instruction::NewObject {
-            dest: v_obj,
-            capacity: 4,
-        });
-        c_bb0.push_instruction(Instruction::Const {
-            dest: v_key,
-            constant: c_calc_name,
-        });
-        c_bb0.push_instruction(Instruction::GetProp {
-            dest: v_callee,
-            object: v_obj,
-            key: v_key,
-        });
-        c_bb0.push_instruction(Instruction::Const {
-            dest: v_arg,
-            constant: c_10,
-        });
-        c_bb0.push_instruction(Instruction::Call {
-            dest: Some(v_res),
-            callee: v_callee,
-            this_val: v_obj,
-            args: vec![v_arg],
-        });
-        c_bb0.set_terminator(Terminator::Return { value: Some(v_res) });
-        caller_func.push_block(c_bb0);
+        let caller_func = caller_with_method_call(&mut module, "calc", c_10);
         module.push_function(caller_func);
 
         // 运行 inline_for_ea
@@ -2118,21 +2143,7 @@ mod tests {
 
         let caller = &module.functions()[1];
         // 验证 caller 包含 GuardSameFunction 守卫
-        let has_guard = caller.blocks().iter().any(|b| {
-            b.instructions().iter().any(|ins| {
-                matches!(
-                    ins,
-                    Instruction::GuardSameFunction {
-                        function: FunctionId(0),
-                        ..
-                    }
-                )
-            })
-        });
-        assert!(
-            has_guard,
-            "caller must have GuardSameFunction for target method"
-        );
+        assert_has_guard(caller, FunctionId(0));
 
         // 验证区域入口块包含汇合多返回分支的 Phi 指令
         let has_phi = caller.blocks().iter().any(|b| {
@@ -2154,7 +2165,6 @@ mod tests {
     fn test_speculative_inline_chained_with_static() {
         let mut module = Module::new();
 
-        let c_calc_name = module.add_constant(Constant::String("calc".to_string()));
         let c_fn0_ref = module.add_constant(Constant::FunctionRef(FunctionId(0)));
         let c_1 = module.add_constant(Constant::Number(1.0));
         let c_42 = module.add_constant(Constant::Number(42.0));
@@ -2227,40 +2237,7 @@ mod tests {
         module.push_function(method_func);
 
         // 函数 2：caller
-        let mut caller_func = Function::new("$main", BasicBlockId(0));
-        caller_func.set_params(vec!["$env".to_string(), "$this".to_string()]);
-        let mut c_bb0 = BasicBlock::new(BasicBlockId(0));
-        let v_obj = ValueId(0);
-        let v_key = ValueId(1);
-        let v_callee = ValueId(2);
-        let v_arg = ValueId(3);
-        let v_res = ValueId(4);
-
-        c_bb0.push_instruction(Instruction::NewObject {
-            dest: v_obj,
-            capacity: 4,
-        });
-        c_bb0.push_instruction(Instruction::Const {
-            dest: v_key,
-            constant: c_calc_name,
-        });
-        c_bb0.push_instruction(Instruction::GetProp {
-            dest: v_callee,
-            object: v_obj,
-            key: v_key,
-        });
-        c_bb0.push_instruction(Instruction::Const {
-            dest: v_arg,
-            constant: c_42,
-        });
-        c_bb0.push_instruction(Instruction::Call {
-            dest: Some(v_res),
-            callee: v_callee,
-            this_val: v_obj,
-            args: vec![v_arg],
-        });
-        c_bb0.set_terminator(Terminator::Return { value: Some(v_res) });
-        caller_func.push_block(c_bb0);
+        let caller_func = caller_with_method_call(&mut module, "calc", c_42);
         module.push_function(caller_func);
 
         // 运行 inline_for_ea
@@ -2268,18 +2245,7 @@ mod tests {
 
         let caller = &module.functions()[2];
         // 验证 caller 包含 GuardSameFunction
-        let has_guard = caller.blocks().iter().any(|b| {
-            b.instructions().iter().any(|ins| {
-                matches!(
-                    ins,
-                    Instruction::GuardSameFunction {
-                        function: FunctionId(1),
-                        ..
-                    }
-                )
-            })
-        });
-        assert!(has_guard, "caller must have GuardSameFunction for method");
+        assert_has_guard(caller, FunctionId(1));
 
         // 验证快路径中 helper 调用也被级联内联为 Binary Add，无残留直接 Call
         let has_binary_add = caller.blocks().iter().any(|b| {
