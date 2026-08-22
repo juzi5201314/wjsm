@@ -126,11 +126,7 @@ fn runtime_string(state: &NativeAgentState, value: i64) -> Option<RuntimeString>
 
 /// 发布字符串，zgc 分配需推进 GC 时收集后重试（实现见
 /// [`super::runtime::intern_string_with_gc_retry`]）。
-pub(super) fn intern(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    string: RuntimeString,
-) -> i64 {
+pub(super) fn intern(ctx: &mut NativeVmContext, state: &mut NativeAgentState, string: RuntimeString) -> i64 {
     super::runtime::intern_string_with_gc_retry(ctx, state, string)
 }
 
@@ -405,17 +401,42 @@ pub(super) fn string_builder_finish(
     let Ok(repr) = state.gc.heap().string_repr(handle) else {
         return fail_dispatch(ctx);
     };
-    if repr == wjsm_ir::constants::STRING_REPR_UTF16_FLAT {
+    // 已冻结的扁平串直接复用；append 失败回落后这里可能是任一种 flat 表示。
+    if matches!(
+        repr,
+        wjsm_ir::constants::STRING_REPR_UTF16_FLAT | wjsm_ir::constants::STRING_REPR_LATIN1_FLAT
+    ) {
         return *encoded;
     }
     if repr != wjsm_ir::constants::STRING_REPR_BUILDER {
         return fail_dispatch(ctx);
     }
-    state
+    // 内容全 Latin-1 时冻结为单字节载荷：payload 就地紧缩（长度减半，capacity 是
+    // 字节上界不必收缩），hash 键按码元计算，紧缩前后同值。
+    let compacted = state.with_string_bytes(*encoded, |view| match view {
+        wjsm_gc::StrView::Utf16(units) if units.iter().all(|&unit| unit <= u16::from(u8::MAX)) => {
+            Some(units.iter().map(|&unit| unit as u8).collect::<Vec<u8>>())
+        }
+        _ => None,
+    });
+    let Some(compacted) = compacted.flatten() else {
+        return state
+            .gc
+            .heap()
+            .set_string_repr(handle, wjsm_ir::constants::STRING_REPR_UTF16_FLAT)
+            .map_or_else(|_| fail_dispatch(ctx), |_| *encoded);
+    };
+    let frozen = state
         .gc
         .heap()
-        .set_string_repr(handle, wjsm_ir::constants::STRING_REPR_UTF16_FLAT)
-        .map_or_else(|_| fail_dispatch(ctx), |_| *encoded)
+        .write_string_payload(handle, 0, &compacted)
+        .and_then(|()| {
+            state
+                .gc
+                .heap()
+                .set_string_repr(handle, wjsm_ir::constants::STRING_REPR_LATIN1_FLAT)
+        });
+    frozen.map_or_else(|_| fail_dispatch(ctx), |_| *encoded)
 }
 
 fn string_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {

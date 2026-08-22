@@ -57,8 +57,8 @@ pub use property_key::{
     symbol_value_to_name_id,
 };
 pub use runtime_string::{
-    RuntimeString, code_point_at, content_hash_units, ends_with_units, find_units,
-    json_quote_units, rfind_units_before, starts_with_units,
+    RuntimeString, code_point_at, content_hash_latin1, content_hash_units, ends_with_units,
+    find_units, json_quote_units, rfind_units_before, starts_with_units,
 };
 pub use stream_types::{
     ByobRequestEntry, ControllerKind, ReadableStreamByobRequestMethodKind,

@@ -19,7 +19,7 @@ use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver};
 use wjsm_gc::backoff::Backoff;
 use wjsm_gc::heap_access::{object_payload_bytes, string_payload_bytes};
 use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey, StrView};
-use wjsm_host::{RuntimeString, content_hash_units};
+use wjsm_host::{RuntimeString, content_hash_latin1, content_hash_units};
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
     MAX_NATIVE_ROOT_BITMAP_WORDS, NativeFeedbackSlot, NativeFeedbackTag, NativeHostSymbol,
@@ -4081,57 +4081,36 @@ impl NativeAgentState {
         self.publish_string_units(&units, tag, true)
     }
 
+    /// 去重命中时复用既有句柄；键为（内容哈希, UTF-16 长度），同一内容无论
+    /// Latin-1 还是 UTF-16 载荷都得到同一键，表示选择不影响句柄唯一性。
+    fn dedup_string_handle(&self, key: &(u32, u32)) -> Option<i64> {
+        self.string_ids
+            .get(key)
+            .copied()
+            .map(value::encode_runtime_string_handle)
+    }
+
     fn publish_string_units(&mut self, units: &[u16], tag: u64, interned: bool) -> Option<i64> {
         let length = u32::try_from(units.len()).ok()?;
         let key = (content_hash_units(units), length);
         if interned
             && tag == value::TAG_STRING
-            && let Some(handle) = self.string_ids.get(&key).copied()
+            && let Some(encoded) = self.dedup_string_handle(&key)
         {
-            return Some(value::encode_runtime_string_handle(handle));
+            return Some(encoded);
         }
-        let payload_len = units.len().checked_mul(2)?;
-        let capacity = u32::try_from(payload_len.checked_add(7)? & !7).ok()?;
-        let mut bytes = Vec::with_capacity(payload_len);
-        for unit in units {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        let address = self
-            .gc
-            .allocate(string_payload_bytes(capacity).ok()?)
-            .ok()?;
-        let handle = self.gc.heap().allocate_handle().ok()?;
-        let flags = if interned {
-            wjsm_ir::constants::STRING_FLAG_INTERNED
+        // 全 Latin-1 内容选单字节载荷：ASCII 负载的内存与拷贝带宽减半。
+        let latin1 = units.iter().all(|unit| *unit <= u16::from(u8::MAX));
+        let bytes = if latin1 {
+            units.iter().map(|&unit| unit as u8).collect::<Vec<_>>()
         } else {
-            0
+            let mut bytes = Vec::with_capacity(units.len().checked_mul(2)?);
+            for unit in units {
+                bytes.extend_from_slice(&unit.to_le_bytes());
+            }
+            bytes
         };
-        self.gc
-            .heap()
-            .publish_string(
-                handle,
-                address,
-                PROTO_NULL_SENTINEL,
-                wjsm_ir::constants::STRING_REPR_UTF16_FLAT,
-                flags,
-                length,
-                capacity,
-            )
-            .ok()?;
-        self.gc
-            .heap()
-            .write_string_payload(handle, 0, &bytes)
-            .ok()?;
-        self.gc.mark_black_allocation(handle).ok()?;
-        if interned && tag == value::TAG_STRING {
-            self.gc.heap().string_content_hash(handle).ok()?;
-            self.string_ids.insert(key, handle);
-        }
-        Some(if tag == value::TAG_STRING {
-            value::encode_runtime_string_handle(handle)
-        } else {
-            value::encode_handle(tag, handle)
-        })
+        self.publish_flat_string(&key, length, &bytes, tag, interned, latin1)
     }
 
     fn publish_builder_units(&mut self, units: &[u16], tag: u64) -> Option<i64> {
@@ -4173,17 +4152,27 @@ impl NativeAgentState {
 
     fn publish_string_bytes(&mut self, bytes: &[u8], tag: u64, interned: bool) -> Option<i64> {
         let length = u32::try_from(bytes.len()).ok()?;
-        let units = bytes
-            .iter()
-            .map(|&byte| u16::from(byte))
-            .collect::<Vec<_>>();
-        let key = (content_hash_units(&units), length);
+        let key = (content_hash_latin1(bytes), length);
         if interned
             && tag == value::TAG_STRING
-            && let Some(handle) = self.string_ids.get(&key).copied()
+            && let Some(encoded) = self.dedup_string_handle(&key)
         {
-            return Some(value::encode_runtime_string_handle(handle));
+            return Some(encoded);
         }
+        self.publish_flat_string(&key, length, bytes, tag, interned, true)
+    }
+
+    /// 以 `latin1` 指定的载荷表示发布扁平字符串：分配、写头、写 payload、
+    /// 黑标记，需要去重时惰性物化内容哈希并登记 `string_ids`。
+    fn publish_flat_string(
+        &mut self,
+        key: &(u32, u32),
+        length: u32,
+        bytes: &[u8],
+        tag: u64,
+        interned: bool,
+        latin1: bool,
+    ) -> Option<i64> {
         let capacity = u32::try_from(bytes.len().checked_add(7)? & !7).ok()?;
         let address = self
             .gc
@@ -4201,17 +4190,24 @@ impl NativeAgentState {
                 handle,
                 address,
                 PROTO_NULL_SENTINEL,
-                wjsm_ir::constants::STRING_REPR_LATIN1_FLAT,
+                if latin1 {
+                    wjsm_ir::constants::STRING_REPR_LATIN1_FLAT
+                } else {
+                    wjsm_ir::constants::STRING_REPR_UTF16_FLAT
+                },
                 flags,
                 length,
                 capacity,
             )
             .ok()?;
-        self.gc.heap().write_string_payload(handle, 0, bytes).ok()?;
+        self.gc
+            .heap()
+            .write_string_payload(handle, 0, bytes)
+            .ok()?;
         self.gc.mark_black_allocation(handle).ok()?;
         if interned && tag == value::TAG_STRING {
             self.gc.heap().string_content_hash(handle).ok()?;
-            self.string_ids.insert(key, handle);
+            self.string_ids.insert(*key, handle);
         }
         Some(if tag == value::TAG_STRING {
             value::encode_runtime_string_handle(handle)
@@ -4239,12 +4235,6 @@ impl NativeAgentState {
         let units = text.as_flat_slice().to_vec();
         let encoded = if is_builder {
             self.publish_builder_units(&units, tag)?
-        } else if units.iter().all(|unit| *unit <= u16::from(u8::MAX)) {
-            let bytes = units
-                .iter()
-                .map(|&unit| u8::try_from(unit).expect("Latin-1 unit is byte-sized"))
-                .collect::<Vec<_>>();
-            self.publish_string_bytes(&bytes, tag, dedup)?
         } else {
             self.publish_string_units(&units, tag, dedup)?
         };
@@ -5614,6 +5604,72 @@ mod tests {
                 std::path::Path::new("."),
             )
             .expect("source should execute")
+    }
+
+    /// 执行后返回（完成值句柄, 运行时），供白盒断言堆内字符串表示。
+    fn execute_source_with_runtime(source: &str) -> (NativeExecution, NativeRuntime) {
+        let artifact = artifact(source);
+        let mut runtime = NativeRuntime::new(None).expect("native runtime should initialize");
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("source should execute");
+        (execution, runtime)
+    }
+
+    /// 断言执行后堆内存在内容恰为 `text` 的字符串句柄且其表示为预期值。
+    fn assert_string_repr(state: &NativeAgentState, text: &str, expect_latin1: bool) {
+        let units = text.encode_utf16().collect::<Vec<u16>>();
+        let handles = state
+            .gc
+            .heap()
+            .capture_handles()
+            .expect("capture_handles 应成功")
+            .0;
+        let matches = handles.into_iter().filter(|entry| {
+            let handle = entry.handle.get();
+            state
+                .with_string_units(value::encode_runtime_string_handle(handle), |found| {
+                    found == units.as_slice()
+                })
+                .unwrap_or(false)
+        });
+        let mut seen = 0;
+        for entry in matches {
+            let repr = state
+                .gc
+                .heap()
+                .string_repr(entry.handle.get())
+                .expect("字符串 repr 读取失败");
+            assert_eq!(
+                repr == wjsm_ir::constants::STRING_REPR_LATIN1_FLAT,
+                expect_latin1,
+                "内容 {text:?} 的句柄 {} 表示不符预期（repr={repr}）",
+                entry.handle.get()
+            );
+            seen += 1;
+        }
+        assert!(seen > 0, "堆内未找到内容为 {text:?} 的字符串");
+    }
+
+    #[test]
+    fn latin1_construction_paths_pick_single_byte_payload() {
+        // 全 Latin-1 内容（字面量物化、builder finish）必须是单字节载荷，
+        // 含 UTF-16 码元的拼接结果保持双字节。push 进存活数组强制物化并防止
+        // 编译期常量折叠把用例消除。
+        let (_, runtime) = execute_source_with_runtime(
+            r#"const keep = [];
+               let acc = "";
+               for (let i = 0; i < 4; i++) acc += "seg" + i;
+               keep.push("ascii-literal", acc, "\u20ac" + "ascii");
+               console.log(keep.length);"#,
+        );
+        assert_string_repr(&runtime.state, "ascii-literal", true);
+        assert_string_repr(&runtime.state, "seg0seg1seg2seg3", true);
+        assert_string_repr(&runtime.state, "\u{20ac}ascii", false);
     }
 
     #[test]

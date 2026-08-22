@@ -629,21 +629,31 @@ fn hash_seed() -> u32 {
 /// SipHash 还慢；按机器字打包并拆成两条独立链后，吞吐由乘法端口而非延迟决定。
 /// 结果归一化到非 [`HASH_UNCOMPUTED`]。
 fn compute_hash(units: &[u16]) -> u32 {
+    compute_hash_by_len(units.len(), |index| units[index])
+}
+
+/// 按码元下标计算内容哈希；`read_unit` 必须与切片读取同值（Latin-1 字节零扩展）。
+fn compute_hash_by_len(len: usize, mut read_unit: impl FnMut(usize) -> u16) -> u32 {
     const K1: u64 = 0xff51_afd7_ed55_8ccd;
     const K2: u64 = 0xc4ce_b9fe_1a85_ec53;
 
-    let mut left = u64::from(hash_seed()) ^ (units.len() as u64).wrapping_mul(K1);
+    let mut left = u64::from(hash_seed()) ^ (len as u64).wrapping_mul(K1);
     let mut right = K2;
-    let (chunks, remainder) = units.as_chunks::<8>();
-    for chunk in chunks {
-        let low = pack_four(&chunk[..4]);
-        let high = pack_four(&chunk[4..]);
+    let full_chunks = len / 8;
+    for chunk in 0..full_chunks {
+        let base = chunk * 8;
+        let mut low = 0_u64;
+        let mut high = 0_u64;
+        for j in 0..4 {
+            low |= u64::from(read_unit(base + j)) << (j * 16);
+            high |= u64::from(read_unit(base + 4 + j)) << (j * 16);
+        }
         left = (left ^ low).wrapping_mul(K1).rotate_left(31);
         right = (right ^ high).wrapping_mul(K2).rotate_left(29);
     }
     let mut tail = 0_u64;
-    for (index, unit) in remainder.iter().enumerate() {
-        tail |= u64::from(*unit) << ((index % 4) * 16);
+    for index in (full_chunks * 8)..len {
+        tail |= u64::from(read_unit(index)) << ((index % 4) * 16);
         if index % 4 == 3 {
             left = (left ^ tail).wrapping_mul(K1).rotate_left(31);
             tail = 0;
@@ -662,6 +672,12 @@ fn compute_hash(units: &[u16]) -> u32 {
 /// 计算 UTF-16 码元序列的内容哈希。
 pub fn content_hash_units(units: &[u16]) -> u32 {
     compute_hash(units)
+}
+
+/// 计算 Latin-1 单字节载荷的内容哈希；字节零扩展为码元，与
+/// [`content_hash_units`] 对同内容给出同值（跨表示去重的键一致性）。
+pub fn content_hash_latin1(bytes: &[u8]) -> u32 {
+    compute_hash_by_len(bytes.len(), |index| u16::from(bytes[index]))
 }
 
 /// 在 UTF-16 码元序列中查找子序列。
@@ -746,15 +762,6 @@ pub fn json_quote_units(units: &[u16]) -> String {
     }
     out.push('"');
     out
-}
-
-/// 把 4 个 UTF-16 码元打包成一个机器字。
-fn pack_four(units: &[u16]) -> u64 {
-    debug_assert_eq!(units.len(), 4, "pack_four 只接受 4 个码元");
-    u64::from(units[0])
-        | (u64::from(units[1]) << 16)
-        | (u64::from(units[2]) << 32)
-        | (u64::from(units[3]) << 48)
 }
 
 struct Utf16Writer<'a>(&'a mut Vec<u16>);
@@ -970,6 +977,23 @@ mod tests {
         let right = RuntimeString::from_utf16_units("alpha,beta".encode_utf16().collect());
         assert_eq!(left.content_hash(), right.content_hash());
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn content_hash_latin1_matches_unit_hash() {
+        let bytes: &[u8] = b"ascii-payload-with-tail";
+        let units: Vec<u16> = bytes.iter().map(|&byte| u16::from(byte)).collect();
+        assert_eq!(super::content_hash_latin1(bytes), super::content_hash_units(&units));
+        // 空、恰好 4/8 对齐与超长尾部三种长度形态都覆盖。
+        for len in [0_usize, 1, 3, 4, 8, 9, 12, 33] {
+            let bytes: Vec<u8> = (0..len as u8).collect();
+            let units: Vec<u16> = bytes.iter().map(|&byte| u16::from(byte)).collect();
+            assert_eq!(
+                super::content_hash_latin1(&bytes),
+                super::content_hash_units(&units),
+                "len={len}"
+            );
+        }
     }
 
     #[test]
