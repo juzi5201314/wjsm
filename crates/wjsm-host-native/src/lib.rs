@@ -958,6 +958,8 @@ struct NativeAgentState {
     /// install_program 批量发布期间的临时字符串根；提交到 program state 前也必须
     /// 覆盖中途分配触发的 GC。
     install_string_roots: Vec<i64>,
+    /// 宿主方法执行期间（如高阶数组迭代器回调）跨 JS 调用的临时根。
+    pub(crate) temporary_roots: Vec<i64>,
     programs: HashMap<u64, NativeProgramState>,
     retained_images: HashMap<u64, Arc<CompiledImage>>,
     program_snapshots: HashMap<u64, Arc<wjsm_ir::Program>>,
@@ -1155,6 +1157,7 @@ impl NativeAgentState {
             current_image_id: 0,
             current_feedback_region: (0, 0),
             install_string_roots: Vec::new(),
+            temporary_roots: Vec::new(),
             programs: HashMap::new(),
             program_snapshots: HashMap::new(),
             variable_slot_snapshots: HashMap::new(),
@@ -4361,10 +4364,18 @@ impl NativeAgentState {
 
         match self.allocate_object_with_prototype(capacity, array, prototype) {
             Ok(value) => Ok(value),
-            Err(HeapAccessV2Error::HeapExhausted { .. }) => {
-                self.collect_garbage(ctx)?;
-                self.allocate_object_with_prototype(capacity, array, prototype)
-                    .map_err(NativeRuntimeError::from)
+            Err(
+                err @ (HeapAccessV2Error::HeapExhausted { .. }
+                | HeapAccessV2Error::Allocator(wjsm_gc::AllocatorError::OutOfPages { .. })),
+            ) => {
+                if self.collect_garbage(ctx).is_ok() {
+                    let _ = self.gc.heap().finish_relocation_epoch();
+                    let _ = self.gc.heap().advance_epoch_and_reclaim();
+                    self.allocate_object_with_prototype(capacity, array, prototype)
+                        .map_err(NativeRuntimeError::from)
+                } else {
+                    Err(err.into())
+                }
             }
             Err(error) => Err(error.into()),
         }
@@ -4496,6 +4507,50 @@ impl NativeAgentState {
         for value in values {
             self.gc.heap().push_element(handle, *value as u64)?;
         }
+        Ok(array)
+    }
+
+    pub(crate) fn allocate_array_values_with_gc_retry(
+        &mut self,
+        ctx: &NativeVmContext,
+        values: &[i64],
+    ) -> Result<i64, NativeRuntimeError> {
+        let initial_temp_roots = self.temporary_roots.len();
+        self.temporary_roots.extend(values.iter().copied());
+
+        let capacity = match u32::try_from(values.len()) {
+            Ok(cap) => cap,
+            Err(_) => {
+                self.temporary_roots.truncate(initial_temp_roots);
+                return Err(NativeRuntimeError::Invariant(
+                    "array length overflow".into(),
+                ));
+            }
+        };
+        let array = match self.allocate_object_with_gc_retry(ctx, capacity, true) {
+            Ok(arr) => arr,
+            Err(e) => {
+                self.temporary_roots.truncate(initial_temp_roots);
+                return Err(e);
+            }
+        };
+        let handle = value::decode_handle(array);
+        self.temporary_roots.push(array);
+
+        for value in values {
+            if self.gc.heap().push_element(handle, *value as u64).is_err() {
+                if self.collect_garbage(ctx).is_ok() {
+                    let _ = self.gc.heap().finish_relocation_epoch();
+                    let _ = self.gc.heap().advance_epoch_and_reclaim();
+                    if self.gc.heap().push_element(handle, *value as u64).is_ok() {
+                        continue;
+                    }
+                }
+                self.temporary_roots.truncate(initial_temp_roots);
+                return Err(NativeRuntimeError::Invariant("push_element failed".into()));
+            }
+        }
+        self.temporary_roots.truncate(initial_temp_roots);
         Ok(array)
     }
     fn collect_garbage(

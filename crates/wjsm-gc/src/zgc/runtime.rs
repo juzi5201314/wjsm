@@ -1314,13 +1314,6 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
 
     fn begin_relocation_selection(&self) -> Result<(), GenerationalZgcError> {
         let heap = self.shared.heap.read();
-        if let HeapBarrier::Zgc(barrier) = heap.barrier() {
-            let epoch = match self.shared.state.lock().generation {
-                MarkGeneration::Young => barrier.epoch().end_young(),
-                MarkGeneration::Old | MarkGeneration::Full => barrier.epoch().end_old(),
-            };
-            barrier.set_epoch(epoch);
-        }
         let pages = heap.page_stats();
         drop(heap);
         {
@@ -1377,6 +1370,13 @@ impl<M: GrowableHeapMemory + Clone + Send + Sync + 'static> GenerationalZgc<M> {
             }
             freed_bytes = freed_bytes.saturating_add(heap.retire_handle(handle)?);
             retired.push(handle);
+        }
+        if let HeapBarrier::Zgc(barrier) = heap.barrier() {
+            let epoch = match generation {
+                MarkGeneration::Young => barrier.epoch().end_young(),
+                MarkGeneration::Old | MarkGeneration::Full => barrier.epoch().end_old(),
+            };
+            barrier.set_epoch(epoch);
         }
         drop(heap);
         let mut state = self.shared.state.lock();

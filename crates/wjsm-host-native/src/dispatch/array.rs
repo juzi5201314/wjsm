@@ -2,6 +2,7 @@ use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
+use super::array_callbacks::set_element_with_gc_retry;
 use super::runtime::{
     allocate_object_or_out_of_memory, array_index, fail_dispatch, get_property, has_property,
     is_truthy, iterator_done, iterator_value, strict_equal, to_number, to_string_coerced,
@@ -42,7 +43,7 @@ pub(super) fn dispatch_array(
         Builtin::ArrayHasElement => array_has_element(ctx, state, args),
         Builtin::ArrayFrom => array_from(ctx, state, args),
         Builtin::ArrayOf => state
-            .allocate_array_values(args)
+            .allocate_array_values_with_gc_retry(ctx, args)
             .unwrap_or_else(|_| fail_dispatch(ctx)),
         Builtin::ArrayToReversed => array_to_reversed(ctx, state, args),
         Builtin::ArrayWith => array_with(ctx, state, args),
@@ -71,14 +72,20 @@ pub(crate) fn construct(
         if value::is_exception(array) {
             return array;
         }
+        let initial_temp_roots = state.temporary_roots.len();
+        state.temporary_roots.push(array);
         let handle = value::decode_handle(array);
         for index in 0..length {
-            if state
-                .gc
-                .heap()
-                .set_element(handle, index, value::encode_array_hole() as u64)
-                .is_err()
+            if set_element_with_gc_retry(
+                ctx,
+                state,
+                handle,
+                index,
+                value::encode_array_hole() as u64,
+            )
+            .is_err()
             {
+                state.temporary_roots.truncate(initial_temp_roots);
                 return fail_dispatch(ctx);
             }
         }
@@ -89,12 +96,14 @@ pub(crate) fn construct(
                 .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_HOLEY)
                 .is_err()
         {
+            state.temporary_roots.truncate(initial_temp_roots);
             return fail_dispatch(ctx);
         }
+        state.temporary_roots.truncate(initial_temp_roots);
         return array;
     }
     state
-        .allocate_array_values(args)
+        .allocate_array_values_with_gc_retry(ctx, args)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -113,28 +122,52 @@ fn array_from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
         return super::runtime::type_error(ctx, state, "Array.from map function is not callable");
     }
     let this_value = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(source);
+    if let Some(m) = map {
+        state.temporary_roots.push(m);
+    }
+    state.temporary_roots.push(this_value);
+
     let iterator_key = value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ITERATOR);
     let method = match get_property(ctx, state, source, iterator_key) {
-        Ok(method) if value::is_exception(method) => return method,
+        Ok(method) if value::is_exception(method) => {
+            state.temporary_roots.truncate(initial_temp_roots);
+            return method;
+        }
         Ok(method) => method,
-        Err(()) => return fail_dispatch(ctx),
+        Err(()) => {
+            state.temporary_roots.truncate(initial_temp_roots);
+            return fail_dispatch(ctx);
+        }
     };
     let values = if value::is_undefined(method) || value::is_null(method) {
         let length = match array_like_length(ctx, state, source) {
             Ok(length) => length,
-            Err(exception) => return exception,
+            Err(exception) => {
+                state.temporary_roots.truncate(initial_temp_roots);
+                return exception;
+            }
         };
         let mut values = Vec::with_capacity(length as usize);
         for index in 0..length {
             let key = match state.intern_text(index.to_string(), value::TAG_STRING) {
                 Some(key) => key,
-                None => return fail_dispatch(ctx),
+                None => {
+                    state.temporary_roots.truncate(initial_temp_roots);
+                    return fail_dispatch(ctx);
+                }
             };
             let mut stored = match get_property(ctx, state, source, key) {
                 Ok(stored) => stored,
-                Err(()) => return fail_dispatch(ctx),
+                Err(()) => {
+                    state.temporary_roots.truncate(initial_temp_roots);
+                    return fail_dispatch(ctx);
+                }
             };
             if value::is_exception(stored) {
+                state.temporary_roots.truncate(initial_temp_roots);
                 return stored;
             }
             if let Some(map) = map {
@@ -147,21 +180,25 @@ fn array_from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
                     )
                     .unwrap_or_else(|| fail_dispatch(ctx));
                 if value::is_exception(stored) {
+                    state.temporary_roots.truncate(initial_temp_roots);
                     return stored;
                 }
             }
+            state.temporary_roots.push(stored);
             values.push(stored);
         }
         values
     } else {
         let iterator = super::runtime::iterator_from_method(ctx, state, source, method);
         if value::is_exception(iterator) {
+            state.temporary_roots.truncate(initial_temp_roots);
             return iterator;
         }
         let mut values = Vec::new();
         loop {
             let done = iterator_done(ctx, state, &[iterator]);
             if value::is_exception(done) {
+                state.temporary_roots.truncate(initial_temp_roots);
                 return done;
             }
             if is_truthy(state, done) {
@@ -169,6 +206,7 @@ fn array_from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
             }
             let mut stored = iterator_value(ctx, state, &[iterator], true);
             if value::is_exception(stored) {
+                state.temporary_roots.truncate(initial_temp_roots);
                 return stored;
             }
             if let Some(map) = map {
@@ -181,16 +219,20 @@ fn array_from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
                     )
                     .unwrap_or_else(|| fail_dispatch(ctx));
                 if value::is_exception(stored) {
+                    state.temporary_roots.truncate(initial_temp_roots);
                     return stored;
                 }
             }
+            state.temporary_roots.push(stored);
             values.push(stored);
         }
         values
     };
-    state
-        .allocate_array_values(&values)
-        .unwrap_or_else(|_| fail_dispatch(ctx))
+    let res = state
+        .allocate_array_values_with_gc_retry(ctx, &values)
+        .unwrap_or_else(|_| fail_dispatch(ctx));
+    state.temporary_roots.truncate(initial_temp_roots);
+    res
 }
 
 fn handle(args: &[i64]) -> Option<u32> {
@@ -229,7 +271,7 @@ fn set(state: &NativeAgentState, handle: u32, index: u32, stored: i64) -> bool {
 /// `array.allocate(len)`：按长度创建全 hole 数组（length=len），供 map 结果容器。
 /// 显式填洞：新分配数组的元素槽为 0（解码为 +0.0），不填洞会让 map 结果把
 /// 未写入的洞误读为 0 而非缺失属性（与 `new Array(len)` 语义对齐）。
-fn array_allocate(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn array_allocate(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(encoded) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
@@ -241,17 +283,18 @@ fn array_allocate(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i
         return fail_dispatch(ctx);
     }
     let length = length as u32;
-    let Ok(array) = state.allocate_object(length, true) else {
-        return fail_dispatch(ctx);
-    };
+    let array = allocate_object_or_out_of_memory(ctx, state, length, true);
+    if value::is_exception(array) {
+        return array;
+    }
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(array);
     let handle = value::decode_handle(array);
     for index in 0..length {
-        if state
-            .gc
-            .heap()
-            .set_element(handle, index, value::encode_array_hole() as u64)
+        if set_element_with_gc_retry(ctx, state, handle, index, value::encode_array_hole() as u64)
             .is_err()
         {
+            state.temporary_roots.truncate(initial_temp_roots);
             return fail_dispatch(ctx);
         }
     }
@@ -262,11 +305,14 @@ fn array_allocate(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i
             .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_HOLEY)
             .is_err()
     {
+        state.temporary_roots.truncate(initial_temp_roots);
         return fail_dispatch(ctx);
     }
     if state.gc.heap().set_array_length(handle, length).is_err() {
+        state.temporary_roots.truncate(initial_temp_roots);
         return fail_dispatch(ctx);
     }
+    state.temporary_roots.truncate(initial_temp_roots);
     array
 }
 
@@ -314,10 +360,13 @@ fn relative(index: i64, length: u32) -> u32 {
     }
 }
 
-fn array_push(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn array_push(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(handle) = handle(args) else {
         return fail_dispatch(ctx);
     };
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.extend(args.iter().copied());
+
     for stored in &args[1..] {
         if state
             .gc
@@ -325,22 +374,46 @@ fn array_push(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64])
             .push_element(handle, *stored as u64)
             .is_err()
         {
+            if state.collect_garbage(ctx).is_ok() {
+                let _ = state.gc.heap().finish_relocation_epoch();
+                let _ = state.gc.heap().advance_epoch_and_reclaim();
+                if state.gc.heap().push_element(handle, *stored as u64).is_ok() {
+                    continue;
+                }
+            }
+            state.temporary_roots.truncate(initial_temp_roots);
             return fail_dispatch(ctx);
         }
     }
+    state.temporary_roots.truncate(initial_temp_roots);
     array_length(ctx, state, args)
 }
 
-fn array_push_hole(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn array_push_hole(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(handle) = handle(args) else {
         return fail_dispatch(ctx);
     };
-    state
-        .gc
-        .heap()
-        .push_element(handle, value::encode_array_hole() as u64)
-        .map(|length| value::encode_f64(f64::from(length)))
-        .unwrap_or_else(|_| fail_dispatch(ctx))
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.extend(args.iter().copied());
+    let hole = value::encode_array_hole() as u64;
+    let res = match state.gc.heap().push_element(handle, hole) {
+        Ok(length) => value::encode_f64(f64::from(length)),
+        Err(_) => {
+            if state.collect_garbage(ctx).is_ok() {
+                let _ = state.gc.heap().finish_relocation_epoch();
+                let _ = state.gc.heap().advance_epoch_and_reclaim();
+                if let Ok(length) = state.gc.heap().push_element(handle, hole) {
+                    value::encode_f64(f64::from(length))
+                } else {
+                    fail_dispatch(ctx)
+                }
+            } else {
+                fail_dispatch(ctx)
+            }
+        }
+    };
+    state.temporary_roots.truncate(initial_temp_roots);
+    res
 }
 
 fn array_push_spread(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -350,14 +423,21 @@ fn array_push_spread(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     if !value::is_array(*target) {
         return fail_dispatch(ctx);
     }
-    let target = value::decode_handle(*target);
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.extend(args.iter().copied());
+
+    let target_handle = value::decode_handle(*target);
     let iterator = super::runtime::iterator_from(ctx, state, &[*source]);
     if value::is_exception(iterator) {
+        state.temporary_roots.truncate(initial_temp_roots);
         return iterator;
     }
+    state.temporary_roots.push(iterator);
+
     loop {
         let done = super::runtime::iterator_done(ctx, state, &[iterator]);
         if value::is_exception(done) {
+            state.temporary_roots.truncate(initial_temp_roots);
             return done;
         }
         if super::runtime::is_truthy(state, done) {
@@ -365,16 +445,36 @@ fn array_push_spread(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
         }
         let stored = super::runtime::iterator_value(ctx, state, &[iterator], true);
         if value::is_exception(stored) {
+            state.temporary_roots.truncate(initial_temp_roots);
             return stored;
         }
-        if state.gc.heap().push_element(target, stored as u64).is_err() {
+        if state
+            .gc
+            .heap()
+            .push_element(target_handle, stored as u64)
+            .is_err()
+        {
+            if state.collect_garbage(ctx).is_ok() {
+                let _ = state.gc.heap().finish_relocation_epoch();
+                let _ = state.gc.heap().advance_epoch_and_reclaim();
+                if state
+                    .gc
+                    .heap()
+                    .push_element(target_handle, stored as u64)
+                    .is_ok()
+                {
+                    continue;
+                }
+            }
+            state.temporary_roots.truncate(initial_temp_roots);
             return fail_dispatch(ctx);
         }
     }
     state
         .array_iterators
         .remove(&value::decode_handle(iterator));
-    value::encode_f64(f64::from(length(state, target).unwrap_or(0)))
+    state.temporary_roots.truncate(initial_temp_roots);
+    value::encode_f64(f64::from(length(state, target_handle).unwrap_or(0)))
 }
 
 fn array_pop(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
@@ -424,7 +524,7 @@ fn array_splice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
     let removed = (start..start + delete_count)
         .map(|index| get_raw(state, handle, index).unwrap_or_else(value::encode_array_hole))
         .collect::<Vec<_>>();
-    let removed = match state.allocate_array_values(&removed) {
+    let removed = match state.allocate_array_values_with_gc_retry(ctx, &removed) {
         Ok(removed) => removed,
         Err(_) => return fail_dispatch(ctx),
     };
@@ -492,7 +592,7 @@ fn array_to_spliced(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         values.push(get(state, handle, index));
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -506,7 +606,7 @@ fn array_flat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
         return fail_dispatch(ctx);
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -697,7 +797,7 @@ fn array_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         }
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -719,7 +819,7 @@ fn array_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         Err(exception) => return exception,
     };
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -954,7 +1054,7 @@ fn array_copy_within(ctx: &mut NativeVmContext, state: &NativeAgentState, args: 
     args[0]
 }
 
-fn array_to_reversed(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn array_to_reversed(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(handle) = handle(args) else {
         return fail_dispatch(ctx);
     };
@@ -966,11 +1066,11 @@ fn array_to_reversed(ctx: &mut NativeVmContext, state: &NativeAgentState, args: 
         .map(|index| get(state, handle, index))
         .collect();
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
-fn array_with(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+fn array_with(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(handle) = handle(args) else {
         return fail_dispatch(ctx);
     };
@@ -997,6 +1097,6 @@ fn array_with(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64])
         })
         .collect();
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }

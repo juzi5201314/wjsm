@@ -153,7 +153,7 @@ pub(super) fn dispatch_runtime(
                 values.push(encoded);
             }
             state
-                .allocate_array_values(&values)
+                .allocate_array_values_with_gc_retry(ctx, &values)
                 .unwrap_or_else(|_| fail_dispatch(ctx))
         }
         NativeRuntimeOp::NewObject | NativeRuntimeOp::NewArray => {
@@ -1170,7 +1170,9 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
 
 pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {
     if value::is_string(encoded) {
-        let text = state.string_owned(encoded)?;
+        let text = state
+            .string_owned(encoded)
+            .unwrap_or_else(|| RuntimeString::from(render_value(state, encoded)));
         state.intern_property_string(text)
     } else if value::is_symbol(encoded) {
         Some(PropertyKey::symbol(value::decode_handle(encoded)))
@@ -1356,7 +1358,18 @@ pub(super) fn get_property_with_receiver(
                     return Ok(element as i64);
                 }
                 Ok(_) => {}
-                Err(_) => return Err(()),
+                Err(_) => {
+                    if state.collect_garbage(ctx).is_ok() {
+                        let _ = state.gc.heap().finish_relocation_epoch();
+                        let _ = state.gc.heap().advance_epoch_and_reclaim();
+                        if let Ok(Some(element)) = state.gc.heap().get_element(handle, index)
+                            && !value::is_array_hole(element as i64)
+                        {
+                            return Ok(element as i64);
+                        }
+                    }
+                    return Err(());
+                }
             }
         }
         if state.array_prototype == Some(object)
@@ -2781,14 +2794,15 @@ pub(crate) fn intern_string_with_gc_retry(
     state: &mut NativeAgentState,
     string: wjsm_host::RuntimeString,
 ) -> i64 {
+    if state.gc.take_pacing_poll_request() {
+        let _ = state.poll_gc(ctx);
+    }
     if let Some(encoded) = state.intern_runtime_string(string.clone(), value::TAG_STRING) {
         return encoded;
     }
     if state.collect_garbage(ctx).is_ok() {
         let _ = state.gc.heap().finish_relocation_epoch();
-        for _ in 0..8 {
-            let _ = state.gc.heap().advance_epoch_and_reclaim();
-        }
+        let _ = state.gc.heap().advance_epoch_and_reclaim();
         if let Some(encoded) = state.intern_runtime_string(string, value::TAG_STRING) {
             return encoded;
         }

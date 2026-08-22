@@ -3,14 +3,14 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::Duration;
 
 use thiserror::Error;
 use wjsm_gc::{
     GcAlgorithmKind, GcRuntimeV2, GcSafepointAction, GcTelemetrySnapshot, GenerationalZgc,
     GenerationalZgcError, HandleTableV2, HeapAccessV2, HeapAccessV2Error, HeapBarrier,
-    ManagedHeapLayout, MutatorContext, NativeHeapMemory, Nlab, RootSnapshot, RuntimeGcReport,
-    StopTheWorldCollector, StopTheWorldCollectorError, ZgcBarrierSet,
+    ManagedHeapLayout, MutatorContext, NativeHeapMemory, Nlab, PAGE_GRANULE_BYTES, RootSnapshot,
+    RuntimeGcReport, StopTheWorldCollector, StopTheWorldCollectorError, ZgcBarrierSet,
 };
 use wjsm_native_abi::{NATIVE_BARRIER_MARKING_MASK, NativeBarrierState, NativeVmContext};
 
@@ -90,20 +90,26 @@ impl NativeGc {
     }
 
     pub(super) fn allocate(&self, bytes: u64) -> Result<u64, HeapAccessV2Error> {
-        let started_at = Instant::now();
         let mut nlab = self.nlab.borrow_mut();
         let refills = nlab.refills();
         let allocation = self.heap.allocate(&mut nlab, bytes)?;
         let needs_poll = allocation.is_dedicated() || nlab.refills() != refills;
         drop(nlab);
-        self.pacing_poll_requested
-            .set(self.pacing_poll_requested.get() || needs_poll);
-        let elapsed = started_at.elapsed();
-        match &self.collector {
-            NativeCollector::StopTheWorld(collector) => {
-                collector.observe_allocation(bytes, elapsed);
+        if needs_poll {
+            self.pacing_poll_requested.set(true);
+            let observed = if allocation.is_dedicated() {
+                allocation.bytes()
+            } else {
+                PAGE_GRANULE_BYTES
+            };
+            match &self.collector {
+                NativeCollector::StopTheWorld(collector) => {
+                    collector.observe_allocation(observed, Duration::from_micros(10));
+                }
+                NativeCollector::Zgc(collector) => {
+                    collector.observe_allocation(observed, Duration::from_micros(10));
+                }
             }
-            NativeCollector::Zgc(collector) => collector.observe_allocation(bytes, elapsed),
         }
         Ok(allocation.object().offset())
     }

@@ -579,6 +579,11 @@ pub(crate) fn settle_promise(
     } else {
         PromiseState::Fulfilled(value)
     };
+    state.gc.record_host_write(
+        value::encode_handle(value::TAG_OBJECT, handle),
+        None,
+        Some(value),
+    );
     // 如果 promise rejected 且应报告 unhandled rejection，立即格式化 reason 并记录到待报告列表
     // 必须立即格式化，因为后续 GC 可能回收 reason 对应的对象（如 Error）
     if rejected && promise.report_unhandled && !promise.handled {

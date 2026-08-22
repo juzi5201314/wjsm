@@ -535,6 +535,10 @@ pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcRe
     if report.cleans_host_tables {
         state.sweep_host_index_tables(retired, &live);
     }
+    let _ = state.gc.heap().finish_relocation_epoch();
+    for _ in 0..3 {
+        let _ = state.gc.heap().advance_epoch_and_reclaim();
+    }
 }
 
 fn root_values(
@@ -604,6 +608,7 @@ fn root_values(
     // 非 handle 值（undefined 填充槽）在根队列下游按 tag 甄别，无害。
     queue.extend(state.string_constants.iter().copied());
     queue.extend(state.install_string_roots.iter().copied());
+    queue.extend(state.temporary_roots.iter().copied());
     for program in state.programs.values() {
         queue.extend(program.string_constants.iter().copied());
     }

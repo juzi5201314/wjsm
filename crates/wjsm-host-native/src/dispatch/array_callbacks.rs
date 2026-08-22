@@ -3,7 +3,9 @@ use std::cmp::Ordering;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, is_truthy, render_value, to_number, type_error};
+use super::runtime::{
+    allocate_object_or_out_of_memory, fail_dispatch, is_truthy, render_value, to_number, type_error,
+};
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_array_callback(
@@ -53,6 +55,45 @@ fn raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i64> {
 fn observable(raw: Option<i64>) -> i64 {
     raw.filter(|value| !value::is_array_hole(*value))
         .unwrap_or_else(value::encode_undefined)
+}
+
+pub(super) fn set_element_with_gc_retry(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    handle: u32,
+    index: u32,
+    value: u64,
+) -> Result<(), ()> {
+    if state.gc.heap().set_element(handle, index, value).is_ok() {
+        return Ok(());
+    }
+    if state.collect_garbage(ctx).is_ok() {
+        let _ = state.gc.heap().finish_relocation_epoch();
+        let _ = state.gc.heap().advance_epoch_and_reclaim();
+        if state.gc.heap().set_element(handle, index, value).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(())
+}
+
+pub(super) fn push_element_with_gc_retry(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    handle: u32,
+    value: u64,
+) -> Result<u32, ()> {
+    if let Ok(length) = state.gc.heap().push_element(handle, value) {
+        return Ok(length);
+    }
+    if state.collect_garbage(ctx).is_ok() {
+        let _ = state.gc.heap().finish_relocation_epoch();
+        let _ = state.gc.heap().advance_epoch_and_reclaim();
+        if let Ok(length) = state.gc.heap().push_element(handle, value) {
+            return Ok(length);
+        }
+    }
+    Err(())
 }
 
 fn call(
@@ -108,9 +149,10 @@ fn iterate(
     };
     let result_array = match kind {
         IterationKind::Map => {
-            let Ok(array) = state.allocate_object(array_length, true) else {
-                return fail_dispatch(ctx);
-            };
+            let array = allocate_object_or_out_of_memory(ctx, state, array_length, true);
+            if value::is_exception(array) {
+                return array;
+            }
             if state
                 .gc
                 .heap()
@@ -122,10 +164,11 @@ fn iterate(
             Some(array)
         }
         IterationKind::Filter | IterationKind::FlatMap => {
-            match state.allocate_object(array_length, true) {
-                Ok(array) => Some(array),
-                Err(_) => return fail_dispatch(ctx),
+            let array = allocate_object_or_out_of_memory(ctx, state, array_length, true);
+            if value::is_exception(array) {
+                return array;
             }
+            Some(array)
         }
         _ => None,
     };
@@ -142,103 +185,102 @@ fn iterate(
     } else {
         Box::new(0..array_length)
     };
-    for index in indices {
-        let element_raw = raw(state, handle, index);
-        if !visits_holes && element_raw.is_none_or(value::is_array_hole) {
-            continue;
-        }
-        let element = observable(element_raw);
-        let callback_args = [element, value::encode_f64(f64::from(index)), array_value];
-        let callback_result = match call(ctx, state, callback, this_value, &callback_args) {
-            Ok(result) => result,
-            Err(exception) => return exception,
-        };
-        match kind {
-            IterationKind::ForEach => {}
-            IterationKind::Map => {
-                let output = value::decode_handle(result_array.expect("map allocates output"));
-                if state
-                    .gc
-                    .heap()
-                    .set_element(output, index, callback_result as u64)
-                    .is_err()
-                {
-                    return fail_dispatch(ctx);
-                }
+    let initial_temp_roots = state.temporary_roots.len();
+    if let Some(array) = result_array {
+        state.temporary_roots.push(array);
+    }
+    state.temporary_roots.push(array_value);
+    state.temporary_roots.push(callback);
+    state.temporary_roots.push(this_value);
+
+    let res = (|| {
+        for index in indices {
+            let element_raw = raw(state, handle, index);
+            if !visits_holes && element_raw.is_none_or(value::is_array_hole) {
+                continue;
             }
-            IterationKind::Filter => {
-                if is_truthy(state, callback_result) {
-                    let output =
-                        value::decode_handle(result_array.expect("filter allocates output"));
-                    if state
-                        .gc
-                        .heap()
-                        .push_element(output, element as u64)
+            let element = observable(element_raw);
+            let callback_args = [element, value::encode_f64(f64::from(index)), array_value];
+            let callback_result = match call(ctx, state, callback, this_value, &callback_args) {
+                Ok(result) => result,
+                Err(exception) => return exception,
+            };
+            match kind {
+                IterationKind::ForEach => {}
+                IterationKind::Map => {
+                    let output = value::decode_handle(result_array.expect("map allocates output"));
+                    if set_element_with_gc_retry(ctx, state, output, index, callback_result as u64)
                         .is_err()
                     {
                         return fail_dispatch(ctx);
                     }
                 }
-            }
-            IterationKind::FlatMap => {
-                let output = value::decode_handle(result_array.expect("flatMap allocates output"));
-                if value::is_array(callback_result) {
-                    let inner = value::decode_handle(callback_result);
-                    let Some(inner_length) = length(state, inner) else {
-                        return fail_dispatch(ctx);
-                    };
-                    for inner_index in 0..inner_length {
-                        let inner_value = observable(raw(state, inner, inner_index));
-                        if state
-                            .gc
-                            .heap()
-                            .push_element(output, inner_value as u64)
-                            .is_err()
-                        {
+                IterationKind::Filter => {
+                    if is_truthy(state, callback_result) {
+                        let output =
+                            value::decode_handle(result_array.expect("filter allocates output"));
+                        if push_element_with_gc_retry(ctx, state, output, element as u64).is_err() {
                             return fail_dispatch(ctx);
                         }
                     }
-                } else if state
-                    .gc
-                    .heap()
-                    .push_element(output, callback_result as u64)
-                    .is_err()
-                {
-                    return fail_dispatch(ctx);
                 }
+                IterationKind::FlatMap => {
+                    let output =
+                        value::decode_handle(result_array.expect("flatMap allocates output"));
+                    if value::is_array(callback_result) {
+                        let inner = value::decode_handle(callback_result);
+                        let Some(inner_length) = length(state, inner) else {
+                            return fail_dispatch(ctx);
+                        };
+                        for inner_index in 0..inner_length {
+                            let inner_value = observable(raw(state, inner, inner_index));
+                            if push_element_with_gc_retry(ctx, state, output, inner_value as u64)
+                                .is_err()
+                            {
+                                return fail_dispatch(ctx);
+                            }
+                        }
+                    } else if push_element_with_gc_retry(ctx, state, output, callback_result as u64)
+                        .is_err()
+                    {
+                        return fail_dispatch(ctx);
+                    }
+                }
+                IterationKind::Find if is_truthy(state, callback_result) => return element,
+                IterationKind::FindIndex if is_truthy(state, callback_result) => {
+                    return value::encode_f64(f64::from(index));
+                }
+                IterationKind::FindLast if is_truthy(state, callback_result) => return element,
+                IterationKind::FindLastIndex if is_truthy(state, callback_result) => {
+                    return value::encode_f64(f64::from(index));
+                }
+                IterationKind::Some if is_truthy(state, callback_result) => {
+                    return value::encode_bool(true);
+                }
+                IterationKind::Every if !is_truthy(state, callback_result) => {
+                    return value::encode_bool(false);
+                }
+                IterationKind::Find
+                | IterationKind::FindIndex
+                | IterationKind::FindLast
+                | IterationKind::FindLastIndex
+                | IterationKind::Some
+                | IterationKind::Every => {}
             }
-            IterationKind::Find if is_truthy(state, callback_result) => return element,
-            IterationKind::FindIndex if is_truthy(state, callback_result) => {
-                return value::encode_f64(f64::from(index));
-            }
-            IterationKind::FindLast if is_truthy(state, callback_result) => return element,
-            IterationKind::FindLastIndex if is_truthy(state, callback_result) => {
-                return value::encode_f64(f64::from(index));
-            }
-            IterationKind::Some if is_truthy(state, callback_result) => {
-                return value::encode_bool(true);
-            }
-            IterationKind::Every if !is_truthy(state, callback_result) => {
-                return value::encode_bool(false);
-            }
-            IterationKind::Find
-            | IterationKind::FindIndex
-            | IterationKind::FindLast
-            | IterationKind::FindLastIndex
-            | IterationKind::Some
-            | IterationKind::Every => {}
         }
-    }
-    match kind {
-        IterationKind::Map | IterationKind::Filter | IterationKind::FlatMap => {
-            result_array.expect("array-producing iteration allocates output")
+        match kind {
+            IterationKind::Map | IterationKind::Filter | IterationKind::FlatMap => {
+                result_array.expect("array-producing iteration allocates output")
+            }
+            IterationKind::Find | IterationKind::FindLast => value::encode_undefined(),
+            IterationKind::FindIndex | IterationKind::FindLastIndex => value::encode_f64(-1.0),
+            IterationKind::Some => value::encode_bool(false),
+            IterationKind::Every => value::encode_bool(true),
+            IterationKind::ForEach => value::encode_undefined(),
         }
-        IterationKind::Find | IterationKind::FindLast => value::encode_undefined(),
-        IterationKind::FindIndex | IterationKind::FindLastIndex => value::encode_f64(-1.0),
-        IterationKind::Some => value::encode_bool(false),
-        IterationKind::Every => value::encode_bool(true),
-        IterationKind::ForEach => value::encode_undefined(),
-    }
+    })();
+    state.temporary_roots.truncate(initial_temp_roots);
+    res
 }
 
 fn reduce(
@@ -282,6 +324,11 @@ fn reduce(
             break element;
         }
     };
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(array_value);
+    state.temporary_roots.push(callback);
+    state.temporary_roots.push(accumulator);
+
     for index in indices.into_iter().skip(position) {
         let Some(element) =
             raw(state, handle, index).filter(|element| !value::is_array_hole(*element))
@@ -302,9 +349,16 @@ fn reduce(
             &callback_args,
         ) {
             Ok(result) => result,
-            Err(exception) => return exception,
+            Err(exception) => {
+                state.temporary_roots.truncate(initial_temp_roots);
+                return exception;
+            }
         };
+        if let Some(last) = state.temporary_roots.last_mut() {
+            *last = accumulator;
+        }
     }
+    state.temporary_roots.truncate(initial_temp_roots);
     accumulator
 }
 
@@ -332,34 +386,40 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], c
             .filter(|stored| !value::is_array_hole(*stored))
             .collect()
     };
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(array_value);
+    if let Some(comp) = comparator {
+        state.temporary_roots.push(comp);
+    }
+    state.temporary_roots.extend(values.iter().copied());
+
     let sorted = super::array_sort::stable_sort_by(&mut values, |left, right| {
         compare(ctx, state, comparator, left, right)
     });
+    state.temporary_roots.truncate(initial_temp_roots);
     if let Err(exception) = sorted {
         return exception;
     }
     if copy {
         state
-            .allocate_array_values(&values)
+            .allocate_array_values_with_gc_retry(ctx, &values)
             .unwrap_or_else(|_| fail_dispatch(ctx))
     } else {
         let present = values.len() as u32;
         for (index, stored) in values.into_iter().enumerate() {
-            if state
-                .gc
-                .heap()
-                .set_element(handle, index as u32, stored as u64)
-                .is_err()
-            {
+            if set_element_with_gc_retry(ctx, state, handle, index as u32, stored as u64).is_err() {
                 return fail_dispatch(ctx);
             }
         }
         for index in present..length {
-            if state
-                .gc
-                .heap()
-                .set_element(handle, index, value::encode_array_hole() as u64)
-                .is_err()
+            if set_element_with_gc_retry(
+                ctx,
+                state,
+                handle,
+                index,
+                value::encode_array_hole() as u64,
+            )
+            .is_err()
             {
                 return fail_dispatch(ctx);
             }

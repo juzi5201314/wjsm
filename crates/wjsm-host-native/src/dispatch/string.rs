@@ -229,7 +229,11 @@ enum BuilderPart {
 impl BuilderPart {
     fn from_value(state: &NativeAgentState, encoded: i64) -> Option<Self> {
         if value::is_string(encoded) || value::is_bigint(encoded) {
-            state.string_owned(encoded).map(Self::String)
+            state.string_owned(encoded).map(Self::String).or_else(|| {
+                Some(Self::String(RuntimeString::from(render_value(
+                    state, encoded,
+                ))))
+            })
         } else if value::is_f64(encoded) {
             Some(Self::Number(value::decode_f64(encoded)))
         } else if value::is_bool(encoded) {
@@ -242,8 +246,12 @@ impl BuilderPart {
             Some(Self::Static("null"))
         } else if value::is_undefined(encoded) {
             Some(Self::Static("undefined"))
-        } else {
+        } else if value::is_symbol(encoded) {
             None
+        } else {
+            Some(Self::String(RuntimeString::from(render_value(
+                state, encoded,
+            ))))
         }
     }
 
@@ -273,9 +281,9 @@ fn append_builder_parts(
         return None;
     }
     let handle = value::decode_handle(current);
-    let mut units = state.with_string_units(current, |units| units.to_vec())?;
+    let cur_len = state.gc.heap().string_length(handle).ok()? as usize;
     let added = parts.iter().map(BuilderPart::capacity).sum::<usize>();
-    let needed = units.len().checked_add(added)?;
+    let needed = cur_len.checked_add(added)?;
     let byte_capacity = u32::try_from(needed.checked_mul(2)?.checked_add(7)? & !7).ok()?;
     let capacity = state.gc.heap().string_capacity(handle).ok()?;
     if capacity < byte_capacity
@@ -285,36 +293,48 @@ fn append_builder_parts(
             .grow_string_capacity(handle, byte_capacity)
             .is_err()
     {
-        state.collect_garbage(ctx).ok()?;
-        state
-            .gc
-            .heap()
-            .grow_string_capacity(handle, byte_capacity)
-            .ok()?;
+        state.temporary_roots.push(current);
+        let _ = state.collect_garbage(ctx);
+        let _ = state.gc.heap().finish_relocation_epoch();
+        for _ in 0..3 {
+            let _ = state.gc.heap().advance_epoch_and_reclaim();
+        }
+        let res = state.gc.heap().grow_string_capacity(handle, byte_capacity);
+        state.temporary_roots.pop();
+        res.ok()?;
     }
+    let mut append_bytes = Vec::with_capacity(added * 2);
     for part in parts {
         match part {
             BuilderPart::Number(number) => {
                 let text = RuntimeString::from_number(*number);
-                units.extend_from_slice(text.as_flat_slice());
+                for unit in text.as_flat_slice() {
+                    append_bytes.extend_from_slice(&unit.to_le_bytes());
+                }
             }
-            BuilderPart::Static(text) => units.extend(text.encode_utf16()),
-            BuilderPart::String(text) => units.extend_from_slice(text.as_flat_slice()),
+            BuilderPart::Static(text) => {
+                for unit in text.encode_utf16() {
+                    append_bytes.extend_from_slice(&unit.to_le_bytes());
+                }
+            }
+            BuilderPart::String(text) => {
+                for unit in text.as_flat_slice() {
+                    append_bytes.extend_from_slice(&unit.to_le_bytes());
+                }
+            }
         }
     }
-    let mut bytes = Vec::with_capacity(units.len() * 2);
-    for unit in units.iter().copied() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
-    }
+    let write_offset = u32::try_from(cur_len.checked_mul(2)?).ok()?;
     state
         .gc
         .heap()
-        .write_string_payload(handle, 0, &bytes)
+        .write_string_payload(handle, write_offset, &append_bytes)
         .ok()?;
+    let final_len = cur_len.checked_add(append_bytes.len() / 2)?;
     state
         .gc
         .heap()
-        .set_string_length(handle, u32::try_from(units.len()).ok()?)
+        .set_string_length(handle, u32::try_from(final_len).ok()?)
         .ok()?;
     Some(())
 }

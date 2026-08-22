@@ -484,14 +484,18 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .publish(HandleId::new(handle), object, HandleGeneration::Young)
             .map_err(HeapAccessV2Error::HandleTable)?;
         if let HeapBarrier::Zgc(barrier) = &self.barrier
-            && barrier.epoch().young_marking
+            && (barrier.epoch().young_marking || barrier.epoch().old_marking)
         {
             self.heap
                 .allocator()
                 .try_mark(
                     ObjectRef::new(object),
                     object_payload_bytes(capacity)?,
-                    HandleGeneration::Young,
+                    if barrier.epoch().young_marking {
+                        HandleGeneration::Young
+                    } else {
+                        HandleGeneration::Old
+                    },
                 )
                 .map_err(HeapAccessV2Error::Allocator)?;
         }
@@ -720,14 +724,18 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .publish(HandleId::new(handle), object, HandleGeneration::Young)
             .map_err(HeapAccessV2Error::HandleTable)?;
         if let HeapBarrier::Zgc(barrier) = &self.barrier
-            && barrier.epoch().young_marking
+            && (barrier.epoch().young_marking || barrier.epoch().old_marking)
         {
             self.heap
                 .allocator()
                 .try_mark(
                     ObjectRef::new(object),
                     string_payload_bytes(capacity)?,
-                    HandleGeneration::Young,
+                    if barrier.epoch().young_marking {
+                        HandleGeneration::Young
+                    } else {
+                        HandleGeneration::Old
+                    },
                 )
                 .map_err(HeapAccessV2Error::Allocator)?;
         }
@@ -987,6 +995,19 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 generation,
             )
             .map_err(HeapAccessV2Error::Allocator)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && (barrier.epoch().young_marking || barrier.epoch().old_marking)
+        {
+            let mark_gen = if barrier.epoch().young_marking {
+                HandleGeneration::Young
+            } else {
+                HandleGeneration::Old
+            };
+            self.heap
+                .allocator()
+                .try_mark(ObjectRef::new(new_object), new_bytes, mark_gen)
+                .map_err(HeapAccessV2Error::Allocator)?;
+        }
         if self
             .heap
             .allocator()
@@ -1525,6 +1546,19 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 generation,
             )
             .map_err(HeapAccessV2Error::Allocator)?;
+        if let HeapBarrier::Zgc(barrier) = &self.barrier
+            && (barrier.epoch().young_marking || barrier.epoch().old_marking)
+        {
+            let mark_gen = if barrier.epoch().young_marking {
+                HandleGeneration::Young
+            } else {
+                HandleGeneration::Old
+            };
+            self.heap
+                .allocator()
+                .try_mark(ObjectRef::new(destination), new_bytes, mark_gen)
+                .map_err(HeapAccessV2Error::Allocator)?;
+        }
         if self
             .heap
             .allocator()
