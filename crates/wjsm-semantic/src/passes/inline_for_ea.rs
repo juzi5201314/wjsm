@@ -575,6 +575,12 @@ fn classify_construct_return(
         | Some(Instruction::NewArray { .. })
         | Some(Instruction::CloneArrayTemplate { .. }) => Some(true),
         Some(Instruction::LoadVar { name, .. }) if is_this_name(name) => Some(false),
+        Some(
+            Instruction::Binary { .. }
+            | Instruction::Unary { .. }
+            | Instruction::Compare { .. }
+            | Instruction::StringConcatVa { .. },
+        ) => Some(false),
         Some(Instruction::Const { constant, .. }) => match constants.get(constant.0 as usize) {
             Some(
                 Constant::Number(_)
@@ -1304,13 +1310,13 @@ fn speculative_inline_round(module: &mut Module) -> bool {
                 if contains_excluded_instruction(target_func) {
                     continue;
                 }
-                // 全函数恰 1 个 Return。
+                // 至少含 1 个 Return。
                 let return_count = target_func
                     .blocks()
                     .iter()
                     .filter(|b| matches!(b.terminator(), Terminator::Return { .. }))
                     .count();
-                if return_count != 1 {
+                if return_count == 0 {
                     continue;
                 }
                 // 函数大小上限：当前块数 + F 块数 + 8 <= 512。
@@ -1519,7 +1525,7 @@ fn inline_speculative_candidate(
     let mut param_subst: Vec<(ValueId, ValueId)> = Vec::new();
     let mut inject_subst: Vec<(String, ValueId)> = Vec::new();
     let mut callee_clones: Vec<BasicBlock> = Vec::with_capacity(target_func.blocks().len());
-    let mut ret_mapped = undefined_dest;
+    let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     for cb in target_func.blocks() {
         let mut clone = BasicBlock::new(BasicBlockId(cb.id().0 + callee_offset));
         for ins in cb.instructions() {
@@ -1564,10 +1570,9 @@ fn inline_speculative_candidate(
         term.remap_blocks(&mut |b| BasicBlockId(b.0 + callee_offset));
         match term {
             Terminator::Return { value } => {
-                // 唯一 Return → Jump(区域入口)；记录返回值（None → undefined）。
-                if let Some(v) = value {
-                    ret_mapped = v;
-                }
+                // Return → Jump(区域入口)；记录返回值（None → undefined）。
+                let mapped = value.unwrap_or(undefined_dest);
+                return_records.push((clone.id(), mapped));
                 clone.set_terminator(Terminator::Jump {
                     target: region_entry,
                 });
@@ -1600,11 +1605,12 @@ fn inline_speculative_candidate(
         block_map.insert(orig, next_id);
         next_id = BasicBlockId(next_id.0 + 1);
     }
-    // 返回值可能来自参数 LoadVar 的 dest（如 `return x`），经 param_subst 解析
-    // 为实参值，否则区域克隆中 R 的 use 会指向悬空值。
-    if let Some((_, resolved)) = param_subst.iter().find(|(old, _)| *old == ret_mapped) {
-        ret_mapped = *resolved;
-    }
+    let resolve_param = |v: ValueId| {
+        param_subst
+            .iter()
+            .find(|(old, _)| *old == v)
+            .map_or(v, |(_, new)| *new)
+    };
 
     // 区域内定义的 ValueId：只有它们在克隆时需要重编号。
     //
@@ -1634,24 +1640,40 @@ fn inline_speculative_candidate(
         }
         defs
     };
-    // 区域偏移必须高于 callee 克隆已占用的编号，否则两套克隆会撞号。
-    let region_offset = {
-        let mut max_used = guard_dest.0.max(undefined_dest.0).max(ret_mapped.0);
-        for block in &callee_clones {
-            for ins in block.instructions() {
-                if let Some(d) = instruction_dest(ins) {
-                    max_used = max_used.max(d.0);
-                }
-                for used in instr_uses(ins) {
-                    max_used = max_used.max(used.0);
-                }
+
+    let mut max_callee_val = guard_dest.0.max(undefined_dest.0);
+    for block in &callee_clones {
+        for ins in block.instructions() {
+            if let Some(d) = instruction_dest(ins) {
+                max_callee_val = max_callee_val.max(d.0);
             }
-            for used in terminator_uses(block.terminator()) {
-                max_used = max_used.max(used.0);
+            for used in instr_uses(ins) {
+                max_callee_val = max_callee_val.max(used.0);
             }
         }
-        max_used + 1
+        for used in terminator_uses(block.terminator()) {
+            max_callee_val = max_callee_val.max(used.0);
+        }
+    }
+
+    let (ret_mapped, phi_opt) = match return_records.len() {
+        0 => (undefined_dest, None),
+        1 => (resolve_param(return_records[0].1), None),
+        _ => {
+            let phi_dest = ValueId(max_callee_val + 1);
+            let sources = return_records
+                .iter()
+                .map(|(pred, val)| wjsm_ir::PhiSource {
+                    predecessor: *pred,
+                    value: resolve_param(*val),
+                })
+                .collect();
+            (phi_dest, Some((phi_dest, sources)))
+        }
     };
+
+    // 区域偏移必须高于 callee 克隆和 phi_dest 已占用的编号，否则两套克隆会撞号。
+    let region_offset = max_callee_val + if phi_opt.is_some() { 2 } else { 1 };
     let remap_region_value = |v: ValueId| -> ValueId {
         if v == candidate.dest {
             // 调用结果 → 快路径 callee 克隆的返回值。
@@ -1707,6 +1729,7 @@ fn inline_speculative_candidate(
     };
 
     let mut region_clones: Vec<BasicBlock> = Vec::with_capacity(region_blocks.len());
+    let mut phi_to_inject = phi_opt;
     for &orig in &region_blocks {
         let clone_id = block_map[&orig];
         let mut clone = BasicBlock::new(clone_id);
@@ -1727,6 +1750,13 @@ fn inline_speculative_candidate(
             clone.push_instruction(ins);
         };
         if orig == call_block_id {
+            // 入口块头部注入多返回汇聚 Phi
+            if let Some((phi_dest, phi_sources)) = phi_to_inject.take() {
+                clone.push_instruction(Instruction::Phi {
+                    dest: phi_dest,
+                    sources: phi_sources,
+                });
+            }
             // 调用块尾部：调用后指令 + 原终止器。
             for ins in &post_instructions {
                 clone_instruction(ins, &mut clone);
@@ -1753,7 +1783,7 @@ fn inline_speculative_candidate(
     }
 
     // 克隆体 max ValueId（记账）。
-    let mut clone_max = 0u32;
+    let mut clone_max = ret_mapped.0;
     for block in callee_clones.iter().chain(region_clones.iter()) {
         for ins in block.instructions() {
             if let Some(d) = instruction_dest(ins) {
@@ -1823,7 +1853,7 @@ fn inline_speculative_candidate(
 /// 运行 inline_for_ea pass。
 ///
 /// 顺序：阶段 A（静态多块内联）+ cfg_fold 迭代至不动点 → 阶段 C（守卫式推测
-/// 方法内联）→ 终轮 cfg_fold。
+/// 方法内联）→ 若阶段 C 发生内联则级联触发阶段 A + cfg_fold → 终轮 cfg_fold。
 pub(crate) fn run(module: &mut Module) {
     // 全局守卫：eval 可动态变动绑定，禁用整个 pass。
     if module.functions().iter().any(|f| f.has_eval()) {
@@ -1841,7 +1871,431 @@ pub(crate) fn run(module: &mut Module) {
         }
     }
 
-    // 阶段 C：守卫式推测方法内联（单次执行，Step 4 实现）。
-    speculative_inline_round(module);
+    // 阶段 C：守卫式推测方法内联。
+    let spec_inlined = speculative_inline_round(module);
     cfg_fold::run(module);
+
+    // 阶段 C 内联展开的方法体中可能暴露出新的 direct_call / 构造器调用，级联触发阶段 A
+    if spec_inlined {
+        let mut post_round = 0;
+        loop {
+            post_round += 1;
+            let inlined = static_inline_round(module);
+            cfg_fold::run(module);
+            if !inlined || post_round >= 4 {
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wjsm_ir::{
+        BasicBlock, BasicBlockId, BinaryOp, CompareOp, Constant, ConstantId, Function, FunctionId,
+        Instruction, Module, Terminator, UnaryOp, ValueId,
+    };
+
+    #[test]
+    fn test_classify_construct_return_primitives() {
+        let mut defs = HashMap::new();
+        let constants = vec![
+            Constant::Number(42.0),
+            Constant::String("hello".to_string()),
+            Constant::Bool(true),
+            Constant::Null,
+            Constant::Undefined,
+        ];
+
+        let v_bin = ValueId(1);
+        defs.insert(
+            v_bin,
+            Instruction::Binary {
+                dest: v_bin,
+                op: BinaryOp::Add,
+                lhs: ValueId(10),
+                rhs: ValueId(11),
+            },
+        );
+
+        let v_un = ValueId(2);
+        defs.insert(
+            v_un,
+            Instruction::Unary {
+                dest: v_un,
+                op: UnaryOp::Not,
+                value: ValueId(12),
+            },
+        );
+
+        let v_cmp = ValueId(3);
+        defs.insert(
+            v_cmp,
+            Instruction::Compare {
+                dest: v_cmp,
+                op: CompareOp::StrictEq,
+                lhs: ValueId(13),
+                rhs: ValueId(14),
+            },
+        );
+
+        let v_str = ValueId(4);
+        defs.insert(
+            v_str,
+            Instruction::StringConcatVa {
+                dest: v_str,
+                parts: vec![ValueId(15), ValueId(16)],
+            },
+        );
+
+        let v_obj = ValueId(5);
+        defs.insert(
+            v_obj,
+            Instruction::NewObject {
+                dest: v_obj,
+                capacity: 4,
+            },
+        );
+
+        let v_arr = ValueId(6);
+        defs.insert(
+            v_arr,
+            Instruction::NewArray {
+                dest: v_arr,
+                capacity: 4,
+            },
+        );
+
+        let v_tmpl = ValueId(7);
+        defs.insert(
+            v_tmpl,
+            Instruction::CloneArrayTemplate {
+                dest: v_tmpl,
+                template: ConstantId(0),
+            },
+        );
+
+        let v_this = ValueId(8);
+        defs.insert(
+            v_this,
+            Instruction::LoadVar {
+                dest: v_this,
+                name: "$this".to_string(),
+            },
+        );
+
+        // 原始值表达式均归类为 Some(false)（即返回 $this）
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_bin),
+            Some(false)
+        );
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_un),
+            Some(false)
+        );
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_cmp),
+            Some(false)
+        );
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_str),
+            Some(false)
+        );
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_this),
+            Some(false)
+        );
+
+        // 对象/数组分配归类为 Some(true)
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_obj),
+            Some(true)
+        );
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_arr),
+            Some(true)
+        );
+        assert_eq!(
+            classify_construct_return(&defs, &constants, v_tmpl),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_speculative_inline_multi_return() {
+        let mut module = Module::new();
+
+        // 常量表
+        let c_calc_name = module.add_constant(Constant::String("calc".to_string()));
+        let c_10 = module.add_constant(Constant::Number(10.0));
+        let c_20 = module.add_constant(Constant::Number(20.0));
+
+        // 函数 0：目标方法 `Point.calc`，含两个返回块
+        let mut target_func = Function::new("Point.calc", BasicBlockId(0));
+        target_func.set_params(vec![
+            "$env".to_string(),
+            "$this".to_string(),
+            "cond".to_string(),
+        ]);
+        target_func.set_direct_callable(true);
+
+        // bb0: load cond -> branch
+        let mut bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_cond = ValueId(0);
+        bb0.push_instruction(Instruction::LoadVar {
+            dest: v_cond,
+            name: "cond".to_string(),
+        });
+        bb0.set_terminator(Terminator::Branch {
+            condition: v_cond,
+            true_block: BasicBlockId(1),
+            false_block: BasicBlockId(2),
+        });
+        target_func.push_block(bb0);
+
+        // bb1: return 10
+        let mut bb1 = BasicBlock::new(BasicBlockId(1));
+        let v_10 = ValueId(1);
+        bb1.push_instruction(Instruction::Const {
+            dest: v_10,
+            constant: c_10,
+        });
+        bb1.set_terminator(Terminator::Return { value: Some(v_10) });
+        target_func.push_block(bb1);
+
+        // bb2: return 20
+        let mut bb2 = BasicBlock::new(BasicBlockId(2));
+        let v_20 = ValueId(2);
+        bb2.push_instruction(Instruction::Const {
+            dest: v_20,
+            constant: c_20,
+        });
+        bb2.set_terminator(Terminator::Return { value: Some(v_20) });
+        target_func.push_block(bb2);
+
+        module.push_function(target_func);
+
+        // 函数 1：caller
+        let mut caller_func = Function::new("$main", BasicBlockId(0));
+        caller_func.set_params(vec!["$env".to_string(), "$this".to_string()]);
+        let mut c_bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_obj = ValueId(0);
+        let v_key = ValueId(1);
+        let v_callee = ValueId(2);
+        let v_arg = ValueId(3);
+        let v_res = ValueId(4);
+
+        c_bb0.push_instruction(Instruction::NewObject {
+            dest: v_obj,
+            capacity: 4,
+        });
+        c_bb0.push_instruction(Instruction::Const {
+            dest: v_key,
+            constant: c_calc_name,
+        });
+        c_bb0.push_instruction(Instruction::GetProp {
+            dest: v_callee,
+            object: v_obj,
+            key: v_key,
+        });
+        c_bb0.push_instruction(Instruction::Const {
+            dest: v_arg,
+            constant: c_10,
+        });
+        c_bb0.push_instruction(Instruction::Call {
+            dest: Some(v_res),
+            callee: v_callee,
+            this_val: v_obj,
+            args: vec![v_arg],
+        });
+        c_bb0.set_terminator(Terminator::Return { value: Some(v_res) });
+        caller_func.push_block(c_bb0);
+        module.push_function(caller_func);
+
+        // 运行 inline_for_ea
+        run(&mut module);
+
+        let caller = &module.functions()[1];
+        // 验证 caller 包含 GuardSameFunction 守卫
+        let has_guard = caller.blocks().iter().any(|b| {
+            b.instructions().iter().any(|ins| {
+                matches!(
+                    ins,
+                    Instruction::GuardSameFunction {
+                        function: FunctionId(0),
+                        ..
+                    }
+                )
+            })
+        });
+        assert!(
+            has_guard,
+            "caller must have GuardSameFunction for target method"
+        );
+
+        // 验证区域入口块包含汇合多返回分支的 Phi 指令
+        let has_phi = caller.blocks().iter().any(|b| {
+            b.instructions().iter().any(|ins| {
+                if let Instruction::Phi { sources, .. } = ins {
+                    sources.len() == 2
+                } else {
+                    false
+                }
+            })
+        });
+        assert!(
+            has_phi,
+            "caller must contain a 2-source Phi instruction for multi-return merge"
+        );
+    }
+
+    #[test]
+    fn test_speculative_inline_chained_with_static() {
+        let mut module = Module::new();
+
+        let c_calc_name = module.add_constant(Constant::String("calc".to_string()));
+        let c_fn0_ref = module.add_constant(Constant::FunctionRef(FunctionId(0)));
+        let c_1 = module.add_constant(Constant::Number(1.0));
+        let c_42 = module.add_constant(Constant::Number(42.0));
+
+        // 函数 0：helper 函数 `add_one`
+        let mut helper_func = Function::new("add_one", BasicBlockId(0));
+        helper_func.set_params(vec![
+            "$env".to_string(),
+            "$this".to_string(),
+            "x".to_string(),
+        ]);
+        helper_func.set_direct_callable(true);
+        let mut h_bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_x = ValueId(0);
+        let v_one = ValueId(1);
+        let v_sum = ValueId(2);
+        h_bb0.push_instruction(Instruction::LoadVar {
+            dest: v_x,
+            name: "x".to_string(),
+        });
+        h_bb0.push_instruction(Instruction::Const {
+            dest: v_one,
+            constant: c_1,
+        });
+        h_bb0.push_instruction(Instruction::Binary {
+            dest: v_sum,
+            op: BinaryOp::Add,
+            lhs: v_x,
+            rhs: v_one,
+        });
+        h_bb0.set_terminator(Terminator::Return { value: Some(v_sum) });
+        helper_func.push_block(h_bb0);
+        module.push_function(helper_func);
+
+        // 函数 1：方法 `Point.calc`，调用 `add_one`
+        let mut method_func = Function::new("Point.calc", BasicBlockId(0));
+        method_func.set_params(vec![
+            "$env".to_string(),
+            "$this".to_string(),
+            "n".to_string(),
+        ]);
+        method_func.set_direct_callable(true);
+        let mut m_bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_fn0 = ValueId(0);
+        let v_n = ValueId(1);
+        let v_this = ValueId(2);
+        let v_call_res = ValueId(3);
+        m_bb0.push_instruction(Instruction::Const {
+            dest: v_fn0,
+            constant: c_fn0_ref,
+        });
+        m_bb0.push_instruction(Instruction::LoadVar {
+            dest: v_n,
+            name: "n".to_string(),
+        });
+        m_bb0.push_instruction(Instruction::LoadVar {
+            dest: v_this,
+            name: "$this".to_string(),
+        });
+        m_bb0.push_instruction(Instruction::Call {
+            dest: Some(v_call_res),
+            callee: v_fn0,
+            this_val: v_this,
+            args: vec![v_n],
+        });
+        m_bb0.set_terminator(Terminator::Return {
+            value: Some(v_call_res),
+        });
+        method_func.push_block(m_bb0);
+        module.push_function(method_func);
+
+        // 函数 2：caller
+        let mut caller_func = Function::new("$main", BasicBlockId(0));
+        caller_func.set_params(vec!["$env".to_string(), "$this".to_string()]);
+        let mut c_bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_obj = ValueId(0);
+        let v_key = ValueId(1);
+        let v_callee = ValueId(2);
+        let v_arg = ValueId(3);
+        let v_res = ValueId(4);
+
+        c_bb0.push_instruction(Instruction::NewObject {
+            dest: v_obj,
+            capacity: 4,
+        });
+        c_bb0.push_instruction(Instruction::Const {
+            dest: v_key,
+            constant: c_calc_name,
+        });
+        c_bb0.push_instruction(Instruction::GetProp {
+            dest: v_callee,
+            object: v_obj,
+            key: v_key,
+        });
+        c_bb0.push_instruction(Instruction::Const {
+            dest: v_arg,
+            constant: c_42,
+        });
+        c_bb0.push_instruction(Instruction::Call {
+            dest: Some(v_res),
+            callee: v_callee,
+            this_val: v_obj,
+            args: vec![v_arg],
+        });
+        c_bb0.set_terminator(Terminator::Return { value: Some(v_res) });
+        caller_func.push_block(c_bb0);
+        module.push_function(caller_func);
+
+        // 运行 inline_for_ea
+        run(&mut module);
+
+        let caller = &module.functions()[2];
+        // 验证 caller 包含 GuardSameFunction
+        let has_guard = caller.blocks().iter().any(|b| {
+            b.instructions().iter().any(|ins| {
+                matches!(
+                    ins,
+                    Instruction::GuardSameFunction {
+                        function: FunctionId(1),
+                        ..
+                    }
+                )
+            })
+        });
+        assert!(has_guard, "caller must have GuardSameFunction for method");
+
+        // 验证快路径中 helper 调用也被级联内联为 Binary Add，无残留直接 Call
+        let has_binary_add = caller.blocks().iter().any(|b| {
+            b.instructions().iter().any(|ins| {
+                matches!(
+                    ins,
+                    Instruction::Binary {
+                        op: BinaryOp::Add,
+                        ..
+                    }
+                )
+            })
+        });
+        assert!(
+            has_binary_add,
+            "cascaded stage A must inline the helper into a binary add"
+        );
+    }
 }
