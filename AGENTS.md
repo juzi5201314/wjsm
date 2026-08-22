@@ -10,6 +10,7 @@ AOT JavaScript/TypeScript runtime: SWC AST → verified semantic IR → portable
 - Tests verify correctness only: deterministic, fast, in-process; never heavy-load/stress tasks, never randomness-dependent assertions, never real network I/O (TCP/UDP/HTTP/TLS/DNS), never real child-process/PTY spawning in the automated suite.
 - Put generated artifacts in `/tmp`. For ad-hoc JS/TS, use `-e`; do not create scratch source files.
 - Fix the owning layer and remove obsolete paths. Do not hide failures by weakening fixtures or snapshots.
+- 遇到测试失败时不要反复切换commit来看之前是不是失败的，编译是极其昂贵的操作。应该直接定位问题然后修复，而不是推卸责任去找是不是你导致的。
 
 ## Tests
 
