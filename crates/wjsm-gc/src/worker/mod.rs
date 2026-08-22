@@ -228,6 +228,10 @@ impl SharedPool {
     }
 
     fn notify_all(&self) {
+        // 必须先取 parking 锁再 notify:parker 在锁内评估 injector 谓词,
+        // 若通知可落在「谓词检查后、condvar.wait 前」的窗口,唤醒会丢失,
+        // worker 永睡、包滞留、inflight 永不归零(周期推进死锁)。
+        let _guard = self.parking.0.lock();
         self.parking.1.notify_all();
     }
 }
