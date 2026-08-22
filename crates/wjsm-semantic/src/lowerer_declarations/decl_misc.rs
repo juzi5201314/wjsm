@@ -109,6 +109,12 @@ impl Lowerer {
                     {
                         self.string_bindings.insert((scope_id, name.clone()));
                     }
+                    if kind == crate::scope::VarKind::Let
+                        && self.is_string_producing_expr(init)
+                        && let Ok((scope_id, _)) = self.scopes.lookup(&name)
+                    {
+                        self.maybe_string_bindings.insert((scope_id, name.clone()));
+                    }
                     if is_sharedarraybuffer_constructor_expr(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {

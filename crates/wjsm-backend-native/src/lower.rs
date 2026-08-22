@@ -1801,6 +1801,50 @@ fn lower_instruction(
         ),
         Instruction::CallBuiltin {
             dest: Some(dest),
+            builtin: Builtin::IsString,
+            args,
+        } if args.len() == 1 => {
+            let encoded = use_value(cx.builder, cx.variables, args[0])?;
+            let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+            let boxed = cx.builder.ins().band_imm_s(encoded, box_base);
+            let boxed = cx
+                .builder
+                .ins()
+                .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed, box_base);
+            let tag = cx.builder.ins().ushr_imm_u(encoded, 32);
+            let tag = cx.builder.ins().band_imm_u(
+                tag,
+                i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+            );
+            let is_string = cx.builder.ins().icmp_imm_u(
+                ir::condcodes::IntCC::Equal,
+                tag,
+                i64::try_from(value::TAG_STRING).expect("string tag fits i64"),
+            );
+            let tag_word = cx.builder.ins().ushr_imm_u(encoded, 32);
+            let runtime_flag = cx.builder.ins().band_imm_u(
+                tag_word,
+                i64::try_from(value::STRING_RUNTIME_HANDLE_FLAG).expect("runtime flag fits i64"),
+            );
+            let is_runtime =
+                cx.builder
+                    .ins()
+                    .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
+            let valid = cx.builder.ins().band(boxed, is_string);
+            let valid = cx.builder.ins().band(valid, is_runtime);
+            let yes = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_bool(true));
+            let no = cx
+                .builder
+                .ins()
+                .iconst(types::I64, value::encode_bool(false));
+            let result = cx.builder.ins().select(valid, yes, no);
+            define_value(cx.builder, cx.variables, *dest, result)
+        }
+        Instruction::CallBuiltin {
+            dest: Some(dest),
             builtin: Builtin::StrictEq,
             args,
         } if args.len() == 2 => lower_strict_eq(

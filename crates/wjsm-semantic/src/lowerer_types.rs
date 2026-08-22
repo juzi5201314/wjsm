@@ -189,6 +189,9 @@ pub(crate) struct Lowerer {
     /// 字符串」的正向证明为前提。只收 `const`：它不可重新赋值，绑定一旦证明成立
     /// 就在整个作用域内成立，不受单遍 lowering 的源码顺序影响。
     pub(crate) string_bindings: std::collections::HashSet<(usize, String)>,
+    /// 由 let 初始化器推断为字符串的绑定；仅用于生成运行时 IsString 守卫，
+    /// 因为 let 后续可被重新赋值，不能进入无守卫的静态直连集合。
+    pub(crate) maybe_string_bindings: std::collections::HashSet<(usize, String)>,
     /// 追踪当前作用域中已推断为 TypedArray 的绑定（scope_id, name）。
     /// 用于在 lower_call_expr 中让 arr.at()/arr.indexOf() 等走 TypedArray dispatch，
     /// 而不是被 String.prototype dispatch 错误拦截。

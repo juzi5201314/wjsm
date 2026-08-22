@@ -78,6 +78,10 @@ pub(super) fn dispatch_operator(
             .first()
             .map(|input| value::encode_bool(value::is_js_object(*input)))
             .unwrap_or_else(|| fail_dispatch(ctx)),
+        Builtin::IsString => args
+            .first()
+            .map(|input| value::encode_bool(value::is_runtime_string_handle(*input)))
+            .unwrap_or_else(|| fail_dispatch(ctx)),
         Builtin::GetPrototypeFromConstructor => {
             let Some(constructor) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));

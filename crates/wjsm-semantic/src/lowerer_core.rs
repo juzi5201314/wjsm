@@ -142,6 +142,7 @@ impl Lowerer {
             active_using_vars: Vec::new(),
             array_bindings: std::collections::HashSet::new(),
             string_bindings: std::collections::HashSet::new(),
+            maybe_string_bindings: std::collections::HashSet::new(),
             typedarray_bindings: std::collections::HashSet::new(),
             sab_bindings: std::collections::HashSet::new(),
             dataview_bindings: std::collections::HashSet::new(),
@@ -1286,6 +1287,14 @@ impl Lowerer {
         let name = ident.sym.to_string();
         match self.scopes.lookup(&name) {
             Ok((scope_id, _)) => self.string_bindings.contains(&(scope_id, name)),
+            Err(_) => false,
+        }
+    }
+
+    pub(crate) fn is_maybe_string_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        match self.scopes.lookup(&name) {
+            Ok((scope_id, _)) => self.maybe_string_bindings.contains(&(scope_id, name)),
             Err(_) => false,
         }
     }

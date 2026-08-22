@@ -173,6 +173,100 @@ impl Lowerer {
         self.expr_merge_block = Some(merge_block);
         Ok(result)
     }
+    fn emit_guarded_string_proto_builtin_call(
+        &mut self,
+        builtin: Builtin,
+        member_expr: &swc_ast::MemberExpr,
+        args: &[swc_ast::ExprOrSpread],
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        if Self::call_args_have_spread(args) {
+            return self.emit_proto_builtin_call(builtin, member_expr, args, block);
+        }
+        let mut eval_block = block;
+        let receiver = self.lower_expr_then_continue(member_expr.obj.as_ref(), &mut eval_block)?;
+        let mut values = Vec::with_capacity(args.len());
+        for arg in args {
+            values.push(self.lower_expr_then_continue(&arg.expr, &mut eval_block)?);
+        }
+        let guard = self.alloc_value();
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: Some(guard),
+                builtin: Builtin::IsString,
+                args: vec![receiver],
+            },
+        );
+        let fast_block = self.current_function.new_block();
+        let slow_block = self.current_function.new_block();
+        let merge_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            eval_block,
+            Terminator::Branch {
+                condition: guard,
+                true_block: fast_block,
+                false_block: slow_block,
+            },
+        );
+        let fast_result = self.alloc_value();
+        let mut fast_args = Vec::with_capacity(values.len() + 1);
+        fast_args.push(receiver);
+        fast_args.extend(values.iter().copied());
+        self.current_function.append_instruction(
+            fast_block,
+            Instruction::CallBuiltin {
+                dest: Some(fast_result),
+                builtin,
+                args: fast_args,
+            },
+        );
+        self.current_function.set_terminator(
+            fast_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+        let mut slow_call_block = slow_block;
+        let callee =
+            self.lower_member_expr_from_object(member_expr, receiver, &mut slow_call_block, false)?;
+        let slow_result = self.alloc_value();
+        self.current_function.append_instruction(
+            slow_call_block,
+            Instruction::Call {
+                dest: Some(slow_result),
+                callee,
+                this_val: receiver,
+                args: values,
+            },
+        );
+        self.current_function.set_terminator(
+            slow_call_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge_block,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: fast_block,
+                        value: fast_result,
+                    },
+                    PhiSource {
+                        predecessor: slow_call_block,
+                        value: slow_result,
+                    },
+                ],
+            },
+        );
+        self.expr_merge_block = Some(merge_block);
+        Ok(result)
+    }
+
     fn emit_proto_builtin_call(
         &mut self,
         builtin: Builtin,
@@ -502,6 +596,25 @@ impl Lowerer {
                     {
                         return self.emit_proto_builtin_call(
                             array_builtin,
+                            member_expr,
+                            &call.args,
+                            block,
+                        );
+                    }
+                    // let 字符串绑定可被重新赋值：先内联 IsString 守卫，miss 保留完整动态语义。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(string_builtin) =
+                            builtin_from_string_proto_method(&prop_ident.sym)
+                        && matches!(
+                            prop_ident.sym.as_ref(),
+                            "concat" | "includes" | "indexOf" | "lastIndexOf" | "slice"
+                        )
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_maybe_string_binding(receiver_ident)
+                        && !self.is_string_producing_expr(member_expr.obj.as_ref())
+                    {
+                        return self.emit_guarded_string_proto_builtin_call(
+                            string_builtin,
                             member_expr,
                             &call.args,
                             block,
