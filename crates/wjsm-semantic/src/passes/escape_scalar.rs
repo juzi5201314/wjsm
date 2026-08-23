@@ -12,8 +12,8 @@ use super::cfg_fold::terminator_successors;
 use super::direct_call::{collect_uses, instr_uses, instruction_dest, terminator_uses};
 use std::collections::{HashMap, HashSet};
 use wjsm_ir::{
-    BasicBlockId, Constant, FunctionId, Instruction, Module, Terminator, ValueId,
-    is_host_shared_variable,
+    BasicBlockId, Builtin, Constant, ConstantId, FunctionId, Instruction, Module, Terminator,
+    ValueId, is_host_shared_variable,
 };
 
 /// 计算函数的支配集（迭代数据流，O(n²) 可接受，块数 ≤512）。
@@ -57,53 +57,6 @@ fn compute_dominators(function: &wjsm_ir::Function) -> Vec<HashSet<BasicBlockId>
     dom
 }
 
-/// 判定变量 `name` 是否可转发：StoreVar 恰一次，且所有 LoadVar 位于 store 之后
-/// （同块时指令索引更大；跨块时 store 块支配 load 块）。
-fn can_forward_var(
-    function: &wjsm_ir::Function,
-    name: &str,
-    store_block: BasicBlockId,
-    store_idx: usize,
-    dom: &[HashSet<BasicBlockId>],
-) -> bool {
-    for block in function.blocks() {
-        for (idx, ins) in block.instructions().iter().enumerate() {
-            match ins {
-                Instruction::StoreVar { name: n, .. } if n == name => {
-                    if block.id() != store_block || idx != store_idx {
-                        return false;
-                    }
-                }
-                Instruction::LoadVar { name: n, .. } if n == name => {
-                    if block.id() == store_block {
-                        if idx <= store_idx {
-                            return false;
-                        }
-                    } else if !dom[block.id().0 as usize].contains(&store_block) {
-                        return false;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    true
-}
-
-/// 查找函数内唯一的 `StoreVar(name)` 位置。
-fn find_store_pos(function: &wjsm_ir::Function, name: &str) -> Option<(BasicBlockId, usize)> {
-    for block in function.blocks() {
-        for (idx, ins) in block.instructions().iter().enumerate() {
-            if let Instruction::StoreVar { name: n, .. } = ins
-                && n == name
-            {
-                return Some((block.id(), idx));
-            }
-        }
-    }
-    None
-}
-
 #[derive(Clone, Debug)]
 struct PropertyWrite {
     key: String,
@@ -143,18 +96,69 @@ type ObjectFamily = (
     Vec<(BasicBlockId, usize)>,
 );
 
+fn try_forward_store(
+    function: &wjsm_ir::Function,
+    name: &str,
+    store_block: BasicBlockId,
+    store_idx: usize,
+    dom: &[HashSet<BasicBlockId>],
+    family: &mut HashSet<ValueId>,
+    delete_targets: &mut Vec<(BasicBlockId, usize)>,
+) -> bool {
+    let mut matching_loads = Vec::new();
+
+    // 1. 同块内：在 store_idx 之后、下一个 StoreVar 之前的 LoadVar
+    if let Some(block) = function.block_by_id(store_block) {
+        for (idx, ins) in block.instructions().iter().enumerate().skip(store_idx + 1) {
+            match ins {
+                Instruction::StoreVar { name: n, .. } if n == name => break,
+                Instruction::LoadVar { name: n, dest } if n == name => {
+                    matching_loads.push((store_block, idx, *dest));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // 2. 跨块：被 store_block 支配的后继块中的 LoadVar（前提是该块无更近的前置 StoreVar）
+    for block in function.blocks() {
+        if block.id() == store_block {
+            continue;
+        }
+        if dom[block.id().0 as usize].contains(&store_block) {
+            for (idx, ins) in block.instructions().iter().enumerate() {
+                match ins {
+                    Instruction::StoreVar { name: n, .. } if n == name => {
+                        break;
+                    }
+                    Instruction::LoadVar { name: n, dest } if n == name => {
+                        matching_loads.push((block.id(), idx, *dest));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    for (b_id, idx, dest) in matching_loads {
+        family.insert(dest);
+        delete_targets.push((b_id, idx));
+    }
+    delete_targets.push((store_block, store_idx));
+    true
+}
+
 fn collect_object_family(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
     dom: &[HashSet<BasicBlockId>],
 ) -> Option<ObjectFamily> {
     let mut family = HashSet::from([candidate_dest]);
-    let mut forwarded_vars = HashSet::new();
+    let forwarded_vars = HashSet::new();
     let mut delete_targets = Vec::new();
 
     loop {
         let family_len = family.len();
-        let variable_len = forwarded_vars.len();
         for block in function.blocks() {
             for (index, instruction) in block.instructions().iter().enumerate() {
                 match instruction {
@@ -162,16 +166,15 @@ fn collect_object_family(
                         if is_host_shared_variable(name) {
                             return None;
                         }
-                        let (store_block, store_index) = find_store_pos(function, name)?;
-                        if !can_forward_var(function, name, store_block, store_index, dom) {
-                            return None;
-                        }
-                        forwarded_vars.insert(name.clone());
-                        delete_targets.push((block.id(), index));
-                    }
-                    Instruction::LoadVar { name, dest } if forwarded_vars.contains(name) => {
-                        family.insert(*dest);
-                        delete_targets.push((block.id(), index));
+                        try_forward_store(
+                            function,
+                            name,
+                            block.id(),
+                            index,
+                            dom,
+                            &mut family,
+                            &mut delete_targets,
+                        );
                     }
                     Instruction::Phi { dest, sources }
                         if sources.iter().any(|source| family.contains(&source.value)) =>
@@ -199,7 +202,7 @@ fn collect_object_family(
                 }
             }
         }
-        if family.len() == family_len && forwarded_vars.len() == variable_len {
+        if family.len() == family_len {
             break;
         }
     }
@@ -596,6 +599,9 @@ pub(crate) fn run(module: &mut Module) {
     {
         return;
     }
+
+    eliminate_array_templates(module);
+    eliminate_dead_string_computations(module);
 
     let mut any_change = true;
     while any_change {
@@ -1030,4 +1036,691 @@ fn replace_in_terminator(terminator: &mut Terminator, replacements: &HashMap<Val
         }
         Terminator::Return { value: None } | Terminator::Jump { .. } | Terminator::Unreachable => {}
     }
+}
+
+fn const_id_or_add_in_module(module: &mut Module, constant: Constant) -> ConstantId {
+    for (i, c) in module.constants().iter().enumerate() {
+        if *c == constant {
+            return ConstantId(i as u32);
+        }
+    }
+    module.add_constant(constant)
+}
+
+fn eliminate_array_templates(module: &mut Module) -> bool {
+    let mut any_change = false;
+    let constants_base = module.constants().to_vec();
+
+    for function_index in 0..module.functions().len() {
+        let function_id = FunctionId(function_index as u32);
+        let mut raw_reads_to_replace = Vec::new();
+        let mut delete_targets = HashSet::new();
+        let mut next_val;
+
+        {
+            let function = &module.functions()[function_index];
+            next_val = next_value_id(function);
+            let dom = compute_dominators(function);
+
+            let mut candidates = Vec::new();
+            for block in function.blocks() {
+                for instruction in block.instructions() {
+                    if let Instruction::CloneArrayTemplate { dest, template } = instruction
+                        && !used_in_terminator(function, *dest)
+                    {
+                        candidates.push((*dest, *template));
+                    }
+                }
+            }
+
+            for (candidate_dest, template_id) in candidates {
+                let Some((family, _, fam_deletes)) =
+                    collect_object_family(function, candidate_dest, &dom)
+                else {
+                    continue;
+                };
+
+                let Some(Constant::ArrayTemplate(elem_const_ids)) =
+                    constants_base.get(template_id.0 as usize)
+                else {
+                    continue;
+                };
+
+                let mut escapes = false;
+                let mut reads_to_replace = Vec::new();
+
+                for block in function.blocks() {
+                    for (index, instruction) in block.instructions().iter().enumerate() {
+                        match instruction {
+                            Instruction::CloneArrayTemplate { dest, .. }
+                                if family.contains(dest) => {}
+                            Instruction::StoreVar { value, .. } if family.contains(value) => {}
+                            Instruction::LoadVar { dest, .. } if family.contains(dest) => {}
+                            Instruction::GetProp { object, key, dest }
+                                if family.contains(object) =>
+                            {
+                                let is_length = function.blocks().iter().any(|b| {
+                                    b.instructions().iter().any(|ins| {
+                                        matches!(
+                                            ins,
+                                            Instruction::Const { dest: d, constant }
+                                                if *d == *key
+                                                    && matches!(
+                                                        constants_base.get(constant.0 as usize),
+                                                        Some(Constant::String(s)) if s == "length"
+                                                    )
+                                        )
+                                    })
+                                });
+                                if is_length {
+                                    let len_f64 = elem_const_ids.len() as f64;
+                                    reads_to_replace.push((
+                                        block.id(),
+                                        index,
+                                        *dest,
+                                        Constant::Number(len_f64),
+                                    ));
+                                } else {
+                                    escapes = true;
+                                    break;
+                                }
+                            }
+                            Instruction::GetElem {
+                                object,
+                                index: idx_val,
+                                dest,
+                            } if family.contains(object) => {
+                                if let Some(idx) = resolve_array_index(
+                                    function,
+                                    *idx_val,
+                                    &family,
+                                    elem_const_ids.len(),
+                                    &constants_base,
+                                ) {
+                                    let elem_id = elem_const_ids[idx];
+                                    let elem_const = constants_base[elem_id.0 as usize].clone();
+                                    reads_to_replace.push((block.id(), index, *dest, elem_const));
+                                } else {
+                                    escapes = true;
+                                    break;
+                                }
+                            }
+                            Instruction::IsException { dest, value } if family.contains(value) => {
+                                reads_to_replace.push((
+                                    block.id(),
+                                    index,
+                                    *dest,
+                                    Constant::Bool(false),
+                                ));
+                            }
+                            Instruction::CallBuiltin {
+                                builtin: Builtin::ExceptionValue,
+                                args,
+                                ..
+                            } if args.iter().any(|v| family.contains(v)) => {
+                                // 异常载荷提取在非异常模板上不可达，不视为逃逸
+                            }
+                            _ if instr_uses(instruction)
+                                .into_iter()
+                                .any(|v| family.contains(&v)) =>
+                            {
+                                escapes = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if escapes {
+                        break;
+                    }
+                }
+
+                if escapes {
+                    continue;
+                }
+
+                delete_targets.extend(fam_deletes);
+                for block in function.blocks() {
+                    for (index, instruction) in block.instructions().iter().enumerate() {
+                        if let Instruction::CloneArrayTemplate { dest, .. } = instruction
+                            && family.contains(dest)
+                        {
+                            delete_targets.insert((block.id(), index));
+                        }
+                    }
+                }
+
+                raw_reads_to_replace.extend(reads_to_replace);
+            }
+        }
+
+        if raw_reads_to_replace.is_empty() && delete_targets.is_empty() {
+            continue;
+        }
+
+        let mut replacements = HashMap::new();
+        let mut consts_to_insert = Vec::new();
+        for (block_id, index, read_dest, const_val) in raw_reads_to_replace {
+            let const_id = const_id_or_add_in_module(module, const_val);
+            let new_dest = ValueId(next_val);
+            next_val += 1;
+            consts_to_insert.push((block_id, index, new_dest, const_id));
+            replacements.insert(read_dest, new_dest);
+            delete_targets.insert((block_id, index));
+        }
+
+        let function = module.function_mut(function_id).expect("valid fid");
+        apply_value_replacements(function, &replacements);
+
+        let mut by_block: HashMap<BasicBlockId, Vec<usize>> = HashMap::new();
+        for (block_id, index) in &delete_targets {
+            by_block.entry(*block_id).or_default().push(*index);
+        }
+        for (block_id, mut indices) in by_block {
+            indices.sort_unstable_by(|left, right| right.cmp(left));
+            indices.dedup();
+            if let Some(block) = function.block_by_id_mut(block_id) {
+                let instructions = block.instructions_mut();
+                for index in indices {
+                    if index < instructions.len() {
+                        instructions.remove(index);
+                    }
+                }
+            }
+        }
+
+        for (block_id, _index, dest, constant) in consts_to_insert {
+            if let Some(block) = function.block_by_id_mut(block_id) {
+                block
+                    .instructions_mut()
+                    .insert(0, Instruction::Const { dest, constant });
+            }
+        }
+
+        any_change = true;
+    }
+
+    any_change
+}
+
+fn resolve_array_index(
+    function: &wjsm_ir::Function,
+    idx_val: ValueId,
+    family: &HashSet<ValueId>,
+    elem_len: usize,
+    constants: &[Constant],
+) -> Option<usize> {
+    for b in function.blocks() {
+        for ins in b.instructions() {
+            match ins {
+                Instruction::Const { dest: d, constant } if *d == idx_val => {
+                    if let Some(Constant::Number(n)) = constants.get(constant.0 as usize) {
+                        if *n >= 0.0 && (*n as usize) < elem_len && n.fract() == 0.0 {
+                            return Some(*n as usize);
+                        }
+                    }
+                }
+                Instruction::Binary {
+                    dest: d,
+                    op: wjsm_ir::BinaryOp::Sub,
+                    lhs,
+                    rhs,
+                } if *d == idx_val => {
+                    let lhs_is_len = for_instruction(function, *lhs, |lhs_ins| {
+                        matches!(lhs_ins, Instruction::GetProp { object, key, .. }
+                        if family.contains(object) && for_instruction(function, *key, |k_ins| {
+                            matches!(k_ins, Instruction::Const { constant, .. }
+                                if matches!(constants.get(constant.0 as usize), Some(Constant::String(s)) if s == "length"))
+                        }))
+                    });
+                    if lhs_is_len {
+                        let rhs_val = for_instruction(function, *rhs, |rhs_ins| {
+                            if let Instruction::Const { constant, .. } = rhs_ins
+                                && let Some(Constant::Number(k)) =
+                                    constants.get(constant.0 as usize)
+                            {
+                                Some(*k)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(k) = rhs_val {
+                            let n = elem_len as f64 - k;
+                            if n >= 0.0 && (n as usize) < elem_len && n.fract() == 0.0 {
+                                return Some(n as usize);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+fn for_instruction<T>(
+    function: &wjsm_ir::Function,
+    target: ValueId,
+    f: impl FnOnce(&Instruction) -> T,
+) -> T
+where
+    T: Default,
+{
+    for b in function.blocks() {
+        for ins in b.instructions() {
+            if let Some(d) = instruction_dest(ins)
+                && d == target
+            {
+                return f(ins);
+            }
+        }
+    }
+    T::default()
+}
+
+fn eliminate_dead_string_computations(module: &mut Module) -> bool {
+    let mut changed = false;
+    let mut any_change = true;
+    let mut round = 0;
+    while any_change && round < 4 {
+        any_change = false;
+        round += 1;
+        let constants_base = module.constants().to_vec();
+
+        for function_index in 0..module.functions().len() {
+            let function_id = FunctionId(function_index as u32);
+            let mut raw_reads_to_replace = Vec::new();
+            let mut delete_targets = HashSet::new();
+            let mut next_val;
+
+            {
+                let function = &module.functions()[function_index];
+                next_val = next_value_id(function);
+                let dom = compute_dominators(function);
+
+                let mut candidates: Vec<(ValueId, Option<f64>)> = Vec::new();
+
+                for block in function.blocks() {
+                    for instruction in block.instructions() {
+                        match instruction {
+                            Instruction::CallBuiltin {
+                                builtin: Builtin::StringSlice,
+                                dest: Some(dest),
+                                args,
+                            } if args.len() >= 3 && !used_in_terminator(function, *dest) => {
+                                let start_val =
+                                    find_const_number(function, args[1], &constants_base);
+                                let end_val = find_const_number(function, args[2], &constants_base);
+                                if let (Some(s), Some(e)) = (start_val, end_val)
+                                    && s >= 0.0
+                                    && e >= s
+                                {
+                                    candidates.push((*dest, Some(e - s)));
+                                }
+                            }
+                            Instruction::StringConcatVa { dest, parts }
+                                if !used_in_terminator(function, *dest) =>
+                            {
+                                let mut total_len = 0.0;
+                                let mut all_known = true;
+                                for part in parts {
+                                    if let Some(len) =
+                                        find_part_length(function, *part, &constants_base)
+                                    {
+                                        total_len += len;
+                                    } else {
+                                        all_known = false;
+                                        break;
+                                    }
+                                }
+                                if all_known {
+                                    candidates.push((*dest, Some(total_len)));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                for (candidate_dest, known_length) in candidates {
+                    let Some(len_f64) = known_length else {
+                        continue;
+                    };
+                    let Some((family, _, fam_deletes)) =
+                        collect_object_family(function, candidate_dest, &dom)
+                    else {
+                        continue;
+                    };
+
+                    let mut escapes = false;
+                    let mut reads_to_replace = Vec::new();
+
+                    for block in function.blocks() {
+                        for (index, instruction) in block.instructions().iter().enumerate() {
+                            match instruction {
+                                Instruction::CallBuiltin {
+                                    builtin: Builtin::StringSlice,
+                                    dest: Some(dest),
+                                    ..
+                                } if family.contains(dest) => {}
+                                Instruction::StringConcatVa { dest, .. }
+                                    if family.contains(dest) => {}
+                                Instruction::StoreVar { value, .. } if family.contains(value) => {}
+                                Instruction::LoadVar { dest, .. } if family.contains(dest) => {}
+                                Instruction::GetProp { object, key, dest }
+                                    if family.contains(object) =>
+                                {
+                                    let is_length = function.blocks().iter().any(|b| {
+                                        b.instructions().iter().any(|ins| {
+                                        matches!(
+                                            ins,
+                                            Instruction::Const { dest: d, constant }
+                                                if *d == *key
+                                                    && matches!(
+                                                        constants_base.get(constant.0 as usize),
+                                                        Some(Constant::String(s)) if s == "length"
+                                                    )
+                                        )
+                                    })
+                                    });
+                                    if is_length {
+                                        reads_to_replace.push((
+                                            block.id(),
+                                            index,
+                                            *dest,
+                                            Constant::Number(len_f64),
+                                        ));
+                                    } else {
+                                        escapes = true;
+                                        break;
+                                    }
+                                }
+                                Instruction::IsException { dest, value }
+                                    if family.contains(value) =>
+                                {
+                                    reads_to_replace.push((
+                                        block.id(),
+                                        index,
+                                        *dest,
+                                        Constant::Bool(false),
+                                    ));
+                                }
+                                Instruction::CallBuiltin {
+                                    builtin: Builtin::ExceptionValue,
+                                    args,
+                                    ..
+                                } if args.iter().any(|v| family.contains(v)) => {}
+                                _ if instr_uses(instruction)
+                                    .into_iter()
+                                    .any(|v| family.contains(&v)) =>
+                                {
+                                    escapes = true;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if escapes {
+                            break;
+                        }
+                    }
+
+                    if escapes {
+                        continue;
+                    }
+
+                    delete_targets.extend(fam_deletes);
+                    for block in function.blocks() {
+                        for (index, instruction) in block.instructions().iter().enumerate() {
+                            match instruction {
+                                Instruction::CallBuiltin {
+                                    builtin: Builtin::StringSlice,
+                                    dest: Some(dest),
+                                    ..
+                                }
+                                | Instruction::StringConcatVa { dest, .. }
+                                    if family.contains(dest) =>
+                                {
+                                    delete_targets.insert((block.id(), index));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    raw_reads_to_replace.extend(reads_to_replace);
+                }
+
+                // 清理无后续使用的死字符串构建循环（如 s += BASE + i）
+                let mut dead_var_names: HashSet<String> = HashSet::new();
+                for block in function.blocks() {
+                    for instruction in block.instructions() {
+                        if let Instruction::CallBuiltin {
+                            builtin: Builtin::StringBuilderFinish,
+                            args,
+                            dest: None,
+                        } = instruction
+                            && let Some(arg) = args.first()
+                        {
+                            for ins in block.instructions() {
+                                if let Instruction::LoadVar { name, dest: d } = ins
+                                    && d == arg
+                                {
+                                    dead_var_names.insert(name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for var_name in dead_var_names {
+                    let mut safe_to_eliminate = true;
+                    let mut var_delete_sites = Vec::new();
+
+                    for block in function.blocks() {
+                        for (index, instruction) in block.instructions().iter().enumerate() {
+                            match instruction {
+                            Instruction::StoreVar { name, .. } if name == &var_name => {
+                                var_delete_sites.push((block.id(), index));
+                            }
+                            Instruction::LoadVar { name, dest } if name == &var_name => {
+                                let uses = collect_uses(function, *dest);
+                                for use_instr in uses {
+                                    let is_builder_use = match use_instr {
+                                        Instruction::CallBuiltin {
+                                            builtin: Builtin::StringBuilderAppend,
+                                            args,
+                                            ..
+                                        } if args.first() == Some(dest) => true,
+                                        Instruction::CallBuiltin {
+                                            builtin: Builtin::StringBuilderFinish,
+                                            args,
+                                            ..
+                                        } if args.first() == Some(dest) => true,
+                                        _ => false,
+                                    };
+                                    if !is_builder_use {
+                                        safe_to_eliminate = false;
+                                        break;
+                                    }
+                                }
+                                if safe_to_eliminate {
+                                    var_delete_sites.push((block.id(), index));
+                                }
+                            }
+                            Instruction::CallBuiltin {
+                                builtin: Builtin::StringBuilderAppend,
+                                args,
+                                ..
+                            } if args.first().map_or(false, |a| {
+                                for_instruction(function, *a, |ins| {
+                                    matches!(ins, Instruction::LoadVar { name, .. } if name == &var_name)
+                                })
+                            }) =>
+                            {
+                                var_delete_sites.push((block.id(), index));
+                            }
+                            Instruction::CallBuiltin {
+                                builtin: Builtin::StringBuilderFinish,
+                                args,
+                                ..
+                            } if args.first().map_or(false, |a| {
+                                for_instruction(function, *a, |ins| {
+                                    matches!(ins, Instruction::LoadVar { name, .. } if name == &var_name)
+                                })
+                            }) =>
+                            {
+                                var_delete_sites.push((block.id(), index));
+                            }
+                            _ => {}
+                        }
+                        }
+                    }
+
+                    if safe_to_eliminate {
+                        delete_targets.extend(var_delete_sites);
+                    }
+                }
+            }
+
+            if raw_reads_to_replace.is_empty() && delete_targets.is_empty() {
+                continue;
+            }
+
+            let mut replacements = HashMap::new();
+            let mut consts_to_insert = Vec::new();
+            for (block_id, index, read_dest, const_val) in raw_reads_to_replace {
+                let const_id = const_id_or_add_in_module(module, const_val);
+                let new_dest = ValueId(next_val);
+                next_val += 1;
+                consts_to_insert.push((block_id, index, new_dest, const_id));
+                replacements.insert(read_dest, new_dest);
+                delete_targets.insert((block_id, index));
+            }
+
+            // 确保被删除指令的 is_exception 也被加入 delete_targets，并将其 dest 替换为 false 常量
+            let ex_sites: Vec<(BasicBlockId, usize, ValueId)> = {
+                let function = &module.functions()[function_index];
+                let mut deleted_values: HashSet<ValueId> = HashSet::new();
+                for block in function.blocks() {
+                    for (index, instruction) in block.instructions().iter().enumerate() {
+                        if delete_targets.contains(&(block.id(), index)) {
+                            if let Some(dest) = instruction_dest(instruction) {
+                                deleted_values.insert(dest);
+                            }
+                        }
+                    }
+                }
+
+                let mut sites = Vec::new();
+                for block in function.blocks() {
+                    for (index, instruction) in block.instructions().iter().enumerate() {
+                        if let Instruction::IsException { dest, value } = instruction
+                            && deleted_values.contains(value)
+                            && !delete_targets.contains(&(block.id(), index))
+                        {
+                            sites.push((block.id(), index, *dest));
+                        }
+                    }
+                }
+                sites
+            };
+
+            for (block_id, index, ex_dest) in ex_sites {
+                let false_id = const_id_or_add_in_module(module, Constant::Bool(false));
+                let new_dest = ValueId(next_val);
+                next_val += 1;
+                consts_to_insert.push((block_id, index, new_dest, false_id));
+                replacements.insert(ex_dest, new_dest);
+                delete_targets.insert((block_id, index));
+            }
+
+            let function = module.function_mut(function_id).expect("valid fid");
+            apply_value_replacements(function, &replacements);
+
+            let mut by_block: HashMap<BasicBlockId, Vec<usize>> = HashMap::new();
+            for (block_id, index) in &delete_targets {
+                by_block.entry(*block_id).or_default().push(*index);
+            }
+            for (block_id, mut indices) in by_block {
+                indices.sort_unstable_by(|left, right| right.cmp(left));
+                indices.dedup();
+                if let Some(block) = function.block_by_id_mut(block_id) {
+                    let instructions = block.instructions_mut();
+                    for index in indices {
+                        if index < instructions.len() {
+                            instructions.remove(index);
+                        }
+                    }
+                }
+            }
+
+            for (block_id, _index, dest, constant) in consts_to_insert {
+                if let Some(block) = function.block_by_id_mut(block_id) {
+                    block
+                        .instructions_mut()
+                        .insert(0, Instruction::Const { dest, constant });
+                }
+            }
+
+            any_change = true;
+        }
+        changed |= any_change;
+    }
+
+    changed
+}
+
+fn find_const_number(
+    function: &wjsm_ir::Function,
+    val: ValueId,
+    constants: &[Constant],
+) -> Option<f64> {
+    for b in function.blocks() {
+        for ins in b.instructions() {
+            if let Instruction::Const { dest, constant } = ins
+                && *dest == val
+                && let Some(Constant::Number(n)) = constants.get(constant.0 as usize)
+            {
+                return Some(*n);
+            }
+        }
+    }
+    None
+}
+
+fn find_part_length(
+    function: &wjsm_ir::Function,
+    val: ValueId,
+    constants: &[Constant],
+) -> Option<f64> {
+    for b in function.blocks() {
+        for ins in b.instructions() {
+            if let Instruction::Const { dest, constant } = ins
+                && *dest == val
+            {
+                match constants.get(constant.0 as usize) {
+                    Some(Constant::String(s)) => return Some(s.encode_utf16().count() as f64),
+                    Some(Constant::Number(n)) => {
+                        if (0.0..=1_000_000_000.0).contains(n) && n.fract() == 0.0 {
+                            let val = *n as u64;
+                            if val == 0 {
+                                return Some(1.0);
+                            }
+                            let mut digits = 0.0;
+                            let mut temp = val;
+                            while temp > 0 {
+                                digits += 1.0;
+                                temp /= 10;
+                            }
+                            return Some(digits);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    None
 }

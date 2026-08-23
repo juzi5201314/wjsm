@@ -67,6 +67,72 @@ fn is_provably_non_exception(defs: &HashMap<ValueId, Instruction>, value: ValueI
     inner(defs, value, &mut HashSet::new())
 }
 
+fn is_provably_string(
+    defs: &HashMap<ValueId, Instruction>,
+    var_stores: &HashMap<String, Vec<ValueId>>,
+    constants: &[Constant],
+    value: ValueId,
+    visiting: &mut HashSet<ValueId>,
+) -> bool {
+    let Some(instr) = defs.get(&value) else {
+        return false;
+    };
+    match instr {
+        Instruction::Const { constant, .. } => {
+            matches!(
+                constants.get(constant.0 as usize),
+                Some(Constant::String(_))
+            )
+        }
+        Instruction::StringConcatVa { .. } => true,
+        Instruction::CallBuiltin { builtin, .. } => matches!(
+            builtin,
+            Builtin::StringBuilderAppend
+                | Builtin::StringBuilderFinish
+                | Builtin::StringSlice
+                | Builtin::StringSubstring
+                | Builtin::StringConcatVa
+                | Builtin::StringRepeat
+                | Builtin::StringReplace
+                | Builtin::StringPadStart
+                | Builtin::StringPadEnd
+                | Builtin::StringTrim
+                | Builtin::StringTrimStart
+                | Builtin::StringTrimEnd
+                | Builtin::StringToLowerCase
+                | Builtin::StringToUpperCase
+                | Builtin::StringCharAt
+        ),
+        Instruction::Phi { sources, .. } => {
+            if !visiting.insert(value) {
+                return false;
+            }
+            let all_str = !sources.is_empty()
+                && sources.iter().all(|source| {
+                    is_provably_string(defs, var_stores, constants, source.value, visiting)
+                });
+            visiting.remove(&value);
+            all_str
+        }
+        Instruction::LoadVar { name, .. } => {
+            if !visiting.insert(value) {
+                return false;
+            }
+            let is_str = if let Some(stores) = var_stores.get(name) {
+                !stores.is_empty()
+                    && stores
+                        .iter()
+                        .all(|val| is_provably_string(defs, var_stores, constants, *val, visiting))
+            } else {
+                false
+            };
+            visiting.remove(&value);
+            is_str
+        }
+        _ => false,
+    }
+}
+
 /// 在模块常量池中查找指定常量；缺失时追加并返回新 ID。
 fn const_id_or_add(module: &mut Module, constant: Constant) -> ConstantId {
     for (i, c) in module.constants().iter().enumerate() {
@@ -118,17 +184,21 @@ pub(crate) fn run(module: &mut Module) {
             // ── 只读快照：def 表与常量 ID ──
             // （后续持有 function 可变借用时不能再查 module，先全部快照。）
             let constants_snapshot: Vec<Constant> = module.constants().to_vec();
-            let defs: HashMap<ValueId, Instruction> = {
+            let (defs, var_stores) = {
                 let function = &module.functions()[fid];
                 let mut defs = HashMap::new();
+                let mut var_stores: HashMap<String, Vec<ValueId>> = HashMap::new();
                 for block in function.blocks() {
                     for instr in block.instructions() {
                         if let Some(dest) = instruction_dest(instr) {
                             defs.insert(dest, instr.clone());
                         }
+                        if let Instruction::StoreVar { name, value } = instr {
+                            var_stores.entry(name.clone()).or_default().push(*value);
+                        }
                     }
                 }
-                defs
+                (defs, var_stores)
             };
             let (bool_true, bool_false, undefined) = {
                 let bt = const_id_or_add(module, Constant::Bool(true));
@@ -168,6 +238,32 @@ pub(crate) fn run(module: &mut Module) {
                     {
                         if args.len() == 1
                             && matches!(defs.get(&args[0]), Some(Instruction::NewObject { .. }))
+                        {
+                            replace_sites.push((
+                                idx,
+                                Instruction::Const {
+                                    dest: *dest,
+                                    constant: bool_true,
+                                },
+                            ));
+                        }
+                        continue;
+                    }
+                    // 规则 2c：is_string(可证明为 String 的值) → true。
+                    if let Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::IsString,
+                        args,
+                    } = instr
+                    {
+                        if args.len() == 1
+                            && is_provably_string(
+                                &defs,
+                                &var_stores,
+                                &constants_snapshot,
+                                args[0],
+                                &mut HashSet::new(),
+                            )
                         {
                             replace_sites.push((
                                 idx,
