@@ -1972,7 +1972,10 @@ impl NativeAgentState {
     }
 
     pub(crate) fn string_len(&self, encoded: i64) -> Option<usize> {
-        self.with_string_units(encoded, <[u16]>::len)
+        (value::is_string(encoded) || value::is_bigint(encoded))
+            .then(|| value::decode_handle(encoded))
+            .and_then(|handle| self.gc.heap().string_length(handle).ok())
+            .map(|len| len as usize)
     }
 
     pub(crate) fn string_code_unit(&self, encoded: i64, index: usize) -> Option<u16> {
@@ -4211,7 +4214,7 @@ impl NativeAgentState {
     fn publish_builder_units(&mut self, units: &[u16], tag: u64) -> Option<i64> {
         let length = u32::try_from(units.len()).ok()?;
         let payload_len = units.len().checked_mul(2)?;
-        let capacity = u32::try_from(payload_len.max(4 * 1024).checked_add(7)? & !7).ok()?;
+        let capacity = u32::try_from(payload_len.max(16 * 1024).checked_add(7)? & !7).ok()?;
         let mut bytes = Vec::with_capacity(payload_len);
         for unit in units {
             bytes.extend_from_slice(&unit.to_le_bytes());
@@ -4308,6 +4311,125 @@ impl NativeAgentState {
         } else {
             value::encode_handle(tag, handle)
         })
+    }
+
+    /// 发布 Cons 字符串（O(1) 绳索拼接节点，无数据拷贝）。
+    pub(crate) fn publish_cons_string(
+        &mut self,
+        left: u32,
+        right: u32,
+        length: u32,
+        tag: u64,
+    ) -> Option<i64> {
+        let capacity = wjsm_ir::constants::HEAP_STRING_CONS_PAYLOAD_SIZE;
+        let address = self
+            .gc
+            .allocate(string_payload_bytes(capacity).ok()?)
+            .ok()?;
+        let handle = self.gc.heap().allocate_handle().ok()?;
+        self.gc
+            .heap()
+            .publish_string(
+                handle,
+                address,
+                PROTO_NULL_SENTINEL,
+                wjsm_ir::constants::STRING_REPR_CONS,
+                0,
+                length,
+                capacity,
+            )
+            .ok()?;
+        self.gc.heap().set_cons_children(handle, left, right).ok()?;
+        self.gc.mark_black_allocation(handle).ok()?;
+        Some(if tag == value::TAG_STRING {
+            value::encode_runtime_string_handle(handle)
+        } else {
+            value::encode_handle(tag, handle)
+        })
+    }
+
+    /// 发布 Slice 字符串（O(1) 零拷贝切片视图）。
+    pub(crate) fn publish_slice_string(
+        &mut self,
+        base: u32,
+        start: u32,
+        end: u32,
+        length: u32,
+        tag: u64,
+    ) -> Option<i64> {
+        let capacity = wjsm_ir::constants::HEAP_STRING_SLICE_PAYLOAD_SIZE;
+        let address = self
+            .gc
+            .allocate(string_payload_bytes(capacity).ok()?)
+            .ok()?;
+        let handle = self.gc.heap().allocate_handle().ok()?;
+        self.gc
+            .heap()
+            .publish_string(
+                handle,
+                address,
+                PROTO_NULL_SENTINEL,
+                wjsm_ir::constants::STRING_REPR_SLICE,
+                0,
+                length,
+                capacity,
+            )
+            .ok()?;
+        self.gc
+            .heap()
+            .set_slice_parts(handle, base, start, end)
+            .ok()?;
+        self.gc.mark_black_allocation(handle).ok()?;
+        Some(if tag == value::TAG_STRING {
+            value::encode_runtime_string_handle(handle)
+        } else {
+            value::encode_handle(tag, handle)
+        })
+    }
+
+    pub(crate) fn publish_cons_string_with_gc_retry(
+        &mut self,
+        ctx: &mut NativeVmContext,
+        left: u32,
+        right: u32,
+        length: u32,
+        tag: u64,
+    ) -> Option<i64> {
+        if self.gc.take_pacing_poll_request() {
+            let _ = self.poll_gc(ctx);
+        }
+        if let Some(encoded) = self.publish_cons_string(left, right, length, tag) {
+            return Some(encoded);
+        }
+        if self.collect_garbage(ctx).is_ok() {
+            let _ = self.gc.heap().finish_relocation_epoch();
+            let _ = self.gc.heap().advance_epoch_and_reclaim();
+            return self.publish_cons_string(left, right, length, tag);
+        }
+        None
+    }
+
+    pub(crate) fn publish_slice_string_with_gc_retry(
+        &mut self,
+        ctx: &mut NativeVmContext,
+        base: u32,
+        start: u32,
+        end: u32,
+        length: u32,
+        tag: u64,
+    ) -> Option<i64> {
+        if self.gc.take_pacing_poll_request() {
+            let _ = self.poll_gc(ctx);
+        }
+        if let Some(encoded) = self.publish_slice_string(base, start, end, length, tag) {
+            return Some(encoded);
+        }
+        if self.collect_garbage(ctx).is_ok() {
+            let _ = self.gc.heap().finish_relocation_epoch();
+            let _ = self.gc.heap().advance_epoch_and_reclaim();
+            return self.publish_slice_string(base, start, end, length, tag);
+        }
+        None
     }
 
     /// 属性名必须内容唯一：同一名字在任何路径下都要解析到同一 handle。

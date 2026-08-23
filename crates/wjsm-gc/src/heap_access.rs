@@ -1137,6 +1137,37 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         )
     }
 
+    /// 冻结 Builder 字符串：如果全为 Latin-1 码元，原地紧缩并置为 LATIN1_FLAT；否则置为 UTF16_FLAT。
+    pub fn freeze_builder_in_place(&self, handle: u32) -> Result<bool, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let repr = self.string_repr_at(object)?;
+        if repr != constants::STRING_REPR_BUILDER {
+            return Ok(repr == constants::STRING_REPR_LATIN1_FLAT);
+        }
+        let length = self.string_length_at(object)? as usize;
+        let payload = self.string_payload_address(object)?;
+        let byte_len = length * 2;
+        let bytes = self
+            .heap
+            .memory()
+            .copy_to(HeapAddress::new(payload), byte_len as u64)
+            .map_err(HeapAccessV2Error::Memory)?;
+        let (pairs, _) = bytes.as_chunks::<2>();
+        let is_latin1 = pairs.iter().all(|p| p[1] == 0);
+        if is_latin1 {
+            let mut latin1_bytes = Vec::with_capacity(length);
+            for p in pairs {
+                latin1_bytes.push(p[0]);
+            }
+            self.write_string_payload(handle, 0, &latin1_bytes)?;
+            self.set_string_repr(handle, constants::STRING_REPR_LATIN1_FLAT)?;
+            Ok(true)
+        } else {
+            self.set_string_repr(handle, constants::STRING_REPR_UTF16_FLAT)?;
+            Ok(false)
+        }
+    }
+
     /// 读 payload 字节容量（header `+12`；Cons/Slice 为固定子引用区大小）。
     pub fn string_capacity(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
@@ -1229,12 +1260,108 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         }
     }
 
-    /// 读取字符串 UTF-16 码元；Latin-1 在读取作用域内展开为 owned 码元。
+    /// 提取任意形态（Flat/Builder/Cons/Slice）字符串的全部 UTF-16 码元到给定 buffer。
+    pub fn extract_string_units(
+        &self,
+        root_handle: u32,
+        out: &mut Vec<u16>,
+    ) -> Result<(), HeapAccessV2Error> {
+        let mut stack = vec![(root_handle, 0usize, usize::MAX)];
+        while let Some((handle, slice_start, slice_len)) = stack.pop() {
+            let object = self.resolve_handle(handle)?;
+            let repr = self.string_repr_at(object)?;
+            let len = self.string_length_at(object)? as usize;
+            let actual_len = slice_len.min(len.saturating_sub(slice_start));
+            if actual_len == 0 {
+                continue;
+            }
+            match repr {
+                constants::STRING_REPR_LATIN1_FLAT => {
+                    let payload = self.string_payload_address(object)?;
+                    let bytes = self
+                        .heap
+                        .memory()
+                        .copy_to(
+                            HeapAddress::new(payload + slice_start as u64),
+                            actual_len as u64,
+                        )
+                        .map_err(HeapAccessV2Error::Memory)?;
+                    out.extend(bytes.iter().map(|&b| u16::from(b)));
+                }
+                constants::STRING_REPR_UTF16_FLAT | constants::STRING_REPR_BUILDER => {
+                    let payload = self.string_payload_address(object)?;
+                    let byte_len = actual_len * 2;
+                    let bytes = self
+                        .heap
+                        .memory()
+                        .copy_to(
+                            HeapAddress::new(payload + (slice_start * 2) as u64),
+                            byte_len as u64,
+                        )
+                        .map_err(HeapAccessV2Error::Memory)?;
+                    let (pairs, remainder) = bytes.as_chunks::<2>();
+                    debug_assert!(remainder.is_empty());
+                    out.extend(pairs.iter().map(|p| u16::from_le_bytes(*p)));
+                }
+                constants::STRING_REPR_CONS => {
+                    let (left, right) =
+                        self.cons_children(handle)?
+                            .ok_or(HeapAccessV2Error::NotAStringRepr {
+                                handle,
+                                repr,
+                                expected: constants::STRING_REPR_CONS,
+                            })?;
+                    let left_len = self.string_length(left)? as usize;
+                    if slice_start < left_len {
+                        let left_take = (left_len - slice_start).min(actual_len);
+                        let right_take = actual_len - left_take;
+                        if right_take > 0 {
+                            stack.push((right, 0, right_take));
+                        }
+                        stack.push((left, slice_start, left_take));
+                    } else {
+                        let right_start = slice_start - left_len;
+                        stack.push((right, right_start, actual_len));
+                    }
+                }
+                constants::STRING_REPR_SLICE => {
+                    let (base, start, end) =
+                        self.slice_parts(handle)?
+                            .ok_or(HeapAccessV2Error::NotAStringRepr {
+                                handle,
+                                repr,
+                                expected: constants::STRING_REPR_SLICE,
+                            })?;
+                    let base_slice_start = start as usize + slice_start;
+                    let base_slice_len = (end as usize - start as usize)
+                        .saturating_sub(slice_start)
+                        .min(actual_len);
+                    stack.push((base, base_slice_start, base_slice_len));
+                }
+                _ => return Err(HeapAccessV2Error::InvalidStringRepr { repr }),
+            }
+        }
+        Ok(())
+    }
+
+    /// 读取字符串 UTF-16 码元；Latin-1 在读取作用域内展开为 owned 码元，Cons/Slice 展开提取。
     pub fn with_string_units<R>(
         &self,
         handle: u32,
         f: impl FnOnce(&[u16]) -> R,
     ) -> Result<R, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let repr = self.string_repr_at(object)?;
+        if matches!(
+            repr,
+            constants::STRING_REPR_CONS | constants::STRING_REPR_SLICE
+        ) {
+            let len = self.string_length_at(object)? as usize;
+            let mut units = Vec::with_capacity(len);
+            self.extract_string_units(handle, &mut units)?;
+            let _scope = self.string_read_scope();
+            return Ok(f(&units));
+        }
         self.with_string_bytes(handle, |view| {
             if let Some(units) = view.as_utf16() {
                 f(units)

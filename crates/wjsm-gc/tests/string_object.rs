@@ -477,9 +477,14 @@ fn with_string_flatten_required() {
     heap.set_cons_children(handle, left, left).unwrap();
 
     assert!(matches!(
-        heap.with_string_units(handle, |_| ()),
+        heap.with_string_bytes(handle, |_| ()),
         Err(wjsm_gc::HeapAccessV2Error::StringFlattenRequired { .. })
     ));
+    assert_eq!(
+        heap.with_string_units(handle, String::from_utf16_lossy)
+            .unwrap(),
+        "leftleft"
+    );
 }
 
 #[cfg(debug_assertions)]

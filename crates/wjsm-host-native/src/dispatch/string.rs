@@ -400,7 +400,7 @@ pub(super) fn string_builder_append(
         };
         parts.push(part);
     }
-    const MIN_BUILDER_INITIAL_CAPACITY: usize = 8192;
+    const MIN_BUILDER_INITIAL_CAPACITY: usize = 16384;
     let needed: usize = parts.iter().map(BuilderPart::capacity).sum();
     let capacity = needed.max(MIN_BUILDER_INITIAL_CAPACITY);
     let mut builder = RuntimeString::builder(capacity);
@@ -424,68 +424,130 @@ pub(super) fn string_builder_finish(
         return fail_dispatch(ctx);
     }
     let handle = value::decode_handle(*encoded);
-    let Ok(repr) = state.gc.heap().string_repr(handle) else {
-        return fail_dispatch(ctx);
-    };
-    // 已冻结的扁平串直接复用；append 失败回落后这里可能是任一种 flat 表示。
-    if matches!(
-        repr,
-        wjsm_ir::constants::STRING_REPR_UTF16_FLAT | wjsm_ir::constants::STRING_REPR_LATIN1_FLAT
-    ) {
-        return *encoded;
+    if state.gc.heap().freeze_builder_in_place(handle).is_ok() {
+        *encoded
+    } else {
+        fail_dispatch(ctx)
     }
-    if repr != wjsm_ir::constants::STRING_REPR_BUILDER {
-        return fail_dispatch(ctx);
-    }
-    // 内容全 Latin-1 时冻结为单字节载荷：payload 就地紧缩（长度减半，capacity 是
-    // 字节上界不必收缩），hash 键按码元计算，紧缩前后同值。
-    let compacted = state.with_string_bytes(*encoded, |view| match view {
-        wjsm_gc::StrView::Utf16(units) if units.iter().all(|&unit| unit <= u16::from(u8::MAX)) => {
-            Some(units.iter().map(|&unit| unit as u8).collect::<Vec<u8>>())
-        }
-        _ => None,
-    });
-    let Some(compacted) = compacted.flatten() else {
-        return state
-            .gc
-            .heap()
-            .set_string_repr(handle, wjsm_ir::constants::STRING_REPR_UTF16_FLAT)
-            .map_or_else(|_| fail_dispatch(ctx), |_| *encoded);
-    };
-    let frozen = state
-        .gc
-        .heap()
-        .write_string_payload(handle, 0, &compacted)
-        .and_then(|()| {
-            state
-                .gc
-                .heap()
-                .set_string_repr(handle, wjsm_ir::constants::STRING_REPR_LATIN1_FLAT)
-        });
-    frozen.map_or_else(|_| fail_dispatch(ctx), |_| *encoded)
 }
 
 fn string_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some((first, rest)) = args.split_first() else {
         return fail_dispatch(ctx);
     };
-    let Some(mut result) = runtime_string(state, *first) else {
-        return fail_dispatch(ctx);
-    };
-    for argument in rest {
-        let Some(part) = runtime_string(state, *argument) else {
+    if rest.is_empty() {
+        return *first;
+    }
+    // 快速探测：如果所有参数总长度 <= 128 且均为 Latin-1，走栈缓冲单次分配发布
+    let mut stack_buf = [0u8; 128];
+    let mut stack_len = 0usize;
+    let mut all_latin1_small = true;
+
+    for &arg in args {
+        if value::is_string(arg) {
+            let handle = value::decode_handle(arg);
+            let len = state.gc.heap().string_length(handle).unwrap_or(0) as usize;
+            if stack_len + len > 128 {
+                all_latin1_small = false;
+                break;
+            }
+            if len == 0 {
+                continue;
+            }
+            let is_latin1 = state
+                .with_string_bytes(arg, |view| {
+                    if let Some(bytes) = view.as_latin1() {
+                        stack_buf[stack_len..stack_len + len].copy_from_slice(bytes);
+                        stack_len += len;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if !is_latin1 {
+                all_latin1_small = false;
+                break;
+            }
+        } else if value::is_f64(arg) {
+            let num = value::decode_f64(arg);
+            if (0.0..=1_000_000_000.0).contains(&num) && num.fract() == 0.0 {
+                let mut temp = [0u8; 20];
+                let mut val = num as u64;
+                let mut i = 0;
+                if val == 0 {
+                    temp[0] = b'0';
+                    i = 1;
+                } else {
+                    while val > 0 {
+                        temp[i] = b'0' + (val % 10) as u8;
+                        val /= 10;
+                        i += 1;
+                    }
+                    temp[..i].reverse();
+                }
+                if stack_len + i > 128 {
+                    all_latin1_small = false;
+                    break;
+                }
+                stack_buf[stack_len..stack_len + i].copy_from_slice(&temp[..i]);
+                stack_len += i;
+            } else {
+                all_latin1_small = false;
+                break;
+            }
+        } else {
+            all_latin1_small = false;
+            break;
+        }
+    }
+
+    if all_latin1_small
+        && let Some(encoded) =
+            state.publish_string_bytes(&stack_buf[..stack_len], value::TAG_STRING, false)
+    {
+        state.gc.record_host_write(encoded, None, Some(encoded));
+        return encoded;
+    }
+
+    let mut current = *first;
+    if !value::is_string(current) {
+        let Some(s) = runtime_string(state, current) else {
             return fail_dispatch(ctx);
         };
-        if part.is_empty() {
-            continue;
-        }
-        if result.is_empty() {
-            result = part;
-            continue;
-        }
-        result = RuntimeString::concat(result, part);
+        current = intern(ctx, state, s);
     }
-    intern(ctx, state, result)
+    for &argument in rest {
+        let arg = if value::is_string(argument) {
+            argument
+        } else {
+            let Some(s) = runtime_string(state, argument) else {
+                return fail_dispatch(ctx);
+            };
+            intern(ctx, state, s)
+        };
+        let len1 = state.string_len(current).unwrap_or(0);
+        let len2 = state.string_len(arg).unwrap_or(0);
+        if len1 == 0 {
+            current = arg;
+            continue;
+        }
+        if len2 == 0 {
+            continue;
+        }
+        let total_len = (len1 + len2) as u32;
+        let h1 = value::decode_handle(current);
+        let h2 = value::decode_handle(arg);
+        if let Some(encoded) =
+            state.publish_cons_string_with_gc_retry(ctx, h1, h2, total_len, value::TAG_STRING)
+        {
+            state.gc.record_host_write(encoded, None, Some(encoded));
+            current = encoded;
+        } else {
+            return fail_dispatch(ctx);
+        }
+    }
+    current
 }
 
 fn string_includes(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -648,27 +710,39 @@ fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         length,
     );
     let range = if end < start {
-        start as usize..start as usize
+        start..start
     } else {
-        start as usize..end as usize
+        start..end
     };
     if range.start >= range.end {
         return intern(ctx, state, RuntimeString::empty());
     }
-    let sliced_string = state.with_string_bytes(first, |view| match view {
-        wjsm_gc::StrView::Latin1(bytes) => {
-            let slice = &bytes[range.start.min(bytes.len())..range.end.min(bytes.len())];
-            RuntimeString::from_utf16_units(slice.iter().map(|&b| u16::from(b)).collect())
-        }
-        wjsm_gc::StrView::Utf16(units) => {
-            let slice = &units[range.start.min(units.len())..range.end.min(units.len())];
-            RuntimeString::from_utf16_units(slice.to_vec())
-        }
-    });
-    let Some(sliced_string) = sliced_string else {
-        return fail_dispatch(ctx);
-    };
-    intern(ctx, state, sliced_string)
+    let base_handle = value::decode_handle(first);
+    let slice_len = (range.end - range.start) as u32;
+    let (actual_base, actual_start, actual_end) =
+        if let Ok(Some((orig_base, orig_start, _orig_end))) =
+            state.gc.heap().slice_parts(base_handle)
+        {
+            (
+                orig_base,
+                orig_start + range.start as u32,
+                orig_start + range.end as u32,
+            )
+        } else {
+            (base_handle, range.start as u32, range.end as u32)
+        };
+    if let Some(encoded) = state.publish_slice_string_with_gc_retry(
+        ctx,
+        actual_base,
+        actual_start,
+        actual_end,
+        slice_len,
+        value::TAG_STRING,
+    ) {
+        state.gc.record_host_write(encoded, None, Some(encoded));
+        return encoded;
+    }
+    fail_dispatch(ctx)
 }
 
 fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -699,20 +773,32 @@ fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     if let Some(text) = text_opt {
         return intern(ctx, state, text.slice_units(start..end));
     }
-    let sliced_string = state.with_string_bytes(first, |view| match view {
-        wjsm_gc::StrView::Latin1(bytes) => {
-            let slice = &bytes[start.min(bytes.len())..end.min(bytes.len())];
-            RuntimeString::from_utf16_units(slice.iter().map(|&b| u16::from(b)).collect())
-        }
-        wjsm_gc::StrView::Utf16(units) => {
-            let slice = &units[start.min(units.len())..end.min(units.len())];
-            RuntimeString::from_utf16_units(slice.to_vec())
-        }
-    });
-    let Some(sliced_string) = sliced_string else {
-        return fail_dispatch(ctx);
-    };
-    intern(ctx, state, sliced_string)
+    let base_handle = value::decode_handle(first);
+    let slice_len = (end - start) as u32;
+    let (actual_base, actual_start, actual_end) =
+        if let Ok(Some((orig_base, orig_start, _orig_end))) =
+            state.gc.heap().slice_parts(base_handle)
+        {
+            (
+                orig_base,
+                orig_start + start as u32,
+                orig_start + end as u32,
+            )
+        } else {
+            (base_handle, start as u32, end as u32)
+        };
+    if let Some(encoded) = state.publish_slice_string_with_gc_retry(
+        ctx,
+        actual_base,
+        actual_start,
+        actual_end,
+        slice_len,
+        value::TAG_STRING,
+    ) {
+        state.gc.record_host_write(encoded, None, Some(encoded));
+        return encoded;
+    }
+    fail_dispatch(ctx)
 }
 
 fn relative_index(index: i64, length: i64) -> usize {
