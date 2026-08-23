@@ -1944,9 +1944,9 @@ mod tests {
                 matches!(
                     ins,
                     Instruction::GuardSameFunction {
-                        function: target,
+                        function: fn_id,
                         ..
-                    }
+                    } if *fn_id == target
                 )
             })
         });

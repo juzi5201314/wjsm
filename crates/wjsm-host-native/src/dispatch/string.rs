@@ -400,7 +400,9 @@ pub(super) fn string_builder_append(
         };
         parts.push(part);
     }
-    let capacity = parts.iter().map(BuilderPart::capacity).sum();
+    const MIN_BUILDER_INITIAL_CAPACITY: usize = 8192;
+    let needed: usize = parts.iter().map(BuilderPart::capacity).sum();
+    let capacity = needed.max(MIN_BUILDER_INITIAL_CAPACITY);
     let mut builder = RuntimeString::builder(capacity);
     for part in &parts {
         if !part.append_to(&mut builder) {
@@ -615,33 +617,73 @@ fn string_repeat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 }
 
 fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) = runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
-    else {
+    let first = *args.first().unwrap_or(&value::encode_undefined());
+    if !value::is_string(first) && !value::is_bigint(first) {
+        let Some(text) = runtime_string(state, first) else {
+            return fail_dispatch(ctx);
+        };
+        let length = text.utf16_len() as i64;
+        let start = relative_index(integer(state, args.get(1).copied(), 0).unwrap_or(0), length);
+        let end = relative_index(
+            integer(state, args.get(2).copied(), length).unwrap_or(length),
+            length,
+        );
+        let range = if end < start {
+            start..start
+        } else {
+            start..end
+        };
+        if range.start >= range.end {
+            return intern(ctx, state, RuntimeString::empty());
+        }
+        return intern(ctx, state, text.slice_units(range));
+    }
+    let Some(length) = state.string_len(first) else {
         return fail_dispatch(ctx);
     };
-    let length = text.utf16_len() as i64;
+    let length = length as i64;
     let start = relative_index(integer(state, args.get(1).copied(), 0).unwrap_or(0), length);
     let end = relative_index(
         integer(state, args.get(2).copied(), length).unwrap_or(length),
         length,
     );
     let range = if end < start {
-        start..start
+        start as usize..start as usize
     } else {
-        start..end
+        start as usize..end as usize
     };
     if range.start >= range.end {
         return intern(ctx, state, RuntimeString::empty());
     }
-    intern(ctx, state, text.slice_units(range))
+    let sliced_string = state.with_string_bytes(first, |view| match view {
+        wjsm_gc::StrView::Latin1(bytes) => {
+            let slice = &bytes[range.start.min(bytes.len())..range.end.min(bytes.len())];
+            RuntimeString::from_utf16_units(slice.iter().map(|&b| u16::from(b)).collect())
+        }
+        wjsm_gc::StrView::Utf16(units) => {
+            let slice = &units[range.start.min(units.len())..range.end.min(units.len())];
+            RuntimeString::from_utf16_units(slice.to_vec())
+        }
+    });
+    let Some(sliced_string) = sliced_string else {
+        return fail_dispatch(ctx);
+    };
+    intern(ctx, state, sliced_string)
 }
 
 fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(text) = runtime_string(state, *args.first().unwrap_or(&value::encode_undefined()))
-    else {
+    let first = *args.first().unwrap_or(&value::encode_undefined());
+    let (length, text_opt) = if value::is_string(first) || value::is_bigint(first) {
+        (state.string_len(first), None)
+    } else {
+        let Some(text) = runtime_string(state, first) else {
+            return fail_dispatch(ctx);
+        };
+        (Some(text.utf16_len()), Some(text))
+    };
+    let Some(length) = length else {
         return fail_dispatch(ctx);
     };
-    let length = text.utf16_len();
     let mut start = integer(state, args.get(1).copied(), 0)
         .unwrap_or(0)
         .clamp(0, length as i64) as usize;
@@ -654,7 +696,23 @@ fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     if start >= end {
         return intern(ctx, state, RuntimeString::empty());
     }
-    intern(ctx, state, text.slice_units(start..end))
+    if let Some(text) = text_opt {
+        return intern(ctx, state, text.slice_units(start..end));
+    }
+    let sliced_string = state.with_string_bytes(first, |view| match view {
+        wjsm_gc::StrView::Latin1(bytes) => {
+            let slice = &bytes[start.min(bytes.len())..end.min(bytes.len())];
+            RuntimeString::from_utf16_units(slice.iter().map(|&b| u16::from(b)).collect())
+        }
+        wjsm_gc::StrView::Utf16(units) => {
+            let slice = &units[start.min(units.len())..end.min(units.len())];
+            RuntimeString::from_utf16_units(slice.to_vec())
+        }
+    });
+    let Some(sliced_string) = sliced_string else {
+        return fail_dispatch(ctx);
+    };
+    intern(ctx, state, sliced_string)
 }
 
 fn relative_index(index: i64, length: i64) -> usize {

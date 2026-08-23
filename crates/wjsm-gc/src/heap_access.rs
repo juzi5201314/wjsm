@@ -288,14 +288,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     pub fn generation_bytes(&self) -> Result<(u64, u64), HeapAccessV2Error> {
+        let count = self.handles.allocated_count().min(u64::from(u32::MAX) + 1) as u32;
         let mut young = 0_u64;
         let mut old = 0_u64;
-        for page in self.page_stats() {
-            for handle in self.handles_in_page(page.page)? {
-                let Some(generation) = self.handle_generation(handle) else {
-                    continue;
-                };
-                let bytes = self.object_size(handle)?;
+        for handle in 0..count {
+            let Some(generation) = self.handle_generation(handle) else {
+                continue;
+            };
+            if let Ok(bytes) = self.object_size(handle) {
                 match generation {
                     HandleGeneration::Young => young = young.saturating_add(bytes),
                     HandleGeneration::Old => old = old.saturating_add(bytes),

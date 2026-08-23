@@ -485,13 +485,20 @@ fn lower_builders(
 
     for block in function.blocks() {
         for instruction in block.instructions() {
-            let Instruction::StringConcatVa { dest, parts } = instruction else {
+            let (dest, parts) = match instruction {
+                Instruction::StringConcatVa { dest, parts } => (*dest, parts.clone()),
+                Instruction::Binary {
+                    dest,
+                    op: BinaryOp::Add,
+                    lhs,
+                    rhs,
+                } => (*dest, vec![*lhs, *rhs]),
+                _ => continue,
+            };
+            let Some(first) = parts.first().copied() else {
                 continue;
             };
-            let Some(first) = parts.first() else {
-                continue;
-            };
-            let Some(Instruction::LoadVar { name, .. }) = definitions.get(first) else {
+            let Some(Instruction::LoadVar { name, .. }) = definitions.get(&first) else {
                 continue;
             };
             // 帧局部变量的可见性天然限于本函数;模块级变量还要求全部触达都
@@ -499,31 +506,43 @@ fn lower_builders(
             let accumulator_private = local_names.contains(name) || module_private.contains(name);
             if !accumulator_private
                 || stable_kinds.get(name) != Some(&PrimitiveKind::String)
-                || kinds.get(dest) != Some(&PrimitiveKind::String)
+                || kinds.get(&dest) != Some(&PrimitiveKind::String)
                 || parts.iter().any(|part| !kinds.contains_key(part))
-                || use_counts.get(first) != Some(&1)
-                || !append_result_is_private(function, *dest, name)
+                || use_counts.get(&first) != Some(&1)
+                || !append_result_is_private(function, dest, name)
             {
                 continue;
             }
-            append_by_dest.insert(*dest, name.clone());
-            append_loads.insert(*first);
+            append_by_dest.insert(dest, (name.clone(), parts));
+            append_loads.insert(first);
         }
     }
 
     if append_by_dest.is_empty() {
         return;
     }
-    let builder_names: HashSet<String> = append_by_dest.values().cloned().collect();
+    let builder_names: HashSet<String> = append_by_dest
+        .values()
+        .map(|(name, _)| name.clone())
+        .collect();
     for block in function.blocks_mut() {
         let original = std::mem::take(block.instructions_mut());
         let mut rewritten = Vec::with_capacity(original.len() + 1);
         for instruction in original {
-            if let Instruction::StringConcatVa { dest, parts } = &instruction
-                && append_by_dest.contains_key(dest)
+            let dest_id = match &instruction {
+                Instruction::StringConcatVa { dest, .. }
+                | Instruction::Binary {
+                    dest,
+                    op: BinaryOp::Add,
+                    ..
+                } => Some(*dest),
+                _ => None,
+            };
+            if let Some(dest) = dest_id
+                && let Some((_, parts)) = append_by_dest.get(&dest)
             {
                 rewritten.push(Instruction::CallBuiltin {
-                    dest: Some(*dest),
+                    dest: Some(dest),
                     builtin: Builtin::StringBuilderAppend,
                     args: parts.clone(),
                 });

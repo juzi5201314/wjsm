@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::bitmap::AtomicBitmap;
 use super::handle_entry::HandleGeneration;
@@ -10,26 +10,35 @@ const OBJECT_ALIGNMENT: usize = 8;
 /// 每个 page 仅保留 object-start bit；对象大小从真实 header 恢复。
 pub(crate) struct ObjectMap {
     starts: AtomicBitmap,
+    count: AtomicUsize,
 }
 
 impl ObjectMap {
     pub(crate) fn new(page_bytes: u64) -> Self {
         Self {
             starts: AtomicBitmap::new(page_bytes as usize / OBJECT_ALIGNMENT),
+            count: AtomicUsize::new(0),
         }
     }
 
     pub(crate) fn record(&self, offset: u64) -> bool {
         let slot = offset as usize / OBJECT_ALIGNMENT;
-        self.starts.mark(slot)
+        if self.starts.mark(slot) {
+            self.count.fetch_add(1, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn remove(&self, offset: u64) {
-        self.starts.clear_bit(offset as usize / OBJECT_ALIGNMENT);
+        if self.starts.clear_bit(offset as usize / OBJECT_ALIGNMENT) {
+            self.count.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn object_count(&self) -> usize {
-        self.starts.count()
+        self.count.load(Ordering::Relaxed)
     }
 
     pub(crate) fn next_object(&self, next_slot: &mut usize, base: u64) -> Option<ObjectRef> {

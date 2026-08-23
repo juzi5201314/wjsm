@@ -1,9 +1,4 @@
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use super::platform::IsaDispatch;
-
-static ISA_DISPATCH: LazyLock<IsaDispatch> = LazyLock::new(IsaDispatch::detect);
 
 pub(crate) struct AtomicBitmap {
     bits: usize,
@@ -27,11 +22,11 @@ impl AtomicBitmap {
         self.words[word].fetch_or(mask, Ordering::AcqRel) & mask == 0
     }
 
-    pub(crate) fn clear_bit(&self, bit: usize) {
+    pub(crate) fn clear_bit(&self, bit: usize) -> bool {
         debug_assert!(bit < self.bits);
         let word = bit / u64::BITS as usize;
         let mask = 1_u64 << (bit % u64::BITS as usize);
-        self.words[word].fetch_and(!mask, Ordering::Release);
+        self.words[word].fetch_and(!mask, Ordering::AcqRel) & mask != 0
     }
 
     pub(crate) fn clear(&self) {
@@ -63,15 +58,5 @@ impl AtomicBitmap {
         }
         let next = word_index * u64::BITS as usize + word.trailing_zeros() as usize;
         (next < self.bits).then_some(next)
-    }
-
-    pub(crate) fn count(&self) -> usize {
-        // Snapshot words once; ISA selected once via LazyLock (no per-call detect).
-        let snapshot: Vec<u64> = self
-            .words
-            .iter()
-            .map(|word| word.load(Ordering::Acquire))
-            .collect();
-        ISA_DISPATCH.count_ones(&snapshot) as usize
     }
 }
