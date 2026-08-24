@@ -267,6 +267,10 @@ pub fn run(module: &mut Module) {
                 if matches!(instruction, Instruction::SuperCall { .. }) {
                     has_new_target.insert(func_id);
                 }
+                // CollectRestArgs 依赖宿主运行时 activation，阻止 direct_callable。
+                if matches!(instruction, Instruction::CollectRestArgs { .. }) {
+                    has_new_target.insert(func_id);
+                }
             }
         }
 
@@ -288,8 +292,7 @@ pub fn run(module: &mut Module) {
         // 经不动点（见下）传播为本函数 env_required。
         for env_dest in env_load_dests {
             let mut all_resolvable = true;
-            let mut resolved_keys: Vec<(String, FunctionId)> = Vec::new();
-            // terminator 使用 env dest（如 return env）→ 不可解析。
+            // terminator 使用 env dest（如 return env）→ env 必需。
             for block in function.blocks() {
                 if terminator_uses(block.terminator()).contains(&env_dest) {
                     all_resolvable = false;
@@ -297,9 +300,6 @@ pub fn run(module: &mut Module) {
                 }
             }
             for use_instr in collect_uses(function, env_dest) {
-                if !all_resolvable {
-                    break;
-                }
                 match use_instr {
                     Instruction::GetProp { object, key, .. } if *object == env_dest => {
                         match defs.get(key) {
@@ -308,7 +308,11 @@ pub fn run(module: &mut Module) {
                                     module.constants().get(constant.0 as usize)
                                     && let Some(target) = immutable.get(s)
                                 {
-                                    resolved_keys.push((s.clone(), *target));
+                                    resolvable_env_gets
+                                        .entry(func_id)
+                                        .or_default()
+                                        .insert((env_dest, s.clone()));
+                                    env_deps.entry(func_id).or_default().push(*target);
                                     continue;
                                 }
                                 all_resolvable = false;
@@ -319,21 +323,15 @@ pub fn run(module: &mut Module) {
                     _ => all_resolvable = false,
                 }
             }
-            if all_resolvable {
-                let entry = resolvable_env_gets.entry(func_id).or_default();
-                for (key, target) in resolved_keys {
-                    entry.insert((env_dest, key));
-                    env_deps.entry(func_id).or_default().push(target);
-                }
-            } else {
+            if !all_resolvable {
                 env_required.insert(func_id);
             }
         }
     }
 
     // env_required 不动点：函数直接不可解析（非 `GetProp(env, immutable)` use）或经
-    // `GetProp(env, immutable)` 依赖某个 env_required 的目标函数（该读取不会替换为
-    // FunctionRef，env 仍然必需）。
+    // `GetProp(env, immutable)` 依赖某个 env_required 的目标函数（该读取替换为
+    // FunctionRef 后如果目标函数自身仍需 env，则当前函数如果需要直接调用它，自身需知晓）。
     loop {
         let mut changed = false;
         for (f, targets) in &env_deps {
@@ -346,14 +344,6 @@ pub fn run(module: &mut Module) {
             break;
         }
     }
-    // resolvable_env_gets 过滤：目标函数 env_required 的 key 不会真正替换，剔除。
-    for entry in resolvable_env_gets.values_mut() {
-        entry.retain(|(_, key)| {
-            immutable
-                .get(key)
-                .is_some_and(|target| !env_required.contains(target))
-        });
-    }
 
     // 4. 写回 direct_callable（函数体不依赖 env/new.target，且无 eval）。
     // direct ABI 显式传递 this，因此读取 this 不影响静态直调。
@@ -362,7 +352,8 @@ pub fn run(module: &mut Module) {
         let func_id = FunctionId(func_idx as u32);
         let direct_callable = !env_required.contains(&func_id)
             && !has_new_target.contains(&func_id)
-            && !function.has_eval();
+            && !function.has_eval()
+            && function.captured_names().is_empty();
         direct_callables.push((func_id, direct_callable));
     }
     for (func_id, direct_callable) in direct_callables {
@@ -371,13 +362,17 @@ pub fn run(module: &mut Module) {
         }
     }
 
-    // 5. 替换集合：immutable 中目标函数 !env_required（替换后其 env 用途全被解析）。
-    let mut replaceable: HashMap<String, FunctionId> = HashMap::new();
-    for (name, function_id) in &immutable {
-        if !env_required.contains(function_id) {
-            replaceable.insert(name.clone(), *function_id);
-        }
-    }
+    // 5. 替换集合：不可变绑定且自身不依赖 env 且无捕获。
+    let replaceable: HashMap<String, FunctionId> = immutable
+        .into_iter()
+        .filter(|(_, f)| {
+            !env_required.contains(f)
+                && module
+                    .functions()
+                    .get(f.0 as usize)
+                    .is_some_and(|func| func.direct_callable() && func.captured_names().is_empty())
+        })
+        .collect();
     if replaceable.is_empty() {
         return;
     }

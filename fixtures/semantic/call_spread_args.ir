@@ -187,14 +187,16 @@ module {
     c184 = number(13)
     c185 = string("sum")
 
-  fn @collect [needs_prototype] [direct_callable] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @collect [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c20
       %3 = const c21
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $1.arguments, %2
-      %6 = const c28
+      %4 = load var $env
+      %5 = const c22
+      %6 = get_prop %4, %5
       %7 = const c23
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
@@ -230,7 +232,7 @@ module {
       %2 = add %0, %1
       return %2
 
-  fn @$0.add [direct_callable] [params: $3.$env, $3.$this, $3.a, $3.b] [entry=bb0]:
+  fn @$0.add [params: $3.$env, $3.$this, $3.a, $3.b] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c41
@@ -351,14 +353,16 @@ module {
     bb14:
       unreachable
 
-  fn @values [needs_prototype] [direct_callable] [params: $7.$env, $7.$this] [entry=bb0]:
+  fn @values [needs_prototype] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c101
       %3 = const c102
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $7.arguments, %2
-      %6 = const c111
+      %4 = load var $env
+      %5 = const c103
+      %6 = get_prop %4, %5
       %7 = const c104
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
@@ -538,14 +542,16 @@ module {
     bb14:
       unreachable
 
-  fn @$__wjsm_gen_expr_8 [needs_prototype] [direct_callable] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @$__wjsm_gen_expr_8 [needs_prototype] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c160
       %3 = const c161
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $11.arguments, %2
-      %6 = const c170
+      %4 = load var $env
+      %5 = const c162
+      %6 = get_prop %4, %5
       %7 = const c163
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
@@ -584,7 +590,7 @@ module {
       %7 = call builtin.exception_value(%5)
       throw %7
 
-  fn @Derived.constructor [home_object=@11.prototype] [needs_prototype] [direct_callable] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @Derived.constructor [home_object=@11.prototype] [needs_prototype] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       store var $15.args, %0
@@ -663,7 +669,7 @@ module {
       store var $0.collect, %21
       %22 = const c29
       %23 = const c30
-      %24 = const c28
+      %24 = load var $0.collect
       %25 = new_array(capacity=4)
       %26 = new_array(capacity=4)
       %27 = const c31
@@ -774,7 +780,7 @@ module {
     bb11:
       %93 = const c61
       %94 = const c62
-      %95 = const c28
+      %95 = load var $0.collect
       %96 = new_array(capacity=4)
       %97 = const c63
       call builtin.array.push(%96, %97)
@@ -794,7 +800,7 @@ module {
     bb13:
       %105 = const c66
       %106 = const c67
-      %107 = const c28
+      %107 = load var $0.collect
       %108 = new_array(capacity=4)
       %109 = new_array(capacity=4)
       %110 = const c68
@@ -816,7 +822,7 @@ module {
     bb15:
       %118 = const c71
       %119 = const c72
-      %120 = const c28
+      %120 = load var $0.collect
       %121 = new_array(capacity=4)
       %122 = new_array(capacity=4)
       %123 = const c73
@@ -836,7 +842,7 @@ module {
     bb17:
       %130 = const c76
       %131 = const c77
-      %132 = const c28
+      %132 = load var $0.collect
       %133 = new_array(capacity=4)
       %134 = const c78
       call builtin.array.push_spread(%133, %134)
@@ -850,7 +856,7 @@ module {
     bb19:
       %139 = const c79
       %140 = const c80
-      %141 = const c28
+      %141 = load var $0.collect
       %142 = new_array(capacity=4)
       %143 = new_array(capacity=4)
       %144 = const c81
@@ -871,10 +877,10 @@ module {
       store var $0.values, %151
       %152 = const c112
       %153 = const c113
-      %154 = const c28
+      %154 = load var $0.collect
       %155 = new_array(capacity=4)
       %156 = const c114
-      %157 = const c111
+      %157 = load var $0.values
       %158 = call %157, this=%156
       call builtin.array.push_spread(%155, %158)
       %159 = call builtin.func_apply(%154, %153, %155)
@@ -893,7 +899,7 @@ module {
       store var $0.iterable, %163
       %168 = const c137
       %169 = const c138
-      %170 = const c28
+      %170 = load var $0.collect
       %171 = new_array(capacity=4)
       %172 = load var $0.iterable
       call builtin.array.push_spread(%171, %172)
@@ -916,7 +922,7 @@ module {
       %182 = call builtin.symbol.well_known(%181)
       %183 = const c170
       store var $0.$__wjsm_gen_expr_8, %183
-      %184 = const c170
+      %184 = load var $0.$__wjsm_gen_expr_8
       %185 = set_elem %180, %182, %184
       %186 = is_exception %185
       branch %186, bb28, bb27
@@ -926,7 +932,7 @@ module {
     bb27:
       %188 = const c171
       %189 = const c172
-      %190 = const c28
+      %190 = load var $0.collect
       %191 = new_array(capacity=4)
       %192 = load var $0.overridden
       call builtin.array.push_spread(%191, %192)
@@ -962,7 +968,7 @@ module {
       store var $14.Derived, %203
       store var $0.Derived, %203
       %214 = const c182
-      %215 = const c177
+      %215 = load var $0.Derived
       %216 = new_object(capacity=4)
       %217 = call builtin.get_prototype_from_constructor(%215)
       set_proto %216, %217

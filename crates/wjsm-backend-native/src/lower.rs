@@ -695,6 +695,8 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub ic_slots: &'a HashMap<ValueId, u32>,
     pub feedback_slots: &'a HashMap<(BasicBlockId, usize), u32>,
     pub specialized_tags: Option<&'a [wjsm_native_abi::NativeFeedbackTag]>,
+    pub function_decls: &'a [DeclaredFunction],
+    pub direct_callable_functions: &'a HashSet<FunctionId>,
     pub collect_diagnostics: bool,
 }
 
@@ -755,6 +757,9 @@ struct InstructionTables<'a> {
     frame_locals: &'a HashMap<String, Variable>,
     frame_local_indices: &'a HashMap<String, usize>,
     ic_slots: &'a HashMap<ValueId, u32>,
+    function_decls: &'a [DeclaredFunction],
+    imported_function_decls: &'a mut HashMap<FunctionId, ir::FuncRef>,
+    direct_callable_functions: &'a HashSet<FunctionId>,
 }
 
 /// 调用类指令的操作数。
@@ -866,6 +871,17 @@ fn compile_program_inner(
 
     // 每个函数的 lower + Cranelift compile 相互独立，只读上面的声明快照；
     // 合并进 object 的写入阶段仍然串行，保证 relocation / 符号表顺序确定。
+    let function_decls: Vec<DeclaredFunction> = function_ids
+        .iter()
+        .map(|id| DeclaredFunction::snapshot(module.declarations(), *id))
+        .collect();
+    let direct_callable_functions: HashSet<FunctionId> = program
+        .functions()
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.direct_callable())
+        .map(|(i, _)| FunctionId(u32::try_from(i).expect("function index fits u32")))
+        .collect();
     let compiled: Vec<CompiledFunction> = program
         .functions()
         .par_iter()
@@ -898,6 +914,8 @@ fn compile_program_inner(
                 ic_slots: &ic_slots[index],
                 feedback_slots: feedback_plan.function_slots(index),
                 specialized_tags: None,
+                function_decls: &function_decls,
+                direct_callable_functions: &direct_callable_functions,
                 collect_diagnostics,
             })
         })
@@ -988,7 +1006,7 @@ pub(crate) fn compile_one_function(
 
     context
         .compile(input.isa.as_ref(), &mut ControlPlane::default())
-        .map_err(|error| NativeCompileError::Cranelift(error.inner.to_string()))?;
+        .map_err(|error| NativeCompileError::Cranelift(format!("{:#?}", error.inner)))?;
     let compiled = context
         .compiled_code()
         .ok_or_else(|| NativeCompileError::CompilerInvariant("missing compiled code".into()))?;
@@ -1374,6 +1392,7 @@ pub(crate) fn lower_function(
             };
             hoisted_constants.insert(*constant_id, result);
         }
+        let mut imported_function_decls: HashMap<FunctionId, ir::FuncRef> = HashMap::new();
         let mut tables = InstructionTables {
             constants,
             function_index,
@@ -1388,6 +1407,9 @@ pub(crate) fn lower_function(
             frame_locals: &frame_locals,
             frame_local_indices: &boxed_local_indices,
             ic_slots,
+            function_decls: input.function_decls,
+            imported_function_decls: &mut imported_function_decls,
+            direct_callable_functions: input.direct_callable_functions,
         };
 
         for block in ir_function.blocks() {
@@ -1472,8 +1494,8 @@ fn lower_function_parameters(
         .to_vec();
     let env = native_params[1];
     let this_value = native_params[2];
-    let args_base = cx.builder.ins().uextend(types::I64, native_params[3]);
-    let args_len = cx.builder.ins().uextend(types::I64, native_params[4]);
+    let _args_base = cx.builder.ins().uextend(types::I64, native_params[3]);
+    let _args_len = cx.builder.ins().uextend(types::I64, native_params[4]);
     let entry_roots: &[ir::Value] = if function.params().len() >= 2 {
         &[env, this_value]
     } else if function.params().len() == 1 {
@@ -1514,41 +1536,43 @@ fn lower_function_parameters(
             0 => env,
             1 => this_value,
             _ => {
-                // 特化 body：profile 覆盖的参数由 wrapper 的入口守卫背书，直接从
-                // call arena 读取（wrapper 已验证 args_count 覆盖全部 tagged 参数，
-                // 且每个参数的 tag 与 profile 一致），跳过 LoadArgument 的
-                // dispatcher 往返；未覆盖的参数保留通用 LoadArgument 默认语义。
+                let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+                let args_base_u32 = cx.builder.ins().uextend(types::I64, native_params[3]);
+                let arena_base = cx.builder.ins().load(
+                    pointer_type,
+                    MemFlagsData::trusted(),
+                    cx.ctx,
+                    vmctx_offset(offset_of!(NativeVmContext, call_arena_slots))?,
+                );
+                let param_idx = u32::try_from(index - 2).context("parameter index exceeds u32")?;
+                let slot_offset = i64::from(param_idx)
+                    .checked_mul(size_of::<i64>() as i64)
+                    .context("call arena offset overflows")?;
+                let args_base_bytes = cx.builder.ins().ishl_imm_u(args_base_u32, 3);
+                let param_bytes = cx.builder.ins().iadd_imm_s(args_base_bytes, slot_offset);
                 if let Some(tags) = specialized_tags
                     && let Some(_tag) = tags.get(index - 2)
                 {
-                    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
-                    let args_base_u32 = cx.builder.ins().uextend(types::I64, native_params[3]);
-                    let arena_base = cx.builder.ins().load(
-                        pointer_type,
-                        MemFlagsData::trusted(),
-                        cx.ctx,
-                        vmctx_offset(offset_of!(NativeVmContext, call_arena_slots))?,
-                    );
-                    let slot_offset = i64::try_from(index - 2)
-                        .context("parameter index exceeds i64")?
-                        .checked_mul(size_of::<i64>() as i64)
-                        .context("call arena offset overflows")?;
-                    let args_base_bytes = cx.builder.ins().ishl_imm_u(args_base_u32, 3);
-                    let param_bytes = cx.builder.ins().iadd_imm_s(args_base_bytes, slot_offset);
                     let address = cx.builder.ins().iadd(arena_base, param_bytes);
                     cx.builder
                         .ins()
                         .load(types::I64, MemFlagsData::trusted(), address, 0)
                 } else {
-                    let argument = cx.builder.ins().iconst(
-                        types::I64,
-                        i64::try_from(index - 2).context("parameter index exceeds i64")?,
+                    let in_bounds = cx.builder.ins().icmp_imm_u(
+                        ir::condcodes::IntCC::UnsignedGreaterThan,
+                        native_params[4],
+                        i64::from(param_idx),
                     );
-                    cx.call(
-                        NativeRuntimeOp::LoadArgument.id(),
-                        &[args_base, args_len, argument],
-                        None,
-                    )?
+                    let address = cx.builder.ins().iadd(arena_base, param_bytes);
+                    let loaded =
+                        cx.builder
+                            .ins()
+                            .load(types::I64, MemFlagsData::trusted(), address, 0);
+                    let undefined = cx
+                        .builder
+                        .ins()
+                        .iconst(types::I64, value::encode_undefined());
+                    cx.builder.ins().select(in_bounds, loaded, undefined)
                 }
             }
         };
@@ -1700,62 +1724,67 @@ fn lower_instruction(
                 feedback_ptr,
             )
         }
-        // 两侧均已证明是 Number 时，抽象关系比较退化为 IEEE-754 比较。
-        // reverse/invert 仍沿用语义 IR 的四种关系编码，NaN 在取反分支也必须返回 false。
         Instruction::CallBuiltin {
             dest: Some(dest),
             builtin: Builtin::AbstractCompare,
             args,
-        } if args.len() == 4
-            && tables.f64_values.contains(&args[0])
-            && tables.f64_values.contains(&args[1]) =>
-        {
+        } if args.len() == 4 => {
             let lhs = use_value(cx.builder, cx.variables, args[0])?;
             let rhs = use_value(cx.builder, cx.variables, args[1])?;
             let reverse = use_value(cx.builder, cx.variables, args[2])?;
             let invert = use_value(cx.builder, cx.variables, args[3])?;
-            let lhs = cx
-                .builder
-                .ins()
-                .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-            let rhs = cx
-                .builder
-                .ins()
-                .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
-            let normal = cx
-                .builder
-                .ins()
-                .fcmp(ir::condcodes::FloatCC::LessThan, lhs, rhs);
-            let reversed = cx
-                .builder
-                .ins()
-                .fcmp(ir::condcodes::FloatCC::LessThan, rhs, lhs);
-            let true_value = cx
-                .builder
-                .ins()
-                .iconst(types::I64, value::encode_bool(true));
-            let reverse = cx
-                .builder
-                .ins()
-                .icmp(ir::condcodes::IntCC::Equal, reverse, true_value);
-            let invert = cx
-                .builder
-                .ins()
-                .icmp(ir::condcodes::IntCC::Equal, invert, true_value);
-            let relation = cx.builder.ins().select(reverse, reversed, normal);
-            let ordered = cx
-                .builder
-                .ins()
-                .fcmp(ir::condcodes::FloatCC::Ordered, lhs, rhs);
-            let not_relation = cx.builder.ins().bnot(relation);
-            let inverted = cx.builder.ins().band(ordered, not_relation);
-            let condition = cx.builder.ins().select(invert, inverted, relation);
-            let false_value = cx
-                .builder
-                .ins()
-                .iconst(types::I64, value::encode_bool(false));
-            let result = cx.builder.ins().select(condition, true_value, false_value);
-            define_value(cx.builder, cx.variables, *dest, result)
+            if tables.f64_values.contains(&args[0]) && tables.f64_values.contains(&args[1]) {
+                let result = emit_f64_abstract_compare(cx.builder, lhs, rhs, reverse, invert);
+                define_value(cx.builder, cx.variables, *dest, result)?;
+            } else {
+                let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+                let lhs_masked = cx.builder.ins().band_imm_s(lhs, box_base);
+                let lhs_is_f64 = cx.builder.ins().icmp_imm_s(
+                    ir::condcodes::IntCC::NotEqual,
+                    lhs_masked,
+                    box_base,
+                );
+                let rhs_masked = cx.builder.ins().band_imm_s(rhs, box_base);
+                let rhs_is_f64 = cx.builder.ins().icmp_imm_s(
+                    ir::condcodes::IntCC::NotEqual,
+                    rhs_masked,
+                    box_base,
+                );
+                let both_f64 = cx.builder.ins().band(lhs_is_f64, rhs_is_f64);
+
+                let fast_block = cx.builder.create_block();
+                let slow_block = cx.builder.create_block();
+                let merge_block = cx.builder.create_block();
+                cx.builder.append_block_param(merge_block, types::I64);
+
+                cx.builder
+                    .ins()
+                    .brif(both_f64, fast_block, &[], slow_block, &[]);
+
+                cx.builder.switch_to_block(fast_block);
+                cx.builder.seal_block(fast_block);
+                let fast_result = emit_f64_abstract_compare(cx.builder, lhs, rhs, reverse, invert);
+                cx.builder
+                    .ins()
+                    .jump(merge_block, &[ir::BlockArg::Value(fast_result)]);
+
+                cx.builder.switch_to_block(slow_block);
+                cx.builder.seal_block(slow_block);
+                let slow_result = cx.call(
+                    u32::from(Builtin::AbstractCompare.wire_id()),
+                    &[lhs, rhs, reverse, invert],
+                    feedback_ptr,
+                )?;
+                cx.builder
+                    .ins()
+                    .jump(merge_block, &[ir::BlockArg::Value(slow_result)]);
+
+                cx.builder.switch_to_block(merge_block);
+                cx.builder.seal_block(merge_block);
+                let result = cx.builder.block_params(merge_block)[0];
+                define_value(cx.builder, cx.variables, *dest, result)?;
+            }
+            Ok(())
         }
         // 已证明 f64 的单参数 Math builtin：直接发 CLIF 浮点指令，零 host 往返。
         // guard 即类型检查——参数未证明 f64 时本 arm 不匹配，落到下方通用 dispatcher 路径。
@@ -1970,20 +1999,41 @@ fn lower_instruction(
             callee,
             this_val,
             args,
-        } => lower_call_instruction(
-            cx,
-            tables.slow_call_signature,
-            CallLowering {
-                destination: *dest,
-                callee: *callee,
-                this_value: *this_val,
-                args,
-                operation: NativeRuntimeOp::PrepareCall,
-                forward_args: false,
-            },
-            roots,
-            feedback_ptr,
-        ),
+        } => {
+            let direct_callee = tables
+                .constant_defs
+                .get(callee)
+                .and_then(|c| tables.constants.get(c.0 as usize))
+                .and_then(|c| match c {
+                    Constant::FunctionRef(target) => Some(*target),
+                    _ => None,
+                });
+            if let Some(target) = direct_callee
+                && tables.direct_callable_functions.contains(&target)
+                && let Some(decl) = tables.function_decls.get(target.0 as usize)
+            {
+                let func_ref = *tables
+                    .imported_function_decls
+                    .entry(target)
+                    .or_insert_with(|| decl.import(cx.builder.func));
+                lower_direct_call_instruction(cx, func_ref, *dest, *this_val, args, roots)
+            } else {
+                lower_call_instruction(
+                    cx,
+                    tables.slow_call_signature,
+                    CallLowering {
+                        destination: *dest,
+                        callee: *callee,
+                        this_value: *this_val,
+                        args,
+                        operation: NativeRuntimeOp::PrepareCall,
+                        forward_args: false,
+                    },
+                    roots,
+                    feedback_ptr,
+                )
+            }
+        }
         Instruction::SuperCall {
             dest,
             callee,
@@ -2337,6 +2387,93 @@ fn lower_instruction(
     }
 }
 
+fn lower_direct_call_instruction(
+    cx: &mut LoweringCx<'_, '_>,
+    target: ir::FuncRef,
+    destination: Option<ValueId>,
+    this_value: ValueId,
+    args: &[ValueId],
+    roots: &[ValueId],
+) -> Result<()> {
+    let this_value = use_value(cx.builder, cx.variables, this_value)?;
+    let active_len_offset = i32::try_from(offset_of!(NativeVmContext, call_arena_active_len))
+        .context("call arena active length offset exceeds i32")?;
+    let active_len = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        active_len_offset,
+    );
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let arena_base = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, call_arena_slots))?,
+    );
+    let active_len_u64 = cx.builder.ins().uextend(types::I64, active_len);
+    let active_len_bytes = cx.builder.ins().ishl_imm_u(active_len_u64, 3);
+    let base_addr = cx.builder.ins().iadd(arena_base, active_len_bytes);
+
+    for (i, arg) in args.iter().enumerate() {
+        let arg_val = use_value(cx.builder, cx.variables, *arg)?;
+        let offset = i32::try_from(i * size_of::<i64>()).context("argument offset exceeds i32")?;
+        cx.builder
+            .ins()
+            .store(MemFlagsData::trusted(), arg_val, base_addr, offset);
+    }
+
+    let args_len = u32::try_from(args.len()).context("args len exceeds u32")?;
+    let new_active_len = cx.builder.ins().iadd_imm_s(active_len, i64::from(args_len));
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        new_active_len,
+        cx.ctx,
+        active_len_offset,
+    );
+
+    let depth_offset = i32::try_from(offset_of!(NativeVmContext, js_call_depth))
+        .context("js call depth offset exceeds i32")?;
+    let depth = cx
+        .builder
+        .ins()
+        .load(types::I32, MemFlagsData::trusted(), cx.ctx, depth_offset);
+    let new_depth = cx.builder.ins().iadd_imm_s(depth, 1);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), new_depth, cx.ctx, depth_offset);
+
+    let undefined_env = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_undefined());
+    let args_len_val = cx.builder.ins().iconst(types::I32, i64::from(args_len));
+
+    cx.flush()?;
+    let call = cx.builder.ins().call(
+        target,
+        &[cx.ctx, undefined_env, this_value, active_len, args_len_val],
+    );
+    let result = cx.builder.inst_results(call)[0];
+
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), depth, cx.ctx, depth_offset);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        active_len,
+        cx.ctx,
+        active_len_offset,
+    );
+
+    cx.root_frame
+        .publish(cx.builder, cx.variables, roots, &[result])?;
+    if let Some(destination) = destination {
+        define_value(cx.builder, cx.variables, destination, result)?;
+    }
+    Ok(())
+}
+
 fn lower_call_instruction(
     cx: &mut LoweringCx<'_, '_>,
     slow_call_signature: ir::SigRef,
@@ -2482,6 +2619,43 @@ fn lower_builtin_operation(
     let _ = result;
     Ok(())
 }
+
+fn emit_f64_abstract_compare(
+    builder: &mut FunctionBuilder<'_>,
+    lhs: ir::Value,
+    rhs: ir::Value,
+    reverse: ir::Value,
+    invert: ir::Value,
+) -> ir::Value {
+    let lhs = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
+    let rhs = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+    let normal = builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::LessThan, lhs, rhs);
+    let reversed = builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::LessThan, rhs, lhs);
+    let true_value = builder.ins().iconst(types::I64, value::encode_bool(true));
+    let reverse = builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, reverse, true_value);
+    let invert = builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, invert, true_value);
+    let relation = builder.ins().select(reverse, reversed, normal);
+    let ordered = builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::Ordered, lhs, rhs);
+    let not_relation = builder.ins().bnot(relation);
+    let inverted = builder.ins().band(ordered, not_relation);
+    let condition = builder.ins().select(invert, inverted, relation);
+    let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
+    builder.ins().select(condition, true_value, false_value)
+}
 /// 把运行时字符串句柄解析为当前读取作用域内稳定的堆地址。
 ///
 /// 每次调用都生成独立控制流；地址不跨块记忆，避免 ZGC epoch 变化后复用旧地址。
@@ -2529,6 +2703,156 @@ fn emit_string_address(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let valid = cx.builder.ins().band(is_boxed, is_string);
     let valid = cx.builder.ins().band(valid, is_runtime);
+    cx.builder
+        .ins()
+        .brif(valid, entry_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(entry_block);
+    cx.builder.seal_block(entry_block);
+    let handle = cx.builder.ins().band_imm_u(encoded, i64::from(u32::MAX));
+    let handle_i32 = cx.builder.ins().ireduce(types::I32, handle);
+    let handle_table = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle, 3);
+    let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
+    let entry = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_address, 0);
+    let state = cx.builder.ins().band_imm_u(entry, 0xffff);
+    let stable = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    let logical_address = cx.builder.ins().ushr_imm_u(entry, 16);
+    let barrier_state = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
+    );
+    let barrier_disabled =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    cx.builder
+        .ins()
+        .brif(barrier_disabled, legacy_block, &[], zgc_block, &[]);
+
+    cx.builder.switch_to_block(legacy_block);
+    cx.builder.seal_block(legacy_block);
+    cx.builder.ins().brif(
+        stable,
+        resolved_block,
+        &[ir::BlockArg::Value(logical_address)],
+        miss_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(zgc_block);
+    cx.builder.seal_block(zgc_block);
+    let epoch_address = cx.builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let epoch = cx
+        .builder
+        .ins()
+        .atomic_load(types::I64, MemFlagsData::trusted(), epoch_address);
+    let epoch_bit = cx.builder.ins().band_imm_u(epoch, 1);
+    let epoch_even = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
+    let direct = cx.builder.ins().band(stable, epoch_even);
+    cx.builder
+        .ins()
+        .brif(direct, fast_block, &[], assist_block, &[]);
+
+    cx.builder.switch_to_block(fast_block);
+    cx.builder.seal_block(fast_block);
+    increment_barrier_counter(
+        cx.builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, load_fast_events),
+    );
+    cx.builder
+        .ins()
+        .jump(resolved_block, &[ir::BlockArg::Value(logical_address)]);
+
+    cx.builder.switch_to_block(assist_block);
+    cx.builder.seal_block(assist_block);
+    let call = cx
+        .builder
+        .ins()
+        .call(barrier_thunks.load, &[cx.ctx, handle_i32]);
+    let assisted = cx.builder.inst_results(call)[0];
+    let assisted_ok = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
+    cx.builder.ins().brif(
+        assisted_ok,
+        resolved_block,
+        &[ir::BlockArg::Value(assisted)],
+        miss_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(resolved_block);
+    cx.builder.seal_block(resolved_block);
+    let logical_address = cx.builder.block_params(resolved_block)[0];
+    let heap_delta = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    Ok(cx.builder.ins().iadd(logical_address, heap_delta))
+}
+
+/// 把运行时数组句柄解析为当前读取作用域内稳定的堆地址。
+fn emit_array_address(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    encoded: ir::Value,
+    miss_block: ir::Block,
+) -> Result<ir::Value> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let entry_block = cx.builder.create_block();
+    let legacy_block = cx.builder.create_block();
+    let zgc_block = cx.builder.create_block();
+    let fast_block = cx.builder.create_block();
+    let assist_block = cx.builder.create_block();
+    let resolved_block = cx.builder.create_block();
+    cx.builder.append_block_param(resolved_block, types::I64);
+
+    let boxed_bits = cx
+        .builder
+        .ins()
+        .band_imm_s(encoded, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
+    let is_boxed = cx.builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        boxed_bits,
+        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
+    );
+    let tag_word = cx.builder.ins().ushr_imm_u(encoded, 32);
+    let tag = cx.builder.ins().band_imm_u(
+        tag_word,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_array = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_ARRAY).expect("array tag fits i64"),
+    );
+    let valid = cx.builder.ins().band(is_boxed, is_array);
     cx.builder
         .ins()
         .brif(valid, entry_block, &[], miss_block, &[]);
@@ -3011,6 +3335,8 @@ fn lower_string_element(
     let encoded_index = use_value(cx.builder, cx.variables, index)?;
     let (index, valid_index) = emit_nonnegative_integer_index(cx.builder, encoded_index);
     let index_block = cx.builder.create_block();
+    let string_block = cx.builder.create_block();
+    let array_block = cx.builder.create_block();
     let miss_block = cx.builder.create_block();
     let out_of_bounds_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
@@ -3020,10 +3346,134 @@ fn lower_string_element(
 
     cx.builder.switch_to_block(index_block);
     cx.builder.seal_block(index_block);
+
+    let boxed_bits = cx
+        .builder
+        .ins()
+        .band_imm_s(object, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
+    let is_boxed = cx.builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        boxed_bits,
+        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
+    );
+    let tag_word = cx.builder.ins().ushr_imm_u(object, 32);
+    let tag = cx.builder.ins().band_imm_u(
+        tag_word,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_string = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_STRING).expect("string tag fits i64"),
+    );
+    let is_string = cx.builder.ins().band(is_boxed, is_string);
+
+    let is_array = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_ARRAY).expect("array tag fits i64"),
+    );
+    let is_array = cx.builder.ins().band(is_boxed, is_array);
+
+    let dispatch_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(is_string, string_block, &[], dispatch_block, &[]);
+
+    cx.builder.switch_to_block(dispatch_block);
+    cx.builder.seal_block(dispatch_block);
+    cx.builder
+        .ins()
+        .brif(is_array, array_block, &[], miss_block, &[]);
+
+    // 字符串读取
+    cx.builder.switch_to_block(string_block);
+    cx.builder.seal_block(string_block);
     let address = emit_string_address(cx, barrier_thunks, object, miss_block)?;
     let unit = emit_flat_string_code_unit(cx, address, index, miss_block, out_of_bounds_block);
     let result = emit_latin1_char_handle(cx, unit, miss_block)?;
     define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    // 数组读取
+    cx.builder.switch_to_block(array_block);
+    cx.builder.seal_block(array_block);
+    let address = emit_array_address(cx, barrier_thunks, object, miss_block)?;
+    let header = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), address, 0);
+    let kind = cx.builder.ins().ushr_imm_u(header, 40);
+    let kind = cx.builder.ins().band_imm_u(kind, 0xff);
+    let is_dict = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        kind,
+        i64::from(wjsm_ir::constants::ARRAY_KIND_DICTIONARY),
+    );
+    let dict_check_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(is_dict, miss_block, &[], dict_check_block, &[]);
+
+    cx.builder.switch_to_block(dict_check_block);
+    cx.builder.seal_block(dict_check_block);
+    let shape = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        address,
+        i32::try_from(constants::HEAP_ARRAY_LENGTH_OFFSET).expect("length offset fits i32"),
+    );
+    let length = cx.builder.ins().band_imm_u(shape, i64::from(u32::MAX));
+    let capacity = cx.builder.ins().ushr_imm_u(shape, 32);
+    let index_u64 = index;
+    let in_length =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, index_u64, length);
+    let in_capacity =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, index_u64, capacity);
+    let in_bounds = cx.builder.ins().band(in_length, in_capacity);
+
+    let elem_read_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(in_bounds, elem_read_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(elem_read_block);
+    cx.builder.seal_block(elem_read_block);
+    let index_bytes = cx.builder.ins().ishl_imm_u(index_u64, 3);
+    let elem_offset = cx
+        .builder
+        .ins()
+        .iadd_imm_s(index_bytes, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let elem_addr = cx.builder.ins().iadd(address, elem_offset);
+    let elem_val = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), elem_addr, 0);
+
+    let hole_val = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_array_hole());
+    let is_hole = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, elem_val, hole_val);
+    let elem_hit_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(is_hole, miss_block, &[], elem_hit_block, &[]);
+
+    cx.builder.switch_to_block(elem_hit_block);
+    cx.builder.seal_block(elem_hit_block);
+    let is_number = emit_is_number(cx.builder, elem_val);
+    let color_mask = i64::from_ne_bytes((!value::GC_COLOR_MASK).to_ne_bytes());
+    let stripped = cx.builder.ins().band_imm_u(elem_val, color_mask);
+    let clean_elem = cx.builder.ins().select(is_number, elem_val, stripped);
+    define_value(cx.builder, cx.variables, dest, clean_elem)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(out_of_bounds_block);
@@ -4433,6 +4883,7 @@ fn lower_get_prop_ic_non_nullish(
     cx.builder.append_block_param(shape_check_block, types::I64);
     let shape_hit_block = cx.builder.create_block();
     let own_hit_block = cx.builder.create_block();
+    let holder_check_block = cx.builder.create_block();
     let holder_block = cx.builder.create_block();
     let holder_resolve_block = cx.builder.create_block();
     let holder_legacy_block = cx.builder.create_block();
@@ -4615,12 +5066,18 @@ fn lower_get_prop_ic_non_nullish(
         .ins()
         .brif(shape_match, shape_hit_block, &[], miss_block, &[]);
 
-    // shape 命中后按 kind 分派：OWN_DATA 直达自有值槽；其余先校验直接原型与世代。
+    // shape 命中后按 kind 分派：OWN_DATA 直达自有值槽；PROTO_DATA / ACCESSOR 先校验直接原型与世代；其余走 miss。
     cx.builder.switch_to_block(shape_hit_block);
     cx.builder.seal_block(shape_hit_block);
     cx.builder
         .ins()
-        .brif(kind_own, own_hit_block, &[], holder_block, &[]);
+        .brif(kind_own, own_hit_block, &[], holder_check_block, &[]);
+
+    cx.builder.switch_to_block(holder_check_block);
+    cx.builder.seal_block(holder_check_block);
+    cx.builder
+        .ins()
+        .brif(kind_holder, holder_block, &[], miss_block, &[]);
 
     // ProtoData / Accessor：同一 shape 的 receiver 可以有不同直接原型，故先比较
     // 对象头里的 proto handle；再比较原型世代以覆盖链上属性或原型变化。

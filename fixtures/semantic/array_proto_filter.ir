@@ -118,7 +118,6 @@ module {
       %37 = get_prop %26, %36
       %38 = const c30
       %39 = const c20
-      %41 = const c0
       %43 = const c26
       %44 = new_array(capacity=0)
       jump bb6
@@ -131,11 +130,9 @@ module {
       branch %47, bb8, bb12
     bb8:
       %48 = get_elem %26, %45
-      %49 = call %29, this=%41, args=[%48, %45, %26]
-      %50 = is_exception %49
-      branch %50, bb13, bb9
+      jump bb19
     bb9:
-      %51 = call builtin.to_boolean(%49)
+      %51 = call builtin.to_boolean(%56)
       branch %51, bb10, bb11
     bb10:
       call builtin.array.push(%44, %48)
@@ -145,7 +142,7 @@ module {
     bb12:
       jump bb14
     bb13:
-      %52 = call builtin.exception_value(%49)
+      %52 = call builtin.exception_value(%56)
       throw %52
     bb14:
       %34 = add %45, %39
@@ -158,4 +155,13 @@ module {
     bb17:
       %31 = is_exception %30
       branch %31, bb2, bb1
+    bb18:
+      %50 = is_exception %56
+      branch %50, bb13, bb9
+    bb19:
+      %55 = const c24
+      %57 = const c25
+      %58 = const c26
+      %56 = call builtin.abstract_compare(%48, %55, %57, %58)
+      jump bb18
 }

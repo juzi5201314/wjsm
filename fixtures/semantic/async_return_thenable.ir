@@ -106,14 +106,16 @@ module {
       promise_resolve %21, %15
       return
 
-  fn @foo [needs_prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @foo [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c32
       %3 = const c33
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
-      %6 = const c48
+      %4 = load var $env
+      %5 = const c34
+      %6 = get_prop %4, %5
       %7 = const c35
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
@@ -196,7 +198,7 @@ module {
       %21 = const c48
       store var $0.foo, %21
       %22 = const c49
-      %23 = const c48
+      %23 = load var $0.foo
       %24 = call %23, this=%22
       %25 = const c50
       %26 = const c51

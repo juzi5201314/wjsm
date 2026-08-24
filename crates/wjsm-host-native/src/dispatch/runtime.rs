@@ -312,17 +312,27 @@ pub(super) fn dispatch_runtime(
             }
         }
         NativeRuntimeOp::SetProto => {
-            let result = super::object::dispatch_object(
-                ctx,
-                state,
-                wjsm_ir::Builtin::ObjectSetPrototypeOf,
-                args,
-            )
-            .unwrap_or_else(|| fail_dispatch(ctx));
-            if value::is_exception(result) {
-                result
-            } else {
+            let [object, proto] = args else {
+                return fail_dispatch(ctx);
+            };
+            if value::is_undefined(*proto) || value::is_null(*proto) {
+                if let Some(handle) = object_handle(*object) {
+                    let _ = state.gc.heap().set_prototype(handle, 0);
+                }
                 value::encode_undefined()
+            } else {
+                let result = super::object::dispatch_object(
+                    ctx,
+                    state,
+                    wjsm_ir::Builtin::ObjectSetPrototypeOf,
+                    args,
+                )
+                .unwrap_or_else(|| fail_dispatch(ctx));
+                if value::is_exception(result) {
+                    result
+                } else {
+                    value::encode_undefined()
+                }
             }
         }
         NativeRuntimeOp::GetSuperBase => super_base(state).unwrap_or_else(value::encode_undefined),

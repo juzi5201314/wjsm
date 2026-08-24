@@ -263,13 +263,10 @@ module {
       %28 = set_prop %24, %27, %26
       %29 = call builtin.create_closure(%22, %24)
       store var $0.makeCounter, %29
-      %30 = const c59
-      %31 = load var $0.makeCounter
-      %32 = call %31, this=%30
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %59 = const c0
+      jump bb10
     bb1:
-      store var $0.counter, %32
+      store var $0.counter, %69
       %35 = const c60
       %36 = load var $0.counter
       %37 = call %36, this=%35
@@ -279,7 +276,7 @@ module {
       %41 = is_exception %40
       branch %41, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
+      %34 = call builtin.exception_value(%69)
       throw %34
     bb3:
       %43 = const c63
@@ -310,4 +307,25 @@ module {
     bb8:
       %58 = call builtin.exception_value(%56)
       throw %58
+    bb9:
+      %33 = is_exception %69
+      branch %33, bb2, bb1
+    bb10:
+      %60 = const c21
+      store var $1.count, %60
+      %61 = const c22
+      store var $1.count, %61
+      %62 = const c53
+      %63 = const c54
+      store var $1.$shared_env, %63
+      %64 = new_object(capacity=1)
+      set_proto %64, %24
+      store var $1.$shared_env, %64
+      %66 = load var $1.count
+      %67 = const c55
+      %68 = set_prop %64, %67, %66
+      %69 = call builtin.create_closure(%62, %64)
+      store var $1.count, %59
+      store var $1.$shared_env, %59
+      jump bb9
 }

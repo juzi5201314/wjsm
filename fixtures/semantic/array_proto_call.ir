@@ -113,7 +113,6 @@ module {
       %36 = get_prop %25, %35
       %37 = const c27
       %38 = const c20
-      %40 = const c0
       %42 = const c30
       %43 = call builtin.array.allocate(%36)
       jump bb6
@@ -126,16 +125,14 @@ module {
       branch %46, bb8, bb10
     bb8:
       %47 = get_elem %25, %44
-      %48 = call %28, this=%40, args=[%47, %44, %25]
-      %49 = is_exception %48
-      branch %49, bb11, bb9
+      jump bb17
     bb9:
-      %50 = set_elem %43, %44, %48
+      %50 = set_elem %43, %44, %55
       jump bb12
     bb10:
       jump bb12
     bb11:
-      %51 = call builtin.exception_value(%48)
+      %51 = call builtin.exception_value(%55)
       throw %51
     bb12:
       %33 = add %44, %38
@@ -148,4 +145,11 @@ module {
     bb15:
       %30 = is_exception %29
       branch %30, bb2, bb1
+    bb16:
+      %49 = is_exception %55
+      branch %49, bb11, bb9
+    bb17:
+      %54 = const c23
+      %55 = mul %47, %54
+      jump bb16
 }

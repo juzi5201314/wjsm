@@ -763,13 +763,8 @@ module {
       %187 = const c78
       branch %186, bb50, bb51
     bb48:
-      %196 = const c82
-      %197 = const c85
       %198 = load var $0.$shared_env
-      %199 = call builtin.create_closure(%197, %198)
-      %200 = call %199, this=%196
-      %201 = is_exception %200
-      branch %201, bb55, bb54
+      jump bb222
     bb49:
       %203 = const c86
       %204 = load var $0.$shared_env
@@ -796,8 +791,7 @@ module {
     bb54:
       jump bb47
     bb55:
-      %202 = call builtin.exception_value(%200)
-      throw %202
+      unreachable
     bb56:
       %209 = load var $0.closureWrite
       jump bb59
@@ -974,13 +968,7 @@ module {
       branch %326, bb90, bb91
     bb85:
       %340 = const c152
-      %341 = const c153
-      %342 = load var $0.readCreatedBefore
-      %343 = call %342, this=%341
-      %344 = add %340, %343
-      %345 = call builtin.console.log(%344)
-      %346 = is_exception %345
-      branch %346, bb96, bb95
+      jump bb220
     bb86:
       %317 = load var $0.createdBefore
       jump bb89
@@ -1530,4 +1518,29 @@ module {
       %608 = const c188
       %610 = call %482, this=%608
       jump bb217
+    bb219:
+      %344 = add %340, %614
+      %345 = call builtin.console.log(%344)
+      %346 = is_exception %345
+      branch %346, bb96, bb95
+    bb220:
+      %613 = const c140
+      %614 = get_prop %307, %613
+      jump bb219
+    bb221:
+      jump bb54
+    bb222:
+      %617 = const c83
+      %618 = get_prop %198, %617
+      %619 = pos %618
+      %620 = const c84
+      %621 = add %619, %620
+      %622 = set_prop %198, %617, %621
+      %623 = is_exception %622
+      branch %623, bb224, bb223
+    bb223:
+      jump bb221
+    bb224:
+      %624 = call builtin.exception_value(%622)
+      throw %624
 }

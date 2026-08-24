@@ -439,6 +439,7 @@ fn map_set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         return fail_dispatch(ctx);
     };
     if !state.maps.contains_key(&value::decode_handle(*receiver)) {
+        eprintln!("map_set invalid receiver: {receiver:#x}");
         return fail_dispatch(ctx);
     }
     map_insert(state, *receiver, *key, *stored);

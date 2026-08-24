@@ -207,7 +207,6 @@ module {
       %22 = const c21
       store var $0.rejectB, %22
       %23 = new_promise
-      %24 = const c23
       %25 = const c24
       store var $0.$shared_env, %25
       %26 = new_object(capacity=1)
@@ -217,28 +216,19 @@ module {
       %28 = load var $0.rejectA
       %29 = const c25
       %30 = set_prop %26, %29, %28
-      %31 = call builtin.create_closure(%24, %26)
       %32 = call builtin.promise.create_resolve_function(%23)
       %33 = call builtin.promise.create_reject_function(%23)
-      %34 = const c26
-      call %31, this=%34, args=[%32, %33]
-      %35 = is_exception %23
-      branch %35, bb2, bb1
+      jump bb14
     bb1:
       store var $0.p1, %23
       %37 = new_promise
-      %38 = const c28
       %39 = load var $0.$shared_env
       %40 = load var $0.rejectB
       %41 = const c29
       %42 = set_prop %39, %41, %40
-      %43 = call builtin.create_closure(%38, %39)
       %44 = call builtin.promise.create_resolve_function(%37)
       %45 = call builtin.promise.create_reject_function(%37)
-      %46 = const c30
-      call %43, this=%46, args=[%44, %45]
-      %47 = is_exception %37
-      branch %47, bb4, bb3
+      jump bb10
     bb2:
       %36 = call builtin.exception_value(%23)
       throw %36
@@ -277,4 +267,30 @@ module {
     bb8:
       %67 = call builtin.exception_value(%65)
       throw %67
+    bb9:
+      %47 = is_exception %37
+      branch %47, bb4, bb3
+    bb10:
+      %70 = const c27
+      %72 = set_prop %39, %70, %45
+      %73 = is_exception %72
+      branch %73, bb12, bb11
+    bb11:
+      jump bb9
+    bb12:
+      %74 = call builtin.exception_value(%72)
+      throw %74
+    bb13:
+      %35 = is_exception %23
+      branch %35, bb2, bb1
+    bb14:
+      %77 = const c22
+      %79 = set_prop %26, %77, %33
+      %80 = is_exception %79
+      branch %80, bb16, bb15
+    bb15:
+      jump bb13
+    bb16:
+      %81 = call builtin.exception_value(%79)
+      throw %81
 }

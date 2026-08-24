@@ -19,8 +19,8 @@
 use std::collections::{HashMap, HashSet};
 
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, Constant, ConstantId, FunctionId, Instruction, Module, Terminator,
-    ValueId,
+    BasicBlock, BasicBlockId, Builtin, Constant, ConstantId, FunctionId, Instruction, Module,
+    Terminator, ValueId,
 };
 
 use super::cfg_fold::{self, terminator_successors};
@@ -563,6 +563,7 @@ struct StaticInlineCandidate {
     args: Vec<ValueId>,
     dest: Option<ValueId>,
     construct_object_returns: HashSet<BasicBlockId>,
+    closure_env: Option<ValueId>,
 }
 
 fn classify_construct_return(
@@ -595,10 +596,127 @@ fn classify_construct_return(
     }
 }
 
+fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
+    let mut block_out: HashMap<BasicBlockId, HashMap<String, Option<ValueId>>> = HashMap::new();
+    let mut block_in: HashMap<BasicBlockId, HashMap<String, Option<ValueId>>> = HashMap::new();
+    let mut load_reaching: HashMap<ValueId, ValueId> = HashMap::new();
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in function.blocks() {
+            let mut in_map: HashMap<String, Option<ValueId>> = HashMap::new();
+            let mut first = true;
+            for pred in function
+                .blocks()
+                .iter()
+                .filter(|p| cfg_fold::terminator_successors(p.terminator()).contains(&block.id()))
+            {
+                if let Some(pred_out) = block_out.get(&pred.id()) {
+                    if first {
+                        in_map = pred_out.clone();
+                        first = false;
+                    } else {
+                        for (k, v) in pred_out {
+                            match in_map.get_mut(k) {
+                                Some(existing) => {
+                                    if *existing != *v {
+                                        *existing = None;
+                                    }
+                                }
+                                None => {
+                                    in_map.insert(k.clone(), None);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut current = in_map.clone();
+            for instr in block.instructions() {
+                if let Instruction::StoreVar { name, value } = instr {
+                    current.insert(name.clone(), Some(*value));
+                }
+            }
+            if block_out.get(&block.id()) != Some(&current) {
+                block_out.insert(block.id(), current);
+                changed = true;
+            }
+            block_in.insert(block.id(), in_map);
+        }
+    }
+
+    for block in function.blocks() {
+        let mut current = block_in.get(&block.id()).cloned().unwrap_or_default();
+        for instr in block.instructions() {
+            match instr {
+                Instruction::StoreVar { name, value } => {
+                    current.insert(name.clone(), Some(*value));
+                }
+                Instruction::LoadVar { dest, name } => {
+                    if let Some(Some(reaching_val)) = current.get(name) {
+                        load_reaching.insert(*dest, *reaching_val);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    load_reaching
+}
+
+fn resolve_callee_id(
+    defs: &HashMap<ValueId, Instruction>,
+    constants: &[Constant],
+    load_reaching: &HashMap<ValueId, ValueId>,
+    callee: &ValueId,
+) -> Option<(FunctionId, Option<ValueId>)> {
+    let mut current = *callee;
+    while let Some(reaching) = load_reaching.get(&current) {
+        if *reaching == current {
+            break;
+        }
+        current = *reaching;
+    }
+
+    match defs.get(&current) {
+        Some(Instruction::Const { constant, .. }) => match constants.get(constant.0 as usize) {
+            Some(Constant::FunctionRef(f)) => Some((*f, None)),
+            _ => None,
+        },
+        Some(Instruction::CallBuiltin {
+            builtin: Builtin::CreateClosure,
+            args: closure_args,
+            ..
+        }) if closure_args.len() >= 2 => {
+            let mut fn_val = closure_args[0];
+            while let Some(reaching) = load_reaching.get(&fn_val) {
+                if *reaching == fn_val {
+                    break;
+                }
+                fn_val = *reaching;
+            }
+            let fn_ref = match defs.get(&fn_val) {
+                Some(Instruction::Const { constant, .. }) => {
+                    match constants.get(constant.0 as usize) {
+                        Some(Constant::FunctionRef(f)) => *f,
+                        _ => return None,
+                    }
+                }
+                _ => return None,
+            };
+            Some((fn_ref, Some(closure_args[1])))
+        }
+        _ => None,
+    }
+}
+
 /// 阶段 A：静态多块内联的一轮。返回是否发生了任何内联。
 fn static_inline_round(module: &mut Module) -> bool {
     // ── 预收集（不可变借用阶段）──
-    let constants_snapshot: Vec<Constant> = module.constants().to_vec();
+    let constants_snapshot = module.constants().to_vec();
     let per_func_defs: Vec<HashMap<ValueId, Instruction>> = module
         .functions()
         .iter()
@@ -613,6 +731,11 @@ fn static_inline_round(module: &mut Module) -> bool {
             }
             defs
         })
+        .collect();
+    let per_func_load_reaching: Vec<HashMap<ValueId, ValueId>> = module
+        .functions()
+        .iter()
+        .map(compute_load_var_reaching)
         .collect();
     let per_func_info: Vec<(bool, bool, usize)> = module
         .functions()
@@ -645,21 +768,22 @@ fn static_inline_round(module: &mut Module) -> bool {
                     } => (false, dest, callee, this_val, args),
                     _ => continue,
                 };
-                let callee_id = match per_func_defs[func_idx].get(callee) {
-                    Some(Instruction::Const { constant, .. }) => {
-                        match constants_snapshot.get(constant.0 as usize) {
-                            Some(Constant::FunctionRef(f)) => *f,
-                            _ => continue,
-                        }
-                    }
-                    _ => continue,
+                let (callee_id, closure_env) = match resolve_callee_id(
+                    &per_func_defs[func_idx],
+                    &constants_snapshot,
+                    &per_func_load_reaching[func_idx],
+                    callee,
+                ) {
+                    Some(x) => x,
+                    None => continue,
                 };
                 let callee_idx = callee_id.0 as usize;
                 if callee_idx >= per_func_info.len() {
                     continue;
                 }
                 let (direct_callable, has_eval, num_blocks) = per_func_info[callee_idx];
-                if !direct_callable || has_eval || num_blocks == 0 || callee_idx == func_idx {
+                let can_call = direct_callable || closure_env.is_some();
+                if !can_call || has_eval || num_blocks == 0 || callee_idx == func_idx {
                     continue;
                 }
                 let callee_func = &module.functions()[callee_idx];
@@ -719,6 +843,7 @@ fn static_inline_round(module: &mut Module) -> bool {
                     args: args.clone(),
                     dest: *dest,
                     construct_object_returns,
+                    closure_env,
                 });
             }
         }
@@ -817,7 +942,8 @@ fn inline_static_candidate(
                     continue;
                 }
                 if is_env_name(name) {
-                    param_subst.push((mapped_dest, undefined_dest));
+                    let env_val = candidate.closure_env.unwrap_or(undefined_dest);
+                    param_subst.push((mapped_dest, env_val));
                     continue;
                 }
                 if let Some((param_idx, _)) = callee_params
@@ -866,6 +992,17 @@ fn inline_static_candidate(
     } else {
         None
     };
+    let callee_local_vars: Vec<String> = callee_func
+        .blocks()
+        .iter()
+        .flat_map(|b| b.instructions())
+        .filter_map(|ins| match ins {
+            Instruction::StoreVar { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
     let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     let mut construct_return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     for (original, clone) in callee_func.blocks().iter().zip(cloned_blocks.iter_mut()) {
@@ -882,6 +1019,12 @@ fn inline_static_candidate(
                 } else {
                     let mapped = value.unwrap_or(undefined_dest);
                     return_records.push((clone.id(), mapped));
+                }
+                for var_name in &callee_local_vars {
+                    clone.push_instruction(Instruction::StoreVar {
+                        name: var_name.clone(),
+                        value: undefined_dest,
+                    });
                 }
                 clone.set_terminator(Terminator::Jump { target: b_post_id });
             }
@@ -1522,6 +1665,7 @@ fn inline_speculative_candidate(
             _ => None,
         })
         .collect();
+    let callee_local_vars: Vec<String> = stored_names.iter().map(|s| (*s).to_string()).collect();
     let mut param_subst: Vec<(ValueId, ValueId)> = Vec::new();
     let mut inject_subst: Vec<(String, ValueId)> = Vec::new();
     let mut callee_clones: Vec<BasicBlock> = Vec::with_capacity(target_func.blocks().len());
@@ -1573,6 +1717,12 @@ fn inline_speculative_candidate(
                 // Return → Jump(区域入口)；记录返回值（None → undefined）。
                 let mapped = value.unwrap_or(undefined_dest);
                 return_records.push((clone.id(), mapped));
+                for var_name in &callee_local_vars {
+                    clone.push_instruction(Instruction::StoreVar {
+                        name: var_name.clone(),
+                        value: undefined_dest,
+                    });
+                }
                 clone.set_terminator(Terminator::Jump {
                     target: region_entry,
                 });

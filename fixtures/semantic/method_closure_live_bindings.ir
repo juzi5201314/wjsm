@@ -774,26 +774,11 @@ module {
       %167 = new_object(capacity=4)
       %168 = const c95
       %169 = set_prop %167, %168, %166
-      %170 = const c99
       %171 = load var $0.$shared_env
       %172 = load var $0.staticValue
       %173 = const c100
       %174 = set_prop %171, %173, %172
-      %175 = call builtin.create_closure(%170, %171)
-      call %175, this=%166
-      %176 = const c101
-      %177 = const c103
-      %178 = call builtin.create_closure(%177, %171)
-      %179 = set_prop %166, %176, %178
-      %180 = const c104
-      %181 = set_prop %166, %180, %167
-      store var $6.StaticClosure, %166
-      store var $0.StaticClosure, %166
-      %182 = load var $0.$shared_env
-      %183 = const c105
-      %184 = stricteq %182, %183
-      %185 = const c106
-      branch %184, bb31, bb32
+      jump bb105
     bb30:
       %164 = call builtin.exception_value(%162)
       throw %164
@@ -1124,4 +1109,42 @@ module {
       jump bb41
     bb103:
       jump bb102
+    bb104:
+      %176 = const c101
+      %177 = const c103
+      %178 = call builtin.create_closure(%177, %171)
+      %179 = set_prop %166, %176, %178
+      %180 = const c104
+      %181 = set_prop %166, %180, %167
+      store var $6.StaticClosure, %166
+      store var $0.StaticClosure, %166
+      %182 = load var $0.$shared_env
+      %183 = const c105
+      %184 = stricteq %182, %183
+      %185 = const c106
+      branch %184, bb31, bb32
+    bb105:
+      %382 = const c96
+      jump bb106
+    bb106:
+      %383 = phi [(bb105, %171), (bb108, %385)]
+      %384 = call builtin.object.has_own(%383, %382)
+      branch %384, bb107, bb108
+    bb107:
+      jump bb109
+    bb108:
+      %385 = call builtin.object.get_prototype_of(%383)
+      %386 = is_nullish %385
+      branch %386, bb107, bb106
+    bb109:
+      %388 = const c97
+      %389 = const c98
+      %390 = set_prop %383, %388, %389
+      %391 = is_exception %390
+      branch %391, bb111, bb110
+    bb110:
+      jump bb104
+    bb111:
+      %392 = call builtin.exception_value(%390)
+      throw %392
 }

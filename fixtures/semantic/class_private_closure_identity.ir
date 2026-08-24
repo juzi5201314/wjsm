@@ -424,61 +424,46 @@ module {
       %84 = new_object(capacity=4)
       %85 = call builtin.get_prototype_from_constructor(%83)
       set_proto %84, %85
-      %86 = construct_call %83, this=%84
-      %87 = is_exception %86
-      branch %87, bb1, bb2
+      jump bb42
     bb1:
-      jump bb5
+      unreachable
     bb2:
-      %88 = call builtin.is_js_object(%86)
-      branch %88, bb3, bb4
+      jump bb3
     bb3:
       jump bb5
     bb4:
-      jump bb5
+      unreachable
     bb5:
-      %89 = phi [(bb1, %86), (bb3, %86), (bb4, %84)]
-      %90 = is_exception %89
-      branch %90, bb7, bb6
+      jump bb6
     bb6:
-      %92 = is_exception %89
-      branch %92, bb9, bb8
+      jump bb8
     bb7:
-      %91 = call builtin.exception_value(%89)
-      throw %91
+      unreachable
     bb8:
-      store var $0.first, %89
+      store var $0.first, %84
       %94 = load var $0.PrivateClosure
       %95 = new_object(capacity=4)
       %96 = call builtin.get_prototype_from_constructor(%94)
       set_proto %95, %96
-      %97 = construct_call %94, this=%95
-      %98 = is_exception %97
-      branch %98, bb10, bb11
+      jump bb40
     bb9:
-      %93 = call builtin.exception_value(%89)
-      throw %93
+      unreachable
     bb10:
-      jump bb14
+      unreachable
     bb11:
-      %99 = call builtin.is_js_object(%97)
-      branch %99, bb12, bb13
+      jump bb12
     bb12:
       jump bb14
     bb13:
-      jump bb14
+      unreachable
     bb14:
-      %100 = phi [(bb10, %97), (bb12, %97), (bb13, %95)]
-      %101 = is_exception %100
-      branch %101, bb16, bb15
+      jump bb15
     bb15:
-      %103 = is_exception %100
-      branch %103, bb18, bb17
+      jump bb17
     bb16:
-      %102 = call builtin.exception_value(%100)
-      throw %102
+      unreachable
     bb17:
-      store var $0.second, %100
+      store var $0.second, %95
       %105 = load var $0.first
       %106 = const c80
       %107 = get_prop %105, %106
@@ -492,8 +477,7 @@ module {
       %115 = is_exception %114
       branch %115, bb20, bb19
     bb18:
-      %104 = call builtin.exception_value(%100)
-      throw %104
+      unreachable
     bb19:
       %117 = load var $0.first
       %118 = const c82
@@ -609,4 +593,40 @@ module {
     bb38:
       %189 = call builtin.exception_value(%187)
       throw %189
+    bb39:
+      jump bb11
+    bb40:
+      %193 = const c32
+      %194 = get_prop %24, %193
+      %195 = const c33
+      call builtin.private_set(%95, %195, %194)
+      %198 = const c34
+      %199 = get_prop %24, %198
+      %200 = const c35
+      call builtin.private_set(%95, %200, %199)
+      %203 = const c36
+      %204 = get_prop %24, %203
+      %206 = const c37
+      %207 = get_prop %24, %206
+      %208 = const c38
+      call builtin.private_accessor_bind(%95, %208, %204, %207)
+      jump bb39
+    bb41:
+      jump bb2
+    bb42:
+      %212 = const c32
+      %213 = get_prop %24, %212
+      %214 = const c33
+      call builtin.private_set(%84, %214, %213)
+      %217 = const c34
+      %218 = get_prop %24, %217
+      %219 = const c35
+      call builtin.private_set(%84, %219, %218)
+      %222 = const c36
+      %223 = get_prop %24, %222
+      %225 = const c37
+      %226 = get_prop %24, %225
+      %227 = const c38
+      call builtin.private_accessor_bind(%84, %227, %223, %226)
+      jump bb41
 }

@@ -441,13 +441,10 @@ pub(crate) fn run(module: &mut Module) {
                     ) || matches!(
                         instr,
                         Instruction::CallBuiltin {
-                            builtin: Builtin::GetPrototypeFromConstructor,
+                            builtin: Builtin::GetPrototypeFromConstructor | Builtin::CreateClosure,
                             ..
                         }
                     );
-                    // 专用规则：get_prototype_from_constructor 读取构造器 prototype
-                    // （不可配置数据属性）无副作用，但 dest 被 set_proto 等使用时必须
-                    // 保留（删除会使 use 悬空）。仅零 use 时删除。
                     if whitelisted
                         && let Some(dest) = instruction_dest(instr)
                         && use_count.get(&dest).copied().unwrap_or(0) == 0

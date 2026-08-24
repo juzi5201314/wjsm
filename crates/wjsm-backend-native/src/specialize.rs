@@ -7,7 +7,7 @@
 //! 的 `function_table[function_index].slow_entry` 以原始五参数回落 generic entry。
 //! 特化 image 只在进程内存在，不进入 `.wjsm`、磁盘 cache 或分发制品。
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem::{offset_of, size_of};
 
 use anyhow::{Context, Result};
@@ -228,6 +228,8 @@ pub(crate) fn compile_specialized(
         ic_slots: &ic_slots[target_index],
         feedback_slots: feedback_plan.function_slots(target_index),
         specialized_tags: Some(profile.argument_tags.as_ref()),
+        function_decls: &[],
+        direct_callable_functions: &HashSet::new(),
         collect_diagnostics,
     })?;
     let wrapper = compile_wrapper(
@@ -444,7 +446,7 @@ fn compile_wrapper(
     };
     context
         .compile(isa.as_ref(), &mut ControlPlane::default())
-        .map_err(|error| NativeCompileError::Cranelift(error.inner.to_string()))?;
+        .map_err(|error| NativeCompileError::Cranelift(format!("{:#?}", error.inner)))?;
     let compiled = context
         .compiled_code()
         .ok_or_else(|| NativeCompileError::CompilerInvariant("missing compiled code".into()))?;
