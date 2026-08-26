@@ -381,6 +381,14 @@ fn push_callable_own(
     Some(())
 }
 
+/// PropertyKey → canonical array index（ECMA array index 字符串判定）。
+fn canonical_array_index_key(state: &NativeAgentState, key: PropertyKey) -> Option<u32> {
+    if key.is_symbol() {
+        return None;
+    }
+    super::runtime::array_index(state, key.to_value())
+}
+
 pub(crate) fn own_keys(
     state: &mut NativeAgentState,
     encoded: i64,
@@ -483,11 +491,48 @@ pub(crate) fn own_keys(
         return Some(properties);
     }
     let slots = state.gc.heap().own_property_slots(handle).ok()?;
-    let mut properties = Vec::with_capacity(slots.len());
+    let mut index_keys = Vec::new();
+    let mut string_keys = Vec::new();
+    let mut symbol_keys = Vec::new();
     for (key, flags) in slots {
         if enumerable_only && flags & ENUMERABLE == 0 {
             continue;
         }
+        if key.is_symbol() {
+            symbol_keys.push((key, flags));
+        } else if let Some(index) = canonical_array_index_key(state, key) {
+            index_keys.push((index, key, flags));
+        } else {
+            string_keys.push((key, flags));
+        }
+    }
+    index_keys.sort_by_key(|(index, _, _)| *index);
+    let mut properties = Vec::with_capacity(index_keys.len() + string_keys.len() + symbol_keys.len());
+    for (_, key, _flags) in index_keys {
+        let property = state
+            .gc
+            .heap()
+            .get_property_slot(handle, key)
+            .ok()
+            .flatten()?;
+        properties.push((
+            super::runtime::encoded_property_key(key),
+            property.value as i64,
+        ));
+    }
+    for (key, _flags) in string_keys {
+        let property = state
+            .gc
+            .heap()
+            .get_property_slot(handle, key)
+            .ok()
+            .flatten()?;
+        properties.push((
+            super::runtime::encoded_property_key(key),
+            property.value as i64,
+        ));
+    }
+    for (key, _flags) in symbol_keys {
         let property = state
             .gc
             .heap()

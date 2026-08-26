@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+mixed keys: ["3","b","a"]
+p keys: ["3","5","foo"]
+p json: {"3":"a","5":"b","foo":1}
+for-in: ["3","b","a"]
+--- stderr ---
