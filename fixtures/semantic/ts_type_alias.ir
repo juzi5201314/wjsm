@@ -75,10 +75,10 @@ module {
       %21 = new_object(capacity=4)
       %22 = const c20
       %23 = const c21
-      %24 = create_data_property %21, %23, %22
+      %24 = set_prop %21, %23, %22
       %25 = const c22
       %26 = const c23
-      %27 = create_data_property %21, %26, %25
+      %27 = set_prop %21, %26, %25
       store var $0.origin, %21
       %28 = load var $0.origin
       %29 = const c24

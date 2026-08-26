@@ -2,7 +2,7 @@ use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::array_callbacks::set_element_with_gc_retry;
+use super::array_callbacks::{push_element_with_gc_retry, set_element_with_gc_retry};
 use super::runtime::{
     allocate_object_or_out_of_memory, array_index, fail_dispatch, get_property, has_property,
     is_truthy, iterator_done, iterator_value, strict_equal, to_number, to_string_coerced,
@@ -368,19 +368,7 @@ fn array_push(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     state.temporary_roots.extend(args.iter().copied());
 
     for stored in &args[1..] {
-        if state
-            .gc
-            .heap()
-            .push_element(handle, *stored as u64)
-            .is_err()
-        {
-            if state.collect_garbage(ctx).is_ok() {
-                let _ = state.gc.heap().finish_relocation_epoch();
-                let _ = state.gc.heap().advance_epoch_and_reclaim();
-                if state.gc.heap().push_element(handle, *stored as u64).is_ok() {
-                    continue;
-                }
-            }
+        if push_element_with_gc_retry(ctx, state, handle, *stored as u64).is_err() {
             state.temporary_roots.truncate(initial_temp_roots);
             return fail_dispatch(ctx);
         }
@@ -396,21 +384,9 @@ fn array_push_hole(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args
     let initial_temp_roots = state.temporary_roots.len();
     state.temporary_roots.extend(args.iter().copied());
     let hole = value::encode_array_hole() as u64;
-    let res = match state.gc.heap().push_element(handle, hole) {
+    let res = match push_element_with_gc_retry(ctx, state, handle, hole) {
         Ok(length) => value::encode_f64(f64::from(length)),
-        Err(_) => {
-            if state.collect_garbage(ctx).is_ok() {
-                let _ = state.gc.heap().finish_relocation_epoch();
-                let _ = state.gc.heap().advance_epoch_and_reclaim();
-                if let Ok(length) = state.gc.heap().push_element(handle, hole) {
-                    value::encode_f64(f64::from(length))
-                } else {
-                    fail_dispatch(ctx)
-                }
-            } else {
-                fail_dispatch(ctx)
-            }
-        }
+        Err(_) => fail_dispatch(ctx),
     };
     state.temporary_roots.truncate(initial_temp_roots);
     res

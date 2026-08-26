@@ -1699,10 +1699,13 @@ impl NativeAgentState {
 
     fn try_publish_baked_string(&mut self, meta: &wjsm_ir::StringConstantMeta) -> Option<i64> {
         let length = meta.unit_len();
-        if meta.latin1
-            && let Some(encoded) = value::encode_inline_ascii(&meta.payload)
-        {
-            return Some(encoded);
+        if meta.latin1 {
+            if let Some(encoded) = value::encode_inline_ascii(&meta.payload) {
+                return Some(encoded);
+            }
+            if let Some(encoded) = value::encode_inline_latin1(&meta.payload) {
+                return Some(encoded);
+            }
         }
         let key = (meta.hash, length);
         if let Some(encoded) = self.dedup_string_handle(&key) {
@@ -4209,12 +4212,14 @@ impl NativeAgentState {
         }
         let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
         for (byte, unit) in bytes.iter_mut().zip(units.iter().copied()) {
-            if unit > u16::from(0x7f_u8) {
+            if unit > u16::from(u8::MAX) {
                 return None;
             }
             *byte = unit as u8;
         }
-        value::encode_inline_ascii(&bytes[..units.len()])
+        let slice = &bytes[..units.len()];
+        value::encode_inline_ascii(slice)
+            .or_else(|| value::encode_inline_latin1(slice))
     }
 
     fn intern_text(&mut self, text: String, tag: u64) -> Option<i64> {
@@ -6233,7 +6238,9 @@ mod tests {
                     s[5],
                     s.charAt(1),
                     s.charCodeAt(2),
-                    s === "abcdef"
+                    s === "abcdef",
+                    s.slice(0, 3),
+                    s.at(-1)
                 );
             "#,
         );
@@ -6250,12 +6257,48 @@ mod tests {
                 std::path::Path::new("."),
             )
             .expect("ZGC SSO operations should execute");
-        assert_eq!(execution.stdout, b"string 6 a f b 99 true\n");
+        assert_eq!(execution.stdout, b"string 6 a f b 99 true abc f\n");
         assert_eq!(runtime.host_side_table_stats().string_ids, before);
         assert!(
             runtime.allocation_diagnostics().inline_string_constructions > 0,
             "{:?}",
             runtime.allocation_diagnostics()
+        );
+    }
+
+    #[test]
+    fn array_literal_push_avoids_excessive_tlab_flushes() {
+        let artifact = artifact(
+            r#"
+                let total = 0;
+                for (let i = 0; i < 32; i++) {
+                    const array = [1, 2, 3, 4, 5, 6];
+                    total += array[0] + array[5] + array.length;
+                }
+                console.log(total);
+            "#,
+        );
+        let config = NativeRuntimeConfig::default()
+            .with_gc_algorithm(GcAlgorithmKind::Zgc)
+            .with_allocation_diagnostics_enabled(true);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("runtime should initialize");
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("array literal workload should execute");
+        assert_eq!(execution.stdout, b"416\n");
+        let diagnostics = runtime.allocation_diagnostics();
+        assert!(
+            diagnostics.tlab_fast_allocations >= 32,
+            "{diagnostics:?}"
+        );
+        assert!(
+            diagnostics.tlab_flushes <= 2,
+            "packed array push should not flush TLAB per element: {diagnostics:?}"
         );
     }
 

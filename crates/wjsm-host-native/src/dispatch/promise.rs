@@ -444,6 +444,35 @@ pub(crate) fn new_promise(ctx: &mut NativeVmContext, state: &mut NativeAgentStat
     new_promise_with_trigger(ctx, state, None)
 }
 
+/// 在已分配对象上安装 Promise 原型与内部状态（配合 JIT TLAB 分配）。
+pub(crate) fn init_allocated_promise(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+) -> Option<i64> {
+    if !value::is_object(object) {
+        return None;
+    }
+    let Some(constructor) =
+        state.native_callable(NativeCallableKind::Builtin(Builtin::PromiseCreate, false))
+    else {
+        return None;
+    };
+    let prototype_key = state.intern_property_string("prototype".into())?;
+    let Some(prototype) = state.callable_property(constructor, prototype_key) else {
+        return None;
+    };
+    if state
+        .gc
+        .heap()
+        .set_prototype(value::decode_handle(object), value::decode_handle(prototype))
+        .is_err()
+    {
+        return None;
+    }
+    initialize_promise(ctx, state, object, None).then_some(object)
+}
+
 pub(crate) fn resolved_promise(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,

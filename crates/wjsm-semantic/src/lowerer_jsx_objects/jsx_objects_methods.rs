@@ -43,7 +43,7 @@ impl Lowerer {
                                 constant: key_const,
                             },
                         );
-                        self.emit_create_data_property(block, obj_dest, key_dest, val_dest);
+                        self.emit_set_prop(block, obj_dest, key_dest, val_dest);
                     }
                     swc_ast::Prop::Getter(getter) => {
                         let key_dest = self.lower_prop_name(&getter.key, block)?;
@@ -138,7 +138,7 @@ impl Lowerer {
                             method.function.span,
                         )?;
                         block = continuation;
-                        self.emit_create_data_property(block, obj_dest, key_dest, fn_value);
+                        self.emit_set_prop(block, obj_dest, key_dest, fn_value);
                     }
                     _ => {
                         return Err(
@@ -256,7 +256,7 @@ impl Lowerer {
         } else {
             let key_dest = self.lower_prop_name(key, *block)?;
             *block = self.resolve_store_block(*block);
-            self.emit_create_data_property(*block, obj_dest, key_dest, val_dest);
+            self.emit_set_prop(*block, obj_dest, key_dest, val_dest);
         }
         Ok(())
     }

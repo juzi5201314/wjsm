@@ -64,8 +64,15 @@ pub(super) fn set_element_with_gc_retry(
     index: u32,
     value: u64,
 ) -> Result<(), ()> {
-    if state.gc.heap().set_element(handle, index, value).is_ok() {
-        return Ok(());
+    match state.gc.heap().set_element(handle, index, value) {
+        Ok(()) => return Ok(()),
+        Err(wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+            state.gc.flush_native_tlab(ctx).map_err(|_| ())?;
+            if state.gc.heap().set_element(handle, index, value).is_ok() {
+                return Ok(());
+            }
+        }
+        Err(_) => {}
     }
     if state.collect_garbage(ctx).is_ok() {
         let _ = state.gc.heap().finish_relocation_epoch();
@@ -83,8 +90,15 @@ pub(super) fn push_element_with_gc_retry(
     handle: u32,
     value: u64,
 ) -> Result<u32, ()> {
-    if let Ok(length) = state.gc.heap().push_element(handle, value) {
-        return Ok(length);
+    match state.gc.heap().push_element(handle, value) {
+        Ok(length) => return Ok(length),
+        Err(wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+            state.gc.flush_native_tlab(ctx).map_err(|_| ())?;
+            if let Ok(length) = state.gc.heap().push_element(handle, value) {
+                return Ok(length);
+            }
+        }
+        Err(_) => {}
     }
     if state.collect_garbage(ctx).is_ok() {
         let _ = state.gc.heap().finish_relocation_epoch();

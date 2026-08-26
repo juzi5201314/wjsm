@@ -1061,10 +1061,10 @@ module {
       %382 = new_object(capacity=4)
       %383 = const c168
       %384 = const c169
-      %385 = create_data_property %382, %384, %383
+      %385 = set_prop %382, %384, %383
       %386 = const c170
       %387 = const c171
-      %388 = create_data_property %382, %387, %386
+      %388 = set_prop %382, %387, %386
       %389 = call builtin.enumerator.from(%382)
       jump bb105
     bb104:

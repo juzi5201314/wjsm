@@ -131,12 +131,32 @@ pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x20;
 pub const INLINE_STRING_MAX_LEN: usize = 6;
 pub const INLINE_STRING_MARKER_SHIFT: u32 = 48;
 pub const INLINE_STRING_MARKER: u64 = 0b101;
+pub const INLINE_STRING_LATIN1_MARKER: u64 = 0b110;
 pub const INLINE_STRING_MARKER_MASK: u64 = 0b111 << INLINE_STRING_MARKER_SHIFT;
 pub const INLINE_STRING_LENGTH_SHIFT: u32 = 45;
 pub const INLINE_STRING_LENGTH_MASK: u64 = 0b111 << INLINE_STRING_LENGTH_SHIFT;
+/// Latin-1 SSO 的最大单字节码元长度（45 bit 可用载荷，低于 ASCII 的 6×7bit）。
+pub const INLINE_STRING_LATIN1_MAX_LEN: usize = 5;
 pub const INLINE_STRING_PAYLOAD_MASK: u64 = (1_u64 << 42) - 1;
-/// SSO 保留位（bit 42–44），对 inline string 必须为零；与 GC color bit 42–43 重叠。
+/// ASCII SSO 保留位（bit 42–44），对 inline ASCII 必须为零；Latin-1 在 ≤5 码元时仅用 bits 0–39。
 pub const INLINE_STRING_RESERVED_MASK: u64 = 0b111 << 42;
+
+fn inline_latin1_payload(bits: u64) -> u64 {
+    bits & !BOX_BASE
+}
+
+fn inline_latin1_wide_payload(bits: u64) -> u64 {
+    inline_latin1_payload(bits) & INLINE_STRING_PAYLOAD_MASK
+}
+
+fn encode_inline_latin1_wide(length: usize, wide: u64) -> i64 {
+    let mut payload = INLINE_STRING_LATIN1_MARKER << INLINE_STRING_MARKER_SHIFT;
+    payload |= (length as u64) << INLINE_STRING_LENGTH_SHIFT;
+    payload |= wide & INLINE_STRING_PAYLOAD_MASK;
+    let encoded = (BOX_BASE | payload) as i64;
+    debug_assert!(is_inline_latin1(encoded), "encode_inline_latin1 必须产出规范 SSO 值");
+    encoded
+}
 
 /// 以独立 marker 编码 0–6 个 7-bit ASCII 码元；尾部槽位保持为零。
 pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
@@ -149,11 +169,11 @@ pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
         payload |= u64::from(byte) << (index * 7);
     }
     let encoded = (BOX_BASE | payload) as i64;
-    debug_assert!(is_inline_string(encoded), "encode_inline_ascii 必须产出规范 SSO 值");
+    debug_assert!(is_inline_ascii(encoded), "encode_inline_ascii 必须产出规范 SSO 值");
     Some(encoded)
 }
 
-pub fn is_inline_string(value: i64) -> bool {
+pub fn is_inline_ascii(value: i64) -> bool {
     let bits = value as u64;
     let length = (bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT;
     let used_payload = if length == 0 {
@@ -169,8 +189,64 @@ pub fn is_inline_string(value: i64) -> bool {
         && bits & INLINE_STRING_PAYLOAD_MASK & !used_payload == 0
 }
 
+/// 以 Latin-1 marker 编码 0–5 个单字节码元。
+pub fn encode_inline_latin1(bytes: &[u8]) -> Option<i64> {
+    if bytes.len() > INLINE_STRING_LATIN1_MAX_LEN {
+        return None;
+    }
+    let mut wide = 0_u64;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        wide |= u64::from(byte) << (index * 8);
+    }
+    let used_wide = if bytes.is_empty() {
+        0
+    } else {
+        (1_u64 << (bytes.len() * 8)) - 1
+    };
+    if wide & !used_wide != 0 {
+        return None;
+    }
+    Some(encode_inline_latin1_wide(bytes.len(), wide))
+}
+
+pub fn is_inline_latin1(value: i64) -> bool {
+    let bits = value as u64;
+    let length = (bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT;
+    if (bits & BOX_BASE) != BOX_BASE
+        || (bits & INLINE_STRING_MARKER_MASK)
+            != (INLINE_STRING_LATIN1_MARKER << INLINE_STRING_MARKER_SHIFT)
+        || length > INLINE_STRING_LATIN1_MAX_LEN as u64
+    {
+        return false;
+    }
+    let wide = inline_latin1_wide_payload(bits);
+    let used_wide = if length == 0 {
+        0
+    } else {
+        (1_u64 << (length * 8)) - 1
+    };
+    wide & !used_wide == 0 && inline_latin1_payload(bits) & INLINE_STRING_RESERVED_MASK == 0
+}
+
+pub fn decode_inline_latin1(value: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
+    if !is_inline_latin1(value) {
+        return None;
+    }
+    let bits = value as u64;
+    let length = ((bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as usize;
+    let wide = inline_latin1_wide_payload(bits);
+    for (index, slot) in output.iter_mut().enumerate().take(length) {
+        *slot = ((wide >> (index * 8)) & 0xff) as u8;
+    }
+    Some(&output[..length])
+}
+
+pub fn is_inline_string(value: i64) -> bool {
+    is_inline_ascii(value) || is_inline_latin1(value)
+}
+
 pub fn decode_inline_ascii(value: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
-    if !is_inline_string(value) {
+    if !is_inline_ascii(value) {
         return None;
     }
     let bits = value as u64;
@@ -192,8 +268,10 @@ pub fn inline_string_len(value: i64) -> Option<u8> {
 /// inline string，无需调用完整 `is_inline_string` 的长度/保留位/payload 校验。
 fn is_tagged(value: i64, tag: u64) -> bool {
     let bits = value as u64;
+    let marker = (bits & INLINE_STRING_MARKER_MASK) >> INLINE_STRING_MARKER_SHIFT;
     (bits & BOX_BASE) == BOX_BASE
-        && (bits & INLINE_STRING_MARKER_MASK) != (INLINE_STRING_MARKER << INLINE_STRING_MARKER_SHIFT)
+        && marker != INLINE_STRING_MARKER
+        && marker != INLINE_STRING_LATIN1_MARKER
         && ((bits >> 32) & TAG_MASK) == tag
 }
 

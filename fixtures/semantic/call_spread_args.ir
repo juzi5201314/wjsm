@@ -404,7 +404,7 @@ module {
       %11 = new_object(capacity=4)
       %12 = const c126
       %13 = const c127
-      %14 = create_data_property %11, %13, %12
+      %14 = set_prop %11, %13, %12
       return %11
     bb2:
       %15 = new_object(capacity=4)
@@ -419,10 +419,10 @@ module {
       branch %23, bb4, bb3
     bb3:
       %25 = const c130
-      %26 = create_data_property %15, %25, %19
+      %26 = set_prop %15, %25, %19
       %27 = const c131
       %28 = const c132
-      %29 = create_data_property %15, %28, %27
+      %29 = set_prop %15, %28, %27
       return %15
     bb4:
       %24 = call builtin.exception_value(%22)
@@ -450,7 +450,7 @@ module {
       %12 = const c135
       %13 = set_prop %9, %12, %11
       %14 = call builtin.create_closure(%7, %9)
-      %15 = create_data_property %5, %6, %14
+      %15 = set_prop %5, %6, %14
       return %5
 
   fn @$__wjsm_gen_expr_8$gen [params: $10.$env, $10.$this] [entry=bb0]:
@@ -703,10 +703,10 @@ module {
       %44 = new_object(capacity=4)
       %45 = const c38
       %46 = const c39
-      %47 = create_data_property %44, %46, %45
+      %47 = set_prop %44, %46, %45
       %48 = const c40
       %49 = const c44
-      %50 = create_data_property %44, %48, %49
+      %50 = set_prop %44, %48, %49
       store var $0.receiver, %44
       %51 = const c45
       %52 = load var $0.receiver
@@ -895,7 +895,7 @@ module {
       %164 = const c115
       %165 = call builtin.symbol.well_known(%164)
       %166 = const c136
-      %167 = create_data_property %163, %165, %166
+      %167 = set_prop %163, %165, %166
       store var $0.iterable, %163
       %168 = const c137
       %169 = const c138

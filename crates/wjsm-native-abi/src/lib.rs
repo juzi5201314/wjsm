@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 18;
+pub const NATIVE_ABI_VERSION: u32 = 19;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -434,6 +434,8 @@ pub enum NativeRuntimeOp {
     /// accessor IC 命中后的直接 getter 调用：`[getter, receiver]`。
     /// 仅由 CLIF 快路径在 shape + 世代命中后使用，宿主不再查属性表。
     GetPropAccessor = 0x1_0510,
+    /// 在 TLAB 已分配的对象句柄上完成 Promise 内部状态初始化。
+    InitPromise = 0x1_0512,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -497,6 +499,7 @@ impl NativeRuntimeOp {
             0x1_050e => Some(Self::GetPropIc),
             0x1_050f => Some(Self::SetPropIc),
             0x1_0510 => Some(Self::GetPropAccessor),
+            0x1_0512 => Some(Self::InitPromise),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -928,7 +931,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::GetPropIc,
             NativeRuntimeOp::SetPropIc,
             NativeRuntimeOp::GetPropAccessor,
-            NativeRuntimeOp::PrepareCall,
+            NativeRuntimeOp::InitPromise,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,
             NativeRuntimeOp::LoadArgument,

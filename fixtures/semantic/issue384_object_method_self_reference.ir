@@ -269,7 +269,7 @@ module {
       set_proto %8, %9
       store var $5.$shared_env, %8
       %10 = call builtin.create_closure(%6, %8)
-      %11 = create_data_property %4, %5, %10
+      %11 = set_prop %4, %5, %10
       %12 = const c63
       %13 = const c67
       %14 = call builtin.create_closure(%13, %8)
@@ -415,11 +415,11 @@ module {
       %28 = const c27
       %29 = set_prop %25, %28, %27
       %30 = call builtin.create_closure(%23, %25)
-      %31 = create_data_property %21, %22, %30
+      %31 = set_prop %21, %22, %30
       %32 = const c28
       %33 = const c32
       %34 = call builtin.create_closure(%33, %25)
-      %35 = create_data_property %21, %32, %34
+      %35 = set_prop %21, %32, %34
       %36 = const c33
       %37 = const c37
       %38 = call builtin.create_closure(%37, %25)
@@ -449,7 +449,7 @@ module {
       %60 = const c54
       %61 = const c73
       %62 = call builtin.create_closure(%61, %25)
-      %63 = create_data_property %21, %60, %62
+      %63 = set_prop %21, %60, %62
       store var $0.set, %21
       %64 = const c74
       %65 = set_prop %25, %64, %21
@@ -788,7 +788,7 @@ module {
       %255 = const c131
       %256 = set_prop %253, %255, %254
       %257 = call builtin.create_closure(%252, %253)
-      %258 = create_data_property %250, %251, %257
+      %258 = set_prop %250, %251, %257
       store var $0.assigned, %250
       %259 = const c132
       %260 = set_prop %253, %259, %250
@@ -815,7 +815,7 @@ module {
       %269 = new_object(capacity=4)
       %270 = const c135
       %271 = const c136
-      %272 = create_data_property %269, %271, %270
+      %272 = set_prop %269, %271, %270
       store var $0.replacement, %269
       %273 = load var $0.assignOwner
       %274 = const c137
@@ -858,7 +858,7 @@ module {
       %298 = const c149
       %299 = set_prop %296, %298, %297
       %300 = call builtin.create_closure(%295, %296)
-      %301 = create_data_property %293, %294, %300
+      %301 = set_prop %293, %294, %300
       store var $0.updated, %293
       %302 = const c150
       %303 = set_prop %296, %302, %293

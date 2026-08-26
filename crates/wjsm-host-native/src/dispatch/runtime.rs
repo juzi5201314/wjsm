@@ -170,6 +170,13 @@ pub(super) fn dispatch_runtime(
                 operation == NativeRuntimeOp::NewArray,
             )
         }
+        NativeRuntimeOp::InitPromise => {
+            let [object] = args else {
+                return fail_dispatch(ctx);
+            };
+            super::promise::init_allocated_promise(ctx, state, *object)
+                .unwrap_or_else(|| fail_dispatch(ctx))
+        }
         NativeRuntimeOp::GetProp => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
@@ -435,6 +442,21 @@ pub(super) fn dispatch_runtime(
                     .heap()
                     .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
                     .map(|()| *stored)
+                    .or_else(|error| match error {
+                        wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. } => {
+                            state
+                                .gc
+                                .flush_native_tlab(ctx)
+                                .map_err(|_| fail_dispatch(ctx))?;
+                            state
+                                .gc
+                                .heap()
+                                .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
+                                .map(|()| *stored)
+                                .map_err(|_| fail_dispatch(ctx))
+                        }
+                        _ => Err(fail_dispatch(ctx)),
+                    })
                     .unwrap_or_else(|_| fail_dispatch(ctx));
             }
             let Some(key) = property_key(state, *index) else {

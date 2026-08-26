@@ -292,15 +292,23 @@ impl NativeGc {
         }
         Ok(())
     }
-    /// 在宿主即将解引用 generated 数组或执行不透明 builtin 前登记 TLAB 对象。
-    /// 普通对象属性写入使用四槽初始容量，避免每次写入都查询尚未物化的 page metadata。
+    /// 在宿主即将遍历堆页元数据或复制尚未物化 TLAB 对象前 flush。
+    ///
+    /// 数组元素读写与多数 builtin 通过 `NativeTlabNeedsMaterialization` 惰性
+    /// materialize，不在每次 dispatcher 入口整页 flush。
     pub(super) fn operation_requires_native_tlab_flush(
         &self,
         context: &NativeVmContext,
         operation: Option<wjsm_native_abi::NativeRuntimeOp>,
-        builtin: bool,
         args: &[i64],
     ) -> Result<bool, NativeGcError> {
+        let must_materialize = matches!(
+            operation,
+            Some(wjsm_native_abi::NativeRuntimeOp::ObjectSpread)
+        );
+        if !must_materialize {
+            return Ok(false);
+        }
         let Some(encoded) = args
             .first()
             .copied()
@@ -308,15 +316,6 @@ impl NativeGc {
         else {
             return Ok(false);
         };
-        let must_materialize = value::is_array(encoded)
-            || builtin
-            || matches!(
-                operation,
-                Some(wjsm_native_abi::NativeRuntimeOp::ObjectSpread)
-            );
-        if !must_materialize {
-            return Ok(false);
-        }
         let native_tlab = self.native_tlab.borrow();
         let Some(window) = native_tlab.as_ref() else {
             return Ok(false);

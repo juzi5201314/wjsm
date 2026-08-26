@@ -661,7 +661,7 @@ module {
       %97 = const c60
       %98 = set_prop %95, %97, %96
       %99 = call builtin.create_closure(%94, %95)
-      %100 = create_data_property %92, %93, %99
+      %100 = set_prop %92, %93, %99
       store var $0.methodObject, %92
       %101 = load var $0.methodObject
       %102 = const c61
@@ -709,7 +709,7 @@ module {
       %127 = const c75
       %128 = set_prop %125, %127, %126
       %129 = call builtin.create_closure(%124, %125)
-      %130 = create_data_property %122, %123, %129
+      %130 = set_prop %122, %123, %129
       store var $0.homeBase, %122
       %131 = new_object(capacity=4)
       %132 = load var $0.homeBase
@@ -721,7 +721,7 @@ module {
       %136 = const c85
       %137 = set_prop %135, %136, %131
       %138 = call builtin.create_closure(%134, %135)
-      %139 = create_data_property %131, %133, %138
+      %139 = set_prop %131, %133, %138
       store var $0.homeObject, %131
       %140 = const c86
       %141 = const c87

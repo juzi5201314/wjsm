@@ -143,3 +143,28 @@ fn inline_ascii_round_trip_preserves_nul_and_del() {
         Some(input.as_slice())
     );
 }
+
+#[test]
+fn inline_latin1_round_trips_all_lengths() {
+    for length in 0..=wjsm_ir::value::INLINE_STRING_LATIN1_MAX_LEN {
+        let input: Vec<u8> = (0..length).map(|index| 0x60 + index as u8).collect();
+        let value = wjsm_ir::value::encode_inline_latin1(&input).expect("Latin-1 SSO");
+        assert!(wjsm_ir::value::is_inline_latin1(value));
+        assert!(wjsm_ir::value::is_inline_string(value));
+        assert_eq!(wjsm_ir::value::inline_string_len(value), Some(length as u8));
+        let mut output = [0_u8; wjsm_ir::value::INLINE_STRING_MAX_LEN];
+        assert_eq!(
+            wjsm_ir::value::decode_inline_latin1(value, &mut output),
+            Some(input.as_slice())
+        );
+    }
+}
+
+#[test]
+fn inline_latin1_is_not_a_number_or_heap_reference() {
+    let value = wjsm_ir::value::encode_inline_latin1(&[0xe9]).expect("Latin-1 SSO");
+    assert!(is_string(value));
+    assert!(!is_f64(value));
+    assert!(!is_handle_backed_reference(value));
+    assert!(!wjsm_ir::value::is_inline_ascii(value));
+}

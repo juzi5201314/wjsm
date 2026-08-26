@@ -12,7 +12,7 @@ use wjsm_ir::{Builtin, Program};
 
 const MAGIC: &[u8; 8] = b"WJSMART\0";
 // v5：运行时NaN-box/属性键布局进入ABI域，旧artifact必须重新构建。
-const FORMAT_VERSION: u16 = 5;
+const FORMAT_VERSION: u16 = 6;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

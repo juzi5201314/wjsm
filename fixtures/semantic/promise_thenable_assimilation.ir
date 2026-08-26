@@ -91,7 +91,7 @@ module {
       %21 = new_object(capacity=4)
       %22 = const c22
       %23 = const c23
-      %24 = create_data_property %21, %23, %22
+      %24 = set_prop %21, %23, %22
       store var $0.thenable, %21
       %25 = const c24
       %26 = load var $0.thenable

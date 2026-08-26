@@ -75,7 +75,7 @@ module {
       %21 = new_object(capacity=4)
       %22 = const c20
       %23 = const c21
-      %24 = create_data_property %21, %23, %22
+      %24 = set_prop %21, %23, %22
       store var $0.target, %21
       %25 = new_object(capacity=4)
       store var $0.handler, %25

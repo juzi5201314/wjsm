@@ -153,6 +153,13 @@ fn integer(state: &NativeAgentState, value: Option<i64>, default: i64) -> Option
 fn receiver(state: &NativeAgentState, args: &[i64]) -> Option<RuntimeString> {
     runtime_string(state, *args.first()?)
 }
+fn decode_inline_bytes(encoded: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
+    if let Some(units) = value::decode_inline_ascii(encoded, output) {
+        return Some(units);
+    }
+    value::decode_inline_latin1(encoded, output)
+}
+
 fn string_at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(encoded) = args.first().copied() else {
         return fail_dispatch(ctx);
@@ -162,7 +169,7 @@ fn string_at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     };
     if value::is_inline_string(encoded) {
         let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
-        let Some(units) = value::decode_inline_ascii(encoded, &mut bytes) else {
+        let Some(units) = decode_inline_bytes(encoded, &mut bytes) else {
             return fail_dispatch(ctx);
         };
         if index < 0 {
@@ -173,7 +180,10 @@ fn string_at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
         };
         return units
             .get(index)
-            .and_then(|unit| value::encode_inline_ascii(std::slice::from_ref(unit)))
+            .and_then(|unit| {
+                value::encode_inline_ascii(std::slice::from_ref(unit))
+                    .or_else(|| value::encode_inline_latin1(std::slice::from_ref(unit)))
+            })
             .unwrap_or_else(value::encode_undefined);
     }
     let length = state.string_len(encoded).unwrap_or(0) as i64;
@@ -710,7 +720,7 @@ fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
     let first = *args.first().unwrap_or(&value::encode_undefined());
     if value::is_inline_string(first) {
         let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
-        let Some(units) = value::decode_inline_ascii(first, &mut bytes) else {
+        let Some(units) = decode_inline_bytes(first, &mut bytes) else {
             return fail_dispatch(ctx);
         };
         let length = i64::try_from(units.len()).expect("SSO length fits i64");
@@ -724,10 +734,13 @@ fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         } else {
             start..end
         };
-        return value::encode_inline_ascii(&units[range.clone()]).unwrap_or_else(|| {
-            let utf16 = units[range].iter().map(|&unit| u16::from(unit)).collect();
-            intern(ctx, state, RuntimeString::from_utf16_units(utf16))
-        });
+        let slice = &units[range];
+        return value::encode_inline_ascii(slice)
+            .or_else(|| value::encode_inline_latin1(slice))
+            .unwrap_or_else(|| {
+                let utf16 = slice.iter().map(|&unit| u16::from(unit)).collect();
+                intern(ctx, state, RuntimeString::from_utf16_units(utf16))
+            });
     }
     if !value::is_string(first) && !value::is_bigint(first) {
         let Some(text) = runtime_string(state, first) else {

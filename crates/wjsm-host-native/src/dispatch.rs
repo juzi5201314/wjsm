@@ -246,12 +246,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
     let runtime_operation = NativeRuntimeOp::from_id(operation);
     let tlab_visibility = state
         .gc
-        .operation_requires_native_tlab_flush(
-            ctx,
-            runtime_operation,
-            operation <= u32::from(Builtin::last_wire_id()),
-            args,
-        )
+        .operation_requires_native_tlab_flush(ctx, runtime_operation, args)
         .and_then(|requires_flush| {
             if requires_flush {
                 state.gc.flush_native_tlab(ctx)

@@ -108,6 +108,18 @@ mod tests {
     }
 
     #[test]
+    fn inline_latin1_key_preserves_complete_sso_value() {
+        for input in [b"".as_slice(), b"\xe9", b"caf\xe9"] {
+            let encoded = value::encode_inline_latin1(input).expect("Latin-1 SSO");
+            let key = PropertyKey::inline_string(encoded).expect("inline property key");
+            assert!(key.is_inline_string());
+            assert_eq!(key.name_id(), None);
+            assert_eq!(key.to_value(), encoded);
+            assert_eq!(PropertyKey::inline_string(key.to_value()), Some(key));
+        }
+    }
+
+    #[test]
     fn non_inline_values_are_rejected() {
         assert!(PropertyKey::inline_string(value::encode_runtime_string_handle(7)).is_none());
         assert!(PropertyKey::inline_string(value::encode_f64(1.0)).is_none());
