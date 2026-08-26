@@ -98,6 +98,7 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         GuardSameFunction { callee, .. } => vec![*callee],
         ObjectSpread { dest, source } => vec![*dest, *source],
         StoreVar { value, .. } => vec![*value],
+        InitObjectLiteral { values, .. } => values.clone(),
         // 无操作数
         Const { .. }
         | LoadVar { .. }
@@ -161,6 +162,7 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | DeleteProp { dest, .. }
         | NewArray { dest, .. }
         | CloneArrayTemplate { dest, .. }
+        | InitObjectLiteral { dest, .. }
         | GetElem { dest, .. }
         | SetElem { dest, .. }
         | OptionalGetProp { dest, .. }

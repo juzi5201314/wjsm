@@ -333,6 +333,10 @@ pub enum Constant {
     String(String),
     /// 编译期 split 产生的不可变数组模板；运行时必须 clone 成独立数组。
     ArrayTemplate(Vec<ConstantId>),
+    /// 静态 SSO 键对象字面量模板；install 期烘焙 shape transition。
+    ObjectTemplate {
+        keys: Vec<u64>,
+    },
     Bool(bool),
     Null,
     Undefined,
@@ -356,6 +360,7 @@ impl fmt::Display for Constant {
             Self::Number(value) => write!(formatter, "number({value})"),
             Self::String(value) => write!(formatter, "string({value:?})"),
             Self::ArrayTemplate(elements) => write!(formatter, "array_template({elements:?})"),
+            Self::ObjectTemplate { keys } => write!(formatter, "object_template({keys:?})"),
             Self::Bool(value) => write!(formatter, "bool({value})"),
             Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
@@ -1196,6 +1201,12 @@ pub enum Instruction {
         dest: ValueId,
         template: ConstantId,
     },
+    /// 以静态 SSO 键模板初始化对象：单次 TLAB bump + 直写 value slot。
+    InitObjectLiteral {
+        dest: ValueId,
+        template: ConstantId,
+        values: Vec<ValueId>,
+    },
     /// 按数字索引读取数组元素
     GetElem {
         dest: ValueId,
@@ -1456,6 +1467,24 @@ impl fmt::Display for Instruction {
             Self::CloneArrayTemplate { dest, template } => {
                 write!(formatter, "{dest} = clone_array_template({template})")
             }
+            Self::InitObjectLiteral {
+                dest,
+                template,
+                values,
+            } => {
+                write!(formatter, "{dest} = init_object_literal({template}")?;
+                if !values.is_empty() {
+                    formatter.write_str(", values=[")?;
+                    for (index, value) in values.iter().enumerate() {
+                        if index > 0 {
+                            formatter.write_str(", ")?;
+                        }
+                        write!(formatter, "{value}")?;
+                    }
+                    formatter.write_char(']')?;
+                }
+                formatter.write_char(')')
+            }
             Self::GetElem {
                 dest,
                 object,
@@ -1644,6 +1673,12 @@ impl Instruction {
             Self::NewObject { dest, .. }
             | Self::NewArray { dest, .. }
             | Self::CloneArrayTemplate { dest, .. } => *dest = f(*dest),
+            Self::InitObjectLiteral { dest, values, .. } => {
+                *dest = f(*dest);
+                for value in values {
+                    *value = f(*value);
+                }
+            }
             Self::GetProp { dest, object, key } => {
                 *dest = f(*dest);
                 *object = f(*object);

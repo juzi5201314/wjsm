@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 19;
+pub const NATIVE_ABI_VERSION: u32 = 20;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -136,6 +136,9 @@ pub struct NativeVmContext {
     /// 当前 canonical Object/Array prototype 的 stable handle；其余 prototype 走宿主慢路径。
     pub object_prototype_handle: u32,
     pub array_prototype_handle: u32,
+    /// 当前 image 的对象模板 install 期元数据（`OBJECT_TEMPLATE_META_WORDS` u32/条）。
+    pub object_template_meta_base: *const u32,
+    pub object_template_meta_count: u32,
 }
 impl Default for NativeVmContext {
     fn default() -> Self {
@@ -184,6 +187,8 @@ impl Default for NativeVmContext {
             allocation_small_limit: 0,
             object_prototype_handle: 0,
             array_prototype_handle: 0,
+            object_template_meta_base: std::ptr::null(),
+            object_template_meta_count: 0,
         }
     }
 }
@@ -436,6 +441,8 @@ pub enum NativeRuntimeOp {
     GetPropAccessor = 0x1_0510,
     /// 在 TLAB 已分配的对象句柄上完成 Promise 内部状态初始化。
     InitPromise = 0x1_0512,
+    /// 以 install 期烘焙的对象模板初始化字面量：`[template_meta_index, ...values]`。
+    InitObjectLiteral = 0x1_0513,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -500,6 +507,7 @@ impl NativeRuntimeOp {
             0x1_050f => Some(Self::SetPropIc),
             0x1_0510 => Some(Self::GetPropAccessor),
             0x1_0512 => Some(Self::InitPromise),
+            0x1_0513 => Some(Self::InitObjectLiteral),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -820,6 +828,8 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, allocation_small_limit),
             offset_of!(NativeVmContext, object_prototype_handle),
             offset_of!(NativeVmContext, array_prototype_handle),
+            offset_of!(NativeVmContext, object_template_meta_base),
+            offset_of!(NativeVmContext, object_template_meta_count),
         ] {
             hasher.update(
                 u64::try_from(offset)
@@ -932,6 +942,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::SetPropIc,
             NativeRuntimeOp::GetPropAccessor,
             NativeRuntimeOp::InitPromise,
+            NativeRuntimeOp::InitObjectLiteral,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,
             NativeRuntimeOp::LoadArgument,

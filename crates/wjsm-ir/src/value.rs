@@ -173,6 +173,16 @@ pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
     Some(encoded)
 }
 
+/// 将规范 inline SSO 值转为 ShapeTable / 对象模板使用的 PropertyKey 原始编码。
+pub fn inline_property_key_raw(encoded: i64) -> Option<u64> {
+    if !is_inline_string(encoded) {
+        return None;
+    }
+    const INLINE_NAMESPACE: u64 = 1 << 62;
+    const INLINE_PAYLOAD_MASK: u64 = (1_u64 << (INLINE_STRING_MARKER_SHIFT + 3)) - 1;
+    Some(INLINE_NAMESPACE | (encoded as u64 & INLINE_PAYLOAD_MASK))
+}
+
 pub fn is_inline_ascii(value: i64) -> bool {
     let bits = value as u64;
     let length = (bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT;

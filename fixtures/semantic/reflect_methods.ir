@@ -20,10 +20,10 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = number(10)
-    c21 = string("x")
+    c20 = object_template([4613128577683030136, 4613128577683030137])
+    c21 = number(10)
     c22 = number(20)
-    c23 = string("y")
+    c23 = object_template([])
     c24 = string("x")
     c25 = bool(true)
     c26 = bool(false)
@@ -72,34 +72,30 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = new_object(capacity=4)
-      %22 = const c20
-      %23 = const c21
-      %24 = set_prop %21, %23, %22
-      %25 = const c22
-      %26 = const c23
-      %27 = set_prop %21, %26, %25
-      store var $0.target, %21
-      %28 = load var $0.target
-      %29 = new_object(capacity=4)
-      %30 = call builtin.proxy.create(%28, %29)
-      %31 = is_exception %30
-      branch %31, bb2, bb1
+      %21 = const c21
+      %22 = const c22
+      %23 = init_object_literal(c20, values=[%21, %22])
+      store var $0.target, %23
+      %24 = load var $0.target
+      %25 = init_object_literal(c23)
+      %26 = call builtin.proxy.create(%24, %25)
+      %27 = is_exception %26
+      branch %27, bb2, bb1
     bb1:
-      store var $0.proxy, %30
-      %33 = load var $0.proxy
-      %34 = const c24
-      %35 = load var $0.proxy
-      %36 = call builtin.reflect.get(%33, %34, %35)
-      %37 = call builtin.console.log(%36)
-      %38 = is_exception %37
-      branch %38, bb4, bb3
+      store var $0.proxy, %26
+      %29 = load var $0.proxy
+      %30 = const c24
+      %31 = load var $0.proxy
+      %32 = call builtin.reflect.get(%29, %30, %31)
+      %33 = call builtin.console.log(%32)
+      %34 = is_exception %33
+      branch %34, bb4, bb3
     bb2:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %28 = call builtin.exception_value(%26)
+      throw %28
     bb3:
       return
     bb4:
-      %39 = call builtin.exception_value(%37)
-      throw %39
+      %35 = call builtin.exception_value(%33)
+      throw %35
 }

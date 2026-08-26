@@ -9,8 +9,8 @@
 //!    source 可证明非异常的 Phi（传递闭包）。NewObject 分配成功即普通对象；
 //!    失败软上限 RangeError 的语义取舍见计划 Assumptions。Binary/Unary 可能
 //!    抛异常（bigint 混合算术），不折叠。
-//! 2. **IsJsObject 折叠**：`is_js_object(new_object)` 恒 true（从 inline_for_ea
-//!    阶段 B 迁移，行为不变）。
+//! 2. **IsJsObject 折叠**：`is_js_object(NewObject|InitObjectLiteral)` 恒 true（从
+//!    inline_for_ea 阶段 B 迁移，行为不变）。
 //! 3. **常量分支折叠**：Const 条件的 `Branch` / Const 值的 `Switch` → `Jump`。
 //! 4. **死块中和**：不可达块清空指令、终止器置 `Unreachable`（块索引与 id 不变，
 //!    沿用后端中和约定；绝不从 blocks 向量移除）。
@@ -49,6 +49,7 @@ fn is_provably_non_exception(defs: &HashMap<ValueId, Instruction>, value: ValueI
         match instr {
             Instruction::Const { .. }
             | Instruction::NewObject { .. }
+            | Instruction::InitObjectLiteral { .. }
             | Instruction::Compare { .. }
             | Instruction::NewArray { .. } => true,
             Instruction::Phi { sources, .. } => {
@@ -229,7 +230,7 @@ pub(crate) fn run(module: &mut Module) {
                         }
                         continue;
                     }
-                    // 规则 2：is_js_object(NewObject) → true。
+                    // 规则 2：is_js_object(NewObject|InitObjectLiteral) → true。
                     if let Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::IsJsObject,
@@ -237,7 +238,13 @@ pub(crate) fn run(module: &mut Module) {
                     } = instr
                     {
                         if args.len() == 1
-                            && matches!(defs.get(&args[0]), Some(Instruction::NewObject { .. }))
+                            && matches!(
+                                defs.get(&args[0]),
+                                Some(
+                                    Instruction::NewObject { .. }
+                                        | Instruction::InitObjectLiteral { .. }
+                                )
+                            )
                         {
                             replace_sites.push((
                                 idx,
@@ -365,6 +372,7 @@ pub(crate) fn run(module: &mut Module) {
                 // 收集（只读借用）→ 应用（可变借用），避免借用冲突。
                 let mut collapses: Vec<(usize, ValueId, ValueId)> = Vec::new();
                 let mut undefs: Vec<(usize, ValueId)> = Vec::new();
+                let mut prunes: Vec<(usize, ValueId, Vec<wjsm_ir::PhiSource>)> = Vec::new();
                 {
                     let block = &function.blocks()[block_idx];
                     for (idx, instr) in block.instructions().iter().enumerate() {
@@ -383,6 +391,8 @@ pub(crate) fn run(module: &mut Module) {
                             } else if live_sources.is_empty() {
                                 // 防御：可达非入口块不应出现 0 源 phi；替换为 undefined。
                                 undefs.push((idx, *dest));
+                            } else if live_sources.len() != sources.len() {
+                                prunes.push((idx, *dest, live_sources));
                             }
                         }
                     }
@@ -396,6 +406,14 @@ pub(crate) fn run(module: &mut Module) {
                         Instruction::Const {
                             dest: *dest,
                             constant: undefined,
+                        };
+                    phi_folded = true;
+                }
+                for (idx, dest, live_sources) in prunes {
+                    function.blocks_mut()[block_idx].instructions_mut()[idx] =
+                        Instruction::Phi {
+                            dest,
+                            sources: live_sources,
                         };
                     phi_folded = true;
                 }

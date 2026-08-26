@@ -177,6 +177,16 @@ pub(super) fn dispatch_runtime(
             super::promise::init_allocated_promise(ctx, state, *object)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
+        NativeRuntimeOp::InitObjectLiteral => {
+            let Some(template_index) = args.first().copied() else {
+                return fail_dispatch(ctx);
+            };
+            let Ok(template_index) = u32::try_from(template_index) else {
+                return fail_dispatch(ctx);
+            };
+            init_object_literal_or_fail(ctx, state, template_index, &args[1..])
+                .unwrap_or_else(|| fail_dispatch(ctx))
+        }
         NativeRuntimeOp::GetProp => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
@@ -2146,6 +2156,55 @@ pub(super) fn range_error(
     message: &str,
 ) -> i64 {
     named_error(ctx, state, "RangeError", message)
+}
+
+fn object_template_keys_for_meta_index(
+    constants: &[Constant],
+    meta_index: usize,
+) -> Option<&[u64]> {
+    let mut count = 0;
+    for constant in constants {
+        if let Constant::ObjectTemplate { keys } = constant {
+            if count == meta_index {
+                return Some(keys);
+            }
+            count += 1;
+        }
+    }
+    None
+}
+
+fn init_object_literal_or_fail(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    template_index: u32,
+    values: &[i64],
+) -> Option<i64> {
+    let entry_start = usize::try_from(
+        template_index
+            .checked_mul(constants::OBJECT_TEMPLATE_META_WORDS)?,
+    )
+    .ok()?;
+    let entry_end = entry_start
+        .checked_add(constants::OBJECT_TEMPLATE_META_WORDS as usize)?;
+    let meta = state.object_template_meta.get(entry_start..entry_end)?;
+    let prop_count = meta[3] as usize;
+    if values.len() != prop_count {
+        return None;
+    }
+    let capacity = meta[2];
+    let object = allocate_object_or_out_of_memory(ctx, state, capacity, false);
+    if !value::is_object(object) {
+        return Some(object);
+    }
+    let handle = value::decode_object_handle(object);
+    let keys: Vec<u64> = object_template_keys_for_meta_index(&state.constants, template_index as usize)?
+        .to_vec();
+    for (index, key_raw) in keys.iter().enumerate() {
+        let key = PropertyKey::from_baked_raw(*key_raw);
+        set_property_or_out_of_memory(ctx, state, handle, key, values[index] as u64).ok()?;
+    }
+    Some(object)
 }
 
 /// 属性槽扩容会 reserve 新对象；堆页耗尽时先 STW 回收再重试。

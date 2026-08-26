@@ -20,10 +20,10 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = undefined
-    c21 = number(3)
-    c22 = functionref(@0)
-    c23 = string("then")
+    c20 = object_template([4613234131031651444])
+    c21 = undefined
+    c22 = number(3)
+    c23 = functionref(@0)
     c24 = undefined
     c25 = functionref(@1)
     c26 = undefined
@@ -32,9 +32,9 @@ module {
 
   fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
-      %0 = const c20
+      %0 = const c21
       %1 = load var $1.resolve
-      %2 = const c21
+      %2 = const c22
       %3 = call %1, this=%0, args=[%2]
       return %3
 
@@ -88,22 +88,20 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = new_object(capacity=4)
-      %22 = const c22
-      %23 = const c23
-      %24 = set_prop %21, %23, %22
-      store var $0.thenable, %21
-      %25 = const c24
-      %26 = load var $0.thenable
-      %27 = call builtin.promise.resolve_static(%25, %26)
-      %28 = const c25
-      %29 = const c26
-      %30 = call builtin.promise.then(%27, %28, %29)
-      %31 = is_exception %30
-      branch %31, bb2, bb1
+      %21 = const c23
+      %22 = init_object_literal(c20, values=[%21])
+      store var $0.thenable, %22
+      %23 = const c24
+      %24 = load var $0.thenable
+      %25 = call builtin.promise.resolve_static(%23, %24)
+      %26 = const c25
+      %27 = const c26
+      %28 = call builtin.promise.then(%25, %26, %27)
+      %29 = is_exception %28
+      branch %29, bb2, bb1
     bb1:
       return
     bb2:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %30 = call builtin.exception_value(%28)
+      throw %30
 }

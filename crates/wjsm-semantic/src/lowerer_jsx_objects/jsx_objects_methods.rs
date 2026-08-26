@@ -6,6 +6,10 @@ impl Lowerer {
         obj_expr: &swc_ast::ObjectLit,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if let Some(keys) = collect_sso_object_literal_keys(obj_expr) {
+            return self.lower_sso_object_literal(obj_expr, block, keys);
+        }
+
         let obj_dest = self.alloc_value();
         // 容量取 4 和属性数量的较大值，确保对象字面量有足够的槽位
         let capacity = std::cmp::max(4, obj_expr.props.len() as u32);
@@ -661,6 +665,88 @@ impl Lowerer {
 
         Ok(desc_dest)
     }
+
+    /// 静态 SSO 键对象字面量：install 期烘焙 shape，运行时走 InitObjectLiteral JIT。
+    fn lower_sso_object_literal(
+        &mut self,
+        obj_expr: &swc_ast::ObjectLit,
+        block: BasicBlockId,
+        keys: Vec<u64>,
+    ) -> Result<ValueId, LoweringError> {
+        let template = self
+            .module
+            .add_constant(Constant::ObjectTemplate { keys });
+        let original_block = block;
+        let mut block = block;
+        let mut values = Vec::with_capacity(obj_expr.props.len());
+        for prop in &obj_expr.props {
+            let swc_ast::PropOrSpread::Prop(prop) = prop else {
+                unreachable!("collect_sso_object_literal_keys 已排除 spread");
+            };
+            let swc_ast::Prop::KeyValue(kv) = prop.as_ref() else {
+                unreachable!("collect_sso_object_literal_keys 仅接受 KeyValue");
+            };
+            let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+            values.push(val_dest);
+        }
+        let obj_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::InitObjectLiteral {
+                dest: obj_dest,
+                template,
+                values,
+            },
+        );
+        if block != original_block {
+            self.expr_merge_block = Some(block);
+        }
+        Ok(obj_dest)
+    }
+}
+
+/// 收集可 JIT 初始化的静态 SSO 键；不满足条件时返回 None。
+fn collect_sso_object_literal_keys(obj_expr: &swc_ast::ObjectLit) -> Option<Vec<u64>> {
+    let mut keys = Vec::with_capacity(obj_expr.props.len());
+    for prop in &obj_expr.props {
+        match prop {
+            swc_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
+                swc_ast::Prop::KeyValue(kv) => {
+                    if is_proto_object_literal_key(&kv.key) {
+                        return None;
+                    }
+                    keys.push(static_sso_property_key(&kv.key)?);
+                }
+                _ => return None,
+            },
+            swc_ast::PropOrSpread::Spread(_) => return None,
+        }
+    }
+    Some(keys)
+}
+
+fn is_proto_object_literal_key(key: &swc_ast::PropName) -> bool {
+    match key {
+        swc_ast::PropName::Ident(ident) => ident.sym.as_ref() == "__proto__",
+        swc_ast::PropName::Str(s) => s.value.to_string_lossy().as_ref() == "__proto__",
+        _ => false,
+    }
+}
+
+fn static_sso_property_key(key: &swc_ast::PropName) -> Option<u64> {
+    let key_str = match key {
+        swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+        swc_ast::PropName::Num(num) => num
+            .raw
+            .as_ref()
+            .map(|raw| raw.to_string())
+            .unwrap_or_else(|| js_number_property_key(num.value)),
+        _ => return None,
+    };
+    let encoded = wjsm_ir::value::encode_inline_ascii(key_str.as_bytes())
+        .or_else(|| wjsm_ir::value::encode_inline_latin1(key_str.as_bytes()))?;
+    wjsm_ir::value::inline_property_key_raw(encoded)
 }
 
 fn js_number_property_key(value: f64) -> String {

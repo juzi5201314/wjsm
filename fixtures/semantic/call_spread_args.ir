@@ -126,66 +126,65 @@ module {
     c123 = number(9)
     c124 = bool(true)
     c125 = bool(false)
-    c126 = bool(true)
-    c127 = string("done")
-    c128 = string("$8.value")
-    c129 = number(1)
-    c130 = string("value")
+    c126 = object_template([4613234131012925412])
+    c127 = bool(true)
+    c128 = object_template([4613269342530515190, 4613234131012925412])
+    c129 = string("$8.value")
+    c130 = number(1)
     c131 = bool(false)
-    c132 = string("done")
-    c133 = functionref(@6)
-    c134 = undefined
-    c135 = string("$8.value")
-    c136 = functionref(@7)
-    c137 = string("custom")
-    c138 = undefined
-    c139 = number(1)
-    c140 = number(2)
+    c132 = functionref(@6)
+    c133 = undefined
+    c134 = string("$8.value")
+    c135 = functionref(@7)
+    c136 = string("custom")
+    c137 = undefined
+    c138 = number(1)
+    c139 = number(2)
+    c140 = number(0)
     c141 = number(0)
-    c142 = number(0)
-    c143 = number(1)
-    c144 = number(2)
-    c145 = number(3)
-    c146 = number(4)
-    c147 = number(0)
-    c148 = functionref(@8)
-    c149 = undefined
-    c150 = number(10)
-    c151 = number(1)
-    c152 = number(2)
-    c153 = number(11)
-    c154 = number(1)
-    c155 = number(2)
-    c156 = undefined
-    c157 = number(0)
-    c158 = number(1)
-    c159 = number(2)
-    c160 = number(0)
-    c161 = undefined
-    c162 = string("$0.$__wjsm_gen_expr_8")
-    c163 = string("callee")
-    c164 = functionref(@8)
-    c165 = number(5)
-    c166 = undefined
-    c167 = number(2)
-    c168 = number(3)
-    c169 = number(4)
-    c170 = functionref(@9)
-    c171 = string("override")
-    c172 = undefined
-    c173 = string("sum")
-    c174 = functionref(@10)
-    c175 = string("constructor")
-    c176 = string("prototype")
-    c177 = functionref(@11)
-    c178 = string("prototype")
-    c179 = string("__super_constructor__")
-    c180 = string("constructor")
-    c181 = string("prototype")
-    c182 = string("super")
-    c183 = number(12)
-    c184 = number(13)
-    c185 = string("sum")
+    c142 = number(1)
+    c143 = number(2)
+    c144 = number(3)
+    c145 = number(4)
+    c146 = number(0)
+    c147 = functionref(@8)
+    c148 = undefined
+    c149 = number(10)
+    c150 = number(1)
+    c151 = number(2)
+    c152 = number(11)
+    c153 = number(1)
+    c154 = number(2)
+    c155 = undefined
+    c156 = number(0)
+    c157 = number(1)
+    c158 = number(2)
+    c159 = number(0)
+    c160 = undefined
+    c161 = string("$0.$__wjsm_gen_expr_8")
+    c162 = string("callee")
+    c163 = functionref(@8)
+    c164 = number(5)
+    c165 = undefined
+    c166 = number(2)
+    c167 = number(3)
+    c168 = number(4)
+    c169 = functionref(@9)
+    c170 = string("override")
+    c171 = undefined
+    c172 = string("sum")
+    c173 = functionref(@10)
+    c174 = string("constructor")
+    c175 = string("prototype")
+    c176 = functionref(@11)
+    c177 = string("prototype")
+    c178 = string("__super_constructor__")
+    c179 = string("constructor")
+    c180 = string("prototype")
+    c181 = string("super")
+    c182 = number(12)
+    c183 = number(13)
+    c184 = string("sum")
 
   fn @collect [needs_prototype] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -401,32 +400,26 @@ module {
       %8 = call builtin.abstract_compare(%6, %7, %9, %10)
       branch %8, bb1, bb2
     bb1:
-      %11 = new_object(capacity=4)
-      %12 = const c126
-      %13 = const c127
-      %14 = set_prop %11, %13, %12
-      return %11
+      %11 = const c127
+      %12 = init_object_literal(c126, values=[%11])
+      return %12
     bb2:
-      %15 = new_object(capacity=4)
-      %16 = load var $env
-      %17 = const c128
-      %18 = get_prop %16, %17
-      %19 = pos %18
-      %20 = const c129
-      %21 = add %19, %20
-      %22 = set_prop %16, %17, %21
-      %23 = is_exception %22
-      branch %23, bb4, bb3
+      %13 = load var $env
+      %14 = const c129
+      %15 = get_prop %13, %14
+      %16 = pos %15
+      %17 = const c130
+      %18 = add %16, %17
+      %19 = set_prop %13, %14, %18
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %25 = const c130
-      %26 = set_prop %15, %25, %19
-      %27 = const c131
-      %28 = const c132
-      %29 = set_prop %15, %28, %27
-      return %15
+      %22 = const c131
+      %23 = init_object_literal(c128, values=[%16, %22])
+      return %23
     bb4:
-      %24 = call builtin.exception_value(%22)
-      throw %24
+      %21 = call builtin.exception_value(%19)
+      throw %21
 
   fn @$0.anonymous [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
@@ -439,15 +432,15 @@ module {
       store var $8.value, %4
       %5 = new_object(capacity=4)
       %6 = const c119
-      %7 = const c133
-      %8 = const c134
+      %7 = const c132
+      %8 = const c133
       store var $8.$shared_env, %8
       %9 = new_object(capacity=1)
       %10 = load var $env
       set_proto %9, %10
       store var $8.$shared_env, %9
       %11 = load var $8.value
-      %12 = const c135
+      %12 = const c134
       %13 = set_prop %9, %12, %11
       %14 = call builtin.create_closure(%7, %9)
       %15 = set_prop %5, %6, %14
@@ -456,36 +449,36 @@ module {
   fn @$__wjsm_gen_expr_8$gen [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c142
+      %1 = const c141
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $10.$state, %2
-      %3 = const c143
+      %3 = const c142
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $10.$is_rejected, %4
-      %5 = const c144
+      %5 = const c143
       %6 = call builtin.continuation.load_var(%0, %5)
       store var $10.$generator, %6
-      %7 = const c145
+      %7 = const c144
       %8 = call builtin.continuation.load_var(%0, %7)
       store var $10.$closure_env, %8
       %9 = load var $10.$this
       store var $10.$resume_val, %9
-      %10 = const c146
+      %10 = const c145
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $10.$this, %11
       %12 = collect_rest_args skip=0
-      %13 = const c147
-      %15 = const c148
+      %13 = const c146
+      %15 = const c147
       %14 = call builtin.create_mapped_arguments_object(%12, %13, %15)
       store var $10.arguments, %14
       jump bb1
     bb1:
-      %16 = const c149
+      %16 = const c148
       store var $10.$shared_env, %16
       %48 = load var $10.$state
-      switch %48 [case c157 -> bb2, case c158 -> bb3, case c159 -> bb8], default bb13, exit bb14
+      switch %48 [case c156 -> bb2, case c157 -> bb3, case c158 -> bb8], default bb13, exit bb14
     bb2:
-      %17 = const c150
+      %17 = const c149
       %18 = load var $10.$generator
       %19 = call builtin.generator.next(%18, %17)
       generator_suspend %19, state=1
@@ -493,7 +486,7 @@ module {
     bb3:
       %20 = load var $10.$resume_val
       %21 = load var $10.$is_rejected
-      %22 = const c151
+      %22 = const c150
       %23 = stricteq %21, %22
       branch %23, bb4, bb7
     bb4:
@@ -501,7 +494,7 @@ module {
       %27 = call builtin.generator.throw(%26, %20)
       return %27
     bb5:
-      %31 = const c153
+      %31 = const c152
       %32 = load var $10.$generator
       %33 = call builtin.generator.next(%32, %31)
       generator_suspend %33, state=2
@@ -511,13 +504,13 @@ module {
       %29 = call builtin.generator.return(%28, %20)
       return %29
     bb7:
-      %24 = const c152
+      %24 = const c151
       %25 = stricteq %21, %24
       branch %25, bb6, bb5
     bb8:
       %34 = load var $10.$resume_val
       %35 = load var $10.$is_rejected
-      %36 = const c154
+      %36 = const c153
       %37 = stricteq %35, %36
       branch %37, bb9, bb12
     bb9:
@@ -526,7 +519,7 @@ module {
       return %41
     bb10:
       %45 = load var $10.$generator
-      %46 = const c156
+      %46 = const c155
       %47 = call builtin.generator.return(%45, %46)
       return %47
     bb11:
@@ -534,7 +527,7 @@ module {
       %43 = call builtin.generator.return(%42, %34)
       return %43
     bb12:
-      %38 = const c155
+      %38 = const c154
       %39 = stricteq %35, %38
       branch %39, bb11, bb10
     bb13:
@@ -545,29 +538,29 @@ module {
   fn @$__wjsm_gen_expr_8 [needs_prototype] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c160
-      %3 = const c161
+      %1 = const c159
+      %3 = const c160
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $11.arguments, %2
       %4 = load var $env
-      %5 = const c162
+      %5 = const c161
       %6 = get_prop %4, %5
-      %7 = const c163
+      %7 = const c162
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
       branch %9, bb2, bb1
     bb1:
-      %11 = const c164
-      %12 = const c165
-      %13 = const c166
+      %11 = const c163
+      %12 = const c164
+      %13 = const c165
       %14 = call builtin.continuation.create(%11, %13, %12)
       %15 = call builtin.generator.start(%14)
       %16 = load var $11.$this
-      %17 = const c167
+      %17 = const c166
       call builtin.continuation.save_var(%14, %17, %15)
-      %18 = const c168
+      %18 = const c167
       call builtin.continuation.save_var(%14, %18, %13)
-      %19 = const c169
+      %19 = const c168
       call builtin.continuation.save_var(%14, %19, %16)
       return %15
     bb2:
@@ -577,7 +570,7 @@ module {
   fn @Base.constructor [home_object=@10.prototype] [needs_prototype] [direct_callable] [params: $13.$env, $13.$this, $13.a, $13.b] [entry=bb0]:
     bb0:
       %0 = load var $13.$this
-      %1 = const c173
+      %1 = const c172
       %2 = load var $13.a
       %3 = load var $13.b
       %4 = add %2, %3
@@ -894,11 +887,11 @@ module {
       %163 = new_object(capacity=4)
       %164 = const c115
       %165 = call builtin.symbol.well_known(%164)
-      %166 = const c136
+      %166 = const c135
       %167 = set_prop %163, %165, %166
       store var $0.iterable, %163
-      %168 = const c137
-      %169 = const c138
+      %168 = const c136
+      %169 = const c137
       %170 = load var $0.collect
       %171 = new_array(capacity=4)
       %172 = load var $0.iterable
@@ -912,15 +905,15 @@ module {
       throw %162
     bb25:
       %177 = new_array(capacity=4)
-      %178 = const c139
+      %178 = const c138
       call builtin.array.push(%177, %178)
-      %179 = const c140
+      %179 = const c139
       call builtin.array.push(%177, %179)
       store var $0.overridden, %177
       %180 = load var $0.overridden
-      %181 = const c141
+      %181 = const c140
       %182 = call builtin.symbol.well_known(%181)
-      %183 = const c170
+      %183 = const c169
       store var $0.$__wjsm_gen_expr_8, %183
       %184 = load var $0.$__wjsm_gen_expr_8
       %185 = set_elem %180, %182, %184
@@ -930,8 +923,8 @@ module {
       %176 = call builtin.exception_value(%174)
       throw %176
     bb27:
-      %188 = const c171
-      %189 = const c172
+      %188 = const c170
+      %189 = const c171
       %190 = load var $0.collect
       %191 = new_array(capacity=4)
       %192 = load var $0.overridden
@@ -944,36 +937,36 @@ module {
       %187 = call builtin.exception_value(%185)
       throw %187
     bb29:
-      %197 = const c174
+      %197 = const c173
       %198 = new_object(capacity=4)
-      %199 = const c175
+      %199 = const c174
       %200 = set_prop %198, %199, %197
-      %201 = const c176
+      %201 = const c175
       %202 = set_prop %197, %201, %198
       store var $12.Base, %197
       store var $0.Base, %197
-      %203 = const c177
+      %203 = const c176
       %204 = new_object(capacity=4)
-      %205 = const c174
-      %206 = const c178
+      %205 = const c173
+      %206 = const c177
       %207 = call builtin.reflect.get(%205, %206, %205)
       set_proto %204, %207
       set_proto %203, %205
-      %208 = const c179
+      %208 = const c178
       %209 = set_prop %203, %208, %205
-      %210 = const c180
+      %210 = const c179
       %211 = set_prop %204, %210, %203
-      %212 = const c181
+      %212 = const c180
       %213 = set_prop %203, %212, %204
       store var $14.Derived, %203
       store var $0.Derived, %203
-      %214 = const c182
+      %214 = const c181
       %215 = load var $0.Derived
       %216 = new_object(capacity=4)
       %217 = call builtin.get_prototype_from_constructor(%215)
       set_proto %216, %217
-      %218 = const c183
-      %219 = const c184
+      %218 = const c182
+      %219 = const c183
       %220 = construct_call %215, this=%216, args=[%218, %219]
       %221 = is_exception %220
       branch %221, bb31, bb32
@@ -994,7 +987,7 @@ module {
       %224 = is_exception %223
       branch %224, bb37, bb36
     bb36:
-      %226 = const c185
+      %226 = const c184
       %227 = get_prop %223, %226
       %228 = call builtin.console.log(%214, %227)
       %229 = is_exception %228

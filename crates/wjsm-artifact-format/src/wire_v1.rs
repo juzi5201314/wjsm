@@ -202,6 +202,13 @@ fn encode_constant(
                 encoder.u32(element.0);
             }
         }
+        Constant::ObjectTemplate { keys } => {
+            encoder.u16(11);
+            encoder.len(keys.len())?;
+            for key in keys {
+                encoder.u64(*key);
+            }
+        }
     }
     Ok(())
 }
@@ -273,6 +280,14 @@ fn decode_constant(
                 elements.push(ConstantId(decoder.u32()?));
             }
             Ok((Constant::ArrayTemplate(elements), None))
+        }
+        11 => {
+            let count = decoder.count(limits.max_constants)?;
+            let mut keys = Vec::with_capacity(count);
+            for _ in 0..count {
+                keys.push(decoder.u64()?);
+            }
+            Ok((Constant::ObjectTemplate { keys }, None))
         }
         _ => Err(ArtifactFormatError::UnknownTag("constant", tag.into())),
     }
@@ -627,6 +642,16 @@ fn encode_instruction(
             value_id(encoder, *key);
             value_id(encoder, *value);
         }
+        Instruction::InitObjectLiteral {
+            dest,
+            template,
+            values,
+        } => {
+            encoder.u16(39);
+            value_id(encoder, *dest);
+            encoder.u32(template.0);
+            value_ids(encoder, values)?;
+        }
     }
     Ok(())
 }
@@ -849,6 +874,20 @@ fn decode_instruction(
             dest: next_value(decoder)?,
             template: ConstantId(decoder.u32()?),
         }),
+        39 => {
+            let dest = next_value(decoder)?;
+            let template = ConstantId(decoder.u32()?);
+            let count = decoder.count(wjsm_ir::constants::OBJECT_TEMPLATE_MAX_PROPS)?;
+            let mut values = Vec::with_capacity(count);
+            for _ in 0..count {
+                values.push(next_value(decoder)?);
+            }
+            Ok(Instruction::InitObjectLiteral {
+                dest,
+                template,
+                values,
+            })
+        }
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),
     }
 }

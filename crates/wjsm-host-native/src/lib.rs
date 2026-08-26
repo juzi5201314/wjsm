@@ -165,6 +165,43 @@ fn function_slots_for_program(
         .collect()
 }
 
+/// install 期为每个 `ObjectTemplate` 常量烘焙 shape transition，供 InitObjectLiteral JIT 直读。
+fn bake_object_template_meta_table(
+    shapes: &wjsm_gc::ShapeTable,
+    constants: &[Constant],
+) -> Vec<u32> {
+    use wjsm_gc::{PropertyKey, ShapeTable};
+    use wjsm_ir::constants::{
+        FLAG_CONFIGURABLE, FLAG_ENUMERABLE, FLAG_WRITABLE, OBJECT_TEMPLATE_MAX_PROPS,
+        OBJECT_TEMPLATE_META_WORDS,
+    };
+
+    let flags = (FLAG_CONFIGURABLE | FLAG_ENUMERABLE | FLAG_WRITABLE) as u32;
+    let mut meta = Vec::new();
+    for constant in constants {
+        let Constant::ObjectTemplate { keys } = constant else {
+            continue;
+        };
+        let prop_count = keys.len().min(OBJECT_TEMPLATE_MAX_PROPS as usize);
+        let mut shape_id = ShapeTable::empty_shape();
+        let mut slot_count = 0_u32;
+        let mut entry = vec![0_u32; OBJECT_TEMPLATE_META_WORDS as usize];
+        for (index, key_raw) in keys.iter().take(prop_count).enumerate() {
+            let key = PropertyKey::from_baked_raw(*key_raw);
+            let transition = shapes.transition_add(shape_id, key, flags);
+            entry[4 + index] = transition.index;
+            shape_id = transition.shape_id;
+            slot_count = transition.slot_count;
+        }
+        entry[0] = shape_id;
+        entry[1] = slot_count;
+        entry[2] = std::cmp::max(4, prop_count as u32);
+        entry[3] = prop_count as u32;
+        meta.extend(entry);
+    }
+    meta
+}
+
 pub(crate) fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String, u32> {
     native_variable_names(program)
         .into_iter()
@@ -929,6 +966,8 @@ struct NativeProgramState {
     /// 字符串常量的盒装值（NaN-boxed 运行时字符串句柄），install 期一次发布；
     /// 非字符串槽位为 `undefined`。生成代码经 vmctx `string_constants_base` 直读。
     string_constants: Vec<i64>,
+    /// 对象模板 install 期烘焙元数据（每条 `OBJECT_TEMPLATE_META_WORDS` 个 u32）。
+    object_template_meta: Vec<u32>,
     function_slots: Vec<Vec<usize>>,
     function_lengths: Vec<u32>,
     function_names: Vec<String>,
@@ -962,6 +1001,8 @@ struct NativeAgentState {
     materialized_constants: Vec<Option<i64>>,
     /// 当前 image 的字符串常量盒装值（见 `NativeProgramState::string_constants`）。
     string_constants: Vec<i64>,
+    /// 当前 image 的对象模板烘焙元数据（见 `NativeProgramState::object_template_meta`）。
+    object_template_meta: Vec<u32>,
     function_slots: Vec<Vec<usize>>,
     function_needs_prototype: Vec<bool>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
@@ -1170,6 +1211,7 @@ impl NativeAgentState {
             constants: Vec::new(),
             materialized_constants: Vec::new(),
             string_constants: Vec::new(),
+            object_template_meta: Vec::new(),
             function_slots: Vec::new(),
             function_needs_prototype: Vec::new(),
             function_home_objects: Vec::new(),
@@ -1319,6 +1361,7 @@ impl NativeAgentState {
             materialized_constants: vec![None; program.constants().len()],
             // install_program 随后按烘焙元数据填充字符串槽位。
             string_constants: Vec::new(),
+            object_template_meta: Vec::new(),
             function_slots: function_slots_for_program(
                 program,
                 variable_slots,
@@ -1605,6 +1648,7 @@ impl NativeAgentState {
             function_source_spans: std::mem::take(&mut self.function_source_spans),
             materialized_constants: std::mem::take(&mut self.materialized_constants),
             string_constants: std::mem::take(&mut self.string_constants),
+            object_template_meta: std::mem::take(&mut self.object_template_meta),
             function_slots: std::mem::take(&mut self.function_slots),
             function_needs_prototype: std::mem::take(&mut self.function_needs_prototype),
             function_home_objects: std::mem::take(&mut self.function_home_objects),
@@ -1615,6 +1659,7 @@ impl NativeAgentState {
         self.constants = state.constants;
         self.materialized_constants = state.materialized_constants;
         self.string_constants = state.string_constants;
+        self.object_template_meta = state.object_template_meta;
         self.function_slots = state.function_slots;
         self.function_lengths = state.function_lengths;
         self.function_names = state.function_names;
@@ -1660,6 +1705,8 @@ impl NativeAgentState {
             }
         }
         self.install_string_roots.clear();
+        let object_template_meta =
+            bake_object_template_meta_table(self.gc.heap().shapes(), program.constants());
         self.images.insert(image_id, image);
         self.program_snapshots
             .insert(image_id, Arc::new(program.clone()));
@@ -1668,6 +1715,7 @@ impl NativeAgentState {
         self.ic_epochs.insert(image_id, 0);
         let mut state = Self::program_state(program, variable_slots, shared_module_slots);
         state.string_constants = string_constants;
+        state.object_template_meta = object_template_meta;
         self.programs.insert(image_id, state);
         if let Some(source_file) = program.source_file() {
             self.image_source_files
@@ -1747,6 +1795,18 @@ impl NativeAgentState {
         } else {
             self.string_constants.as_ptr()
         };
+        ctx.object_template_meta_base = if self.object_template_meta.is_empty() {
+            std::ptr::null()
+        } else {
+            self.object_template_meta.as_ptr()
+        };
+        ctx.object_template_meta_count = u32::try_from(
+            self.object_template_meta
+                .len()
+                .checked_div(wjsm_ir::constants::OBJECT_TEMPLATE_META_WORDS as usize)
+                .unwrap_or(0),
+        )
+        .unwrap_or(0);
         ctx.feedback_slots_base = image.feedback_slots();
         self.current_feedback_region = (
             image.feedback_slots().addr(),

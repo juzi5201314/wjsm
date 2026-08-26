@@ -362,7 +362,8 @@ fn constant_kind(constant: &Constant) -> Option<PrimitiveKind> {
         | Constant::NativeCallableEval
         | Constant::RegExp { .. }
         | Constant::ModuleId(_)
-        | Constant::ArrayTemplate(_) => return None,
+        | Constant::ArrayTemplate(_)
+        | Constant::ObjectTemplate { .. } => return None,
     })
 }
 

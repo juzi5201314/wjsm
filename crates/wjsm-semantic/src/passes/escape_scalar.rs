@@ -753,6 +753,7 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
         | Instruction::NewObject { .. }
         | Instruction::NewArray { .. }
         | Instruction::CloneArrayTemplate { .. }
+        | Instruction::InitObjectLiteral { .. }
         | Instruction::GetSuperBase { .. }
         | Instruction::GetSuperConstructor { .. }
         | Instruction::NewPromise { .. }

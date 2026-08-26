@@ -1826,6 +1826,351 @@ fn lower_native_object_allocation(
     )
 }
 
+fn object_template_meta_index(constants: &[Constant], template: ConstantId) -> Option<u32> {
+    let index = usize::try_from(template.0).ok()?;
+    if !matches!(constants.get(index), Some(Constant::ObjectTemplate { .. })) {
+        return None;
+    }
+    Some(
+        constants[..index]
+            .iter()
+            .filter(|constant| matches!(constant, Constant::ObjectTemplate { .. }))
+            .count() as u32,
+    )
+}
+
+fn emit_load_object_template_meta_word(
+    cx: &mut LoweringCx<'_, '_>,
+    meta_index: u32,
+    word_index: u32,
+) -> Result<ir::Value> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let meta_base = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, object_template_meta_base))?,
+    );
+    let entry_offset = (u64::from(meta_index) * u64::from(constants::OBJECT_TEMPLATE_META_WORDS)
+        + u64::from(word_index))
+        .checked_mul(4)
+        .context("object template meta offset overflows")?;
+    let entry_offset =
+        i64::try_from(entry_offset).context("object template meta offset exceeds i64")?;
+    let address = cx.builder.ins().iadd_imm_s(meta_base, entry_offset);
+    let word = cx
+        .builder
+        .ins()
+        .load(types::I32, MemFlagsData::trusted(), address, 0);
+    Ok(cx.builder.ins().uextend(types::I64, word))
+}
+
+/// 在新分配对象已知 value slot 上直写属性值（仅用于 unboxed 数字等无需 store barrier 的值）。
+fn lower_create_data_property_fast(
+    cx: &mut LoweringCx<'_, '_>,
+    logical_addr: ir::Value,
+    heap_delta: ir::Value,
+    slot_index: ir::Value,
+    stored: ir::Value,
+) {
+    let value_shift = cx.builder.ins().ishl_imm_u(slot_index, 3);
+    let value_offset = cx.builder.ins().iadd_imm_s(
+        value_shift,
+        i64::from(constants::HEAP_OBJECT_HEADER_SIZE),
+    );
+    let value_addr = cx.builder.ins().iadd(logical_addr, value_offset);
+    let value_addr = cx.builder.ins().iadd(value_addr, heap_delta);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), stored, value_addr, 0);
+}
+
+fn emit_init_object_literal_heap_value_guard(
+    cx: &mut LoweringCx<'_, '_>,
+    values: &[ValueId],
+    slow_block: ir::Block,
+) -> Result<()> {
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let mut check_block = cx
+        .builder
+        .current_block()
+        .context("init_object_literal guard requires an active block")?;
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            cx.builder.switch_to_block(check_block);
+            cx.builder.seal_block(check_block);
+        }
+        let stored = use_value(cx.builder, cx.variables, *value)?;
+        let boxed_bits = cx.builder.ins().band_imm_s(stored, box_base);
+        let is_heap_value = cx
+            .builder
+            .ins()
+            .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+        let next_block = cx.builder.create_block();
+        cx.builder
+            .ins()
+            .brif(is_heap_value, slow_block, &[], next_block, &[]);
+        check_block = next_block;
+    }
+    cx.builder.switch_to_block(check_block);
+    cx.builder.seal_block(check_block);
+    Ok(())
+}
+
+fn lower_init_object_literal(
+    cx: &mut LoweringCx<'_, '_>,
+    _tables: &BarrierThunks,
+    constants: &[Constant],
+    dest: ValueId,
+    template: ConstantId,
+    values: &[ValueId],
+) -> Result<()> {
+    let Some(meta_index) = object_template_meta_index(constants, template) else {
+        bail!("init_object_literal template constant is invalid");
+    };
+    let Constant::ObjectTemplate { keys } = constants
+        .get(usize::try_from(template.0).context("template index")?)
+        .context("missing object template constant")?
+    else {
+        bail!("init_object_literal template constant is invalid");
+    };
+    if keys.len() != values.len() {
+        bail!("init_object_literal value count mismatch");
+    }
+    let prop_count = u32::try_from(keys.len()).context("property count exceeds u32")?;
+
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let fast_block = cx.builder.create_block();
+    let slow_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+    cx.builder.append_block_param(merge_block, types::I64);
+
+    let meta_count = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, object_template_meta_count))?,
+    );
+    let meta_index_i32 = cx.builder.ins().iconst(types::I32, i64::from(meta_index));
+    let meta_ready = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThan,
+        meta_index_i32,
+        meta_count,
+    );
+    cx.builder
+        .ins()
+        .brif(meta_ready, fast_block, &[], slow_block, &[]);
+
+    cx.builder.switch_to_block(fast_block);
+    cx.builder.seal_block(fast_block);
+
+    let shape_id = emit_load_object_template_meta_word(cx, meta_index, 0)?;
+    let _slot_count = emit_load_object_template_meta_word(cx, meta_index, 1)?;
+    let capacity = emit_load_object_template_meta_word(cx, meta_index, 2)?;
+
+    let flags = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, allocation_fast_flags))?,
+    );
+    let enabled = cx
+        .builder
+        .ins()
+        .band_imm_u(flags, i64::from(wjsm_native_abi::NATIVE_ALLOCATION_FAST_OBJECT));
+    let enabled = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, enabled, 0);
+    let small_limit = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, allocation_small_limit))?,
+    );
+    let slot_bytes = cx.builder.ins().imul_imm_u(
+        capacity,
+        i64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE),
+    );
+    let header_bytes = cx.builder.ins().iconst(
+        types::I64,
+        i64::from(constants::HEAP_OBJECT_HEADER_SIZE),
+    );
+    let mut bytes_value = cx.builder.ins().iadd(slot_bytes, header_bytes);
+    bytes_value = cx.builder.ins().iadd_imm_u(bytes_value, 7);
+    bytes_value = cx.builder.ins().band_imm_s(bytes_value, !7);
+    let small = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        bytes_value,
+        small_limit,
+    );
+    let top = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_ptr))?,
+    );
+    let limit = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_limit))?,
+    );
+    let end = cx.builder.ins().iadd(top, bytes_value);
+    let object_fits = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        end,
+        limit,
+    );
+    let cursor = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_handle_cursor))?,
+    );
+    let handle_limit = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_handle_limit))?,
+    );
+    let handle_fits = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThan,
+        cursor,
+        handle_limit,
+    );
+    let mut ready = cx.builder.ins().band(enabled, small);
+    ready = cx.builder.ins().band(ready, object_fits);
+    ready = cx.builder.ins().band(ready, handle_fits);
+    let fast_alloc_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(ready, fast_alloc_block, &[], slow_block, &[]);
+
+    cx.builder.switch_to_block(fast_alloc_block);
+    cx.builder.seal_block(fast_alloc_block);
+    emit_init_object_literal_heap_value_guard(cx, values, slow_block)?;
+    let prototype = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, object_prototype_handle))?,
+    );
+    let prototype = cx.builder.ins().uextend(types::I64, prototype);
+    let type_word = cx.builder.ins().iconst(
+        types::I64,
+        i64::try_from(u64::from(wjsm_ir::HEAP_TYPE_OBJECT) << 32).expect("heap type word fits i64"),
+    );
+    let header_word = cx.builder.ins().bor(prototype, type_word);
+    let heap_delta = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    let address = cx.builder.ins().iadd(top, heap_delta);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), header_word, address, 0);
+    let capacity_i32 = cx.builder.ins().ireduce(types::I32, capacity);
+    let shape_i32 = cx.builder.ins().ireduce(types::I32, shape_id);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        capacity_i32,
+        address,
+        i32::try_from(constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET)
+            .expect("capacity offset fits i32"),
+    );
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        shape_i32,
+        address,
+        i32::try_from(constants::HEAP_OBJECT_SHAPE_ID_OFFSET).expect("shape offset fits i32"),
+    );
+    let handle_value = cx.builder.ins().uextend(types::I64, cursor);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        handle_value,
+        address,
+        i32::try_from(constants::HEAP_OBJECT_GC_WORD_OFFSET).expect("GC word offset fits i32"),
+    );
+    let handle_table = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle_value, 3);
+    let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
+    let object_bits = cx.builder.ins().ishl_imm_u(top, 16);
+    let stable_state = cx
+        .builder
+        .ins()
+        .iconst(types::I64, i64::from(constants::HANDLE_STATE_STABLE_YOUNG));
+    let entry_value = cx.builder.ins().bor(object_bits, stable_state);
+    cx.builder
+        .ins()
+        .atomic_store(MemFlagsData::trusted(), entry_value, entry_address);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        end,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_ptr))?,
+    );
+    let next_handle = cx.builder.ins().iadd_imm_u(cursor, 1);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        next_handle,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_handle_cursor))?,
+    );
+    let logical_addr = top;
+    for property in 0..prop_count {
+        let slot_index = emit_load_object_template_meta_word(cx, meta_index, 4 + property)?;
+        let stored = use_value(
+            cx.builder,
+            cx.variables,
+            values[usize::try_from(property).expect("property index fits usize")],
+        )?;
+        lower_create_data_property_fast(cx, logical_addr, heap_delta, slot_index, stored);
+    }
+    let value_prefix = cx.builder.ins().iconst(
+        types::I64,
+        i64::from_ne_bytes((value::BOX_BASE | (value::TAG_OBJECT << 32)).to_ne_bytes()),
+    );
+    let encoded = cx.builder.ins().bor(handle_value, value_prefix);
+    cx.builder
+        .ins()
+        .jump(merge_block, &[ir::BlockArg::Value(encoded)]);
+
+    cx.builder.switch_to_block(slow_block);
+    cx.builder.seal_block(slow_block);
+    let mut call_args = vec![cx
+        .builder
+        .ins()
+        .iconst(types::I64, i64::from(meta_index))];
+    for value in values {
+        call_args.push(use_value(cx.builder, cx.variables, *value)?);
+    }
+    let slow = cx.call(
+        NativeRuntimeOp::InitObjectLiteral.id(),
+        &call_args,
+        None,
+    )?;
+    cx.builder
+        .ins()
+        .jump(merge_block, &[ir::BlockArg::Value(slow)]);
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+    define_value(
+        cx.builder,
+        cx.variables,
+        dest,
+        cx.builder.block_params(merge_block)[0],
+    )
+}
+
 fn lower_instruction(
     cx: &mut LoweringCx<'_, '_>,
     tables: &mut InstructionTables<'_>,
@@ -1877,6 +2222,9 @@ fn lower_instruction(
                     .context("immutable constant was not hoisted")?,
                 Constant::ArrayTemplate(_) => {
                     bail!("array templates are materialized by clone_array_template")
+                }
+                Constant::ObjectTemplate { .. } => {
+                    bail!("object templates are materialized by init_object_literal")
                 }
                 Constant::RegExp { .. } => {
                     let index = cx
@@ -2429,6 +2777,18 @@ fn lower_instruction(
             let result = cx.call(NativeRuntimeOp::CloneArrayTemplate.id(), &[template], None)?;
             define_value(cx.builder, cx.variables, *dest, result)
         }
+        Instruction::InitObjectLiteral {
+            dest,
+            template,
+            values,
+        } => lower_init_object_literal(
+            cx,
+            tables.barrier_thunks,
+            tables.constants,
+            *dest,
+            *template,
+            values,
+        ),
         Instruction::GetElem {
             dest,
             object,
@@ -6996,6 +7356,9 @@ fn switch_constant_immediate(constant: &Constant) -> Result<i64> {
             bail!("materialized constants are not valid switch keys")
         }
         Constant::ArrayTemplate(_) => bail!("array templates are not valid switch keys"),
+        Constant::ObjectTemplate { .. } => {
+            bail!("object templates are not valid switch keys")
+        }
     }
 }
 

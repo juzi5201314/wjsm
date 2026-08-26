@@ -27,11 +27,11 @@ module {
     c24 = number(0)
     c25 = functionref(@0)
     c26 = undefined
-    c27 = undefined
-    c28 = number(99)
-    c29 = functionref(@0)
-    c30 = undefined
-    c31 = string("then")
+    c27 = object_template([4613234131031651444])
+    c28 = undefined
+    c29 = number(99)
+    c30 = functionref(@0)
+    c31 = undefined
     c32 = number(0)
     c33 = undefined
     c34 = string("$0.foo")
@@ -56,9 +56,9 @@ module {
 
   fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
-      %0 = const c27
+      %0 = const c28
       %1 = load var $2.resolve
-      %2 = const c28
+      %2 = const c29
       %3 = call %1, this=%0, args=[%2]
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -96,14 +96,12 @@ module {
       store var $1.$shared_env, %14
       jump bb2
     bb2:
-      %15 = new_object(capacity=4)
-      %16 = const c29
-      %17 = const c30
-      %18 = call builtin.create_closure(%16, %17)
-      %19 = const c31
-      %20 = set_prop %15, %19, %18
-      %21 = load var $1.$promise
-      promise_resolve %21, %15
+      %15 = const c30
+      %16 = const c31
+      %17 = call builtin.create_closure(%15, %16)
+      %18 = init_object_literal(c27, values=[%17])
+      %19 = load var $1.$promise
+      promise_resolve %19, %18
       return
 
   fn @foo [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:

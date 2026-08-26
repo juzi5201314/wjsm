@@ -40,6 +40,11 @@ impl PropertyKey {
         ))
     }
 
+    /// 从 install 期持久化的完整64位键编码恢复 PropertyKey。
+    pub const fn from_baked_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
     /// 返回内部64位编码；只用于持久化、诊断和完整键比较。
     #[inline]
     pub const fn raw(self) -> u64 {

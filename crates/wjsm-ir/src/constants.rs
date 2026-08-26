@@ -496,6 +496,14 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
     ]
 }
 
+/// 对象模板 install 期元数据每条最多支持的 SSO 属性数。
+pub const OBJECT_TEMPLATE_MAX_PROPS: u32 = 16;
+/// 对象模板元数据头：`shape_id, slot_count, capacity, prop_count`。
+pub const OBJECT_TEMPLATE_META_HEADER_WORDS: u32 = 4;
+/// 单条对象模板元数据占用的 u32 字数（头 + 固定槽位索引数组）。
+pub const OBJECT_TEMPLATE_META_WORDS: u32 =
+    OBJECT_TEMPLATE_META_HEADER_WORDS + OBJECT_TEMPLATE_MAX_PROPS;
+
 // ── 属性标志位定义 ──────────────────────────────────────────────────────────
 // flags 字段的位定义
 pub const FLAG_CONFIGURABLE: i32 = 1 << 0; // bit 0: 可配置

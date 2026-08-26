@@ -447,8 +447,15 @@ fn verify_instruction_uses(
         }
         | Instruction::CreateDataProperty {
             object, key, value, ..
+        } => {
+            verify_value_use(function, definitions, *object, site, dominance)?;
+            verify_value_use(function, definitions, *key, site, dominance)?;
+            verify_value_use(function, definitions, *value, site, dominance)?;
         }
-        | Instruction::SetElem {
+        Instruction::InitObjectLiteral { values, .. } => {
+            verify_value_slice(function, definitions, values, site, dominance)?;
+        }
+        Instruction::SetElem {
             object,
             index: key,
             value,
@@ -705,6 +712,7 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::DeleteProp { dest, .. }
         | Instruction::NewArray { dest, .. }
         | Instruction::CloneArrayTemplate { dest, .. }
+        | Instruction::InitObjectLiteral { dest, .. }
         | Instruction::GetElem { dest, .. }
         | Instruction::SetElem { dest, .. }
         | Instruction::OptionalGetProp { dest, .. }
