@@ -732,7 +732,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         &self.shapes
     }
 
-    /// 整张 ShapeTable 的 name_id 并集，供宿主 string intern 表回收钉扎。
+    /// 整张 ShapeTable 的 managed-string handle 并集，供宿主 string intern 表回收钉扎。
     pub fn property_name_ids(&self) -> std::collections::HashSet<u32> {
         self.shapes.all_name_ids()
     }

@@ -258,7 +258,10 @@ impl ShapeTable {
             .map_or_else(Vec::new, |shape| shape.props.clone())
     }
 
-    /// 整张表当前所有 shape 的 name_id 并集。
+    /// 整张表当前所有 shape 中出现的 managed-string handle 并集。
+    ///
+    /// 只收集 `PropertyKey::from_name_id` 命名空间的 handle；Symbol 与 inline SSO
+    /// 属性键被 `name_id()` 过滤掉，不参与 intern 表回收钉扎。
     ///
     /// 宿主侧 string intern 表回收用它钉扎「曾作为属性名出现」的 name_id：
     /// 这些 id 即便对应的对象已死，仍可能被存活 shape 的 transition 引用，复用

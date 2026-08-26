@@ -2897,7 +2897,7 @@ fn emit_inline_string_predicate(cx: &mut LoweringCx<'_, '_>, encoded: ir::Value)
     );
     let reserved = cx.builder.ins().band_imm_u(
         encoded,
-        i64::try_from(0b111_u64 << 42).expect("SSO reserved mask fits i64"),
+        i64::try_from(value::INLINE_STRING_RESERVED_MASK).expect("SSO reserved mask fits i64"),
     );
     let reserved = cx
         .builder
@@ -4642,72 +4642,8 @@ fn lower_strict_eq(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let same_runtime_string = cx.builder.ins().band(same_plain, is_string);
     let same_runtime_string = cx.builder.ins().band(same_runtime_string, is_runtime);
-    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-    let inline_marker_mask =
-        i64::try_from(value::INLINE_STRING_MARKER_MASK).expect("SSO marker mask fits i64");
-    let inline_marker =
-        i64::try_from(value::INLINE_STRING_MARKER << value::INLINE_STRING_MARKER_SHIFT)
-            .expect("SSO marker fits i64");
-    let inline_reserved_mask = i64::try_from(0b111_u64 << 42).expect("SSO reserved mask fits i64");
-    let inline_length_mask =
-        i64::try_from(value::INLINE_STRING_LENGTH_MASK).expect("SSO length mask fits i64");
-    let inline_length_shift = i64::from(value::INLINE_STRING_LENGTH_SHIFT);
-    let lhs_boxed = cx.builder.ins().band_imm_u(lhs_plain, box_base);
-    let lhs_boxed = cx
-        .builder
-        .ins()
-        .icmp_imm_u(ir::condcodes::IntCC::Equal, lhs_boxed, box_base);
-    let rhs_boxed = cx.builder.ins().band_imm_u(rhs_plain, box_base);
-    let rhs_boxed = cx
-        .builder
-        .ins()
-        .icmp_imm_u(ir::condcodes::IntCC::Equal, rhs_boxed, box_base);
-    let lhs_marker = cx.builder.ins().band_imm_u(lhs_plain, inline_marker_mask);
-    let rhs_marker = cx.builder.ins().band_imm_u(rhs_plain, inline_marker_mask);
-    let lhs_marker =
-        cx.builder
-            .ins()
-            .icmp_imm_u(ir::condcodes::IntCC::Equal, lhs_marker, inline_marker);
-    let rhs_marker =
-        cx.builder
-            .ins()
-            .icmp_imm_u(ir::condcodes::IntCC::Equal, rhs_marker, inline_marker);
-    let lhs_reserved = cx.builder.ins().band_imm_u(lhs_plain, inline_reserved_mask);
-    let rhs_reserved = cx.builder.ins().band_imm_u(rhs_plain, inline_reserved_mask);
-    let lhs_reserved = cx
-        .builder
-        .ins()
-        .icmp_imm_u(ir::condcodes::IntCC::Equal, lhs_reserved, 0);
-    let rhs_reserved = cx
-        .builder
-        .ins()
-        .icmp_imm_u(ir::condcodes::IntCC::Equal, rhs_reserved, 0);
-    let lhs_length_bits = cx.builder.ins().band_imm_u(lhs_plain, inline_length_mask);
-    let rhs_length_bits = cx.builder.ins().band_imm_u(rhs_plain, inline_length_mask);
-    let lhs_length = cx
-        .builder
-        .ins()
-        .ushr_imm_u(lhs_length_bits, inline_length_shift);
-    let rhs_length = cx
-        .builder
-        .ins()
-        .ushr_imm_u(rhs_length_bits, inline_length_shift);
-    let lhs_length_ok = cx.builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
-        lhs_length,
-        i64::try_from(value::INLINE_STRING_MAX_LEN).expect("SSO length fits i64"),
-    );
-    let rhs_length_ok = cx.builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
-        rhs_length,
-        i64::try_from(value::INLINE_STRING_MAX_LEN).expect("SSO length fits i64"),
-    );
-    let lhs_inline = cx.builder.ins().band(lhs_boxed, lhs_marker);
-    let lhs_inline = cx.builder.ins().band(lhs_inline, lhs_reserved);
-    let lhs_inline = cx.builder.ins().band(lhs_inline, lhs_length_ok);
-    let rhs_inline = cx.builder.ins().band(rhs_boxed, rhs_marker);
-    let rhs_inline = cx.builder.ins().band(rhs_inline, rhs_reserved);
-    let rhs_inline = cx.builder.ins().band(rhs_inline, rhs_length_ok);
+    let lhs_inline = emit_inline_string_predicate(cx, lhs_plain);
+    let rhs_inline = emit_inline_string_predicate(cx, rhs_plain);
     let any_inline = cx.builder.ins().bor(lhs_inline, rhs_inline);
     let both_inline = cx.builder.ins().band(lhs_inline, rhs_inline);
     let same_block = cx.builder.create_block();

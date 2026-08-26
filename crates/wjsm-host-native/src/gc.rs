@@ -397,8 +397,26 @@ impl NativeGc {
         Ok(())
     }
 
+    /// 把 vmctx 游标回写到 owner window，不做 materialize。
+    ///
+    /// 仅在宿主已确保 TLAB 稳定（无未物化对象暴露给 collector）时调用；
+    /// 比 `adopt_native_tlab_cursor` 轻量——后者会做完整 invariant 校验并返回错误。
+    /// 这里用 debug_assert 钉死单调性与 reservation 边界，便于 debug 构建捕获误用。
     pub(super) fn commit_native_tlab_cursor(&self, context: &NativeVmContext) {
         if let Some(window) = self.native_tlab.borrow_mut().as_mut() {
+            debug_assert!(context.bump_ptr >= window.top, "bump_ptr must not go backwards");
+            debug_assert!(
+                context.bump_ptr <= window.reservation.object_limit(),
+                "bump_ptr must stay within reservation"
+            );
+            debug_assert!(
+                context.bump_handle_cursor >= window.next_handle,
+                "bump_handle_cursor must not go backwards"
+            );
+            debug_assert!(
+                context.bump_handle_cursor <= window.reservation.handle_limit(),
+                "bump_handle_cursor must stay within reservation"
+            );
             window.top = context.bump_ptr;
             window.next_handle = context.bump_handle_cursor;
         }

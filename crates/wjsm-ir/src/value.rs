@@ -127,8 +127,7 @@ pub const TAG_MASK: u64 = 0x1F;
 
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x20;
 
-/// 非激活 GC reference color 占用 payload 的 bit 38–43；只允许附着于 heap-backed handle。
-/// ASCII SSO 的最大 UTF-8/UTF-16 码元长度；每个码元使用 7 bit。
+/// ASCII SSO 的最大 7-bit ASCII 码元长度；每个码元占用 7 bit。
 pub const INLINE_STRING_MAX_LEN: usize = 6;
 pub const INLINE_STRING_MARKER_SHIFT: u32 = 48;
 pub const INLINE_STRING_MARKER: u64 = 0b101;
@@ -136,8 +135,10 @@ pub const INLINE_STRING_MARKER_MASK: u64 = 0b111 << INLINE_STRING_MARKER_SHIFT;
 pub const INLINE_STRING_LENGTH_SHIFT: u32 = 45;
 pub const INLINE_STRING_LENGTH_MASK: u64 = 0b111 << INLINE_STRING_LENGTH_SHIFT;
 pub const INLINE_STRING_PAYLOAD_MASK: u64 = (1_u64 << 42) - 1;
+/// SSO 保留位（bit 42–44），对 inline string 必须为零；与 GC color bit 42–43 重叠。
+pub const INLINE_STRING_RESERVED_MASK: u64 = 0b111 << 42;
 
-/// 以独立 marker 编码 0–6 个 ASCII 码元；尾部槽位保持为零。
+/// 以独立 marker 编码 0–6 个 7-bit ASCII 码元；尾部槽位保持为零。
 pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
     if bytes.len() > INLINE_STRING_MAX_LEN || !bytes.iter().all(u8::is_ascii) {
         return None;
@@ -147,7 +148,9 @@ pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
     for (index, byte) in bytes.iter().copied().enumerate() {
         payload |= u64::from(byte) << (index * 7);
     }
-    Some((BOX_BASE | payload) as i64)
+    let encoded = (BOX_BASE | payload) as i64;
+    debug_assert!(is_inline_string(encoded), "encode_inline_ascii 必须产出规范 SSO 值");
+    Some(encoded)
 }
 
 pub fn is_inline_string(value: i64) -> bool {
@@ -162,7 +165,7 @@ pub fn is_inline_string(value: i64) -> bool {
         && (bits & INLINE_STRING_MARKER_MASK)
             == (INLINE_STRING_MARKER << INLINE_STRING_MARKER_SHIFT)
         && length <= INLINE_STRING_MAX_LEN as u64
-        && bits & (0b111_u64 << 42) == 0
+        && bits & INLINE_STRING_RESERVED_MASK == 0
         && bits & INLINE_STRING_PAYLOAD_MASK & !used_payload == 0
 }
 
@@ -182,10 +185,16 @@ pub fn inline_string_len(value: i64) -> Option<u8> {
     is_inline_string(value)
         .then(|| ((value as u64 & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as u8)
 }
+/// 判定 NaN-box tagged handle；先用 marker 快拒 inline SSO，再做完整 tag 比较。
+///
+/// tagged handle 的 marker 位（48–50）恒为零——handle 占 bits 0–31、tag 占 bits 32–36，
+/// GC color 占 bits 38–43，bits 44–50 对标准编码恒为零——因此 marker 不匹配即可安全排除
+/// inline string，无需调用完整 `is_inline_string` 的长度/保留位/payload 校验。
 fn is_tagged(value: i64, tag: u64) -> bool {
-    !is_inline_string(value)
-        && (value as u64 & BOX_BASE) == BOX_BASE
-        && ((value as u64 >> 32) & TAG_MASK) == tag
+    let bits = value as u64;
+    (bits & BOX_BASE) == BOX_BASE
+        && (bits & INLINE_STRING_MARKER_MASK) != (INLINE_STRING_MARKER << INLINE_STRING_MARKER_SHIFT)
+        && ((bits >> 32) & TAG_MASK) == tag
 }
 
 pub const GC_COLOR_SHIFT: u32 = 38;

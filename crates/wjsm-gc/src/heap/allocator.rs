@@ -744,7 +744,12 @@ impl ManagedAllocator {
             .map(|(_, metadata)| metadata.stats())
             .collect()
     }
-
+    /// 遍历已登记到 page object-start metadata 的对象。
+    ///
+    /// 调用方（collector、relocation、handles_in_page）必须在 safepoint 后调用，
+    /// 即 native TLAB 已通过 `materialize_native_tlab` 把全部已分配对象登记完毕。
+    /// 未物化的 TLAB 对象不应出现在 page 迭代结果中——它们的 metadata 尚未发布。
+    #[inline]
     pub fn objects_in_page(&self, page: PageId) -> PageObjectIter {
         let page = self.state.lock().pages.get(&page).cloned();
         PageObjectIter::new(page)
