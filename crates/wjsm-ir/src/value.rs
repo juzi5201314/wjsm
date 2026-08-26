@@ -257,6 +257,15 @@ pub fn decode_inline_ascii(value: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
     Some(&output[..length])
 }
 
+/// 解码任意 inline SSO（ASCII 或 Latin-1）到单字节载荷视图。
+pub fn decode_inline_string(value: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
+    if is_inline_ascii(value) {
+        decode_inline_ascii(value, output)
+    } else {
+        decode_inline_latin1(value, output)
+    }
+}
+
 pub fn inline_string_len(value: i64) -> Option<u8> {
     is_inline_string(value)
         .then_some(((value as u64 & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as u8)

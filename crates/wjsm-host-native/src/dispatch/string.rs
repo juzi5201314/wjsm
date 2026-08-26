@@ -154,10 +154,7 @@ fn receiver(state: &NativeAgentState, args: &[i64]) -> Option<RuntimeString> {
     runtime_string(state, *args.first()?)
 }
 fn decode_inline_bytes(encoded: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
-    if let Some(units) = value::decode_inline_ascii(encoded, output) {
-        return Some(units);
-    }
-    value::decode_inline_latin1(encoded, output)
+    value::decode_inline_string(encoded, output)
 }
 
 fn string_at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {

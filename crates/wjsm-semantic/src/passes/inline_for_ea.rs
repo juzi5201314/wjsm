@@ -992,7 +992,7 @@ fn inline_static_candidate(
     } else {
         None
     };
-    let callee_local_vars: Vec<String> = callee_func
+    let mut callee_local_vars: Vec<String> = callee_func
         .blocks()
         .iter()
         .flat_map(|b| b.instructions())
@@ -1003,6 +1003,7 @@ fn inline_static_candidate(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    callee_local_vars.sort();
     let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     let mut construct_return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     for (original, clone) in callee_func.blocks().iter().zip(cloned_blocks.iter_mut()) {
@@ -1665,7 +1666,9 @@ fn inline_speculative_candidate(
             _ => None,
         })
         .collect();
-    let callee_local_vars: Vec<String> = stored_names.iter().map(|s| (*s).to_string()).collect();
+    let mut callee_local_vars: Vec<String> =
+        stored_names.iter().map(|s| (*s).to_string()).collect();
+    callee_local_vars.sort();
     let mut param_subst: Vec<(ValueId, ValueId)> = Vec::new();
     let mut inject_subst: Vec<(String, ValueId)> = Vec::new();
     let mut callee_clones: Vec<BasicBlock> = Vec::with_capacity(target_func.blocks().len());

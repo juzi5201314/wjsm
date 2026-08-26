@@ -3624,11 +3624,28 @@ fn lower_string_element(
 
     cx.builder.switch_to_block(inline_char_block);
     cx.builder.seal_block(inline_char_block);
-    let shift = cx.builder.ins().ishl_imm_u(index, 3);
-    let shift = cx.builder.ins().isub(shift, index);
-    let inline_unit = cx.builder.ins().ushr(object, shift);
-    let inline_unit = cx.builder.ins().band_imm_u(inline_unit, 0x7f);
+    let inline_latin1_char_block = cx.builder.create_block();
+    let inline_ascii_char_block = cx.builder.create_block();
+    let is_inline_latin1 = emit_is_inline_latin1_marker(cx.builder, object);
+    cx.builder.ins().brif(
+        is_inline_latin1,
+        inline_latin1_char_block,
+        &[],
+        inline_ascii_char_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(inline_ascii_char_block);
+    cx.builder.seal_block(inline_ascii_char_block);
+    let inline_unit = emit_extract_inline_ascii_unit(cx.builder, object, index);
     let inline_result = emit_inline_ascii_char_value(cx, inline_unit);
+    define_value(cx.builder, cx.variables, dest, inline_result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(inline_latin1_char_block);
+    cx.builder.seal_block(inline_latin1_char_block);
+    let inline_unit = emit_extract_inline_latin1_unit(cx.builder, object, index);
+    let inline_result = emit_latin1_char_handle(cx, inline_unit, miss_block)?;
     define_value(cx.builder, cx.variables, dest, inline_result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
@@ -4042,6 +4059,36 @@ fn emit_extract_inline_ascii_unit(
     builder.ins().band_imm_u(unit, 0x7f)
 }
 
+fn emit_is_inline_latin1_marker(
+    builder: &mut FunctionBuilder<'_>,
+    encoded: ir::Value,
+) -> ir::Value {
+    let marker_bits = builder.ins().band_imm_u(
+        encoded,
+        i64::try_from(value::INLINE_STRING_MARKER_MASK).expect("SSO marker mask fits i64"),
+    );
+    builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        marker_bits,
+        i64::try_from(value::INLINE_STRING_LATIN1_MARKER << value::INLINE_STRING_MARKER_SHIFT)
+            .expect("Latin-1 SSO marker fits i64"),
+    )
+}
+
+fn emit_extract_inline_latin1_unit(
+    builder: &mut FunctionBuilder<'_>,
+    receiver: ir::Value,
+    index: ir::Value,
+) -> ir::Value {
+    let payload = builder.ins().band_imm_u(
+        receiver,
+        i64::try_from(value::INLINE_STRING_PAYLOAD_MASK).expect("SSO payload mask fits i64"),
+    );
+    let shift = builder.ins().ishl_imm_u(index, 3);
+    let unit = builder.ins().ushr(payload, shift);
+    builder.ins().band_imm_u(unit, 0xff)
+}
+
 fn emit_unsigned_min(
     builder: &mut FunctionBuilder<'_>,
     lhs: ir::Value,
@@ -4321,15 +4368,37 @@ fn lower_string_char_builtin(
 
     cx.builder.switch_to_block(inline_char_block);
     cx.builder.seal_block(inline_char_block);
-    let shift = cx.builder.ins().ishl_imm_u(index, 3);
-    let shift = cx.builder.ins().isub(shift, index);
-    let unit = cx.builder.ins().ushr(receiver, shift);
-    let unit = cx.builder.ins().band_imm_u(unit, 0x7f);
+    let inline_latin1_char_block = cx.builder.create_block();
+    let inline_ascii_char_block = cx.builder.create_block();
+    let is_inline_latin1 = emit_is_inline_latin1_marker(cx.builder, receiver);
+    cx.builder.ins().brif(
+        is_inline_latin1,
+        inline_latin1_char_block,
+        &[],
+        inline_ascii_char_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(inline_ascii_char_block);
+    cx.builder.seal_block(inline_ascii_char_block);
+    let ascii_unit = emit_extract_inline_ascii_unit(cx.builder, receiver, index);
     let result = if builtin == Builtin::StringCharCodeAt {
-        let unit = cx.builder.ins().fcvt_from_uint(types::F64, unit);
+        let unit = cx.builder.ins().fcvt_from_uint(types::F64, ascii_unit);
         box_f64_result(cx.builder, unit)
     } else {
-        emit_inline_ascii_char_value(cx, unit)
+        emit_inline_ascii_char_value(cx, ascii_unit)
+    };
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(inline_latin1_char_block);
+    cx.builder.seal_block(inline_latin1_char_block);
+    let latin1_unit = emit_extract_inline_latin1_unit(cx.builder, receiver, index);
+    let result = if builtin == Builtin::StringCharCodeAt {
+        let unit = cx.builder.ins().fcvt_from_uint(types::F64, latin1_unit);
+        box_f64_result(cx.builder, unit)
+    } else {
+        emit_latin1_char_handle(cx, latin1_unit, miss_block)?
     };
     define_value(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);

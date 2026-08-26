@@ -1984,7 +1984,7 @@ impl NativeAgentState {
     ) -> Option<R> {
         if value::is_inline_string(encoded) {
             let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
-            return Some(f(StrView::Latin1(value::decode_inline_ascii(
+            return Some(f(StrView::Latin1(value::decode_inline_string(
                 encoded, &mut bytes,
             )?)));
         }
@@ -2000,7 +2000,7 @@ impl NativeAgentState {
     ) -> Option<R> {
         if value::is_inline_string(encoded) {
             let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
-            let bytes = value::decode_inline_ascii(encoded, &mut bytes)?;
+            let bytes = value::decode_inline_string(encoded, &mut bytes)?;
             let mut units = [0_u16; value::INLINE_STRING_MAX_LEN];
             for (unit, byte) in units.iter_mut().zip(bytes.iter().copied()) {
                 *unit = u16::from(byte);

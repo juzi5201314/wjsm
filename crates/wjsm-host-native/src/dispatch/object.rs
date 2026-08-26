@@ -1420,12 +1420,33 @@ fn define_ordinary_property(
                 .filter(|current| current.flags & ACCESSOR != 0 && !switching_kind)
                 .map_or_else(value::encode_undefined, |current| current.setter as i64)
         });
-        state
-            .gc
-            .heap()
-            .define_accessor_property_with_flags(handle, key, getter as u64, setter as u64, flags)
-            .map(|()| object)
-            .unwrap_or_else(|_| fail_dispatch(ctx))
+        match state.gc.heap().define_accessor_property_with_flags(
+            handle,
+            key,
+            getter as u64,
+            setter as u64,
+            flags,
+        ) {
+            Ok(()) => object,
+            Err(wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+                if state.gc.flush_native_tlab(ctx).is_err() {
+                    return fail_dispatch(ctx);
+                }
+                state
+                    .gc
+                    .heap()
+                    .define_accessor_property_with_flags(
+                        handle,
+                        key,
+                        getter as u64,
+                        setter as u64,
+                        flags,
+                    )
+                    .map(|()| object)
+                    .unwrap_or_else(|_| fail_dispatch(ctx))
+            }
+            Err(_) => fail_dispatch(ctx),
+        }
     } else {
         set_flag(&mut flags, WRITABLE, descriptor.writable);
         let stored = descriptor.value.unwrap_or_else(|| {
@@ -1433,12 +1454,25 @@ fn define_ordinary_property(
                 .filter(|current| current.flags & ACCESSOR == 0 && !switching_kind)
                 .map_or_else(value::encode_undefined, |current| current.value as i64)
         });
-        state
+        match state
             .gc
             .heap()
             .define_data_property(handle, key, stored as u64, flags)
-            .map(|()| object)
-            .unwrap_or_else(|_| fail_dispatch(ctx))
+        {
+            Ok(()) => object,
+            Err(wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+                if state.gc.flush_native_tlab(ctx).is_err() {
+                    return fail_dispatch(ctx);
+                }
+                state
+                    .gc
+                    .heap()
+                    .define_data_property(handle, key, stored as u64, flags)
+                    .map(|()| object)
+                    .unwrap_or_else(|_| fail_dispatch(ctx))
+            }
+            Err(_) => fail_dispatch(ctx),
+        }
     }
 }
 
