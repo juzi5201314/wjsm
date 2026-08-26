@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+abcdef  world
+hello  world
+--- stderr ---

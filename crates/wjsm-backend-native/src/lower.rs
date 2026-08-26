@@ -2070,7 +2070,7 @@ fn lower_instruction(
             args,
         } if args.len() == 1 => {
             let encoded = use_value(cx.builder, cx.variables, args[0])?;
-            let inline = emit_inline_string_predicate(cx, encoded);
+            let inline = emit_inline_string_predicate(cx.builder, encoded);
             let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
             let boxed = cx.builder.ins().band_imm_s(encoded, box_base);
             let boxed = cx
@@ -2878,46 +2878,46 @@ fn emit_f64_abstract_compare(
     let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
     builder.ins().select(condition, true_value, false_value)
 }
-fn emit_inline_string_predicate(cx: &mut LoweringCx<'_, '_>, encoded: ir::Value) -> ir::Value {
+fn emit_inline_string_predicate(
+    builder: &mut FunctionBuilder<'_>,
+    encoded: ir::Value,
+) -> ir::Value {
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-    let boxed = cx.builder.ins().band_imm_u(encoded, box_base);
-    let boxed = cx
-        .builder
+    let boxed = builder.ins().band_imm_u(encoded, box_base);
+    let boxed = builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::Equal, boxed, box_base);
-    let marker = cx.builder.ins().band_imm_u(
+    let marker = builder.ins().band_imm_u(
         encoded,
         i64::try_from(value::INLINE_STRING_MARKER_MASK).expect("SSO marker mask fits i64"),
     );
-    let marker = cx.builder.ins().icmp_imm_u(
+    let marker = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         marker,
         i64::try_from(value::INLINE_STRING_MARKER << value::INLINE_STRING_MARKER_SHIFT)
             .expect("SSO marker fits i64"),
     );
-    let reserved = cx.builder.ins().band_imm_u(
+    let reserved = builder.ins().band_imm_u(
         encoded,
         i64::try_from(value::INLINE_STRING_RESERVED_MASK).expect("SSO reserved mask fits i64"),
     );
-    let reserved = cx
-        .builder
+    let reserved = builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::Equal, reserved, 0);
-    let length = cx
-        .builder
+    let length = builder
         .ins()
         .ushr_imm_u(encoded, i64::from(value::INLINE_STRING_LENGTH_SHIFT));
-    let length = cx.builder.ins().band_imm_u(length, 0b111);
-    let length_ok = cx.builder.ins().icmp_imm_u(
+    let length = builder.ins().band_imm_u(length, 0b111);
+    let length_ok = builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::UnsignedLessThanOrEqual,
         length,
         i64::try_from(value::INLINE_STRING_MAX_LEN).expect("SSO length fits i64"),
     );
     // generated code 只接收经过 Value 编码器构造的值；marker、保留位和长度足以
     // 区分 SSO，无需在每次字符串操作中重新验证未使用 payload 位。
-    let result = cx.builder.ins().band(boxed, marker);
-    let result = cx.builder.ins().band(result, reserved);
-    cx.builder.ins().band(result, length_ok)
+    let result = builder.ins().band(boxed, marker);
+    let result = builder.ins().band(result, reserved);
+    builder.ins().band(result, length_ok)
 }
 
 /// 把运行时字符串句柄解析为当前读取作用域内稳定的堆地址。
@@ -2967,7 +2967,7 @@ fn emit_string_address(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let valid = cx.builder.ins().band(is_boxed, is_string);
     let valid = cx.builder.ins().band(valid, is_runtime);
-    let inline = emit_inline_string_predicate(cx, encoded);
+    let inline = emit_inline_string_predicate(cx.builder, encoded);
     let inline = cx.builder.ins().bnot(inline);
     let valid = cx.builder.ins().band(valid, inline);
     cx.builder
@@ -3581,7 +3581,7 @@ fn lower_string_element(
 
     cx.builder.switch_to_block(index_block);
     cx.builder.seal_block(index_block);
-    let is_inline = emit_inline_string_predicate(cx, object);
+    let is_inline = emit_inline_string_predicate(cx.builder, object);
     cx.builder
         .ins()
         .brif(is_inline, inline_string_block, &[], dispatch_block, &[]);
@@ -3724,10 +3724,7 @@ fn lower_string_element(
 
     cx.builder.switch_to_block(elem_hit_block);
     cx.builder.seal_block(elem_hit_block);
-    let is_number = emit_is_number(cx.builder, elem_val);
-    let color_mask = i64::from_ne_bytes((!value::GC_COLOR_MASK).to_ne_bytes());
-    let stripped = cx.builder.ins().band_imm_u(elem_val, color_mask);
-    let clean_elem = cx.builder.ins().select(is_number, elem_val, stripped);
+    let clean_elem = emit_strip_gc_color(cx.builder, elem_val);
     define_value(cx.builder, cx.variables, dest, clean_elem)?;
     cx.builder.ins().jump(merge_block, &[]);
 
@@ -3803,7 +3800,7 @@ fn lower_string_char_builtin(
 
     cx.builder.switch_to_block(index_block);
     cx.builder.seal_block(index_block);
-    let is_inline = emit_inline_string_predicate(cx, receiver);
+    let is_inline = emit_inline_string_predicate(cx.builder, receiver);
     cx.builder
         .ins()
         .brif(is_inline, inline_string_block, &[], string_block, &[]);
@@ -3929,7 +3926,7 @@ fn emit_idle_string_address(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let valid = cx.builder.ins().band(is_boxed, is_string);
     let valid = cx.builder.ins().band(valid, is_runtime);
-    let inline = emit_inline_string_predicate(cx, encoded);
+    let inline = emit_inline_string_predicate(cx.builder, encoded);
     let not_inline = cx.builder.ins().bnot(inline);
     let valid = cx.builder.ins().band(valid, not_inline);
     cx.builder
@@ -4614,9 +4611,8 @@ fn lower_strict_eq(
     if let Some(slot) = feedback_ptr {
         emit_inline_binary_feedback(cx.builder, cx.ctx, slot, mode.slow_operation, lhs, rhs);
     }
-    let color_mask = i64::from_ne_bytes((!value::GC_COLOR_MASK).to_ne_bytes());
-    let lhs_plain = cx.builder.ins().band_imm_u(lhs, color_mask);
-    let rhs_plain = cx.builder.ins().band_imm_u(rhs, color_mask);
+    let lhs_plain = emit_strip_gc_color(cx.builder, lhs);
+    let rhs_plain = emit_strip_gc_color(cx.builder, rhs);
     let same_plain = cx
         .builder
         .ins()
@@ -4642,8 +4638,8 @@ fn lower_strict_eq(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let same_runtime_string = cx.builder.ins().band(same_plain, is_string);
     let same_runtime_string = cx.builder.ins().band(same_runtime_string, is_runtime);
-    let lhs_inline = emit_inline_string_predicate(cx, lhs_plain);
-    let rhs_inline = emit_inline_string_predicate(cx, rhs_plain);
+    let lhs_inline = emit_inline_string_predicate(cx.builder, lhs_plain);
+    let rhs_inline = emit_inline_string_predicate(cx.builder, rhs_plain);
     let any_inline = cx.builder.ins().bor(lhs_inline, rhs_inline);
     let both_inline = cx.builder.ins().band(lhs_inline, rhs_inline);
     let same_block = cx.builder.create_block();
@@ -6304,6 +6300,20 @@ pub(crate) fn emit_is_number(builder: &mut FunctionBuilder<'_>, input: ir::Value
     builder
         .ins()
         .icmp_imm_s(ir::condcodes::IntCC::NotEqual, boxed_bits, box_base)
+}
+
+/// CLIF 版 `value::strip_gc_color`：仅对 handle-backed reference 清除 GC color。
+/// number 与 inline SSO 的 payload 可能占用 bits 38–43，必须原样保留。
+pub(crate) fn emit_strip_gc_color(
+    builder: &mut FunctionBuilder<'_>,
+    input: ir::Value,
+) -> ir::Value {
+    let is_number = emit_is_number(builder, input);
+    let is_inline = emit_inline_string_predicate(builder, input);
+    let color_mask = i64::from_ne_bytes((!value::GC_COLOR_MASK).to_ne_bytes());
+    let stripped = builder.ins().band_imm_u(input, color_mask);
+    let keep_raw = builder.ins().bor(is_number, is_inline);
+    builder.ins().select(keep_raw, input, stripped)
 }
 
 fn emit_is_exception(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
