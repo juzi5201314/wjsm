@@ -75,10 +75,7 @@ module {
       %22 = const c22
       %23 = init_object_literal(c20, values=[%21, %22])
       store var $0.origin, %23
-      %24 = load var $0.origin
-      %25 = const c23
-      %26 = get_prop %24, %25
-      %27 = call builtin.console.log(%26)
+      %27 = call builtin.console.log(%21)
       %28 = is_exception %27
       branch %28, bb2, bb1
     bb1:

@@ -1237,6 +1237,8 @@ impl Lowerer {
         crate::passes::inline_for_ea::run(&mut self.module);
         // 初轮 cfg_fold：化简已知类型分支（is_string/is_js_object 等）与 Phi，打平控制流供 EA 跨块分析。
         crate::passes::cfg_fold::run(&mut self.module);
+        // object_literal_read_fold：同块 InitObjectLiteral 后的常量键 GetProp 折叠为 SSA 值。
+        crate::passes::object_literal_read_fold::run(&mut self.module);
         // escape_scalar pass：逃逸分析 + 标量替换，消除局部 NewObject / ArrayTemplate / 字符串切片等分配。
         crate::passes::escape_scalar::run(&mut self.module);
         // 终轮 cfg_fold：折叠 EA 消除后新生成的常量表达式、清理死块与 Phi。
