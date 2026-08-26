@@ -183,6 +183,28 @@ pub fn inline_property_key_raw(encoded: i64) -> Option<u64> {
     Some(INLINE_NAMESPACE | (encoded as u64 & INLINE_PAYLOAD_MASK))
 }
 
+/// 对象模板键的 NameRef 命名空间（bit 61）：键文本由常量池 String 槽位承载，
+/// install 期经字符串常量发布结果解析为 PropertyKey。
+/// 位域安全性：SSO inline raw 的 payload 仅占 bit 0..=50 且 namespace 是 bit 62，
+/// Symbol 是 bit 63，bit 61 恒为 0，故 NameRef raw 不与任何 PropertyKey 编码冲突。
+pub const TEMPLATE_NAME_REF_NAMESPACE: u64 = 1 << 61;
+
+/// 将字符串常量池下标编码为对象模板 NameRef 键。
+pub const fn template_name_ref_key(constant_idx: u32) -> u64 {
+    TEMPLATE_NAME_REF_NAMESPACE | constant_idx as u64
+}
+
+/// 若 `raw` 为 NameRef 模板键，返回其字符串常量池下标。
+pub const fn template_key_name_ref(raw: u64) -> Option<u32> {
+    if raw & TEMPLATE_NAME_REF_NAMESPACE != TEMPLATE_NAME_REF_NAMESPACE {
+        return None;
+    }
+    if raw & (1 << 62) != 0 || raw & (1 << 63) != 0 {
+        return None;
+    }
+    Some((raw & 0x0000_7FFF_FFFF_FFFF) as u32)
+}
+
 pub fn is_inline_ascii(value: i64) -> bool {
     let bits = value as u64;
     let length = (bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT;
@@ -693,4 +715,27 @@ pub fn is_native_callable(val: i64) -> bool {
 
 pub fn decode_native_callable_idx(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_name_ref_key_round_trip() {
+        for idx in [0_u32, 1, 42, 0x7FFF_FFFF] {
+            let raw = template_name_ref_key(idx);
+            assert_eq!(template_key_name_ref(raw), Some(idx));
+            assert_eq!(raw & 0x0000_7FFF_FFFF_FFFF, idx as u64);
+            assert_eq!(raw & (1 << 62), 0);
+            assert_eq!(raw & (1 << 63), 0);
+        }
+    }
+
+    #[test]
+    fn template_key_name_ref_rejects_inline_property_key_raw() {
+        let encoded = encode_inline_ascii(b"name").expect("sso");
+        let inline_raw = inline_property_key_raw(encoded).expect("inline raw");
+        assert!(template_key_name_ref(inline_raw).is_none());
+    }
 }

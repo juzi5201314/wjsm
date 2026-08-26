@@ -711,6 +711,49 @@ mod tests {
     }
 
     #[test]
+    fn object_template_name_ref_round_trip() {
+        let mut program = Program::new();
+        let key_text = program.add_constant(Constant::String("firstName".to_string()));
+        let template = program.add_constant(Constant::ObjectTemplate {
+            keys: vec![wjsm_ir::value::template_name_ref_key(key_text.0)],
+        });
+        let input = ArtifactBuildInput::new(
+            program,
+            ModuleManifest::single("input.js", true),
+            BuildOptions::default(),
+        );
+        let artifact = PortableArtifact::from_input(&input).expect("artifact should encode");
+        let decoded = PortableArtifact::decode(artifact.bytes.clone(), &ArtifactLimits::default())
+            .expect("artifact should decode");
+        let Constant::ObjectTemplate { keys } =
+            &decoded.program().constants()[template.0 as usize]
+        else {
+            panic!("expected object template constant");
+        };
+        assert_eq!(keys.len(), 1);
+        assert_eq!(
+            wjsm_ir::value::template_key_name_ref(keys[0]),
+            Some(key_text.0)
+        );
+    }
+
+    #[test]
+    fn legacy_inline_object_template_still_decodes() {
+        let mut program = Program::new();
+        let encoded = wjsm_ir::value::encode_inline_ascii(b"name").expect("sso");
+        let inline_raw = wjsm_ir::value::inline_property_key_raw(encoded).expect("inline raw");
+        program.add_constant(Constant::ObjectTemplate {
+            keys: vec![inline_raw],
+        });
+        let input = ArtifactBuildInput::new(
+            program,
+            ModuleManifest::single("input.js", true),
+            BuildOptions::default(),
+        );
+        PortableArtifact::from_input(&input).expect("legacy inline template should encode");
+    }
+
+    #[test]
     fn source_file_does_not_replace_manifest_logical_url_during_verification() {
         let mut input = sample_input();
         Arc::make_mut(&mut input.program).set_source_file("/home/example/fixtures/input.js");

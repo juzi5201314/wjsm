@@ -810,6 +810,11 @@ fn issue384_object_method_self_reference_fixture_matches_ir_snapshot() {
     assert_snapshot("issue384_object_method_self_reference");
 }
 
+#[test]
+fn object_literal_static_keys_fixture_matches_ir_snapshot() {
+    assert_snapshot("object_literal_static_keys");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

@@ -1,0 +1,20 @@
+exit_code: 0
+--- stdout ---
+long dot: 1 2 3
+long bracket: 1 2
+long keys: ["firstName","lastName","quantity"]
+long json: {"firstName":1,"lastName":2,"quantity":3}
+long after delete: ["firstName","lastName"]
+long hasOwn: true false
+unicode read: 1 2
+unicode json: {"café":1,"日本語":2}
+unicode key len: 4
+numeric read: a 1 1
+numeric keys: ["3","1e21","1.5"]
+many dynamic: 17 18 1
+proto own: 2 1
+computed: 42
+getter: 7
+spread: 99 1
+frozen value: 1 none
+--- stderr ---

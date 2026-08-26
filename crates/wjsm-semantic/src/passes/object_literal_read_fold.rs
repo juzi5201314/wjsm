@@ -26,18 +26,29 @@ fn template_property_index(
     key: ValueId,
 ) -> Option<usize> {
     let constant_id = const_defs.get(&key)?;
-    let index = usize::try_from(constant_id.0).ok()?;
-    let Constant::String(text) = constants.get(index)? else {
+    let key_index = usize::try_from(constant_id.0).ok()?;
+    let Constant::String(key_text) = constants.get(key_index)? else {
         return None;
     };
-    let encoded = value::encode_inline_ascii(text.as_bytes())
-        .or_else(|| value::encode_inline_latin1(text.as_bytes()))?;
-    let key_raw = value::inline_property_key_raw(encoded)?;
     let template_index = usize::try_from(template.0).ok()?;
     let Constant::ObjectTemplate { keys } = constants.get(template_index)? else {
         return None;
     };
-    keys.iter().position(|candidate| *candidate == key_raw)
+    if let Some(encoded) = value::encode_inline_ascii(key_text.as_bytes()) {
+        if let Some(key_raw) = value::inline_property_key_raw(encoded) {
+            if let Some(index) = keys.iter().position(|candidate| *candidate == key_raw) {
+                return Some(index);
+            }
+        }
+    }
+    keys.iter().position(|candidate| {
+        value::template_key_name_ref(*candidate).is_some_and(|idx| {
+            matches!(
+                constants.get(idx as usize),
+                Some(Constant::String(text)) if text == key_text
+            )
+        })
+    })
 }
 
 fn resolve_canonical(object: ValueId, aliases: &HashMap<ValueId, ValueId>) -> ValueId {
@@ -468,5 +479,57 @@ mod tests {
 
         let function = &program.functions()[function_id.0 as usize];
         assert_eq!(count_get_prop(function), 1);
+    }
+
+    fn name_ref_key(program: &mut Program, text: &str) -> u64 {
+        let constant_idx = program.add_constant(Constant::String(text.into()));
+        value::template_name_ref_key(constant_idx.0)
+    }
+
+    #[test]
+    fn folds_long_key_name_ref_get_prop() {
+        let mut program = Program::new();
+        let name_ref = name_ref_key(&mut program, "firstName");
+        let template = program.add_constant(Constant::ObjectTemplate {
+            keys: vec![name_ref],
+        });
+        let key = program.add_constant(Constant::String("firstName".into()));
+        let mut function = Function::new("long_key", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: program.add_constant(Constant::Number(1.0)),
+        });
+        block.push_instruction(Instruction::InitObjectLiteral {
+            dest: ValueId(1),
+            template,
+            values: vec![ValueId(0)],
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(2),
+            constant: key,
+        });
+        block.push_instruction(Instruction::GetProp {
+            dest: ValueId(3),
+            object: ValueId(1),
+            key: ValueId(2),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(3)),
+        });
+        function.push_block(block);
+        let function_id = program.push_function(function);
+
+        run(&mut program);
+
+        let function = &program.functions()[function_id.0 as usize];
+        assert_eq!(count_get_prop(function), 0);
+        assert!(matches!(
+            function.blocks()[0].terminator(),
+            Terminator::Return {
+                value: Some(ValueId(0)),
+                ..
+            }
+        ));
     }
 }

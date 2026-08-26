@@ -169,6 +169,7 @@ fn function_slots_for_program(
 fn bake_object_template_meta_table(
     shapes: &wjsm_gc::ShapeTable,
     constants: &[Constant],
+    string_constants: &[i64],
 ) -> Vec<u32> {
     use wjsm_gc::{PropertyKey, ShapeTable};
     use wjsm_ir::constants::{
@@ -187,7 +188,18 @@ fn bake_object_template_meta_table(
         let mut slot_count = 0_u32;
         let mut entry = vec![0_u32; OBJECT_TEMPLATE_META_WORDS as usize];
         for (index, key_raw) in keys.iter().take(prop_count).enumerate() {
-            let key = PropertyKey::from_baked_raw(*key_raw);
+            let key = if let Some(constant_idx) = value::template_key_name_ref(*key_raw) {
+                let constant_idx = constant_idx as usize;
+                debug_assert!(constant_idx < string_constants.len());
+                let encoded = string_constants[constant_idx];
+                if value::is_inline_string(encoded) {
+                    PropertyKey::inline_string(encoded).expect("install 期 SSO 字符串常量")
+                } else {
+                    PropertyKey::from_name_id(value::decode_runtime_string_handle(encoded))
+                }
+            } else {
+                PropertyKey::from_baked_raw(*key_raw)
+            };
             let transition = shapes.transition_add(shape_id, key, flags);
             entry[4 + index] = transition.index;
             shape_id = transition.shape_id;
@@ -1705,8 +1717,11 @@ impl NativeAgentState {
             }
         }
         self.install_string_roots.clear();
-        let object_template_meta =
-            bake_object_template_meta_table(self.gc.heap().shapes(), program.constants());
+        let object_template_meta = bake_object_template_meta_table(
+            self.gc.heap().shapes(),
+            program.constants(),
+            &string_constants,
+        );
         let ic_hints = wjsm_backend_native::ic_template_hints(program);
         if let Some(image) = Arc::get_mut(&mut image) {
             image.prefill_template_ic_slots(&ic_hints, &object_template_meta);

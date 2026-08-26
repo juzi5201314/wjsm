@@ -53,13 +53,29 @@ pub(crate) fn verify_module(module: &Module) -> Result<(), IrVerificationError> 
 
 fn verify_module_constants(module: &Module) -> Result<(), IrVerificationError> {
     let function_count = module.functions().len();
-    for (index, constant) in module.constants().iter().enumerate() {
+    let constants = module.constants();
+    for (index, constant) in constants.iter().enumerate() {
         if let Constant::FunctionRef(function_id) = constant
             && function_id.0 as usize >= function_count
         {
             return Err(IrVerificationError::new(format!(
                 "IR verification failed: constant c{index} references missing function @{function_id}"
             )));
+        }
+        if let Constant::ObjectTemplate { keys } = constant {
+            for key in keys {
+                if let Some(constant_idx) = crate::value::template_key_name_ref(*key) {
+                    let constant_idx = constant_idx as usize;
+                    match constants.get(constant_idx) {
+                        Some(Constant::String(_)) => {}
+                        _ => {
+                            return Err(IrVerificationError::new(format!(
+                                "IR verification failed: template name-ref key must reference a string constant (c{index})"
+                            )));
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())

@@ -21,16 +21,17 @@ module {
     c18 = number(inf)
     c19 = undefined
     c20 = object_template([])
-    c21 = bool(true)
-    c22 = functionref(@0)
-    c23 = undefined
-    c24 = string("deleteProperty")
-    c25 = string("x")
-    c26 = bool(false)
+    c21 = string("deleteProperty")
+    c22 = object_template([2305843009213693973])
+    c23 = bool(true)
+    c24 = functionref(@0)
+    c25 = undefined
+    c26 = string("x")
+    c27 = bool(false)
 
   fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
     bb0:
-      %0 = const c21
+      %0 = const c23
       return %0
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -79,32 +80,30 @@ module {
       store var $this, %20
       %21 = init_object_literal(c20)
       store var $0.target, %21
-      %22 = new_object(capacity=4)
-      %23 = const c22
-      %24 = const c23
-      %25 = call builtin.create_closure(%23, %24)
-      %26 = const c24
-      %27 = set_prop %22, %26, %25
-      store var $0.handler, %22
-      %28 = load var $0.target
-      %29 = load var $0.handler
-      %30 = call builtin.proxy.create(%28, %29)
-      %31 = is_exception %30
-      branch %31, bb2, bb1
+      %22 = const c24
+      %23 = const c25
+      %24 = call builtin.create_closure(%22, %23)
+      %25 = init_object_literal(c22, values=[%24])
+      store var $0.handler, %25
+      %26 = load var $0.target
+      %27 = load var $0.handler
+      %28 = call builtin.proxy.create(%26, %27)
+      %29 = is_exception %28
+      branch %29, bb2, bb1
     bb1:
-      store var $0.proxy, %30
-      %33 = load var $0.proxy
-      %34 = const c25
-      %35 = delete_prop %33, %34
-      %36 = call builtin.console.log(%35)
-      %37 = is_exception %36
-      branch %37, bb4, bb3
+      store var $0.proxy, %28
+      %31 = load var $0.proxy
+      %32 = const c26
+      %33 = delete_prop %31, %32
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb4, bb3
     bb2:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %30 = call builtin.exception_value(%28)
+      throw %30
     bb3:
       return
     bb4:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %36 = call builtin.exception_value(%34)
+      throw %36
 }

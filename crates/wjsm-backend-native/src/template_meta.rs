@@ -46,11 +46,8 @@ pub(crate) fn plan_ic_slots(program: &Program) -> IcSlotPlan {
                     Instruction::SetProp { dest, key, .. } => (*dest, None, *key),
                     _ => continue,
                 };
-                let Some(key_raw) =
-                    const_property_key_raw(program.constants(), &const_defs, key)
-                else {
-                    continue;
-                };
+                let key_raw =
+                    const_property_key_raw(program.constants(), &const_defs, key).unwrap_or(0);
                 let (template_meta_index, prop_index) = template_hint_for_access(
                     program.constants(),
                     &const_defs,
@@ -206,9 +203,36 @@ pub(crate) fn const_property_key_raw(
     let Constant::String(text) = constants.get(index)? else {
         return None;
     };
-    let encoded = value::encode_inline_ascii(text.as_bytes())
-        .or_else(|| value::encode_inline_latin1(text.as_bytes()))?;
+    let encoded = value::encode_inline_ascii(text.as_bytes())?;
     value::inline_property_key_raw(encoded)
+}
+
+fn template_property_index_by_key_text(
+    constants: &[Constant],
+    template: ConstantId,
+    key_text: &str,
+) -> Option<u32> {
+    let index = usize::try_from(template.0).ok()?;
+    let Constant::ObjectTemplate { keys } = constants.get(index)? else {
+        return None;
+    };
+    if let Some(encoded) = value::encode_inline_ascii(key_text.as_bytes()) {
+        if let Some(key_raw) = value::inline_property_key_raw(encoded) {
+            if let Some(prop_index) = keys.iter().position(|key| *key == key_raw) {
+                return Some(u32::try_from(prop_index).expect("模板属性下标在 u32 内"));
+            }
+        }
+    }
+    keys.iter()
+        .position(|key| {
+            value::template_key_name_ref(*key).is_some_and(|idx| {
+                matches!(
+                    constants.get(idx as usize),
+                    Some(Constant::String(text)) if text == key_text
+                )
+            })
+        })
+        .map(|index| u32::try_from(index).expect("模板属性下标在 u32 内"))
 }
 
 pub(crate) fn template_property_index_for_key(
@@ -217,8 +241,15 @@ pub(crate) fn template_property_index_for_key(
     template: ConstantId,
     key: ValueId,
 ) -> Option<u32> {
-    let key_raw = const_property_key_raw(constants, const_defs, key)?;
-    template_property_index_with_key_raw(constants, template, key_raw)
+    if let Some(key_raw) = const_property_key_raw(constants, const_defs, key) {
+        return template_property_index_with_key_raw(constants, template, key_raw);
+    }
+    let constant_id = const_defs.get(&key)?;
+    let index = usize::try_from(constant_id.0).ok()?;
+    let Constant::String(key_text) = constants.get(index)? else {
+        return None;
+    };
+    template_property_index_by_key_text(constants, template, key_text)
 }
 
 pub(crate) fn template_property_index_with_key_raw(
@@ -233,4 +264,12 @@ pub(crate) fn template_property_index_with_key_raw(
     keys.iter()
         .position(|key| *key == key_raw)
         .map(|index| u32::try_from(index).expect("模板属性下标在 u32 内"))
+        .or_else(|| {
+            value::template_key_name_ref(key_raw).and_then(|constant_idx| {
+                let Constant::String(key_text) = constants.get(constant_idx as usize)? else {
+                    return None;
+                };
+                template_property_index_by_key_text(constants, template, key_text)
+            })
+        })
 }

@@ -6,7 +6,7 @@ impl Lowerer {
         obj_expr: &swc_ast::ObjectLit,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        if let Some(keys) = collect_sso_object_literal_keys(obj_expr) {
+        if let Some(keys) = collect_static_object_literal_keys(obj_expr, &mut self.module) {
             return self.lower_sso_object_literal(obj_expr, block, keys);
         }
 
@@ -666,7 +666,8 @@ impl Lowerer {
         Ok(desc_dest)
     }
 
-    /// 静态 SSO 键对象字面量：install 期烘焙 shape，运行时走 InitObjectLiteral JIT。
+    /// 静态字符串键对象字面量（ASCII ≤6 码元 inline；其余经 String 常量 NameRef）：
+    /// install 期烘焙 shape，运行时走 InitObjectLiteral JIT。
     fn lower_sso_object_literal(
         &mut self,
         obj_expr: &swc_ast::ObjectLit,
@@ -705,8 +706,16 @@ impl Lowerer {
     }
 }
 
-/// 收集可 JIT 初始化的静态 SSO 键；不满足条件时返回 None。
-fn collect_sso_object_literal_keys(obj_expr: &swc_ast::ObjectLit) -> Option<Vec<u64>> {
+/// 收集可 JIT 初始化的静态字符串键；不满足条件时返回 None。
+fn collect_static_object_literal_keys(
+    obj_expr: &swc_ast::ObjectLit,
+    module: &mut wjsm_ir::Module,
+) -> Option<Vec<u64>> {
+    use wjsm_ir::constants::OBJECT_TEMPLATE_MAX_PROPS;
+
+    if obj_expr.props.len() > OBJECT_TEMPLATE_MAX_PROPS as usize {
+        return None;
+    }
     let mut keys = Vec::with_capacity(obj_expr.props.len());
     for prop in &obj_expr.props {
         match prop {
@@ -715,7 +724,7 @@ fn collect_sso_object_literal_keys(obj_expr: &swc_ast::ObjectLit) -> Option<Vec<
                     if is_proto_object_literal_key(&kv.key) {
                         return None;
                     }
-                    keys.push(static_sso_property_key(&kv.key)?);
+                    keys.push(static_object_literal_property_key(&kv.key, module)?);
                 }
                 _ => return None,
             },
@@ -733,7 +742,12 @@ fn is_proto_object_literal_key(key: &swc_ast::PropName) -> bool {
     }
 }
 
-fn static_sso_property_key(key: &swc_ast::PropName) -> Option<u64> {
+fn static_object_literal_property_key(
+    key: &swc_ast::PropName,
+    module: &mut wjsm_ir::Module,
+) -> Option<u64> {
+    use wjsm_ir::{Constant, value};
+
     let key_str = match key {
         swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
         swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
@@ -744,9 +758,13 @@ fn static_sso_property_key(key: &swc_ast::PropName) -> Option<u64> {
             .unwrap_or_else(|| js_number_property_key(num.value)),
         _ => return None,
     };
-    let encoded = wjsm_ir::value::encode_inline_ascii(key_str.as_bytes())
-        .or_else(|| wjsm_ir::value::encode_inline_latin1(key_str.as_bytes()))?;
-    wjsm_ir::value::inline_property_key_raw(encoded)
+    if key_str.is_ascii() && key_str.len() <= 6 {
+        let encoded = value::encode_inline_ascii(key_str.as_bytes())?;
+        value::inline_property_key_raw(encoded)
+    } else {
+        let constant_idx = module.add_constant(Constant::String(key_str));
+        Some(value::template_name_ref_key(constant_idx.0))
+    }
 }
 
 fn js_number_property_key(value: f64) -> String {
