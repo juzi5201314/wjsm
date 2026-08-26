@@ -2,6 +2,8 @@ pub mod cache;
 pub(crate) mod f64_analysis;
 pub mod image;
 pub(crate) mod lower;
+pub(crate) mod template_meta;
+pub use template_meta::{IcTemplateHint, ic_template_hints};
 pub(crate) mod root_plan;
 pub(crate) mod specialize;
 pub(crate) mod unwind;
@@ -482,6 +484,94 @@ mod tests {
             source_text: None,
         })
         .expect("property IC artifact should encode")
+    }
+
+    #[test]
+    fn template_object_literal_lowering_uses_baked_meta_reads() {
+        fn sso_key(text: &str) -> u64 {
+            let encoded = wjsm_ir::value::encode_inline_ascii(text.as_bytes()).expect("sso key");
+            wjsm_ir::value::inline_property_key_raw(encoded).expect("property key")
+        }
+        let mut program = Program::new();
+        let template = program.add_constant(Constant::ObjectTemplate {
+            keys: vec![sso_key("name"), sso_key("value"), sso_key("length")],
+        });
+        let key_name = program.add_constant(Constant::String("name".into()));
+        let key_value = program.add_constant(Constant::String("value".into()));
+        let key_length = program.add_constant(Constant::String("length".into()));
+        let mut function = Function::new("template_object", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        for (dest, constant) in [
+            (ValueId(0), 1_u32),
+            (ValueId(1), 2_u32),
+            (ValueId(2), 3_u32),
+        ] {
+            block.push_instruction(Instruction::Const {
+                dest,
+                constant: program.add_constant(Constant::Number(f64::from(constant))),
+            });
+        }
+        block.push_instruction(Instruction::InitObjectLiteral {
+            dest: ValueId(3),
+            template,
+            values: vec![ValueId(0), ValueId(1), ValueId(2)],
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(10),
+            constant: key_name,
+        });
+        block.push_instruction(Instruction::GetProp {
+            dest: ValueId(4),
+            object: ValueId(3),
+            key: ValueId(10),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(11),
+            constant: key_value,
+        });
+        block.push_instruction(Instruction::GetProp {
+            dest: ValueId(5),
+            object: ValueId(3),
+            key: ValueId(11),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(12),
+            constant: key_length,
+        });
+        block.push_instruction(Instruction::GetProp {
+            dest: ValueId(6),
+            object: ValueId(3),
+            key: ValueId(12),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(4)),
+        });
+        function.push_block(block);
+        program.push_function(function);
+        let artifact = PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("template artifact should encode");
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&artifact)
+            .expect("template object diagnostics should compile");
+        let hints = ic_template_hints(artifact.program());
+        assert!(
+            hints.iter().any(|hint| hint.template_meta_index.is_some()),
+            "expected template-linked IC hints: {hints:?}"
+        );
+        assert!(
+            hints.iter().filter(|hint| hint.template_meta_index.is_some()).count() >= 3,
+            "expected three template property reads: {hints:?}"
+        );
+        assert!(
+            diagnostics.disassembly.contains("cmp") || diagnostics.clif.contains("icmp"),
+            "expected shape guard in generated code"
+        );
     }
 
     #[test]

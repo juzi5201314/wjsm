@@ -27,6 +27,9 @@ use rayon::prelude::*;
 
 use crate::f64_analysis::infer_f64_values;
 use crate::root_plan::RootPlan;
+use crate::template_meta::{
+    TemplateOriginMap, build_template_origin_maps, plan_ic_slots, template_property_index_for_key,
+};
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompileError, NativeObject};
 
@@ -435,47 +438,10 @@ pub(crate) fn slots_from_program(
         .collect()
 }
 
-/// 为「常量字符串键的 GetProp / OptionalGetProp」分配全局 IC 槽；返回每函数的 `dest → 槽下标`
-/// 映射与总槽数。非字符串常量键（symbol / 数字 / 动态键）不分配，走宿主路径。
-///
-/// ValueId 是函数局部命名，故 `Const` 定义表必须按函数隔离，避免跨函数误匹配。
+/// 为「常量字符串键的 GetProp / OptionalGetProp / SetProp」分配全局 IC 槽。
 pub(crate) fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
-    let mut per_function = Vec::with_capacity(program.functions().len());
-    let mut slot_index = 0_u32;
-    for function in program.functions() {
-        let mut const_defs: HashMap<ValueId, ConstantId> = HashMap::new();
-        for block in function.blocks() {
-            for instruction in block.instructions() {
-                if let Instruction::Const { dest, constant } = instruction {
-                    const_defs.insert(*dest, *constant);
-                }
-            }
-        }
-        let mut slots = HashMap::new();
-        for block in function.blocks() {
-            for instruction in block.instructions() {
-                let (dest, key) = match instruction {
-                    Instruction::GetProp { dest, key, .. }
-                    | Instruction::OptionalGetProp { dest, key, .. }
-                    | Instruction::SetProp { dest, key, .. } => (*dest, *key),
-                    _ => continue,
-                };
-                let Some(constant_id) = const_defs.get(&key) else {
-                    continue;
-                };
-                let is_string = usize::try_from(constant_id.0)
-                    .ok()
-                    .and_then(|index| program.constants().get(index))
-                    .is_some_and(|constant| matches!(constant, Constant::String(_)));
-                if is_string {
-                    slots.insert(dest, slot_index);
-                    slot_index += 1;
-                }
-            }
-        }
-        per_function.push(slots);
-    }
-    (per_function, slot_index)
+    let plan = plan_ic_slots(program);
+    (plan.per_function, plan.total)
 }
 
 /// 每函数的反馈槽 plan：`(block, instruction) → 全局槽下标`。
@@ -693,6 +659,7 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub frame_local_names: &'a BTreeSet<&'s str>,
     pub boxed_local_names: &'a BTreeSet<&'s str>,
     pub ic_slots: &'a HashMap<ValueId, u32>,
+    pub template_origins: &'a TemplateOriginMap,
     pub feedback_slots: &'a HashMap<(BasicBlockId, usize), u32>,
     pub specialized_tags: Option<&'a [wjsm_native_abi::NativeFeedbackTag]>,
     pub function_decls: &'a [DeclaredFunction],
@@ -757,6 +724,7 @@ struct InstructionTables<'a> {
     frame_locals: &'a HashMap<String, Variable>,
     frame_local_indices: &'a HashMap<String, usize>,
     ic_slots: &'a HashMap<ValueId, u32>,
+    template_origins: &'a TemplateOriginMap,
     function_decls: &'a [DeclaredFunction],
     imported_function_decls: &'a mut HashMap<FunctionId, ir::FuncRef>,
     direct_callable_functions: &'a HashSet<FunctionId>,
@@ -866,6 +834,7 @@ fn compile_program_inner(
 
     // IC 槽预计算：常量字符串键的 GetProp 在编译期固定槽位，miss 回填由宿主完成。
     let (ic_slots, ic_slot_count) = allocate_ic_slots(program);
+    let template_origins = build_template_origin_maps(program);
     // 反馈槽预计算：只按指令形态编号，保证与运行时特化 overlay 的编号一致。
     let feedback_plan = allocate_feedback_slots(program);
 
@@ -912,6 +881,7 @@ fn compile_program_inner(
                 frame_local_names: &frame_locals[index],
                 boxed_local_names: &boxed_frame_locals[index],
                 ic_slots: &ic_slots[index],
+                template_origins: &template_origins[index],
                 feedback_slots: feedback_plan.function_slots(index),
                 specialized_tags: None,
                 function_decls: &function_decls,
@@ -1284,6 +1254,7 @@ pub(crate) fn lower_function(
     let frame_local_names = input.frame_local_names;
     let boxed_local_names = input.boxed_local_names;
     let ic_slots = input.ic_slots;
+    let template_origins = input.template_origins;
     let feedback_slots = input.feedback_slots;
     let specialized_tags = input.specialized_tags;
     let slow_call_signature = function.signature.clone();
@@ -1407,6 +1378,7 @@ pub(crate) fn lower_function(
             frame_locals: &frame_locals,
             frame_local_indices: &boxed_local_indices,
             ic_slots,
+            template_origins,
             function_decls: input.function_decls,
             imported_function_decls: &mut imported_function_decls,
             direct_callable_functions: input.direct_callable_functions,
@@ -1827,16 +1799,7 @@ fn lower_native_object_allocation(
 }
 
 fn object_template_meta_index(constants: &[Constant], template: ConstantId) -> Option<u32> {
-    let index = usize::try_from(template.0).ok()?;
-    if !matches!(constants.get(index), Some(Constant::ObjectTemplate { .. })) {
-        return None;
-    }
-    Some(
-        constants[..index]
-            .iter()
-            .filter(|constant| matches!(constant, Constant::ObjectTemplate { .. }))
-            .count() as u32,
-    )
+    crate::template_meta::object_template_meta_index(constants, template)
 }
 
 fn emit_load_object_template_meta_word(
@@ -1883,6 +1846,268 @@ fn lower_create_data_property_fast(
     cx.builder
         .ins()
         .store(MemFlagsData::trusted(), stored, value_addr, 0);
+}
+
+/// 模板对象自有数据属性读：install 期烘焙 shape/slot，shape 失配回落 fallback。
+fn lower_get_template_prop_inline(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    object: ValueId,
+    meta_index: u32,
+    prop_index: u32,
+    merge_block: ir::Block,
+    fallback_block: ir::Block,
+) -> Result<()> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let obj = use_value(cx.builder, cx.variables, object)?;
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let ht_base = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let barrier_state = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
+    );
+    let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
+    let is_boxed = cx
+        .builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    let tag = cx.builder.ins().ushr_imm_u(obj, 32);
+    let tag = cx.builder.ins().band_imm_u(
+        tag,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_obj = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
+    );
+    let tag_ok = cx.builder.ins().band(is_boxed, is_obj);
+
+    let entry_block = cx.builder.create_block();
+    let legacy_entry_block = cx.builder.create_block();
+    let zgc_entry_block = cx.builder.create_block();
+    let zgc_fast_block = cx.builder.create_block();
+    let receiver_assist_block = cx.builder.create_block();
+    let shape_check_block = cx.builder.create_block();
+    cx.builder.append_block_param(shape_check_block, types::I64);
+    let own_hit_block = cx.builder.create_block();
+
+    cx.builder
+        .ins()
+        .brif(tag_ok, entry_block, &[], fallback_block, &[]);
+
+    cx.builder.switch_to_block(entry_block);
+    cx.builder.seal_block(entry_block);
+    let handle_idx = cx.builder.ins().band_imm_u(obj, i64::from(u32::MAX));
+    let handle_i32 = cx.builder.ins().ireduce(types::I32, handle_idx);
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle_idx, 3);
+    let entry_addr = cx.builder.ins().iadd(ht_base, entry_offset);
+    let entry = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let entry_state = cx.builder.ins().band_imm_u(entry, 0xFFFF);
+    let stable = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        entry_state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    let logical_addr = cx.builder.ins().ushr_imm_u(entry, 16);
+    let heap_delta = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    let barrier_disabled =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    cx.builder.ins().brif(
+        barrier_disabled,
+        legacy_entry_block,
+        &[],
+        zgc_entry_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(legacy_entry_block);
+    cx.builder.seal_block(legacy_entry_block);
+    cx.builder.ins().brif(
+        stable,
+        shape_check_block,
+        &[ir::BlockArg::Value(logical_addr)],
+        fallback_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(zgc_entry_block);
+    cx.builder.seal_block(zgc_entry_block);
+    let epoch_addr = cx.builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let access_epoch =
+        cx.builder
+            .ins()
+            .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
+    let epoch_bit = cx.builder.ins().band_imm_u(access_epoch, 1);
+    let epoch_even = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
+    let direct = cx.builder.ins().band(stable, epoch_even);
+    cx.builder
+        .ins()
+        .brif(direct, zgc_fast_block, &[], receiver_assist_block, &[]);
+
+    cx.builder.switch_to_block(zgc_fast_block);
+    cx.builder.seal_block(zgc_fast_block);
+    increment_barrier_counter(
+        cx.builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, load_fast_events),
+    );
+    cx.builder
+        .ins()
+        .jump(shape_check_block, &[ir::BlockArg::Value(logical_addr)]);
+
+    cx.builder.switch_to_block(receiver_assist_block);
+    cx.builder.seal_block(receiver_assist_block);
+    let call = cx
+        .builder
+        .ins()
+        .call(barrier_thunks.load, &[cx.ctx, handle_i32]);
+    let assisted = cx.builder.inst_results(call)[0];
+    let assisted_ok = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
+    cx.builder.ins().brif(
+        assisted_ok,
+        shape_check_block,
+        &[ir::BlockArg::Value(assisted)],
+        fallback_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(shape_check_block);
+    cx.builder.seal_block(shape_check_block);
+    let logical_addr = cx.builder.block_params(shape_check_block)[0];
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    let baked_shape = emit_load_object_template_meta_word(cx, meta_index, 0)?;
+    let obj_word = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, 8);
+    let obj_shape = cx.builder.ins().ushr_imm_u(obj_word, 32);
+    let shape_match = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, obj_shape, baked_shape);
+    cx.builder
+        .ins()
+        .brif(shape_match, own_hit_block, &[], fallback_block, &[]);
+
+    cx.builder.switch_to_block(own_hit_block);
+    cx.builder.seal_block(own_hit_block);
+    let slot_index = emit_load_object_template_meta_word(cx, meta_index, 4 + prop_index)?;
+    let value_shift = cx.builder.ins().ishl_imm_u(slot_index, 3);
+    let value_offset = cx
+        .builder
+        .ins()
+        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let value_addr = cx.builder.ins().iadd(addr, value_offset);
+    let loaded = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
+    define_value(cx.builder, cx.variables, dest, loaded)?;
+    cx.builder.ins().jump(merge_block, &[]);
+    Ok(())
+}
+
+fn lower_get_prop_with_template_or_ic(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &InstructionTables<'_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    roots: &[ValueId],
+) -> Result<()> {
+    let template_inline = tables
+        .template_origins
+        .get(&object)
+        .and_then(|site| {
+            template_property_index_for_key(
+                tables.constants,
+                tables.constant_defs,
+                site.template,
+                key,
+            )
+            .map(|prop_index| (site.meta_index, prop_index))
+        });
+    if let Some((meta_index, prop_index)) = template_inline {
+        let merge_block = cx.builder.create_block();
+        let fallback_block = cx.builder.create_block();
+        lower_get_template_prop_inline(
+            cx,
+            barrier_thunks,
+            dest,
+            object,
+            meta_index,
+            prop_index,
+            merge_block,
+            fallback_block,
+        )?;
+        cx.builder.switch_to_block(fallback_block);
+        cx.builder.seal_block(fallback_block);
+        if let Some(slot) = tables.ic_slots.get(&dest).copied() {
+            lower_get_prop_ic_non_nullish(
+                cx,
+                barrier_thunks,
+                PropAccess {
+                    dest,
+                    object,
+                    key,
+                    slot,
+                },
+                roots,
+                merge_block,
+            )?;
+        } else {
+            lower_value_operation(cx, NativeRuntimeOp::GetProp, &[object, key], Some(dest))?;
+            cx.builder.ins().jump(merge_block, &[]);
+        }
+        cx.builder.switch_to_block(merge_block);
+        cx.builder.seal_block(merge_block);
+        return Ok(());
+    }
+    if let Some(slot) = tables.ic_slots.get(&dest).copied() {
+        lower_get_prop_ic(
+            cx,
+            barrier_thunks,
+            PropAccess {
+                dest,
+                object,
+                key,
+                slot,
+            },
+            roots,
+        )
+    } else {
+        lower_value_operation(cx, NativeRuntimeOp::GetProp, &[object, key], Some(dest))
+    }
 }
 
 fn emit_init_object_literal_heap_value_guard(
@@ -2706,21 +2931,15 @@ fn lower_instruction(
             lower_native_object_allocation(cx, *dest, *capacity, false)
         }
         Instruction::GetProp { dest, object, key } => {
-            if let Some(slot) = tables.ic_slots.get(dest).copied() {
-                lower_get_prop_ic(
-                    cx,
-                    tables.barrier_thunks,
-                    PropAccess {
-                        dest: *dest,
-                        object: *object,
-                        key: *key,
-                        slot,
-                    },
-                    roots,
-                )
-            } else {
-                lower_value_operation(cx, NativeRuntimeOp::GetProp, &[*object, *key], Some(*dest))
-            }
+            lower_get_prop_with_template_or_ic(
+                cx,
+                tables,
+                tables.barrier_thunks,
+                *dest,
+                *object,
+                *key,
+                roots,
+            )
         }
         Instruction::SetProp {
             dest,

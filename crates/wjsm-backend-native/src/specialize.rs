@@ -28,6 +28,7 @@ use crate::lower::{
     declare_string_add_thunk, declare_string_builder_finish_thunk, emit_feedback_tag_code,
     gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
 };
+use crate::template_meta::build_template_origin_maps;
 use crate::root_plan::RootPlan;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompilationDiagnostics, NativeCompileError, NativeObject};
@@ -203,6 +204,7 @@ pub(crate) fn compile_specialized(
     // IC/反馈槽沿用全 Program 编号：overlay 生成代码经由 vmctx 继续写 base
     // image 的 IC/反馈区，编号必须与 base 编译完全一致。
     let (ic_slots, _) = allocate_ic_slots(program);
+    let template_origins = build_template_origin_maps(program);
     let feedback_plan = allocate_feedback_slots(program);
 
     let body = compile_one_function(&FunctionCompileInput {
@@ -226,6 +228,7 @@ pub(crate) fn compile_specialized(
         frame_local_names: &frame_locals,
         boxed_local_names: &boxed_frame_locals,
         ic_slots: &ic_slots[target_index],
+        template_origins: &template_origins[target_index],
         feedback_slots: feedback_plan.function_slots(target_index),
         specialized_tags: Some(profile.argument_tags.as_ref()),
         function_decls: &[],

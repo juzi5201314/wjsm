@@ -710,6 +710,21 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         Ok(())
     }
 
+    /// 以 install 期烘焙的 shape 与槽位直写对象属性，跳过运行时 shape transition。
+    pub fn write_baked_object_literal_properties(
+        &self,
+        handle: u32,
+        shape_id: u32,
+        properties: &[(u32, u64)],
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.write_shape_id(handle, shape_id)?;
+        for &(index, stored) in properties {
+            self.store_value_slot(handle, object, index, stored)?;
+        }
+        Ok(())
+    }
+
     pub fn gc_word_at(&self, object: u64) -> Result<u64, HeapAccessV2Error> {
         self.heap
             .load_word(HeapAddress::new(

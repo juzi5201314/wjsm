@@ -16,15 +16,74 @@ use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_ARM64_RUNTIME_FUNCTION
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_RUNTIME_FUNCTION_ENTRY as PlatformRuntimeFunction;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Diagnostics::Debug::{RtlAddFunctionTable, RtlDeleteFunctionTable};
+use wjsm_ir::constants;
 use wjsm_native_abi::{NativeFeedbackSlot, NativeFunctionEntry, NativeHostSymbol, NativeSlowEntry};
 
-use crate::{NativeObject, NativeSymbolResolver};
+use crate::{IcTemplateHint, NativeObject, NativeSymbolResolver};
 use platform::{ExecutableMapping, align_to_page, page_size};
 
 /// IC 缓冲上限：4M 槽 × 8 word = 32M u32 = 128 MiB，防御恶意/损坏的 cache 条目。
 const MAX_IC_BUFFER_WORDS: usize = 4_000_000 * 8;
 /// 反馈缓冲上限：4M 槽 × 48 字节 = 192 MiB，防御恶意/损坏的 cache 条目。
 const MAX_FEEDBACK_BUFFER_BYTES: usize = 4_000_000 * 48;
+
+fn prefill_template_ic_slots_slice(
+    ic_slots: &mut [u32],
+    hints: &[IcTemplateHint],
+    object_template_meta: &[u32],
+) {
+    let words_per_slot = usize::try_from(constants::IC_SLOT_SIZE)
+        .unwrap_or(32)
+        .checked_div(4)
+        .unwrap_or(8);
+    for (slot_index, hint) in hints.iter().enumerate() {
+        let Some(meta_index) = hint.template_meta_index else {
+            continue;
+        };
+        let Some(prop_index) = hint.prop_index else {
+            continue;
+        };
+        let Ok(entry_start) = usize::try_from(meta_index) else {
+            continue;
+        };
+        let Some(entry_start) = entry_start
+            .checked_mul(constants::OBJECT_TEMPLATE_META_WORDS as usize)
+        else {
+            continue;
+        };
+        let Some(entry_end) = entry_start.checked_add(constants::OBJECT_TEMPLATE_META_WORDS as usize)
+        else {
+            continue;
+        };
+        let Some(meta) = object_template_meta.get(entry_start..entry_end) else {
+            continue;
+        };
+        let Some(&shape_id) = meta.first() else {
+            continue;
+        };
+        let Ok(prop_index) = usize::try_from(prop_index) else {
+            continue;
+        };
+        let Some(value_index) = meta.get(4 + prop_index).copied() else {
+            continue;
+        };
+        let Some(base) = slot_index.checked_mul(words_per_slot) else {
+            continue;
+        };
+        let Some(end) = base.checked_add(words_per_slot) else {
+            continue;
+        };
+        let Some(slot) = ic_slots.get_mut(base..end) else {
+            continue;
+        };
+        slot[0] = shape_id;
+        slot[1] = value_index;
+        slot[2] = constants::IC_KIND_OWN_DATA;
+        for word in slot.iter_mut().skip(3) {
+            *word = 0;
+        }
+    }
+}
 
 pub struct CompiledImage {
     image_id: u64,
@@ -220,6 +279,15 @@ impl CompiledImage {
         } else {
             self.ic_slots.as_ptr()
         }
+    }
+
+    /// install 期按编译 hint 与对象模板烘焙元数据预填 IC 槽（OWN_DATA）。
+    pub fn prefill_template_ic_slots(
+        &mut self,
+        hints: &[IcTemplateHint],
+        object_template_meta: &[u32],
+    ) {
+        prefill_template_ic_slots_slice(&mut self.ic_slots, hints, object_template_meta);
     }
 }
 

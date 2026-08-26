@@ -2158,22 +2158,6 @@ pub(super) fn range_error(
     named_error(ctx, state, "RangeError", message)
 }
 
-fn object_template_keys_for_meta_index(
-    constants: &[Constant],
-    meta_index: usize,
-) -> Option<&[u64]> {
-    let mut count = 0;
-    for constant in constants {
-        if let Constant::ObjectTemplate { keys } = constant {
-            if count == meta_index {
-                return Some(keys);
-            }
-            count += 1;
-        }
-    }
-    None
-}
-
 fn init_object_literal_or_fail(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -2193,18 +2177,56 @@ fn init_object_literal_or_fail(
         return None;
     }
     let capacity = meta[2];
+    let shape_id = meta[0];
+    let properties: Vec<(u32, u64)> = (0..prop_count)
+        .map(|index| (meta[4 + index], values[index] as u64))
+        .collect();
     let object = allocate_object_or_out_of_memory(ctx, state, capacity, false);
     if !value::is_object(object) {
         return Some(object);
     }
     let handle = value::decode_object_handle(object);
-    let keys: Vec<u64> = object_template_keys_for_meta_index(&state.constants, template_index as usize)?
-        .to_vec();
-    for (index, key_raw) in keys.iter().enumerate() {
-        let key = PropertyKey::from_baked_raw(*key_raw);
-        set_property_or_out_of_memory(ctx, state, handle, key, values[index] as u64).ok()?;
+    match state
+        .gc
+        .heap()
+        .write_baked_object_literal_properties(handle, shape_id, &properties)
+    {
+        Ok(()) => Some(object),
+        Err(HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+            state
+                .gc
+                .flush_native_tlab(ctx)
+                .map_err(|_| fail_dispatch(ctx))
+                .ok()?;
+            match state
+                .gc
+                .heap()
+                .write_baked_object_literal_properties(handle, shape_id, &properties)
+            {
+                Ok(()) => Some(object),
+                Err(HeapAccessV2Error::HeapExhausted { .. }) => {
+                    state.collect_garbage(ctx).ok()?;
+                    state
+                        .gc
+                        .heap()
+                        .write_baked_object_literal_properties(handle, shape_id, &properties)
+                        .ok()?;
+                    Some(object)
+                }
+                Err(_) => None,
+            }
+        }
+        Err(HeapAccessV2Error::HeapExhausted { .. }) => {
+            state.collect_garbage(ctx).ok()?;
+            state
+                .gc
+                .heap()
+                .write_baked_object_literal_properties(handle, shape_id, &properties)
+                .ok()?;
+            Some(object)
+        }
+        Err(_) => None,
     }
-    Some(object)
 }
 
 /// 属性槽扩容会 reserve 新对象；堆页耗尽时先 STW 回收再重试。

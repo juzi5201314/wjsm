@@ -1671,7 +1671,7 @@ impl NativeAgentState {
     fn install_program(
         &mut self,
         ctx: &mut NativeVmContext,
-        image: Arc<CompiledImage>,
+        mut image: Arc<CompiledImage>,
         program: &wjsm_ir::Program,
         variable_slots: &HashMap<String, u32>,
         shared_module_slots: &HashSet<&str>,
@@ -1707,6 +1707,10 @@ impl NativeAgentState {
         self.install_string_roots.clear();
         let object_template_meta =
             bake_object_template_meta_table(self.gc.heap().shapes(), program.constants());
+        let ic_hints = wjsm_backend_native::ic_template_hints(program);
+        if let Some(image) = Arc::get_mut(&mut image) {
+            image.prefill_template_ic_slots(&ic_hints, &object_template_meta);
+        }
         self.images.insert(image_id, image);
         self.program_snapshots
             .insert(image_id, Arc::new(program.clone()));
@@ -6359,6 +6363,38 @@ mod tests {
         assert!(
             diagnostics.tlab_flushes <= 2,
             "packed array push should not flush TLAB per element: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn tlab_object_template_literal_fast_path() {
+        let artifact = artifact(
+            r#"
+                let total = 0;
+                for (let i = 0; i < 64; i++) {
+                    const object = { name: i, value: i * 2, length: i + 1 };
+                    total += object.name + object.value + object.length;
+                }
+                console.log(total);
+            "#,
+        );
+        let config = NativeRuntimeConfig::default()
+            .with_gc_algorithm(GcAlgorithmKind::Zgc)
+            .with_allocation_diagnostics_enabled(true);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("runtime should initialize");
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("tlab object template workload should execute");
+        assert_eq!(execution.stdout, b"8128\n");
+        let diagnostics = runtime.allocation_diagnostics();
+        assert!(
+            diagnostics.tlab_fast_allocations >= 64,
+            "{diagnostics:?}"
         );
     }
 
