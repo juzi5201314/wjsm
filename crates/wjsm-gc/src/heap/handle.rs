@@ -217,6 +217,10 @@ impl HandleRangeReservation {
         self.limit - self.start
     }
 
+    pub const fn is_empty(&self) -> bool {
+        self.start == self.limit
+    }
+
     pub const fn contains(&self, handle: u32) -> bool {
         handle >= self.start && handle < self.limit
     }

@@ -169,7 +169,7 @@ pub fn is_inline_string(value: i64) -> bool {
         && bits & INLINE_STRING_PAYLOAD_MASK & !used_payload == 0
 }
 
-pub fn decode_inline_ascii<'a>(value: i64, output: &'a mut [u8; 6]) -> Option<&'a [u8]> {
+pub fn decode_inline_ascii(value: i64, output: &mut [u8; 6]) -> Option<&[u8]> {
     if !is_inline_string(value) {
         return None;
     }
@@ -183,7 +183,7 @@ pub fn decode_inline_ascii<'a>(value: i64, output: &'a mut [u8; 6]) -> Option<&'
 
 pub fn inline_string_len(value: i64) -> Option<u8> {
     is_inline_string(value)
-        .then(|| ((value as u64 & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as u8)
+        .then_some(((value as u64 & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as u8)
 }
 /// 判定 NaN-box tagged handle；先用 marker 快拒 inline SSO，再做完整 tag 比较。
 ///

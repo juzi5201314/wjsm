@@ -127,7 +127,7 @@ fn discover_scenarios(filter: &str) -> Result<Vec<String>> {
     {
         let entry = entry.context("读取场景目录项")?;
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "js")
+        if path.extension().is_some_and(|ext| ext == "js")
             && let Some(name) = path.file_stem().and_then(|stem| stem.to_str())
             && (filters.is_empty() || filters.iter().any(|filter| name.contains(filter)))
         {

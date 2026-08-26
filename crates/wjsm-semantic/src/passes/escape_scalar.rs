@@ -1254,11 +1254,10 @@ fn resolve_array_index(
         for ins in b.instructions() {
             match ins {
                 Instruction::Const { dest: d, constant } if *d == idx_val => {
-                    if let Some(Constant::Number(n)) = constants.get(constant.0 as usize) {
-                        if *n >= 0.0 && (*n as usize) < elem_len && n.fract() == 0.0 {
+                    if let Some(Constant::Number(n)) = constants.get(constant.0 as usize)
+                        && *n >= 0.0 && (*n as usize) < elem_len && n.fract() == 0.0 {
                             return Some(*n as usize);
                         }
-                    }
                 }
                 Instruction::Binary {
                     dest: d,
@@ -1553,7 +1552,7 @@ fn eliminate_dead_string_computations(module: &mut Module) -> bool {
                                 builtin: Builtin::StringBuilderAppend,
                                 args,
                                 ..
-                            } if args.first().map_or(false, |a| {
+                            } if args.first().is_some_and(|a| {
                                 for_instruction(function, *a, |ins| {
                                     matches!(ins, Instruction::LoadVar { name, .. } if name == &var_name)
                                 })
@@ -1565,7 +1564,7 @@ fn eliminate_dead_string_computations(module: &mut Module) -> bool {
                                 builtin: Builtin::StringBuilderFinish,
                                 args,
                                 ..
-                            } if args.first().map_or(false, |a| {
+                            } if args.first().is_some_and(|a| {
                                 for_instruction(function, *a, |ins| {
                                     matches!(ins, Instruction::LoadVar { name, .. } if name == &var_name)
                                 })
@@ -1605,11 +1604,10 @@ fn eliminate_dead_string_computations(module: &mut Module) -> bool {
                 let mut deleted_values: HashSet<ValueId> = HashSet::new();
                 for block in function.blocks() {
                     for (index, instruction) in block.instructions().iter().enumerate() {
-                        if delete_targets.contains(&(block.id(), index)) {
-                            if let Some(dest) = instruction_dest(instruction) {
+                        if delete_targets.contains(&(block.id(), index))
+                            && let Some(dest) = instruction_dest(instruction) {
                                 deleted_values.insert(dest);
                             }
-                        }
                     }
                 }
 
@@ -1702,8 +1700,8 @@ fn find_part_length(
             {
                 match constants.get(constant.0 as usize) {
                     Some(Constant::String(s)) => return Some(s.encode_utf16().count() as f64),
-                    Some(Constant::Number(n)) => {
-                        if (0.0..=1_000_000_000.0).contains(n) && n.fract() == 0.0 {
+                    Some(Constant::Number(n))
+                        if (0.0..=1_000_000_000.0).contains(n) && n.fract() == 0.0 => {
                             let val = *n as u64;
                             if val == 0 {
                                 return Some(1.0);
@@ -1716,7 +1714,6 @@ fn find_part_length(
                             }
                             return Some(digits);
                         }
-                    }
                     _ => {}
                 }
             }

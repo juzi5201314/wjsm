@@ -4577,8 +4577,7 @@ impl NativeAgentState {
                     ..
                 })),
             ) => {
-                self.collect_garbage(ctx)
-                    .map_err(NativeRuntimeError::from)?;
+                self.collect_garbage(ctx)?;
                 let _ = self.gc.heap().finish_relocation_epoch();
                 let _ = self.gc.heap().advance_epoch_and_reclaim();
                 self.allocate_object_with_prototype(capacity, array, prototype)

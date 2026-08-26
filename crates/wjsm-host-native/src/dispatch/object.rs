@@ -488,7 +488,6 @@ pub(crate) fn own_keys(
         if enumerable_only && flags & ENUMERABLE == 0 {
             continue;
         }
-        let key = key;
         let property = state
             .gc
             .heap()
