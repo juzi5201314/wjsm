@@ -5,8 +5,11 @@ use wjsm_native_abi::NativeVmContext;
 
 use crate::{NativeAgentState, NativeCallableKind};
 
+mod gc;
 mod readable;
 mod writable;
+
+pub(crate) use gc::{extend_gc_edges, extend_gc_roots};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ReadableMethod {

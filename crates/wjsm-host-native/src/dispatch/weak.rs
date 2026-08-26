@@ -757,6 +757,7 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
             add(value::encode_proxy_handle(owner as u32), proxy.handler);
         }
     }
+    super::streams::extend_gc_edges(&state.streams, |owner, target| add(owner, target));
     (edges, ephemerons)
 }
 
@@ -875,6 +876,7 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         .visit_gc_roots(|root| queue.push_back(root));
     queue.extend(state.fatal_exception);
     state.node_perf_hooks.extend_gc_roots(queue);
+    super::streams::extend_gc_roots(&state.streams, queue);
     queue.extend(state.node_async_hooks.defaults.values().copied());
     for stores in state.node_async_hooks.captured_frames.iter().flatten() {
         queue.extend(stores.values().copied());
