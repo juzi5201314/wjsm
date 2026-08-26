@@ -193,7 +193,7 @@ pub(super) fn string_array(
         values.push(stored);
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 

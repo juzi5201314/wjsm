@@ -121,7 +121,7 @@ fn revocable(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     let Some(revoke) = state.native_callable(NativeCallableKind::ProxyRevoke(proxy_handle)) else {
         return fail_dispatch(ctx);
     };
-    let Ok(result) = state.allocate_object(2, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let result_handle = value::decode_handle(result);
@@ -972,7 +972,10 @@ pub(crate) fn call(
         Ok(entry) => entry,
         Err(exception) => return exception,
     };
-    let Some(args_array) = state.allocate_array_values(arguments).ok() else {
+    let Some(args_array) = state
+        .allocate_array_values_with_gc_retry(ctx, arguments)
+        .ok()
+    else {
         return fail_dispatch(ctx);
     };
     match trap(ctx, state, entry.handler, "apply") {
@@ -1002,7 +1005,10 @@ pub(crate) fn construct(
         Ok(entry) => entry,
         Err(exception) => return exception,
     };
-    let Some(args_array) = state.allocate_array_values(arguments).ok() else {
+    let Some(args_array) = state
+        .allocate_array_values_with_gc_retry(ctx, arguments)
+        .ok()
+    else {
         return fail_dispatch(ctx);
     };
     match trap(ctx, state, entry.handler, "construct") {
@@ -1052,7 +1058,7 @@ fn reflect_construct(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     if value::is_proxy(*target) {
         return construct(ctx, state, *target, &arguments, new_target);
     }
-    let Ok(this_value) = state.allocate_object(4, false) else {
+    let Ok(this_value) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
         return fail_dispatch(ctx);
     };
     let Some(prototype_key) = state.intern_text("prototype".into(), value::TAG_STRING) else {

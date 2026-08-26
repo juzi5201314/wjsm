@@ -341,7 +341,7 @@ fn segment_object(
     let end_i = (end as usize).min(units.len());
     let slice = units.get(start_i..end_i).unwrap_or(&[]);
     let segment = String::from_utf16_lossy(slice);
-    let object = match state.allocate_object(4, false) {
+    let object = match state.allocate_object_with_gc_retry(ctx, 4, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };
@@ -376,7 +376,7 @@ fn iterator_result(
     value: i64,
     done: bool,
 ) -> i64 {
-    let object = match state.allocate_object(2, false) {
+    let object = match state.allocate_object_with_gc_retry(ctx, 2, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };

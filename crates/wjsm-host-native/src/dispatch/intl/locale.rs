@@ -387,7 +387,7 @@ fn text_info(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: 
         Some(IntlSlot::Locale(slot)) => locale_text_direction(&slot.tag),
         _ => return incompatible(ctx, state),
     };
-    let object = match state.allocate_object(1, false) {
+    let object = match state.allocate_object_with_gc_retry(ctx, 1, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };
@@ -409,11 +409,12 @@ fn week_info(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: 
     if let Some(first) = slot.first_day_of_week.as_deref() {
         info.first_day = weekday_number(first) as u8;
     }
-    let object = match state.allocate_object(3, false) {
+    let object = match state.allocate_object_with_gc_retry(ctx, 3, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };
-    let weekend = match state.allocate_array_values(
+    let weekend = match state.allocate_array_values_with_gc_retry(
+        ctx,
         &info
             .weekend
             .iter()

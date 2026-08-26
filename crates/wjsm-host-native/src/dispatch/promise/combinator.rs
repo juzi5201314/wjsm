@@ -25,7 +25,7 @@ pub(super) fn run(
     if length == 0 {
         match kind {
             PromiseCombinatorKind::All | PromiseCombinatorKind::AllSettled => {
-                let Ok(values) = state.allocate_array_values(&[]) else {
+                let Ok(values) = state.allocate_array_values_with_gc_retry(ctx, &[]) else {
                     return fail_dispatch(ctx);
                 };
                 settle_promise(state, target_handle, values, false);
@@ -166,7 +166,7 @@ fn settle_value_slot(
         };
         settle_promise(state, target, reason, true);
     } else {
-        let Ok(values) = state.allocate_array_values(&values) else {
+        let Ok(values) = state.allocate_array_values_with_gc_retry(ctx, &values) else {
             return fail_dispatch(ctx);
         };
         settle_promise(state, target, values, false);

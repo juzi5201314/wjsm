@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMNSP\0";
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 
 const HEADER_BYTES: usize = 220;
 const DIRECTORY_ENTRY_BYTES: usize = 52;

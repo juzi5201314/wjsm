@@ -40,13 +40,16 @@ pub use cpu_time::thread_cpu_ns;
 pub use g1::{G1V2, G1V2CollectionKind, G1V2Error, G1V2Generation, G1V2Report};
 pub use heap::{
     Allocation, AllocationClass, AllocatorError, GrowableHeapMemory, HANDLE_ENTRY_BYTES,
-    HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN, HandleGeneration, HandleId, HandleState,
-    HandleTableError, HandleTableV2, HeapAddress, HeapEpoch, HeapMemory, HeapMemoryError,
-    ManagedAllocator, ManagedHeap, ManagedHeapLayout, NativeHeapMemory, Nlab, ObjectRef,
-    PAGE_GRANULE_BYTES, PageStats, RelocationNlab, TestHeapMemory,
+    HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN, HandleGeneration, HandleId,
+    HandleRangeReservation, HandleState, HandleTableError, HandleTableV2, HeapAddress, HeapEpoch,
+    HeapMemory, HeapMemoryError, ManagedAllocator, ManagedHeap, ManagedHeapLayout,
+    NativeHeapMemory, NativeTlabReservation, Nlab, ObjectRef, PAGE_GRANULE_BYTES, PageStats,
+    RelocationNlab, TestHeapMemory,
 };
+
 pub use heap_access::{
     CollectorHeapCapability, HeapAccessV2, HeapAccessV2Error, HeapAccessV2Property,
+    object_payload_bytes,
 };
 pub use mark_sweep::{MarkSweepV2, MarkSweepV2Allocation, MarkSweepV2Error, MarkSweepV2Report};
 pub use mutator::MutatorContext;

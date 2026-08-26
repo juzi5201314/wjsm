@@ -39,9 +39,9 @@ impl NativeAgentState {
             self.runtime_config.gc_algorithm,
             self.runtime_config.max_heap_size,
         )?;
-        self.reset_execution();
-        self.gc.reset_heap(restored.heap)?;
+        self.gc.reset_native_tlab();
         self.gc.reset_nlab();
+        self.gc.reset_heap(restored.heap)?;
         self.global_object = Some(restored.global_object);
         self.rebuild_string_ids()?;
         self.rebuild_latin1_char_strings()?;

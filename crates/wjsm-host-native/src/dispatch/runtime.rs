@@ -174,18 +174,7 @@ pub(super) fn dispatch_runtime(
             let [object, key] = args else {
                 return fail_dispatch(ctx);
             };
-            let result =
-                get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx));
-            if value::is_undefined(result)
-                && std::env::var_os("WJSM_TRACE_UNDEFINED_PROP").is_some()
-            {
-                eprintln!(
-                    "undefined property {} on {}",
-                    render_value(state, *key),
-                    render_value(state, *object)
-                );
-            }
-            result
+            get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
         }
         NativeRuntimeOp::GetPropIc => {
             let [object, key, ic_slot_ptr] = args else {
@@ -1064,8 +1053,6 @@ fn ordinary_set_key(
     Ok(true)
 }
 
-pub(crate) const SYMBOL_PROPERTY_KEY_BIT: u32 = 1 << 31;
-
 /// GetPropIc 的 miss 回填：按「自有数据 → 原型链数据 → accessor」优先级回填
 /// CLIF 快路径；proxy / 字典 shape / 数组 / 缺失 / 非 callable accessor 一律
 /// 永久退化 MEGAMORPHIC（此后每次访问都走宿主完整 [[Get]]）。
@@ -1179,25 +1166,23 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
 }
 
 pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {
+    if value::is_inline_string(encoded) {
+        return PropertyKey::inline_string(encoded);
+    }
+    if value::is_symbol(encoded) {
+        return Some(PropertyKey::symbol(value::decode_handle(encoded)));
+    }
     if value::is_string(encoded) {
         let text = state
             .string_owned(encoded)
             .unwrap_or_else(|| RuntimeString::from(render_value(state, encoded)));
-        state.intern_property_string(text)
-    } else if value::is_symbol(encoded) {
-        Some(PropertyKey::symbol(value::decode_handle(encoded)))
-    } else {
-        state.intern_property_string(RuntimeString::from(render_value(state, encoded)))
+        return state.intern_property_string(text);
     }
+    state.intern_property_string(RuntimeString::from(render_value(state, encoded)))
 }
 
 pub(crate) fn encoded_property_key(key: PropertyKey) -> i64 {
-    let raw = key.get();
-    if raw & SYMBOL_PROPERTY_KEY_BIT == 0 {
-        value::encode_handle(value::TAG_STRING, raw)
-    } else {
-        value::encode_handle(value::TAG_SYMBOL, raw & !SYMBOL_PROPERTY_KEY_BIT)
-    }
+    key.to_value()
 }
 
 pub(super) fn get_property(
@@ -1420,11 +1405,11 @@ pub(super) fn get_property_with_receiver(
             .unwrap_or_else(value::encode_undefined));
     }
     let handle = object_handle(object).ok_or(())?;
-    match state
+    let lookup = state
         .gc
         .heap()
-        .get_property_slot_on_proto_chain(handle, key)
-    {
+        .get_property_slot_on_proto_chain(handle, key);
+    match lookup {
         Ok(Some(property)) if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 => {
             let getter = property.getter as i64;
             if value::is_callable(getter) {
@@ -1689,7 +1674,7 @@ pub(super) fn iterator_from_method(
         return type_error(ctx, state, "value is not iterable");
     }
     if let Some((source_kind, iterator_kind)) = intrinsic_iterator_source(state, source, method) {
-        let Ok(iterator) = state.allocate_object(0, false) else {
+        let Ok(iterator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
             return fail_dispatch(ctx);
         };
         state.array_iterators.insert(
@@ -1736,7 +1721,7 @@ pub(crate) fn array_iterator(
     if !value::is_array(source) {
         return type_error(ctx, state, "Array iterator receiver is not an object");
     }
-    let Ok(iterator) = state.allocate_object(0, false) else {
+    let Ok(iterator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     state.array_iterators.insert(
@@ -1893,7 +1878,7 @@ pub(super) fn iterator_value(
             else {
                 return value::encode_undefined();
             };
-            let Ok(entry) = state.allocate_array_values(&[key, stored]) else {
+            let Ok(entry) = state.allocate_array_values_with_gc_retry(ctx, &[key, stored]) else {
                 return fail_dispatch(ctx);
             };
             (entry, 1)
@@ -1926,9 +1911,10 @@ pub(super) fn iterator_value(
         super::super::NativeIteratorKind::Values => result,
         super::super::NativeIteratorKind::Keys => value::encode_f64(f64::from(iterator.index)),
         super::super::NativeIteratorKind::Entries => {
-            let Ok(entry) = state
-                .allocate_array_values(&[value::encode_f64(f64::from(iterator.index)), result])
-            else {
+            let Ok(entry) = state.allocate_array_values_with_gc_retry(
+                ctx,
+                &[value::encode_f64(f64::from(iterator.index)), result],
+            ) else {
                 return fail_dispatch(ctx);
             };
             entry
@@ -1969,7 +1955,7 @@ pub(crate) fn create_iterator_result(
     result: i64,
     done: bool,
 ) -> i64 {
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     for (name, stored) in [("value", result), ("done", value::encode_bool(done))] {
@@ -2150,6 +2136,24 @@ fn set_property_or_out_of_memory(
 ) -> Result<(), i64> {
     match state.gc.heap().set_property(handle, key, stored) {
         Ok(()) => Ok(()),
+        Err(HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+            state
+                .gc
+                .flush_native_tlab(ctx)
+                .map_err(|_| fail_dispatch(ctx))?;
+            match state.gc.heap().set_property(handle, key, stored) {
+                Ok(()) => Ok(()),
+                Err(HeapAccessV2Error::HeapExhausted { .. }) => {
+                    state.collect_garbage(ctx).map_err(|_| fail_dispatch(ctx))?;
+                    state
+                        .gc
+                        .heap()
+                        .set_property(handle, key, stored)
+                        .map_err(|_| fail_dispatch(ctx))
+                }
+                Err(_) => Err(fail_dispatch(ctx)),
+            }
+        }
         Err(HeapAccessV2Error::HeapExhausted { .. }) => {
             state.collect_garbage(ctx).map_err(|_| fail_dispatch(ctx))?;
             match state.gc.heap().set_property(handle, key, stored) {
@@ -2529,13 +2533,14 @@ pub(super) fn strict_equal(state: &NativeAgentState, left: i64, right: i64) -> b
     if value::is_f64(left) && value::is_f64(right) {
         value::decode_f64(left) == value::decode_f64(right)
     } else if value::is_string(left) && value::is_string(right) {
-        let left_handle = value::decode_handle(left);
-        let right_handle = value::decode_handle(right);
-        left_handle == right_handle
+        left == right
             || state
-                .with_string_units(left, |units| units.to_vec())
-                .zip(state.with_string_units(right, |units| units.to_vec()))
-                .is_some_and(|(left_units, right_units)| left_units == right_units)
+                .with_string_units(left, |left_units| {
+                    state
+                        .with_string_units(right, |right_units| left_units == right_units)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false)
     } else if value::is_bigint(left) && value::is_bigint(right) {
         super::bigint::read(state, left) == super::bigint::read(state, right)
     } else {

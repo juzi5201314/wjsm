@@ -1,10 +1,11 @@
 use wjsm_ir::value::{
-    GC_COLOR_MASK, TAG_ARRAY, TAG_ENUMERATOR, TAG_ITERATOR, encode_array_hole,
-    encode_bigint_handle, encode_bool, encode_bound_idx, encode_closure_idx, encode_exception,
-    encode_f64, encode_function_idx, encode_handle, encode_native_callable_idx, encode_null,
-    encode_object_handle, encode_proxy_handle, encode_regexp_handle, encode_runtime_string_handle,
-    encode_scope_record_handle, encode_string_ptr, encode_symbol_handle, encode_typeof_undefined,
-    encode_undefined, is_handle_backed_reference, strip_gc_color,
+    GC_COLOR_MASK, GcColorMask, TAG_ARRAY, TAG_ENUMERATOR, TAG_ITERATOR, apply_gc_color,
+    encode_array_hole, encode_bigint_handle, encode_bool, encode_bound_idx, encode_closure_idx,
+    encode_exception, encode_f64, encode_function_idx, encode_handle, encode_native_callable_idx,
+    encode_null, encode_object_handle, encode_proxy_handle, encode_regexp_handle,
+    encode_runtime_string_handle, encode_scope_record_handle, encode_string_ptr,
+    encode_symbol_handle, encode_typeof_undefined, encode_undefined, is_f64,
+    is_handle_backed_reference, is_string, strip_gc_color,
 };
 
 #[test]
@@ -70,5 +71,75 @@ fn stripping_color_preserves_raw_f64_payload_bits() {
     assert_eq!(
         strip_gc_color(strip_gc_color(colored_handle)),
         strip_gc_color(colored_handle)
+    );
+}
+
+#[test]
+fn inline_ascii_round_trips_all_lengths_and_boundaries() {
+    let mut output = [0_u8; 6];
+    for length in 0..=6 {
+        let input = [b'a', b'\0', b'Z', b'~', b'0', 0x7f];
+        let value = wjsm_ir::value::encode_inline_ascii(&input[..length]).expect("ASCII SSO");
+        assert!(wjsm_ir::value::is_inline_string(value));
+        assert_eq!(wjsm_ir::value::inline_string_len(value), Some(length as u8));
+        assert_eq!(
+            wjsm_ir::value::decode_inline_ascii(value, &mut output),
+            Some(&input[..length])
+        );
+        assert!(!wjsm_ir::value::is_handle_backed_reference(value));
+        assert_eq!(wjsm_ir::value::gc_color_bits(value), 0);
+    }
+}
+
+#[test]
+fn inline_ascii_rejects_non_ascii_and_seven_units() {
+    assert!(wjsm_ir::value::encode_inline_ascii(b"abcdefg").is_none());
+    assert!(wjsm_ir::value::encode_inline_ascii(&[0x80]).is_none());
+    let empty = wjsm_ir::value::encode_inline_ascii(b"").expect("empty SSO");
+    assert!(wjsm_ir::value::is_falsy(empty));
+    let nonempty = wjsm_ir::value::encode_inline_ascii(b"a").expect("nonempty SSO");
+    assert!(!wjsm_ir::value::is_falsy(nonempty));
+}
+
+#[test]
+fn inline_ascii_is_not_a_number_or_heap_reference() {
+    let mut output = [0_u8; 6];
+    for length in 0..=6 {
+        let input = b"abcdef".get(..length).unwrap();
+        let value = wjsm_ir::value::encode_inline_ascii(input).expect("ASCII SSO");
+        assert!(is_string(value));
+        assert!(!is_f64(value));
+        assert!(!is_handle_backed_reference(value));
+        assert_eq!(strip_gc_color(value), value);
+        assert_eq!(apply_gc_color(value, GcColorMask::EMPTY), value);
+        assert_eq!(wjsm_ir::value::gc_color_bits(value), 0);
+        assert_eq!(
+            wjsm_ir::value::decode_inline_ascii(value, &mut output)
+                .unwrap()
+                .len(),
+            length
+        );
+    }
+}
+
+#[test]
+fn inline_ascii_rejects_reserved_bits_and_noncanonical_tail() {
+    let value = wjsm_ir::value::encode_inline_ascii(b"a").expect("ASCII SSO");
+    assert!(!wjsm_ir::value::is_inline_string(
+        (value as u64 | (1_u64 << 42)) as i64
+    ));
+    assert!(!wjsm_ir::value::is_inline_string(
+        (value as u64 | (1_u64 << 7)) as i64
+    ));
+}
+
+#[test]
+fn inline_ascii_round_trip_preserves_nul_and_del() {
+    let input = [0_u8, 0x7f, b'a', 0, 0x7f, b'z'];
+    let encoded = wjsm_ir::value::encode_inline_ascii(&input).expect("ASCII SSO");
+    let mut output = [0_u8; 6];
+    assert_eq!(
+        wjsm_ir::value::decode_inline_ascii(encoded, &mut output),
+        Some(input.as_slice())
     );
 }

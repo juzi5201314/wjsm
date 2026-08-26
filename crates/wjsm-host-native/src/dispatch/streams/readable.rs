@@ -371,7 +371,7 @@ fn get_reader(
             false,
         );
     }
-    let Ok(object) = state.allocate_object(5, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 5, false) else {
         return super::super::fail_dispatch(ctx);
     };
     let reader = state.streams.readers.len() as u32;
@@ -476,7 +476,7 @@ fn create_byob_request(
     view: i64,
     promise: u32,
 ) {
-    let Ok(object) = state.allocate_object(3, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         let reason = super::super::fail_dispatch(ctx);
         super::super::promise::settle_promise(state, promise, reason, true);
         return;
@@ -780,7 +780,7 @@ pub(super) fn create_async_iterator(
     else {
         return super::super::fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(3, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         return super::super::fail_dispatch(ctx);
     };
     let iterator = state.streams.async_iterators.len() as u32;

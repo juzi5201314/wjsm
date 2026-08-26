@@ -197,6 +197,8 @@ pub const HEAP_OBJECT_HEADER_PAD_END: u32 =
 /// 值槽容量（不是属性数）；与数组的 `HEAP_ARRAY_CAPACITY_OFFSET` 靠 heap_type 区分。
 pub const HEAP_OBJECT_VALUE_CAPACITY_OFFSET: u32 = 8;
 /// 指向宿主 `ShapeTable` 的隐藏类 id；与数组的 length 字段位置别名。
+/// Native 与宿主对象首次扩容统一采用四个值槽，覆盖常见构造器字段写入。
+pub const HEAP_OBJECT_INITIAL_VALUE_CAPACITY: u32 = 4;
 pub const HEAP_OBJECT_SHAPE_ID_OFFSET: u32 = 12;
 /// GC word：低 32 位稳定 handle，高 8 位 age；其余位保留为零。
 pub const HEAP_OBJECT_GC_WORD_OFFSET: u32 = 16;

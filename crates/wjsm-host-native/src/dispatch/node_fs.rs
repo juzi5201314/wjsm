@@ -199,7 +199,7 @@ fn metadata_object(
     state: &mut NativeAgentState,
     metadata: &fs::Metadata,
 ) -> i64 {
-    let Ok(object) = state.allocate_object(7, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 7, false) else {
         return fail_dispatch(ctx);
     };
     let kind = if metadata.file_type().is_symlink() {
@@ -269,7 +269,7 @@ fn readdir(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
             values.push(name_value);
             continue;
         }
-        let Ok(object) = state.allocate_object(2, false) else {
+        let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
             return fail_dispatch(ctx);
         };
         let file_type = match entry.file_type() {
@@ -296,7 +296,7 @@ fn readdir(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         values.push(object);
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 

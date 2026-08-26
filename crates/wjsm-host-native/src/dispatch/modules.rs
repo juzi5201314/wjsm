@@ -707,9 +707,11 @@ fn resolve_paths_for_require(
     match resolve_runtime_paths_with_store(&specifier, &referrer, &state.runtime_modules.store) {
         RuntimeResolvePaths::Null => value::encode_null(),
         RuntimeResolvePaths::Search(paths) => {
-            let Ok(array) =
-                state.allocate_object(u32::try_from(paths.len()).unwrap_or(u32::MAX), true)
-            else {
+            let Ok(array) = state.allocate_object_with_gc_retry(
+                ctx,
+                u32::try_from(paths.len()).unwrap_or(u32::MAX),
+                true,
+            ) else {
                 return fail_dispatch(ctx);
             };
             for (index, path) in paths.into_iter().enumerate() {

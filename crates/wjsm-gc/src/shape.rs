@@ -56,6 +56,7 @@
 //! proto **句柄本身**换掉（`o.__proto__ = x`）由 IC 槽内缓存的 `expected_proto`
 //! 比较覆盖，不需要 bump 世代。
 
+use crate::property_key::PropertyKey;
 use std::collections::{HashMap, HashSet};
 
 use parking_lot::RwLock;
@@ -69,7 +70,7 @@ use wjsm_ir::constants::{
 /// 数据属性占 1 槽，accessor 属性占 `index` / `index + 1` 两槽。
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShapeProp {
-    pub name_id: u32,
+    pub name_id: PropertyKey,
     pub flags: u32,
     pub index: u32,
 }
@@ -122,10 +123,10 @@ struct Shape {
     props: Vec<ShapeProp>,
     /// name_id → `props` 下标；`props.len() >= SHAPE_MAP_THRESHOLD` 时建立。
     #[serde(skip)]
-    index_of: Option<HashMap<u32, u32>>,
-    /// `(name_id, flags)` → 目标 shape_id。字典 shape 恒空（不共享）。
+    index_of: Option<HashMap<PropertyKey, u32>>,
+    /// `(PropertyKey, flags)` → 目标 shape_id。字典 shape 恒空（不共享）。
     #[serde(skip)]
-    transitions: HashMap<(u32, u32), u32>,
+    transitions: HashMap<(PropertyKey, u32), u32>,
     /// 本 shape 需要的值槽总数。
     slot_count: u32,
     /// 字典 shape：被单个对象独占，IC 永不回填。
@@ -133,7 +134,7 @@ struct Shape {
 }
 
 impl Shape {
-    fn find(&self, name_id: u32) -> Option<usize> {
+    fn find(&self, name_id: PropertyKey) -> Option<usize> {
         match &self.index_of {
             Some(map) => map.get(&name_id).map(|slot| *slot as usize),
             None => self.props.iter().position(|prop| prop.name_id == name_id),
@@ -165,8 +166,8 @@ impl Shape {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShapeTableSnapshot {
     shapes: Vec<Shape>,
-    /// `(parent_shape_id, name_id, flags, child_shape_id)`，保证恢复后 shape 共享不退化。
-    transitions: Vec<(u32, u32, u32, u32)>,
+    /// `(parent_shape_id, PropertyKey, flags, child_shape_id)`，保证恢复后 shape 共享不退化。
+    transitions: Vec<(u32, PropertyKey, u32, u32)>,
     prototypes: Vec<u32>,
     proto_generation: u32,
 }
@@ -215,7 +216,7 @@ impl ShapeTable {
     }
 
     /// 查属性；命中返回 flags 与值槽下标。这是慢路径（IC 未命中）的查找入口。
-    pub fn lookup(&self, shape_id: u32, name_id: u32) -> Option<ShapeProp> {
+    pub fn lookup(&self, shape_id: u32, name_id: PropertyKey) -> Option<ShapeProp> {
         let inner = self.inner.read();
         let shape = inner.shapes.get(shape_id as usize)?;
         shape.find(name_id).map(|slot| shape.props[slot])
@@ -267,7 +268,7 @@ impl ShapeTable {
         inner
             .shapes
             .iter()
-            .flat_map(|shape| shape.props.iter().map(|prop| prop.name_id))
+            .flat_map(|shape| shape.props.iter().filter_map(|prop| prop.name_id.name_id()))
             .collect()
     }
 
@@ -277,14 +278,24 @@ impl ShapeTable {
     /// - 属性已存在但 flags 不同 → 转移到「同名不同 flags」的 shape；若属性种类
     ///   （数据 ↔ accessor）改变则分配新值槽并在 `abandoned` 报出旧槽。
     /// - 属性不存在 → 追加。出边过多或属性过多则退化为字典 shape。
-    pub fn transition_add(&self, shape_id: u32, name_id: u32, flags: u32) -> ShapeTransition {
+    pub fn transition_add(
+        &self,
+        shape_id: u32,
+        name_id: PropertyKey,
+        flags: u32,
+    ) -> ShapeTransition {
         let mut inner = self.inner.write();
         inner.transition(shape_id, name_id, flags)
     }
 
     /// 收紧已存在属性的 flags（`Object.freeze` / `seal` / 描述符收紧）。
     /// 属性不存在时返回 `None`。
-    pub fn update_flags(&self, shape_id: u32, name_id: u32, flags: u32) -> Option<ShapeTransition> {
+    pub fn update_flags(
+        &self,
+        shape_id: u32,
+        name_id: PropertyKey,
+        flags: u32,
+    ) -> Option<ShapeTransition> {
         let mut inner = self.inner.write();
         let shape = inner.shapes.get(shape_id as usize)?;
         shape.find(name_id)?;
@@ -293,7 +304,7 @@ impl ShapeTable {
 
     /// 删除属性：对象退化为字典 shape，返回 `(新 shape_id, 被释放的值槽区间)`。
     /// 属性不存在时返回 `None`（调用方语义上仍算删除成功）。
-    pub fn remove_prop(&self, shape_id: u32, name_id: u32) -> Option<(u32, (u32, u32))> {
+    pub fn remove_prop(&self, shape_id: u32, name_id: PropertyKey) -> Option<(u32, (u32, u32))> {
         let mut inner = self.inner.write();
         let dictionary_id = inner.ensure_dictionary(shape_id);
         let shape = inner.shapes.get_mut(dictionary_id as usize)?;
@@ -399,7 +410,7 @@ impl ShapeTable {
 pub const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
 
 impl ShapeTableInner {
-    fn transition(&mut self, shape_id: u32, name_id: u32, flags: u32) -> ShapeTransition {
+    fn transition(&mut self, shape_id: u32, name_id: PropertyKey, flags: u32) -> ShapeTransition {
         let Some(shape) = self.shapes.get(shape_id as usize) else {
             // 未知 shape_id 只可能来自损坏的堆；回落到空 shape 追加，语义等价于新对象。
             return self.transition(SHAPE_ID_EMPTY, name_id, flags);
@@ -499,7 +510,7 @@ impl ShapeTableInner {
     fn transition_in_dictionary(
         &mut self,
         shape_id: u32,
-        name_id: u32,
+        name_id: PropertyKey,
         flags: u32,
     ) -> ShapeTransition {
         let shape = &mut self.shapes[shape_id as usize];
@@ -567,13 +578,17 @@ mod tests {
     const DATA: u32 = 0b111;
     const ACCESSOR: u32 = 0b111 | FLAG_IS_ACCESSOR as u32;
 
+    fn key(name_id: u32) -> PropertyKey {
+        PropertyKey::from_name_id(name_id)
+    }
+
     #[test]
     fn identical_literals_share_one_shape() {
         let table = ShapeTable::new();
-        let a = table.transition_add(ShapeTable::empty_shape(), 1, DATA);
-        let ab = table.transition_add(a.shape_id, 2, DATA);
-        let a2 = table.transition_add(ShapeTable::empty_shape(), 1, DATA);
-        let ab2 = table.transition_add(a2.shape_id, 2, DATA);
+        let a = table.transition_add(ShapeTable::empty_shape(), key(1), DATA);
+        let ab = table.transition_add(a.shape_id, key(2), DATA);
+        let a2 = table.transition_add(ShapeTable::empty_shape(), key(1), DATA);
+        let ab2 = table.transition_add(a2.shape_id, key(2), DATA);
         assert_eq!(ab.shape_id, ab2.shape_id);
         assert_eq!((a.index, ab.index), (0, 1));
         assert_eq!(table.slot_count(ab.shape_id), 2);
@@ -583,23 +598,23 @@ mod tests {
     fn different_insertion_order_yields_different_shapes() {
         let table = ShapeTable::new();
         let ab = {
-            let a = table.transition_add(ShapeTable::empty_shape(), 1, DATA);
-            table.transition_add(a.shape_id, 2, DATA)
+            let a = table.transition_add(ShapeTable::empty_shape(), key(1), DATA);
+            table.transition_add(a.shape_id, key(2), DATA)
         };
         let ba = {
-            let b = table.transition_add(ShapeTable::empty_shape(), 2, DATA);
-            table.transition_add(b.shape_id, 1, DATA)
+            let b = table.transition_add(ShapeTable::empty_shape(), key(2), DATA);
+            table.transition_add(b.shape_id, key(1), DATA)
         };
         assert_ne!(ab.shape_id, ba.shape_id);
-        assert_eq!(table.lookup(ba.shape_id, 1).unwrap().index, 1);
+        assert_eq!(table.lookup(ba.shape_id, key(1)).unwrap().index, 1);
     }
 
     #[test]
     fn accessor_occupies_two_adjacent_slots() {
         let table = ShapeTable::new();
-        let get = table.transition_add(ShapeTable::empty_shape(), 7, ACCESSOR);
+        let get = table.transition_add(ShapeTable::empty_shape(), key(7), ACCESSOR);
         assert_eq!(get.slot_count, 2);
-        let prop = table.lookup(get.shape_id, 7).unwrap();
+        let prop = table.lookup(get.shape_id, key(7)).unwrap();
         assert!(prop.is_accessor());
         assert_eq!((prop.getter_index(), prop.setter_index()), (0, 1));
     }
@@ -607,8 +622,8 @@ mod tests {
     #[test]
     fn data_to_accessor_conversion_abandons_old_slot() {
         let table = ShapeTable::new();
-        let data = table.transition_add(ShapeTable::empty_shape(), 7, DATA);
-        let accessor = table.transition_add(data.shape_id, 7, ACCESSOR);
+        let data = table.transition_add(ShapeTable::empty_shape(), key(7), DATA);
+        let accessor = table.transition_add(data.shape_id, key(7), ACCESSOR);
         assert_eq!(accessor.abandoned, Some((0, 1)));
         assert_eq!(accessor.index, 1);
         assert_eq!(accessor.slot_count, 3);
@@ -617,48 +632,42 @@ mod tests {
     #[test]
     fn flag_tightening_keeps_slot_and_changes_shape() {
         let table = ShapeTable::new();
-        let writable = table.transition_add(ShapeTable::empty_shape(), 7, DATA);
-        let frozen = table.update_flags(writable.shape_id, 7, 0).unwrap();
+        let writable = table.transition_add(ShapeTable::empty_shape(), key(7), DATA);
+        let frozen = table.update_flags(writable.shape_id, key(7), 0).unwrap();
         assert_ne!(frozen.shape_id, writable.shape_id);
         assert_eq!(frozen.index, writable.index);
         assert_eq!(frozen.abandoned, None);
-        assert_eq!(table.update_flags(writable.shape_id, 9, 0), None);
+        assert_eq!(table.update_flags(writable.shape_id, key(9), 0), None);
     }
 
     #[test]
     fn delete_degrades_to_private_dictionary() {
         let table = ShapeTable::new();
-        let a = table.transition_add(ShapeTable::empty_shape(), 1, DATA);
-        let ab = table.transition_add(a.shape_id, 2, DATA);
-        let (dict, freed) = table.remove_prop(ab.shape_id, 1).unwrap();
+        let a = table.transition_add(ShapeTable::empty_shape(), key(1), DATA);
+        let ab = table.transition_add(a.shape_id, key(2), DATA);
+        let (dict, freed) = table.remove_prop(ab.shape_id, key(1)).unwrap();
         assert!(table.is_dictionary(dict));
         assert!(!table.is_dictionary(ab.shape_id));
         assert_eq!(freed, (0, 1));
-        // 其余属性下标必须稳定，否则已发射的 IC 会读错槽。
-        assert_eq!(table.lookup(dict, 2).unwrap().index, 1);
-        assert_eq!(table.lookup(dict, 1), None);
-        // 字典 shape 原地增长，不再产生新 shape。
-        let grow = table.transition_add(dict, 3, DATA);
+        assert_eq!(table.lookup(dict, key(2)).unwrap().index, 1);
+        assert_eq!(table.lookup(dict, key(1)), None);
+        let grow = table.transition_add(dict, key(3), DATA);
         assert_eq!(grow.shape_id, dict);
     }
 
-    /// 空 shape 是 transition 树的根：全程序每个「作为首个属性出现的名字」都在
-    /// 它上面加一条出边。高扇出必须保持共享 shape——按出边设限会让根 shape 触顶，
-    /// 此后每个新对象都退化字典、inline cache 永久失效（实测 10ns → 74ns）。
+    /// 空 shape 是 transition 树的根：每个首属性名都在它上面加一条出边。
     #[test]
     fn high_fanout_on_root_shape_stays_shared() {
         let table = ShapeTable::new();
-        // 模拟 bootstrap：数百个不同「首属性名」的对象。
         for name_id in 1..512 {
-            let step = table.transition_add(ShapeTable::empty_shape(), name_id, DATA);
+            let step = table.transition_add(ShapeTable::empty_shape(), key(name_id), DATA);
             assert!(
                 !table.is_dictionary(step.shape_id),
                 "根 shape 的第 {name_id} 条出边不应触发字典退化"
             );
         }
-        // 同结构对象仍复用同一 shape，IC 可命中。
-        let a = table.transition_add(ShapeTable::empty_shape(), 7, DATA);
-        let b = table.transition_add(ShapeTable::empty_shape(), 7, DATA);
+        let a = table.transition_add(ShapeTable::empty_shape(), key(7), DATA);
+        let b = table.transition_add(ShapeTable::empty_shape(), key(7), DATA);
         assert_eq!(a.shape_id, b.shape_id);
         assert!(!table.is_dictionary(a.shape_id));
     }
@@ -668,13 +677,17 @@ mod tests {
         let table = ShapeTable::new();
         let mut current = ShapeTable::empty_shape();
         for name_id in 0..DICTIONARY_THRESHOLD + 4 {
-            current = table.transition_add(current, name_id + 1, DATA).shape_id;
+            current = table
+                .transition_add(current, key(name_id + 1), DATA)
+                .shape_id;
         }
         assert!(table.is_dictionary(current));
         assert_eq!(table.prop_count(current), DICTIONARY_THRESHOLD + 4);
-        // 退化后属性仍然全部可查，且下标保持稠密。
         for name_id in 0..DICTIONARY_THRESHOLD + 4 {
-            assert_eq!(table.lookup(current, name_id + 1).unwrap().index, name_id);
+            assert_eq!(
+                table.lookup(current, key(name_id + 1)).unwrap().index,
+                name_id
+            );
         }
     }
 
@@ -683,12 +696,17 @@ mod tests {
         let table = ShapeTable::new();
         let mut current = ShapeTable::empty_shape();
         for name_id in 0..SHAPE_MAP_THRESHOLD + 3 {
-            current = table.transition_add(current, name_id + 1, DATA).shape_id;
+            current = table
+                .transition_add(current, key(name_id + 1), DATA)
+                .shape_id;
         }
         for name_id in 0..SHAPE_MAP_THRESHOLD + 3 {
-            assert_eq!(table.lookup(current, name_id + 1).unwrap().index, name_id);
+            assert_eq!(
+                table.lookup(current, key(name_id + 1)).unwrap().index,
+                name_id
+            );
         }
-        assert_eq!(table.lookup(current, 9999), None);
+        assert_eq!(table.lookup(current, key(9999)), None);
     }
 
     #[test]
@@ -708,8 +726,8 @@ mod tests {
     #[test]
     fn export_import_round_trip_preserves_sharing() {
         let table = ShapeTable::new();
-        let a = table.transition_add(ShapeTable::empty_shape(), 1, DATA);
-        let ab = table.transition_add(a.shape_id, 2, ACCESSOR);
+        let a = table.transition_add(ShapeTable::empty_shape(), key(1), DATA);
+        let ab = table.transition_add(a.shape_id, key(2), ACCESSOR);
         table.note_prototype(5);
         table.invalidate_if_prototype(5);
 
@@ -718,14 +736,12 @@ mod tests {
         assert_eq!(restored.shape_count(), table.shape_count());
         assert_eq!(restored.proto_generation(), 1);
         assert_eq!(
-            restored.lookup(ab.shape_id, 2),
-            table.lookup(ab.shape_id, 2)
+            restored.lookup(ab.shape_id, key(2)),
+            table.lookup(ab.shape_id, key(2))
         );
-        // transition 边被保留 → 恢复后同结构对象仍复用同一 shape，不产生新 id。
-        let again = restored.transition_add(a.shape_id, 2, ACCESSOR);
+        let again = restored.transition_add(a.shape_id, key(2), ACCESSOR);
         assert_eq!(again.shape_id, ab.shape_id);
         assert_eq!(restored.shape_count(), table.shape_count());
-        // 原型登记也跟着恢复。
         restored.invalidate_if_prototype(5);
         assert_eq!(restored.proto_generation(), 2);
     }

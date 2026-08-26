@@ -87,7 +87,7 @@ fn wrap_sync_iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, s
     if value::is_exception(iterator) {
         return iterator;
     }
-    let Ok(wrapper) = state.allocate_object(0, false) else {
+    let Ok(wrapper) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     state
@@ -100,8 +100,8 @@ fn ensure_prototypes(ctx: &mut NativeVmContext, state: &mut NativeAgentState) ->
     if let Some(prototype) = state.async_generator_prototype {
         return Some(prototype);
     }
-    let async_iterator_prototype = state.allocate_object(2, false).ok()?;
-    let async_generator_prototype = state.allocate_object(0, false).ok()?;
+    let async_iterator_prototype = state.allocate_object_with_gc_retry(ctx, 2, false).ok()?;
+    let async_generator_prototype = state.allocate_object_with_gc_retry(ctx, 0, false).ok()?;
     if state
         .gc
         .heap()
@@ -250,7 +250,7 @@ fn start(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     };
     *state_slot = value::encode_f64(0.0);
     *completion_slot = value::encode_f64(0.0);
-    let Ok(generator) = state.allocate_object(0, false) else {
+    let Ok(generator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     let Some(prototype) = ensure_prototypes(ctx, state) else {

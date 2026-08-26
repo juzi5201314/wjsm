@@ -40,7 +40,8 @@ pub(super) fn create(
     let Ok(length) = state.gc.heap().array_length(source_handle) else {
         return fail_dispatch(ctx);
     };
-    let Ok(arguments) = state.allocate_object(length.saturating_add(3), false) else {
+    let Ok(arguments) = state.allocate_object_with_gc_retry(ctx, length.saturating_add(3), false)
+    else {
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(arguments);

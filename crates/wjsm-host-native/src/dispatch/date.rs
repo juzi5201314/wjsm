@@ -41,7 +41,7 @@ fn construct_date(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
         [argument] => one_argument_millis(state, *argument),
         _ => date_args_to_ms(state, args, false),
     };
-    let Some(object) = state.allocate_object(1, false).ok() else {
+    let Some(object) = state.allocate_object_with_gc_retry(ctx, 1, false).ok() else {
         return fail_dispatch(ctx);
     };
     if modules::set_named_property(

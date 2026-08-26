@@ -12,8 +12,8 @@ use crate::PropertyKey;
 use crate::StrView;
 use crate::heap::{
     Allocation, AllocatorError, GrowableHeapMemory, HandleGeneration, HandleId, HandleTableError,
-    HandleTableV2, HeapAddress, HeapMemoryError, ManagedHeap, ManagedHeapLayout, Nlab, ObjectRef,
-    PageId, PageStats, RestoredHandleEntry,
+    HandleTableV2, HeapAddress, HeapMemoryError, ManagedHeap, ManagedHeapLayout,
+    NativeTlabReservation, Nlab, ObjectRef, PageId, PageStats, RestoredHandleEntry,
 };
 use crate::shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot};
 use crate::zgc::{
@@ -157,6 +157,214 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .grow_to(end)
             .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
         Ok(allocation)
+    }
+
+    pub fn reserve_native_tlab(
+        &self,
+        handle_count: u32,
+    ) -> Result<NativeTlabReservation, HeapAccessV2Error> {
+        let handles = self
+            .handles
+            .reserve_range(handle_count)
+            .map_err(HeapAccessV2Error::HandleTable)?;
+        let mut reservation = self
+            .heap
+            .allocator()
+            .reserve_native_tlab(handles)
+            .map_err(HeapAccessV2Error::Allocator)?;
+        self.heap
+            .memory()
+            .grow_to(reservation.object_limit())
+            .map_err(HeapAccessV2Error::VirtualMemoryGrow)?;
+        reservation
+            .zero_range(self.heap.memory())
+            .map_err(HeapAccessV2Error::Allocator)?;
+        Ok(reservation)
+    }
+    pub fn publish_native_tlab_handle(
+        &self,
+        reservation: &NativeTlabReservation,
+        handle: u32,
+        address: u64,
+        generation: HandleGeneration,
+    ) -> Result<(), HeapAccessV2Error> {
+        self.handles
+            .publish_reserved(&reservation.handle_range(), handle, address, generation)
+            .map_err(HeapAccessV2Error::HandleTable)
+    }
+    /// 在已清零的 Native TLAB window 中发布对象头与 stable handle。
+    ///
+    /// 该入口与 generated code 的三字宽 header 布局一致；对象仍须在 safepoint
+    /// 前通过 `materialize_native_tlab` 登记 page metadata。
+    pub fn publish_native_tlab_object(
+        &self,
+        reservation: &NativeTlabReservation,
+        handle: u32,
+        object: u64,
+        prototype: u32,
+        array: bool,
+        capacity: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let bytes = object_payload_bytes(capacity)?;
+        let end = object
+            .checked_add(bytes)
+            .ok_or(HeapAccessV2Error::AddressOverflow)?;
+        if object < reservation.object_start()
+            || end > reservation.object_limit()
+            || object & 7 != 0
+            || bytes > reservation.small_object_limit()
+        {
+            return Err(HeapAccessV2Error::Allocator(
+                AllocatorError::NativeTlabInvalidObject { object, bytes },
+            ));
+        }
+        let mut header = [0_u8; constants::HEAP_OBJECT_HEADER_SIZE as usize];
+        header[constants::HEAP_OBJECT_PROTO_OFFSET as usize..][..4]
+            .copy_from_slice(&prototype.to_le_bytes());
+        header[constants::HEAP_OBJECT_TYPE_OFFSET as usize] = if array {
+            wjsm_ir::HEAP_TYPE_ARRAY
+        } else {
+            wjsm_ir::HEAP_TYPE_OBJECT
+        };
+        if array {
+            header[constants::HEAP_ARRAY_CAPACITY_OFFSET as usize..][..4]
+                .copy_from_slice(&capacity.to_le_bytes());
+        } else {
+            header[constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET as usize..][..4]
+                .copy_from_slice(&capacity.to_le_bytes());
+        }
+        header[constants::HEAP_OBJECT_GC_WORD_OFFSET as usize..][..8]
+            .copy_from_slice(&u64::from(handle).to_le_bytes());
+        self.heap
+            .memory()
+            .copy_from(HeapAddress::new(object), &header)
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.publish_native_tlab_handle(reservation, handle, object, HandleGeneration::Young)?;
+        Ok(())
+    }
+    /// 在 safepoint 前登记 native TLAB 中已发布的连续对象，并应用当前标记阶段。
+    pub fn materialize_native_tlab(
+        &self,
+        reservation: &mut NativeTlabReservation,
+        top: u64,
+        next_handle: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let mark_generation = match &self.barrier {
+            HeapBarrier::Zgc(barrier) if barrier.epoch().young_marking => {
+                Some(HandleGeneration::Young)
+            }
+            HeapBarrier::Zgc(barrier) if barrier.epoch().old_marking => Some(HandleGeneration::Old),
+            _ => None,
+        };
+        let mut read_object_size =
+            |object: u64, handle: u32| self.read_native_tlab_object_size(object, handle);
+        reservation
+            .materialize_native_tlab(
+                top,
+                next_handle,
+                &mut read_object_size,
+                self.heap.allocator(),
+                mark_generation,
+            )
+            .map_err(HeapAccessV2Error::Allocator)
+    }
+    pub fn release_native_tlab_if_empty(&self, reservation: &NativeTlabReservation) -> bool {
+        self.heap
+            .allocator()
+            .release_empty_page_if_present(reservation.page_range().start())
+    }
+
+    fn read_native_tlab_object_size(
+        &self,
+        object: u64,
+        handle: u32,
+    ) -> Result<u64, AllocatorError> {
+        if object < self.object_heap_base() || object & 7 != 0 || object >> 48 != 0 {
+            return Err(AllocatorError::NativeTlabInvalidObject { object, bytes: 0 });
+        }
+        let header = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(object))
+            .map_err(|error| AllocatorError::NativeTlabInvalidHeader {
+                object,
+                detail: error.to_string(),
+            })?;
+        let object_type = header_heap_type(header);
+        let capacity_word = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET),
+            ))
+            .map_err(|error| AllocatorError::NativeTlabInvalidHeader {
+                object,
+                detail: error.to_string(),
+            })?;
+        let capacity = match object_type {
+            t if t == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) => {
+                u32::try_from(capacity_word >> 32).expect("array capacity high word fits u32")
+            }
+            t if t == u32::from(wjsm_ir::HEAP_TYPE_OBJECT)
+                || t == u32::from(wjsm_ir::HEAP_TYPE_PROMISE)
+                || t == u32::from(wjsm_ir::HEAP_TYPE_CONTINUATION)
+                || t == u32::from(wjsm_ir::HEAP_TYPE_ASYNC_GENERATOR)
+                || t == u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS)
+                || t == u32::from(wjsm_ir::HEAP_TYPE_MODULE_NAMESPACE) =>
+            {
+                u32::try_from(capacity_word & u64::from(u32::MAX))
+                    .expect("object capacity low word fits u32")
+            }
+            _ => {
+                return Err(AllocatorError::NativeTlabInvalidHeader {
+                    object,
+                    detail: format!("unsupported heap type {object_type} header {header}"),
+                });
+            }
+        };
+        let gc_word = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(
+                object + u64::from(constants::HEAP_OBJECT_GC_WORD_OFFSET),
+            ))
+            .map_err(|error| AllocatorError::NativeTlabInvalidHeader {
+                object,
+                detail: error.to_string(),
+            })?;
+        if (gc_word & constants::HEAP_GC_HANDLE_MASK) as u32 != handle {
+            return Err(AllocatorError::NativeTlabInvalidHeader {
+                object,
+                detail: format!(
+                    "GC handle {} does not match reserved handle {handle}",
+                    gc_word & constants::HEAP_GC_HANDLE_MASK
+                ),
+            });
+        }
+        let Some(entry) = self.handles.resolve(HandleId::new(handle)) else {
+            return Err(AllocatorError::NativeTlabInvalidHeader {
+                object,
+                detail: format!("handle {handle} has not been published"),
+            });
+        };
+        if entry.address() != object || !entry.state().is_stable() {
+            return Err(AllocatorError::NativeTlabInvalidHeader {
+                object,
+                detail: format!(
+                    "handle {handle} entry address {} expected {object} state {}",
+                    entry.address(),
+                    entry.state() as u16,
+                ),
+            });
+        }
+        let payload = u64::from(capacity)
+            .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
+            .ok_or(AllocatorError::RequestTooLarge {
+                bytes: u64::from(capacity),
+            })?;
+        payload
+            .checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE))
+            .ok_or(AllocatorError::RequestTooLarge { bytes: payload })
     }
 
     fn reserve_exact(&self, bytes: u64) -> Result<u64, HeapAccessV2Error> {
@@ -588,7 +796,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         if self.shapes.is_dictionary(shape_id) {
             return Ok(None);
         }
-        let Some(prop) = self.shapes.lookup(shape_id, key.get()) else {
+        let Some(prop) = self.shapes.lookup(shape_id, key) else {
             return Ok(None);
         };
 
@@ -911,6 +1119,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         let (_, capacity) = self.array_shape(handle)?;
         if needed <= capacity {
             return Ok(());
+        }
+        if !self
+            .heap
+            .allocator()
+            .contains_object(ObjectRef::new(self.resolve_handle(handle)?))
+        {
+            return Err(HeapAccessV2Error::NativeTlabNeedsMaterialization { handle });
         }
         let new_capacity = capacity.saturating_mul(2).max(4).max(needed);
         if new_capacity <= capacity {
@@ -1778,8 +1993,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
         let shape_id = self.shape_id_at(object)?;
-        let Some((dictionary_id, (index, span))) = self.shapes.remove_prop(shape_id, key.get())
-        else {
+        let Some((dictionary_id, (index, span))) = self.shapes.remove_prop(shape_id, key) else {
             return Ok(true);
         };
         self.write_shape_id(handle, dictionary_id)?;
@@ -2210,14 +2424,17 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Ok(None);
         }
         let shape_id = self.shape_id_at(object)?;
-        let Some(prop) = self.shapes.lookup(shape_id, key.get()) else {
+        let Some(prop) = self.shapes.lookup(shape_id, key) else {
             return Ok(None);
         };
         self.read_prop(object, &prop).map(Some)
     }
 
     /// 自有属性的 `(name_id, flags)` 列表，按插入序（即 `Object.keys` 顺序）。
-    pub fn own_property_slots(&self, handle: u32) -> Result<Vec<(u32, u32)>, HeapAccessV2Error> {
+    pub fn own_property_slots(
+        &self,
+        handle: u32,
+    ) -> Result<Vec<(PropertyKey, u32)>, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         if self.object_at_is_array(object)? {
             return Ok(Vec::new());
@@ -2243,7 +2460,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Ok(());
         }
         let shape_id = self.shape_id_at(object)?;
-        let Some(transition) = self.shapes.update_flags(shape_id, key.get(), flags) else {
+        let Some(transition) = self.shapes.update_flags(shape_id, key, flags) else {
             return Ok(());
         };
         // flags 收紧不改属性种类时下标不变，无需扩容；改变种类时按 transition 处理。
@@ -2319,7 +2536,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             if self.shapes.is_dictionary(shape_id) {
                 return Ok(None);
             }
-            if let Some(property) = self.shapes.lookup(shape_id, key.get()) {
+            if let Some(property) = self.shapes.lookup(shape_id, key) {
                 let value_slot_index = property.index;
                 return self
                     .read_prop(object, &property)
@@ -2362,7 +2579,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<(), HeapAccessV2Error> {
         self.define_property_slot(
             handle,
-            key.get(),
+            key,
             flags | constants::FLAG_IS_ACCESSOR as u32,
             value::encode_undefined() as u64,
             getter,
@@ -2379,7 +2596,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<(), HeapAccessV2Error> {
         self.define_property_slot(
             handle,
-            key.get(),
+            key,
             flags,
             property_value,
             value::encode_undefined() as u64,
@@ -2409,14 +2626,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Err(HeapAccessV2Error::ArrayPropertySlots { handle });
         }
         let shape_id = self.shape_id_at(object)?;
-        if let Some(prop) = self.shapes.lookup(shape_id, key.get())
+        if let Some(prop) = self.shapes.lookup(shape_id, key)
             && !prop.is_accessor()
         {
             return self.store_value_slot(handle, object, prop.index, value);
         }
         self.define_property_slot(
             handle,
-            key.get(),
+            key,
             (constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE)
                 as u32,
             value,
@@ -2428,7 +2645,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     fn define_property_slot(
         &self,
         handle: u32,
-        key: u32,
+        key: PropertyKey,
         flags: u32,
         property_value: u64,
         getter: u64,
@@ -2461,6 +2678,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<u64, HeapAccessV2Error> {
         let mut object = object;
         if self.value_capacity(object)? < transition.slot_count {
+            if !self
+                .heap
+                .allocator()
+                .contains_object(ObjectRef::new(object))
+            {
+                return Err(HeapAccessV2Error::NativeTlabNeedsMaterialization { handle });
+            }
             self.grow_value_capacity(handle, transition.slot_count)?;
             object = self.resolve_handle(handle)?;
         }
@@ -2542,6 +2766,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     fn grow_value_capacity(&self, handle: u32, needed: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        if !self
+            .heap
+            .allocator()
+            .contains_object(ObjectRef::new(object))
+        {
+            return Err(HeapAccessV2Error::NativeTlabNeedsMaterialization { handle });
+        }
         let _relocation_guard = match &self.barrier {
             HeapBarrier::Disabled => None,
             HeapBarrier::Zgc(barrier) => Some(
@@ -2557,7 +2789,10 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         };
         let object = self.resolve_handle(handle)?;
         let capacity = self.value_capacity(object)?;
-        let new_capacity = capacity.saturating_mul(2).max(4).max(needed);
+        let new_capacity = capacity
+            .saturating_mul(2)
+            .max(constants::HEAP_OBJECT_INITIAL_VALUE_CAPACITY)
+            .max(needed);
         if new_capacity <= capacity {
             return Err(HeapAccessV2Error::AddressOverflow);
         }
@@ -2792,6 +3027,9 @@ pub enum HeapAccessV2Error {
         handle: u32,
         capacity: u32,
     },
+    NativeTlabNeedsMaterialization {
+        handle: u32,
+    },
     VirtualMemoryGrow(String),
     UnresolvedHandle {
         handle: u32,
@@ -2906,6 +3144,10 @@ impl fmt::Display for HeapAccessV2Error {
                     "V2 object handle {handle} has property capacity {capacity}"
                 )
             }
+            Self::NativeTlabNeedsMaterialization { handle } => write!(
+                formatter,
+                "native TLAB object handle {handle} must be materialized before relocation"
+            ),
             Self::VirtualMemoryGrow(error) => {
                 write!(formatter, "unable to grow V2 shared memory64: {error}")
             }

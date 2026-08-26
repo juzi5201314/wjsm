@@ -538,7 +538,7 @@ fn construct(
     else {
         return fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     state.typed_arrays.insert(
@@ -599,7 +599,7 @@ fn construct_buffer_view(
     {
         return fail_dispatch(ctx);
     }
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     state.typed_arrays.insert(
@@ -653,7 +653,7 @@ fn construct_shared_buffer_view(
     {
         return fail_dispatch(ctx);
     }
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     state.typed_arrays.insert(
@@ -769,7 +769,7 @@ fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     let end = args.get(2).map_or(array.length, |encoded| {
         relative_index(state, Some(*encoded), array.length)
     });
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     state.typed_arrays.insert(
@@ -1092,7 +1092,7 @@ fn callback_iterate(
         CallbackKind::FindIndex => value::encode_f64(-1.0),
         CallbackKind::ForEach => value::encode_undefined(),
         CallbackKind::Map | CallbackKind::Filter => state
-            .allocate_array_values(&output_values)
+            .allocate_array_values_with_gc_retry(ctx, &output_values)
             .unwrap_or_else(|_| fail_dispatch(ctx)),
     }
 }
@@ -1245,7 +1245,7 @@ fn iterator(
     if !state.typed_arrays.contains_key(&handle) {
         return fail_dispatch(ctx);
     }
-    let Ok(iterator_object) = state.allocate_object(1, false) else {
+    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     let Ok(iterator_id) = u32::try_from(state.collection_iterators.len()) else {

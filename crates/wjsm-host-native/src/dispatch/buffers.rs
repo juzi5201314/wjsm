@@ -148,7 +148,7 @@ fn array_buffer_slice(
         relative_index(state, Some(*encoded), length)
     });
     let bytes = buffer.bytes.borrow()[start.min(end)..end.min(length)].to_vec();
-    let Ok(object) = state.allocate_object(1, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     state.array_buffers.insert(
@@ -190,7 +190,7 @@ fn data_view_constructor(
     if offset.saturating_add(length) > total_length {
         return fail_dispatch(ctx);
     }
-    let Ok(object) = state.allocate_object(1, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     state.data_views.insert(

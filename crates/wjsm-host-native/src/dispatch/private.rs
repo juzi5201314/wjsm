@@ -114,10 +114,10 @@ fn establish_brand(state: &mut NativeAgentState, receiver: i64, key: PropertyKey
     let Some(brand) = receiver_brand(state, receiver) else {
         return false;
     };
-    match state.private_brands.get(&key.get()).copied() {
+    match state.private_brands.get(&(key.raw() as u32)).copied() {
         Some(expected) => expected == brand,
         None => {
-            state.private_brands.insert(key.get(), brand);
+            state.private_brands.insert(key.raw() as u32, brand);
             true
         }
     }
@@ -137,7 +137,10 @@ fn receiver_brand(state: &NativeAgentState, receiver: i64) -> Option<i64> {
 }
 
 fn private_key(encoded: i64) -> Option<PropertyKey> {
-    value::is_string(encoded).then(|| PropertyKey::from_name_id(value::decode_handle(encoded)))
+    PropertyKey::inline_string(encoded).or_else(|| {
+        value::is_runtime_string_handle(encoded)
+            .then(|| PropertyKey::from_name_id(value::decode_handle(encoded)))
+    })
 }
 
 fn type_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, message: &str) -> i64 {

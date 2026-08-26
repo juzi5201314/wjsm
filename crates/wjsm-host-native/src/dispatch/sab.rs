@@ -135,7 +135,7 @@ fn constructor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     {
         return fail_dispatch(ctx);
     }
-    let Ok(object) = state.allocate_object(1, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     let backing_id = state.allocate_sab_backing(length, max_byte_length);
@@ -228,7 +228,7 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         relative_index(state, Some(*encoded), length)
     });
     let bytes = entry.slice(start, end);
-    let Ok(object) = state.allocate_object(1, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     let backing_id = state.allocate_sab_backing_from_bytes(bytes);

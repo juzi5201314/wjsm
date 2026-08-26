@@ -182,7 +182,9 @@ pub(crate) fn next(
                     CollectionIteratorKind::Keys => (key, false),
                     CollectionIteratorKind::Values => (stored, false),
                     CollectionIteratorKind::Entries => {
-                        let Ok(entry) = state.allocate_array_values(&[key, stored]) else {
+                        let Ok(entry) =
+                            state.allocate_array_values_with_gc_retry(ctx, &[key, stored])
+                        else {
                             return fail_dispatch(ctx);
                         };
                         (entry, false)
@@ -201,7 +203,9 @@ pub(crate) fn next(
                         (stored, false)
                     }
                     CollectionIteratorKind::Entries => {
-                        let Ok(entry) = state.allocate_array_values(&[stored, stored]) else {
+                        let Ok(entry) =
+                            state.allocate_array_values_with_gc_retry(ctx, &[stored, stored])
+                        else {
                             return fail_dispatch(ctx);
                         };
                         (entry, false)
@@ -228,10 +232,10 @@ pub(crate) fn next(
                     }
                     CollectionIteratorKind::Values => (stored, false),
                     CollectionIteratorKind::Entries => {
-                        let Ok(entry) = state.allocate_array_values(&[
-                            value::encode_f64(iterator.index as f64),
-                            stored,
-                        ]) else {
+                        let Ok(entry) = state.allocate_array_values_with_gc_retry(
+                            ctx,
+                            &[value::encode_f64(iterator.index as f64), stored],
+                        ) else {
                             return fail_dispatch(ctx);
                         };
                         (entry, false)
@@ -247,7 +251,7 @@ pub(crate) fn next(
     {
         iterator.index = iterator.index.saturating_add(1);
     }
-    let Ok(result) = state.allocate_object(2, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(result);
@@ -273,7 +277,7 @@ fn collection_object(
     constructor: Builtin,
 ) -> Option<i64> {
     let object = state
-        .allocate_object(4, false)
+        .allocate_object_with_gc_retry(ctx, 4, false)
         .map_err(|_| fail_dispatch(ctx))
         .ok()?;
     state
@@ -380,7 +384,7 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         let key = canonicalize_keyed_collection_key(key);
         let group = map_get(ctx, state, &[result, key]);
         let group = if value::is_undefined(group) {
-            let Ok(group) = state.allocate_array_values(&[]) else {
+            let Ok(group) = state.allocate_array_values_with_gc_retry(ctx, &[]) else {
                 let exception = fail_dispatch(ctx);
                 return iterator_close(ctx, state, &[iterator, exception]);
             };
@@ -631,7 +635,7 @@ fn iterator(
     } else {
         return fail_dispatch(ctx);
     };
-    let Ok(iterator_object) = state.allocate_object(1, false) else {
+    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     let Ok(iterator_id) = u32::try_from(state.collection_iterators.len()) else {

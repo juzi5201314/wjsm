@@ -917,10 +917,10 @@ fn to_json(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i6
         .into_iter()
         .map(|byte| value::encode_f64(f64::from(byte)))
         .collect();
-    let Ok(data) = state.allocate_array_values(&values) else {
+    let Ok(data) = state.allocate_array_values_with_gc_retry(ctx, &values) else {
         return fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let Some(kind) = state.intern_text("Buffer".into(), value::TAG_STRING) else {

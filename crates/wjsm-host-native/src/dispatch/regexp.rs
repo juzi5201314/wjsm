@@ -274,7 +274,7 @@ fn build_match_result(
         };
         captures.push(encoded);
     }
-    let Ok(result) = state.allocate_array_values(&captures) else {
+    let Ok(result) = state.allocate_array_values_with_gc_retry(ctx, &captures) else {
         return fail_dispatch(ctx);
     };
     let result_handle = value::decode_handle(result);
@@ -331,7 +331,7 @@ fn iterator_result(
     value: i64,
     done: bool,
 ) -> i64 {
-    let Ok(result) = state.allocate_object(2, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(result);
@@ -387,7 +387,7 @@ pub(super) fn string_match_all(
         last_index,
         done: false,
     });
-    let Ok(iterator_object) = state.allocate_object(1, false) else {
+    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     let Some(next) = state.native_callable(NativeCallableKind::RegExpIteratorNext(iterator_id))
@@ -669,7 +669,7 @@ fn string_match_impl(
         value::encode_null()
     } else {
         state
-            .allocate_array_values(&matches)
+            .allocate_array_values_with_gc_retry(ctx, &matches)
             .unwrap_or_else(|_| fail_dispatch(ctx))
     }
 }
@@ -759,7 +759,7 @@ fn string_split_impl(
         .unwrap_or(u32::MAX);
     if limit == 0 {
         return state
-            .allocate_array_values(&[])
+            .allocate_array_values_with_gc_retry(ctx, &[])
             .unwrap_or_else(|_| fail_dispatch(ctx));
     }
     if value::is_regexp(separator) {
@@ -793,7 +793,7 @@ fn string_split_impl(
             values.push(part);
         }
         return state
-            .allocate_array_values(&values)
+            .allocate_array_values_with_gc_retry(ctx, &values)
             .unwrap_or_else(|_| fail_dispatch(ctx));
     }
     if value::is_undefined(separator) {
@@ -802,7 +802,7 @@ fn string_split_impl(
             return fail_dispatch(ctx);
         };
         return state
-            .allocate_array_values(&[part])
+            .allocate_array_values_with_gc_retry(ctx, &[part])
             .unwrap_or_else(|_| fail_dispatch(ctx));
     }
     let input = subject_runtime_string(state, receiver);
@@ -849,7 +849,7 @@ fn string_split_string_fast(
     };
     values.push(part);
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -870,7 +870,7 @@ fn string_split_empty_separator(
         values.push(part);
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -895,7 +895,7 @@ fn string_split_single_unit(
         values.push(part);
         if values.len() == limit {
             return state
-                .allocate_array_values(&values)
+                .allocate_array_values_with_gc_retry(ctx, &values)
                 .unwrap_or_else(|_| fail_dispatch(ctx));
         }
         start = index + 1;
@@ -905,7 +905,7 @@ fn string_split_single_unit(
     };
     values.push(part);
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 

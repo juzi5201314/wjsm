@@ -155,6 +155,7 @@ pub enum HandleTableError {
         handle: HandleId,
     },
     HandleExhausted,
+    InvalidHandleRange,
     UnallocatedHandle {
         handle: HandleId,
     },
@@ -195,6 +196,7 @@ impl fmt::Display for HandleTableError {
                 handle.get()
             ),
             Self::HandleExhausted => formatter.write_str("handle table is exhausted"),
+            Self::InvalidHandleRange => formatter.write_str("handle reservation must be non-empty"),
             Self::InvalidTransition {
                 handle,
                 expected,

@@ -223,7 +223,7 @@ fn create(
         None
     };
     let object = state
-        .allocate_object(0, false)
+        .allocate_object_with_gc_retry(ctx, 0, false)
         .map_err(|_| super::super::fail_dispatch(ctx))?;
     state.fetch.responses.push(response);
     super::register_object(state, object, FetchObjectKind::Response(handle));

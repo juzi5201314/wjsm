@@ -18,9 +18,14 @@ mod page;
 pub mod platform;
 mod word;
 
-pub use allocator::{Allocation, AllocatorError, ManagedAllocator, Nlab, RelocationNlab};
+pub use allocator::{
+    Allocation, AllocatorError, ManagedAllocator, NativeTlabReservation, Nlab, RelocationNlab,
+};
 pub use epoch::{EpochParticipant, HeapEpoch};
-pub use handle::{HandleRegionBackend, HandleTableV2, PlatformHandleRegion, RestoredHandleEntry};
+pub use handle::{
+    HandleRangeReservation, HandleRegionBackend, HandleTableV2, PlatformHandleRegion,
+    RestoredHandleEntry,
+};
 pub use handle_entry::{
     ColoredHandleEntry, HANDLE_ENTRY_BYTES, HANDLE_REGION_BYTES, HANDLE_STATE_STABLE_MIN,
     HandleGeneration, HandleId, HandleState, HandleTableError,

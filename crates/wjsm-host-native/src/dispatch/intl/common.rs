@@ -155,7 +155,7 @@ pub(super) fn resolved_object(
     state: &mut NativeAgentState,
     fields: &[(&str, i64)],
 ) -> i64 {
-    let object = match state.allocate_object(fields.len() as u32, false) {
+    let object = match state.allocate_object_with_gc_retry(ctx, fields.len() as u32, false) {
         Ok(object) => object,
         Err(_) => return fail_dispatch(ctx),
     };
@@ -174,7 +174,7 @@ pub(super) fn parts_array(
 ) -> i64 {
     let mut values = Vec::with_capacity(parts.len());
     for part in parts {
-        let object = match state.allocate_object(3, false) {
+        let object = match state.allocate_object_with_gc_retry(ctx, 3, false) {
             Ok(object) => object,
             Err(_) => return fail_dispatch(ctx),
         };
@@ -201,7 +201,7 @@ pub(super) fn parts_array(
         values.push(object);
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 

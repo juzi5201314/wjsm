@@ -1593,6 +1593,239 @@ fn lower_function_parameters(
     Ok(())
 }
 
+fn lower_native_object_allocation(
+    cx: &mut LoweringCx<'_, '_>,
+    dest: ValueId,
+    capacity: u32,
+    array: bool,
+) -> Result<()> {
+    // 与宿主首次扩容策略一致：空对象预留常见构造器字段，避免尚未物化对象
+    // 在第一次属性写入时立即搬迁。
+    let capacity = if array {
+        capacity
+    } else {
+        capacity.max(constants::HEAP_OBJECT_INITIAL_VALUE_CAPACITY)
+    };
+    let bytes = u64::from(capacity)
+        .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
+        .and_then(|payload| payload.checked_add(u64::from(constants::HEAP_OBJECT_HEADER_SIZE)))
+        .and_then(|bytes| bytes.checked_add(7))
+        .map(|bytes| bytes & !7)
+        .context("native object allocation size overflows")?;
+    let bytes = i64::try_from(bytes).context("native object allocation size exceeds i64")?;
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let fast_block = cx.builder.create_block();
+    let slow_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+    cx.builder.append_block_param(merge_block, types::I64);
+
+    let flags = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, allocation_fast_flags))?,
+    );
+    let allocation_flag = if array {
+        wjsm_native_abi::NATIVE_ALLOCATION_FAST_ARRAY
+    } else {
+        wjsm_native_abi::NATIVE_ALLOCATION_FAST_OBJECT
+    };
+    let enabled = cx
+        .builder
+        .ins()
+        .band_imm_u(flags, i64::from(allocation_flag));
+    let enabled = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, enabled, 0);
+    let small_limit = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, allocation_small_limit))?,
+    );
+    let bytes_value = cx.builder.ins().iconst(types::I64, bytes);
+    let small = cx.builder.ins().icmp(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        bytes_value,
+        small_limit,
+    );
+    let top = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_ptr))?,
+    );
+    let limit = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_limit))?,
+    );
+    let end = cx.builder.ins().iadd(top, bytes_value);
+    let object_fits =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThanOrEqual, end, limit);
+    let cursor = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_handle_cursor))?,
+    );
+    let handle_limit = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_handle_limit))?,
+    );
+    let handle_fits =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, cursor, handle_limit);
+    let ready = cx.builder.ins().band(enabled, small);
+    let ready = cx.builder.ins().band(ready, object_fits);
+    let ready = cx.builder.ins().band(ready, handle_fits);
+    cx.builder
+        .ins()
+        .brif(ready, fast_block, &[], slow_block, &[]);
+
+    cx.builder.switch_to_block(fast_block);
+    cx.builder.seal_block(fast_block);
+    let prototype = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(if array {
+            offset_of!(NativeVmContext, array_prototype_handle)
+        } else {
+            offset_of!(NativeVmContext, object_prototype_handle)
+        })?,
+    );
+    let prototype = cx.builder.ins().uextend(types::I64, prototype);
+    let heap_type = if array {
+        wjsm_ir::HEAP_TYPE_ARRAY
+    } else {
+        wjsm_ir::HEAP_TYPE_OBJECT
+    };
+    let type_word = cx.builder.ins().iconst(
+        types::I64,
+        i64::try_from(u64::from(heap_type) << 32).expect("heap type word fits i64"),
+    );
+    let header_word = cx.builder.ins().bor(prototype, type_word);
+    let heap_delta = cx.builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    let address = cx.builder.ins().iadd(top, heap_delta);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), header_word, address, 0);
+    let capacity_i32 = cx.builder.ins().iconst(types::I32, i64::from(capacity));
+    let zero_i32 = cx.builder.ins().iconst(types::I32, 0);
+    let first_header_value = if array { zero_i32 } else { capacity_i32 };
+    let second_header_value = if array { capacity_i32 } else { zero_i32 };
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        first_header_value,
+        address,
+        i32::try_from(if array {
+            constants::HEAP_ARRAY_LENGTH_OFFSET
+        } else {
+            constants::HEAP_OBJECT_VALUE_CAPACITY_OFFSET
+        })
+        .expect("capacity or length offset fits i32"),
+    );
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        second_header_value,
+        address,
+        i32::try_from(if array {
+            constants::HEAP_ARRAY_CAPACITY_OFFSET
+        } else {
+            constants::HEAP_OBJECT_SHAPE_ID_OFFSET
+        })
+        .expect("capacity or shape offset fits i32"),
+    );
+    let handle_value = cx.builder.ins().uextend(types::I64, cursor);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        handle_value,
+        address,
+        i32::try_from(constants::HEAP_OBJECT_GC_WORD_OFFSET).expect("GC word offset fits i32"),
+    );
+    let handle_table = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle_value, 3);
+    let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
+    let object_bits = cx.builder.ins().ishl_imm_u(top, 16);
+    let stable_state = cx
+        .builder
+        .ins()
+        .iconst(types::I64, i64::from(constants::HANDLE_STATE_STABLE_YOUNG));
+    let entry_value = cx.builder.ins().bor(object_bits, stable_state);
+    cx.builder
+        .ins()
+        .atomic_store(MemFlagsData::trusted(), entry_value, entry_address);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        end,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_ptr))?,
+    );
+    let next_handle = cx.builder.ins().iadd_imm_u(cursor, 1);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        next_handle,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, bump_handle_cursor))?,
+    );
+    let tag = if array {
+        value::TAG_ARRAY
+    } else {
+        value::TAG_OBJECT
+    };
+    let value_prefix = cx.builder.ins().iconst(
+        types::I64,
+        i64::from_ne_bytes((value::BOX_BASE | (tag << 32)).to_ne_bytes()),
+    );
+    let encoded = cx.builder.ins().bor(handle_value, value_prefix);
+    cx.builder
+        .ins()
+        .jump(merge_block, &[ir::BlockArg::Value(encoded)]);
+
+    cx.builder.switch_to_block(slow_block);
+    cx.builder.seal_block(slow_block);
+    let slow_capacity = cx.builder.ins().iconst(types::I64, i64::from(capacity));
+    let slow = cx.call(
+        if array {
+            NativeRuntimeOp::NewArray.id()
+        } else {
+            NativeRuntimeOp::NewObject.id()
+        },
+        &[slow_capacity],
+        None,
+    )?;
+    cx.builder
+        .ins()
+        .jump(merge_block, &[ir::BlockArg::Value(slow)]);
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+    define_value(
+        cx.builder,
+        cx.variables,
+        dest,
+        cx.builder.block_params(merge_block)[0],
+    )
+}
+
 fn lower_instruction(
     cx: &mut LoweringCx<'_, '_>,
     tables: &mut InstructionTables<'_>,
@@ -1837,6 +2070,7 @@ fn lower_instruction(
             args,
         } if args.len() == 1 => {
             let encoded = use_value(cx.builder, cx.variables, args[0])?;
+            let inline = emit_inline_string_predicate(cx, encoded);
             let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
             let boxed = cx.builder.ins().band_imm_s(encoded, box_base);
             let boxed = cx
@@ -1862,8 +2096,9 @@ fn lower_instruction(
                 cx.builder
                     .ins()
                     .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
-            let valid = cx.builder.ins().band(boxed, is_string);
-            let valid = cx.builder.ins().band(valid, is_runtime);
+            let valid_handle = cx.builder.ins().band(boxed, is_string);
+            let valid_handle = cx.builder.ins().band(valid_handle, is_runtime);
+            let valid = cx.builder.ins().bor(inline, valid_handle);
             let yes = cx
                 .builder
                 .ins()
@@ -2104,21 +2339,10 @@ fn lower_instruction(
             define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::NewObject { dest, capacity } => {
-            let capacity = cx.builder.ins().iconst(types::I64, i64::from(*capacity));
-            let result = cx.call(NativeRuntimeOp::NewObject.id(), &[capacity], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            lower_native_object_allocation(cx, *dest, *capacity, false)
         }
         Instruction::GetProp { dest, object, key } => {
-            let is_length = tables
-                .constant_defs
-                .get(key)
-                .and_then(|constant| tables.constants.get(constant.0 as usize))
-                .is_some_and(
-                    |constant| matches!(constant, Constant::String(text) if text == "length"),
-                );
-            if is_length {
-                lower_string_length(cx, tables.barrier_thunks, *dest, *object, *key, roots)
-            } else if let Some(slot) = tables.ic_slots.get(dest).copied() {
+            if let Some(slot) = tables.ic_slots.get(dest).copied() {
                 lower_get_prop_ic(
                     cx,
                     tables.barrier_thunks,
@@ -2182,9 +2406,7 @@ fn lower_instruction(
             lower_value_operation(cx, NativeRuntimeOp::SetProto, &[*object, *value], None)
         }
         Instruction::NewArray { dest, capacity } => {
-            let capacity = cx.builder.ins().iconst(types::I64, i64::from(*capacity));
-            let result = cx.call(NativeRuntimeOp::NewArray.id(), &[capacity], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            lower_native_object_allocation(cx, *dest, *capacity, true)
         }
         Instruction::CloneArrayTemplate { dest, template } => {
             let template = cx.builder.ins().iconst(types::I64, i64::from(template.0));
@@ -2656,6 +2878,48 @@ fn emit_f64_abstract_compare(
     let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
     builder.ins().select(condition, true_value, false_value)
 }
+fn emit_inline_string_predicate(cx: &mut LoweringCx<'_, '_>, encoded: ir::Value) -> ir::Value {
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let boxed = cx.builder.ins().band_imm_u(encoded, box_base);
+    let boxed = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, boxed, box_base);
+    let marker = cx.builder.ins().band_imm_u(
+        encoded,
+        i64::try_from(value::INLINE_STRING_MARKER_MASK).expect("SSO marker mask fits i64"),
+    );
+    let marker = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        marker,
+        i64::try_from(value::INLINE_STRING_MARKER << value::INLINE_STRING_MARKER_SHIFT)
+            .expect("SSO marker fits i64"),
+    );
+    let reserved = cx.builder.ins().band_imm_u(
+        encoded,
+        i64::try_from(0b111_u64 << 42).expect("SSO reserved mask fits i64"),
+    );
+    let reserved = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, reserved, 0);
+    let length = cx
+        .builder
+        .ins()
+        .ushr_imm_u(encoded, i64::from(value::INLINE_STRING_LENGTH_SHIFT));
+    let length = cx.builder.ins().band_imm_u(length, 0b111);
+    let length_ok = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        length,
+        i64::try_from(value::INLINE_STRING_MAX_LEN).expect("SSO length fits i64"),
+    );
+    // generated code 只接收经过 Value 编码器构造的值；marker、保留位和长度足以
+    // 区分 SSO，无需在每次字符串操作中重新验证未使用 payload 位。
+    let result = cx.builder.ins().band(boxed, marker);
+    let result = cx.builder.ins().band(result, reserved);
+    cx.builder.ins().band(result, length_ok)
+}
+
 /// 把运行时字符串句柄解析为当前读取作用域内稳定的堆地址。
 ///
 /// 每次调用都生成独立控制流；地址不跨块记忆，避免 ZGC epoch 变化后复用旧地址。
@@ -2703,6 +2967,9 @@ fn emit_string_address(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let valid = cx.builder.ins().band(is_boxed, is_string);
     let valid = cx.builder.ins().band(valid, is_runtime);
+    let inline = emit_inline_string_predicate(cx, encoded);
+    let inline = cx.builder.ins().bnot(inline);
+    let valid = cx.builder.ins().band(valid, inline);
     cx.builder
         .ins()
         .brif(valid, entry_block, &[], miss_block, &[]);
@@ -3288,42 +3555,6 @@ fn emit_mixed_string_equal(
     cx.builder.seal_block(loop_block);
 }
 
-fn lower_string_length(
-    cx: &mut LoweringCx<'_, '_>,
-    barrier_thunks: &BarrierThunks,
-    dest: ValueId,
-    object: ValueId,
-    key: ValueId,
-    _roots: &[ValueId],
-) -> Result<()> {
-    let object = use_value(cx.builder, cx.variables, object)?;
-    let key = use_value(cx.builder, cx.variables, key)?;
-    let miss_block = cx.builder.create_block();
-    let merge_block = cx.builder.create_block();
-    let address = emit_string_address(cx, barrier_thunks, object, miss_block)?;
-    let header = cx.builder.ins().load(
-        types::I64,
-        MemFlagsData::trusted(),
-        address,
-        i32::try_from(constants::HEAP_STRING_LENGTH_OFFSET).expect("length offset fits i32"),
-    );
-    let length = cx.builder.ins().band_imm_u(header, i64::from(u32::MAX));
-    let length = cx.builder.ins().fcvt_from_uint(types::F64, length);
-    let result = box_f64_result(cx.builder, length);
-    define_value(cx.builder, cx.variables, dest, result)?;
-    cx.builder.ins().jump(merge_block, &[]);
-
-    cx.builder.switch_to_block(miss_block);
-    cx.builder.seal_block(miss_block);
-    let result = cx.call(NativeRuntimeOp::GetProp.id(), &[object, key], None)?;
-    define_value(cx.builder, cx.variables, dest, result)?;
-    cx.builder.ins().jump(merge_block, &[]);
-
-    cx.builder.switch_to_block(merge_block);
-    cx.builder.seal_block(merge_block);
-    Ok(())
-}
-
 fn lower_string_element(
     cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
@@ -3335,7 +3566,11 @@ fn lower_string_element(
     let encoded_index = use_value(cx.builder, cx.variables, index)?;
     let (index, valid_index) = emit_nonnegative_integer_index(cx.builder, encoded_index);
     let index_block = cx.builder.create_block();
+    let inline_string_block = cx.builder.create_block();
+    let inline_char_block = cx.builder.create_block();
     let string_block = cx.builder.create_block();
+    let dispatch_block = cx.builder.create_block();
+    let array_dispatch_block = cx.builder.create_block();
     let array_block = cx.builder.create_block();
     let miss_block = cx.builder.create_block();
     let out_of_bounds_block = cx.builder.create_block();
@@ -3346,16 +3581,42 @@ fn lower_string_element(
 
     cx.builder.switch_to_block(index_block);
     cx.builder.seal_block(index_block);
+    let is_inline = emit_inline_string_predicate(cx, object);
+    cx.builder
+        .ins()
+        .brif(is_inline, inline_string_block, &[], dispatch_block, &[]);
 
-    let boxed_bits = cx
+    cx.builder.switch_to_block(inline_string_block);
+    cx.builder.seal_block(inline_string_block);
+    let inline_length = cx
         .builder
         .ins()
-        .band_imm_s(object, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
-    let is_boxed = cx.builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        boxed_bits,
-        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
+        .ushr_imm_u(object, i64::from(value::INLINE_STRING_LENGTH_SHIFT));
+    let inline_length = cx.builder.ins().band_imm_u(inline_length, 0b111);
+    let inline_in_bounds =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, index, inline_length);
+    cx.builder.ins().brif(
+        inline_in_bounds,
+        inline_char_block,
+        &[],
+        out_of_bounds_block,
+        &[],
     );
+
+    cx.builder.switch_to_block(inline_char_block);
+    cx.builder.seal_block(inline_char_block);
+    let shift = cx.builder.ins().ishl_imm_u(index, 3);
+    let shift = cx.builder.ins().isub(shift, index);
+    let inline_unit = cx.builder.ins().ushr(object, shift);
+    let inline_unit = cx.builder.ins().band_imm_u(inline_unit, 0x7f);
+    let inline_result = emit_inline_ascii_char_value(cx, inline_unit);
+    define_value(cx.builder, cx.variables, dest, inline_result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(dispatch_block);
+    cx.builder.seal_block(dispatch_block);
     let tag_word = cx.builder.ins().ushr_imm_u(object, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag_word,
@@ -3366,27 +3627,21 @@ fn lower_string_element(
         tag,
         i64::try_from(value::TAG_STRING).expect("string tag fits i64"),
     );
-    let is_string = cx.builder.ins().band(is_boxed, is_string);
-
     let is_array = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         tag,
         i64::try_from(value::TAG_ARRAY).expect("array tag fits i64"),
     );
-    let is_array = cx.builder.ins().band(is_boxed, is_array);
-
-    let dispatch_block = cx.builder.create_block();
     cx.builder
         .ins()
-        .brif(is_string, string_block, &[], dispatch_block, &[]);
+        .brif(is_string, string_block, &[], array_dispatch_block, &[]);
 
-    cx.builder.switch_to_block(dispatch_block);
-    cx.builder.seal_block(dispatch_block);
+    cx.builder.switch_to_block(array_dispatch_block);
+    cx.builder.seal_block(array_dispatch_block);
     cx.builder
         .ins()
         .brif(is_array, array_block, &[], miss_block, &[]);
 
-    // 字符串读取
     cx.builder.switch_to_block(string_block);
     cx.builder.seal_block(string_block);
     let address = emit_string_address(cx, barrier_thunks, object, miss_block)?;
@@ -3500,6 +3755,26 @@ fn lower_string_element(
     Ok(())
 }
 
+fn emit_inline_ascii_char_value(cx: &mut LoweringCx<'_, '_>, unit: ir::Value) -> ir::Value {
+    let base = cx.builder.ins().iconst(
+        types::I64,
+        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
+    );
+    let marker = cx.builder.ins().iconst(
+        types::I64,
+        i64::try_from(value::INLINE_STRING_MARKER << value::INLINE_STRING_MARKER_SHIFT)
+            .expect("SSO marker fits i64"),
+    );
+    let length = cx
+        .builder
+        .ins()
+        .iconst(types::I64, 1_i64 << value::INLINE_STRING_LENGTH_SHIFT);
+    let result = cx.builder.ins().bor(base, marker);
+    let result = cx.builder.ins().bor(result, length);
+    let unit = cx.builder.ins().band_imm_u(unit, 0x7f);
+    cx.builder.ins().bor(result, unit)
+}
+
 fn lower_string_char_builtin(
     cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
@@ -3516,6 +3791,9 @@ fn lower_string_char_builtin(
     };
     let (index, valid_index) = emit_nonnegative_integer_index(cx.builder, encoded_index);
     let index_block = cx.builder.create_block();
+    let inline_string_block = cx.builder.create_block();
+    let inline_char_block = cx.builder.create_block();
+    let string_block = cx.builder.create_block();
     let miss_block = cx.builder.create_block();
     let out_of_bounds_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
@@ -3525,6 +3803,43 @@ fn lower_string_char_builtin(
 
     cx.builder.switch_to_block(index_block);
     cx.builder.seal_block(index_block);
+    let is_inline = emit_inline_string_predicate(cx, receiver);
+    cx.builder
+        .ins()
+        .brif(is_inline, inline_string_block, &[], string_block, &[]);
+
+    cx.builder.switch_to_block(inline_string_block);
+    cx.builder.seal_block(inline_string_block);
+    let inline_length = cx
+        .builder
+        .ins()
+        .ushr_imm_u(receiver, i64::from(value::INLINE_STRING_LENGTH_SHIFT));
+    let inline_length = cx.builder.ins().band_imm_u(inline_length, 0b111);
+    let in_bounds =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, index, inline_length);
+    cx.builder
+        .ins()
+        .brif(in_bounds, inline_char_block, &[], out_of_bounds_block, &[]);
+
+    cx.builder.switch_to_block(inline_char_block);
+    cx.builder.seal_block(inline_char_block);
+    let shift = cx.builder.ins().ishl_imm_u(index, 3);
+    let shift = cx.builder.ins().isub(shift, index);
+    let unit = cx.builder.ins().ushr(receiver, shift);
+    let unit = cx.builder.ins().band_imm_u(unit, 0x7f);
+    let result = if builtin == Builtin::StringCharCodeAt {
+        let unit = cx.builder.ins().fcvt_from_uint(types::F64, unit);
+        box_f64_result(cx.builder, unit)
+    } else {
+        emit_inline_ascii_char_value(cx, unit)
+    };
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(string_block);
+    cx.builder.seal_block(string_block);
     let address = emit_string_address(cx, barrier_thunks, receiver, miss_block)?;
     let unit = emit_flat_string_code_unit(cx, address, index, miss_block, out_of_bounds_block);
     let result = if builtin == Builtin::StringCharCodeAt {
@@ -3614,6 +3929,9 @@ fn emit_idle_string_address(
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
     let valid = cx.builder.ins().band(is_boxed, is_string);
     let valid = cx.builder.ins().band(valid, is_runtime);
+    let inline = emit_inline_string_predicate(cx, encoded);
+    let not_inline = cx.builder.ins().bnot(inline);
+    let valid = cx.builder.ins().band(valid, not_inline);
     cx.builder
         .ins()
         .brif(valid, entry_block, &[], miss_block, &[]);
@@ -4299,10 +4617,11 @@ fn lower_strict_eq(
     let color_mask = i64::from_ne_bytes((!value::GC_COLOR_MASK).to_ne_bytes());
     let lhs_plain = cx.builder.ins().band_imm_u(lhs, color_mask);
     let rhs_plain = cx.builder.ins().band_imm_u(rhs, color_mask);
-    let same = cx
+    let same_plain = cx
         .builder
         .ins()
         .icmp(ir::condcodes::IntCC::Equal, lhs_plain, rhs_plain);
+    let same_raw = cx.builder.ins().icmp(ir::condcodes::IntCC::Equal, lhs, rhs);
     let tag_word = cx.builder.ins().ushr_imm_u(lhs_plain, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag_word,
@@ -4321,13 +4640,110 @@ fn lower_strict_eq(
         .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, runtime_flag, 0);
-    let same_runtime_string = cx.builder.ins().band(same, is_string);
+    let same_runtime_string = cx.builder.ins().band(same_plain, is_string);
     let same_runtime_string = cx.builder.ins().band(same_runtime_string, is_runtime);
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let inline_marker_mask =
+        i64::try_from(value::INLINE_STRING_MARKER_MASK).expect("SSO marker mask fits i64");
+    let inline_marker =
+        i64::try_from(value::INLINE_STRING_MARKER << value::INLINE_STRING_MARKER_SHIFT)
+            .expect("SSO marker fits i64");
+    let inline_reserved_mask = i64::try_from(0b111_u64 << 42).expect("SSO reserved mask fits i64");
+    let inline_length_mask =
+        i64::try_from(value::INLINE_STRING_LENGTH_MASK).expect("SSO length mask fits i64");
+    let inline_length_shift = i64::from(value::INLINE_STRING_LENGTH_SHIFT);
+    let lhs_boxed = cx.builder.ins().band_imm_u(lhs_plain, box_base);
+    let lhs_boxed = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, lhs_boxed, box_base);
+    let rhs_boxed = cx.builder.ins().band_imm_u(rhs_plain, box_base);
+    let rhs_boxed = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, rhs_boxed, box_base);
+    let lhs_marker = cx.builder.ins().band_imm_u(lhs_plain, inline_marker_mask);
+    let rhs_marker = cx.builder.ins().band_imm_u(rhs_plain, inline_marker_mask);
+    let lhs_marker =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, lhs_marker, inline_marker);
+    let rhs_marker =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, rhs_marker, inline_marker);
+    let lhs_reserved = cx.builder.ins().band_imm_u(lhs_plain, inline_reserved_mask);
+    let rhs_reserved = cx.builder.ins().band_imm_u(rhs_plain, inline_reserved_mask);
+    let lhs_reserved = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, lhs_reserved, 0);
+    let rhs_reserved = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, rhs_reserved, 0);
+    let lhs_length_bits = cx.builder.ins().band_imm_u(lhs_plain, inline_length_mask);
+    let rhs_length_bits = cx.builder.ins().band_imm_u(rhs_plain, inline_length_mask);
+    let lhs_length = cx
+        .builder
+        .ins()
+        .ushr_imm_u(lhs_length_bits, inline_length_shift);
+    let rhs_length = cx
+        .builder
+        .ins()
+        .ushr_imm_u(rhs_length_bits, inline_length_shift);
+    let lhs_length_ok = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        lhs_length,
+        i64::try_from(value::INLINE_STRING_MAX_LEN).expect("SSO length fits i64"),
+    );
+    let rhs_length_ok = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        rhs_length,
+        i64::try_from(value::INLINE_STRING_MAX_LEN).expect("SSO length fits i64"),
+    );
+    let lhs_inline = cx.builder.ins().band(lhs_boxed, lhs_marker);
+    let lhs_inline = cx.builder.ins().band(lhs_inline, lhs_reserved);
+    let lhs_inline = cx.builder.ins().band(lhs_inline, lhs_length_ok);
+    let rhs_inline = cx.builder.ins().band(rhs_boxed, rhs_marker);
+    let rhs_inline = cx.builder.ins().band(rhs_inline, rhs_reserved);
+    let rhs_inline = cx.builder.ins().band(rhs_inline, rhs_length_ok);
+    let any_inline = cx.builder.ins().bor(lhs_inline, rhs_inline);
+    let both_inline = cx.builder.ins().band(lhs_inline, rhs_inline);
     let same_block = cx.builder.create_block();
     let compare_block = cx.builder.create_block();
+    let inline_block = cx.builder.create_block();
+    let inline_equal_block = cx.builder.create_block();
+    let non_inline_block = cx.builder.create_block();
     let miss_block = cx.builder.create_block();
     let false_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(any_inline, inline_block, &[], non_inline_block, &[]);
+
+    cx.builder.switch_to_block(inline_block);
+    cx.builder.seal_block(inline_block);
+    cx.builder
+        .ins()
+        .brif(both_inline, inline_equal_block, &[], miss_block, &[]);
+
+    cx.builder.switch_to_block(inline_equal_block);
+    cx.builder.seal_block(inline_equal_block);
+    let true_value = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_bool(!mode.invert));
+    let false_value = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_bool(mode.invert));
+    let result = cx.builder.ins().select(same_raw, true_value, false_value);
+    define_value(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(non_inline_block);
+    cx.builder.seal_block(non_inline_block);
     cx.builder
         .ins()
         .brif(same_runtime_string, same_block, &[], compare_block, &[]);

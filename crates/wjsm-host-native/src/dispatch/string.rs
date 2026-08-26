@@ -160,6 +160,22 @@ fn string_at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     let Some(mut index) = integer(state, args.get(1).copied(), 0) else {
         return fail_dispatch(ctx);
     };
+    if value::is_inline_string(encoded) {
+        let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
+        let Some(units) = value::decode_inline_ascii(encoded, &mut bytes) else {
+            return fail_dispatch(ctx);
+        };
+        if index < 0 {
+            index += i64::try_from(units.len()).expect("SSO length fits i64");
+        }
+        let Ok(index) = usize::try_from(index) else {
+            return value::encode_undefined();
+        };
+        return units
+            .get(index)
+            .and_then(|unit| value::encode_inline_ascii(std::slice::from_ref(unit)))
+            .unwrap_or_else(value::encode_undefined);
+    }
     let length = state.string_len(encoded).unwrap_or(0) as i64;
     if index < 0 {
         index += length;
@@ -420,7 +436,10 @@ pub(super) fn string_builder_finish(
     let [encoded] = args else {
         return fail_dispatch(ctx);
     };
-    if !value::is_string(*encoded) {
+    if value::is_inline_string(*encoded) {
+        return *encoded;
+    }
+    if !value::is_runtime_string_handle(*encoded) {
         return fail_dispatch(ctx);
     }
     let handle = value::decode_handle(*encoded);
@@ -445,8 +464,7 @@ fn string_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 
     for &arg in args {
         if value::is_string(arg) {
-            let handle = value::decode_handle(arg);
-            let len = state.gc.heap().string_length(handle).unwrap_or(0) as usize;
+            let len = state.string_len(arg).unwrap_or(0);
             if stack_len + len > 128 {
                 all_latin1_small = false;
                 break;
@@ -533,6 +551,16 @@ fn string_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
             continue;
         }
         if len2 == 0 {
+            continue;
+        }
+        if value::is_inline_string(current) || value::is_inline_string(arg) {
+            let Some(left) = state.string_owned(current) else {
+                return fail_dispatch(ctx);
+            };
+            let Some(right) = state.string_owned(arg) else {
+                return fail_dispatch(ctx);
+            };
+            current = intern(ctx, state, RuntimeString::concat(left, right));
             continue;
         }
         let total_len = (len1 + len2) as u32;
@@ -680,6 +708,27 @@ fn string_repeat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
 
 fn string_slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let first = *args.first().unwrap_or(&value::encode_undefined());
+    if value::is_inline_string(first) {
+        let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
+        let Some(units) = value::decode_inline_ascii(first, &mut bytes) else {
+            return fail_dispatch(ctx);
+        };
+        let length = i64::try_from(units.len()).expect("SSO length fits i64");
+        let start = relative_index(integer(state, args.get(1).copied(), 0).unwrap_or(0), length);
+        let end = relative_index(
+            integer(state, args.get(2).copied(), length).unwrap_or(length),
+            length,
+        );
+        let range = if end < start {
+            start..start
+        } else {
+            start..end
+        };
+        return value::encode_inline_ascii(&units[range.clone()]).unwrap_or_else(|| {
+            let utf16 = units[range].iter().map(|&unit| u16::from(unit)).collect();
+            intern(ctx, state, RuntimeString::from_utf16_units(utf16))
+        });
+    }
     if !value::is_string(first) && !value::is_bigint(first) {
         let Some(text) = runtime_string(state, first) else {
             return fail_dispatch(ctx);
@@ -769,6 +818,12 @@ fn string_substring(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     }
     if start >= end {
         return intern(ctx, state, RuntimeString::empty());
+    }
+    if value::is_inline_string(first) {
+        let Some(text) = state.string_owned(first) else {
+            return fail_dispatch(ctx);
+        };
+        return intern(ctx, state, text.slice_units(start..end));
     }
     if let Some(text) = text_opt {
         return intern(ctx, state, text.slice_units(start..end));

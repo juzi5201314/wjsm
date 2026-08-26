@@ -34,6 +34,7 @@ mod side_tables;
 mod snapshot;
 mod specialization;
 
+pub use gc::NativeAllocationDiagnostics;
 pub use inspector::InspectorConfig;
 pub use native_exec::{
     PrecompiledNativeImages, compile_native_exec_images, compile_snapshot_entry,
@@ -248,6 +249,8 @@ pub struct NativeRuntimeConfig {
     /// 用于同 binary 的 generic AOT 对照。关闭时不启动反馈 worker、不发布 overlay，
     /// generic lowering、IC 与全部语义路径保持不变。
     pub specialization_enabled: bool,
+    /// 分配诊断计数器开关；`WJSM_PERF_DIAGNOSTICS=1` 时启用，默认关闭。
+    pub allocation_diagnostics_enabled: bool,
     pub output_mode: OutputMode,
     /// 子 agent 不得复用父进程 `SHARED_IMAGE_STATE` 里已跑过的 image：
     /// IC / 反馈槽指向父堆对象，packed worker 里 `require` 会变成 undefined。
@@ -261,6 +264,7 @@ impl Default for NativeRuntimeConfig {
             gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled: true,
+            allocation_diagnostics_enabled: false,
             output_mode: OutputMode::Capture,
             isolate_native_images: false,
         }
@@ -278,11 +282,14 @@ impl NativeRuntimeConfig {
             .unwrap_or(GcAlgorithmKind::Zgc);
         let specialization_enabled =
             std::env::var("WJSM_DISABLE_SPECIALIZATION").ok().as_deref() != Some("1");
+        let allocation_diagnostics_enabled =
+            std::env::var("WJSM_PERF_DIAGNOSTICS").ok().as_deref() == Some("1");
         Ok(Self {
             cache_dir,
             gc_algorithm,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled,
+            allocation_diagnostics_enabled,
             output_mode: OutputMode::Capture,
             isolate_native_images: false,
         })
@@ -303,6 +310,11 @@ impl NativeRuntimeConfig {
         self
     }
 
+    pub fn with_allocation_diagnostics_enabled(mut self, enabled: bool) -> Self {
+        self.allocation_diagnostics_enabled = enabled;
+        self
+    }
+
     pub fn with_output_mode(mut self, output_mode: OutputMode) -> Self {
         self.output_mode = output_mode;
         self
@@ -314,6 +326,7 @@ impl NativeRuntimeConfig {
             gc_algorithm: self.gc_algorithm,
             max_heap_size: self.max_heap_size,
             specialization_enabled: self.specialization_enabled,
+            allocation_diagnostics_enabled: self.allocation_diagnostics_enabled,
             output_mode: self.output_mode,
             isolate_native_images: true,
         }
@@ -447,11 +460,13 @@ pub fn execute_with_writer_with_options(
                 .map_err(|error| NativeRuntimeError::Artifact(error.to_string()))?
         }
     };
+    let environment_config = NativeRuntimeConfig::from_environment(None)?;
     let mut runtime = NativeRuntime::new_with_config(NativeRuntimeConfig {
         cache_dir: options.cache_dir,
         gc_algorithm: options.gc_algorithm,
         max_heap_size: options.max_heap_size,
-        specialization_enabled: NativeRuntimeConfig::from_environment(None)?.specialization_enabled,
+        specialization_enabled: environment_config.specialization_enabled,
+        allocation_diagnostics_enabled: environment_config.allocation_diagnostics_enabled,
         output_mode: OutputMode::Capture,
         isolate_native_images: false,
     })?;
@@ -1121,7 +1136,11 @@ impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
         // 把 ICU4X compiled_data 留在 rustc 链接的 stub 里，避免 DCE 在 Intl API 落地前删掉。
         wjsm_intl_data::keep_compiled_data();
-        let gc = gc::NativeGc::new(config.gc_algorithm, config.max_heap_size)?;
+        let gc = gc::NativeGc::new(
+            config.gc_algorithm,
+            config.max_heap_size,
+            config.allocation_diagnostics_enabled,
+        )?;
         let compiler = NativeCompiler::new()?;
         let repository = if config.isolate_native_images {
             NativeImageRepository::new_exclusive(compiler.clone(), config.cache_dir.clone())
@@ -1391,7 +1410,7 @@ impl NativeAgentState {
 
     fn install_isolated_program(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
         image: Arc<CompiledImage>,
         program: &wjsm_ir::Program,
     ) -> Result<(), NativeRuntimeError> {
@@ -1606,7 +1625,7 @@ impl NativeAgentState {
 
     fn install_program(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
         image: Arc<CompiledImage>,
         program: &wjsm_ir::Program,
         variable_slots: &HashMap<String, u32>,
@@ -1636,7 +1655,7 @@ impl NativeAgentState {
                 _ => value::encode_undefined(),
             };
             string_constants.push(encoded);
-            if encoded != value::encode_undefined() {
+            if encoded != value::encode_undefined() && !value::is_inline_string(encoded) {
                 self.install_string_roots.push(encoded);
             }
         }
@@ -1662,7 +1681,7 @@ impl NativeAgentState {
     /// `dispatch::runtime::intern_string_with_gc_retry` 同一模式）。
     fn publish_baked_string(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
         meta: &wjsm_ir::StringConstantMeta,
     ) -> Result<i64, NativeRuntimeError> {
         if let Some(encoded) = self.try_publish_baked_string(meta) {
@@ -1680,6 +1699,11 @@ impl NativeAgentState {
 
     fn try_publish_baked_string(&mut self, meta: &wjsm_ir::StringConstantMeta) -> Option<i64> {
         let length = meta.unit_len();
+        if meta.latin1
+            && let Some(encoded) = value::encode_inline_ascii(&meta.payload)
+        {
+            return Some(encoded);
+        }
         let key = (meta.hash, length);
         if let Some(encoded) = self.dedup_string_handle(&key) {
             return Some(encoded);
@@ -1919,8 +1943,16 @@ impl NativeAgentState {
 
     fn property_value_by_name(&self, object: i64, name: &str) -> Option<i64> {
         let units = name.encode_utf16().collect::<Vec<_>>();
-        let key = (content_hash_units(&units), u32::try_from(units.len()).ok()?);
-        let key = PropertyKey::from_name_id(self.string_ids.get(&key).copied()?);
+        let key = Self::encode_inline_ascii_units(&units)
+            .and_then(PropertyKey::inline_string)
+            .or_else(|| {
+                let hash = content_hash_units(&units);
+                let length = u32::try_from(units.len()).ok()?;
+                self.string_ids
+                    .get(&(hash, length))
+                    .copied()
+                    .map(PropertyKey::from_name_id)
+            })?;
         self.gc
             .heap()
             .get_property(value::decode_handle(object), key)
@@ -1947,7 +1979,13 @@ impl NativeAgentState {
         encoded: i64,
         f: impl FnOnce(StrView<'_>) -> R,
     ) -> Option<R> {
-        (value::is_string(encoded) || value::is_bigint(encoded))
+        if value::is_inline_string(encoded) {
+            let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
+            return Some(f(StrView::Latin1(value::decode_inline_ascii(
+                encoded, &mut bytes,
+            )?)));
+        }
+        (value::is_runtime_string_handle(encoded) || value::is_bigint(encoded))
             .then(|| value::decode_handle(encoded))
             .and_then(|handle| self.gc.heap().with_string_bytes(handle, f).ok())
     }
@@ -1957,7 +1995,16 @@ impl NativeAgentState {
         encoded: i64,
         f: impl FnOnce(&[u16]) -> R,
     ) -> Option<R> {
-        (value::is_string(encoded) || value::is_bigint(encoded))
+        if value::is_inline_string(encoded) {
+            let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
+            let bytes = value::decode_inline_ascii(encoded, &mut bytes)?;
+            let mut units = [0_u16; value::INLINE_STRING_MAX_LEN];
+            for (unit, byte) in units.iter_mut().zip(bytes.iter().copied()) {
+                *unit = u16::from(byte);
+            }
+            return Some(f(&units[..bytes.len()]));
+        }
+        (value::is_runtime_string_handle(encoded) || value::is_bigint(encoded))
             .then(|| value::decode_handle(encoded))
             .and_then(|handle| self.gc.heap().with_string_units(handle, f).ok())
     }
@@ -1972,7 +2019,10 @@ impl NativeAgentState {
     }
 
     pub(crate) fn string_len(&self, encoded: i64) -> Option<usize> {
-        (value::is_string(encoded) || value::is_bigint(encoded))
+        if value::is_inline_string(encoded) {
+            return value::inline_string_len(encoded).map(usize::from);
+        }
+        (value::is_runtime_string_handle(encoded) || value::is_bigint(encoded))
             .then(|| value::decode_handle(encoded))
             .and_then(|handle| self.gc.heap().string_length(handle).ok())
             .map(|len| len as usize)
@@ -1990,7 +2040,7 @@ impl NativeAgentState {
     }
 
     pub(crate) fn string_is_builder(&self, encoded: i64) -> bool {
-        value::is_string(encoded)
+        value::is_runtime_string_handle(encoded)
             && self
                 .gc
                 .heap()
@@ -3657,7 +3707,7 @@ impl NativeAgentState {
         if let Some(value) = self.callable_properties.get(&(callable, key)).copied() {
             return Some(value);
         }
-        if self.text_matches(value::encode_handle(value::TAG_STRING, key.get()), "name") {
+        if self.text_matches(key.to_value(), "name") {
             let name = if let Some(function) = self.callable_function(callable) {
                 let index = usize::try_from(function.function_index).ok()?;
                 (if function.image_id == self.current_image_id {
@@ -3679,7 +3729,7 @@ impl NativeAgentState {
                 .insert((callable, key), FUNCTION_METADATA_FLAGS);
             return Some(stored);
         }
-        if self.text_matches(value::encode_handle(value::TAG_STRING, key.get()), "length") {
+        if self.text_matches(key.to_value(), "length") {
             let length = if let Some(function) = self.callable_function(callable) {
                 if function.image_id == self.current_image_id {
                     self.function_lengths
@@ -3702,10 +3752,7 @@ impl NativeAgentState {
             return Some(stored);
         }
         if self.native_callable_kind(callable) == Some(NativeCallableKind::FunctionConstructor)
-            && self.text_matches(
-                value::encode_handle(value::TAG_STRING, key.get()),
-                "prototype",
-            )
+            && self.text_matches(key.to_value(), "prototype")
         {
             let prototype = self.native_callable(NativeCallableKind::FunctionPrototype)?;
             let constructor_key = self.intern_property_string("constructor".into())?;
@@ -3725,10 +3772,7 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::SymbolCreate
-                    && self.text_matches(
-                        value::encode_handle(value::TAG_STRING, key.get()),
-                        "prototype",
-                    )
+                    && self.text_matches(key.to_value(), "prototype")
             })
         {
             let prototype = if let Some(prototype) = self.symbol_prototype {
@@ -3760,10 +3804,7 @@ impl NativeAgentState {
                     | wjsm_ir::Builtin::WeakMapConstructor
                     | wjsm_ir::Builtin::WeakSetConstructor
             )
-            && self.text_matches(
-                value::encode_handle(value::TAG_STRING, key.get()),
-                "prototype",
-            )
+            && self.text_matches(key.to_value(), "prototype")
         {
             let prototype = self.ensure_collection_prototype(callable, builtin)?;
             self.callable_properties.insert((callable, key), prototype);
@@ -3778,10 +3819,7 @@ impl NativeAgentState {
                 matches!(
                     builtin,
                     wjsm_ir::Builtin::ObjectKeys | wjsm_ir::Builtin::PromiseCreate
-                ) && self.text_matches(
-                    value::encode_handle(value::TAG_STRING, key.get()),
-                    "prototype",
-                )
+                ) && self.text_matches(key.to_value(), "prototype")
             })
         {
             let prototype = self.allocate_object(1, false).ok()?;
@@ -3801,10 +3839,7 @@ impl NativeAgentState {
         }
         if let Some(NativeCallableKind::Intl(kind)) = self.native_callable_kind(callable)
             && dispatch::intl::is_constructor(kind)
-            && self.text_matches(
-                value::encode_handle(value::TAG_STRING, key.get()),
-                "prototype",
-            )
+            && self.text_matches(key.to_value(), "prototype")
         {
             let prototype = dispatch::intl::ensure_constructor_prototype(self, callable, kind)?;
             self.callable_properties.insert((callable, key), prototype);
@@ -3816,10 +3851,7 @@ impl NativeAgentState {
             == Some(NativeCallableKind::WebEncoding(
                 dispatch::web_encoding::WebEncodingCallable::TextDecoderConstructor,
             ))
-            && self.text_matches(
-                value::encode_handle(value::TAG_STRING, key.get()),
-                "prototype",
-            )
+            && self.text_matches(key.to_value(), "prototype")
         {
             let prototype = dispatch::web_encoding::ensure_text_decoder_prototype(self)?;
             self.callable_properties.insert((callable, key), prototype);
@@ -3827,10 +3859,7 @@ impl NativeAgentState {
             return Some(prototype);
         }
         if self.native_callable_kind(callable) == Some(NativeCallableKind::StringConstructor)
-            && self.text_matches(
-                value::encode_handle(value::TAG_STRING, key.get()),
-                "prototype",
-            )
+            && self.text_matches(key.to_value(), "prototype")
         {
             return dispatch::intl::ensure_string_prototype(self);
         }
@@ -3838,10 +3867,7 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::NumberConstructor
-                    && self.text_matches(
-                        value::encode_handle(value::TAG_STRING, key.get()),
-                        "prototype",
-                    )
+                    && self.text_matches(key.to_value(), "prototype")
             })
         {
             return dispatch::intl::ensure_number_prototype(self);
@@ -3850,10 +3876,7 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::BigIntFromLiteral
-                    && self.text_matches(
-                        value::encode_handle(value::TAG_STRING, key.get()),
-                        "prototype",
-                    )
+                    && self.text_matches(key.to_value(), "prototype")
             })
         {
             return dispatch::intl::ensure_bigint_prototype(self);
@@ -3862,10 +3885,7 @@ impl NativeAgentState {
             .native_callable_builtin(callable)
             .is_some_and(|(builtin, _)| {
                 builtin == wjsm_ir::Builtin::DateConstructor
-                    && self.text_matches(
-                        value::encode_handle(value::TAG_STRING, key.get()),
-                        "prototype",
-                    )
+                    && self.text_matches(key.to_value(), "prototype")
             })
         {
             let prototype = self.allocate_object(1, false).ok()?;
@@ -3885,11 +3905,7 @@ impl NativeAgentState {
             return Some(prototype);
         }
         let function = self.callable_function(callable)?;
-        if !self.text_matches(
-            value::encode_handle(value::TAG_STRING, key.get()),
-            "prototype",
-        ) || !function.needs_prototype
-        {
+        if !self.text_matches(key.to_value(), "prototype") || !function.needs_prototype {
             return None;
         }
         let prototype = self.allocate_object(1, false).ok()?;
@@ -4101,10 +4117,13 @@ impl NativeAgentState {
         }
         Ok(())
     }
+
     fn rebuild_latin1_char_strings(&mut self) -> Result<(), NativeRuntimeError> {
         for unit in 0_u16..=u16::from(u8::MAX) {
-            let encoded = self
-                .publish_string_bytes(
+            let encoded = if unit <= u16::from(0x7f_u8) {
+                value::encode_inline_ascii(&[unit as u8]).expect("ASCII SSO")
+            } else {
+                self.publish_string_bytes(
                     &[u8::try_from(unit).expect("Latin-1 码元不超过 u8")],
                     value::TAG_STRING,
                     true,
@@ -4113,39 +4132,49 @@ impl NativeAgentState {
                     NativeRuntimeError::Invariant(
                         "failed to materialize Latin-1 character cache".into(),
                     )
-                })?;
+                })?
+            };
             self.latin1_char_strings[usize::from(unit)] = encoded;
         }
         Ok(())
     }
     pub(crate) fn property_name_handles(&self) -> Vec<i64> {
         let mut names = self.gc.heap().property_name_ids();
-        names.extend(self.array_properties.keys().map(|(_, key)| key.get()));
-        names.extend(self.array_accessors.keys().map(|(_, key)| key.get()));
-        names.extend(self.array_property_flags.keys().map(|(_, key)| key.get()));
+        names.extend(
+            self.array_properties
+                .keys()
+                .filter_map(|(_, key)| key.name_id()),
+        );
+        names.extend(
+            self.array_accessors
+                .keys()
+                .filter_map(|(_, key)| key.name_id()),
+        );
+        names.extend(
+            self.array_property_flags
+                .keys()
+                .filter_map(|(_, key)| key.name_id()),
+        );
         names.extend(
             self.array_property_order
                 .values()
                 .flatten()
-                .map(|key| key.get()),
+                .filter_map(|key| key.name_id()),
         );
         names.extend(
             self.callable_properties
                 .keys()
-                .map(|(_, key)| key.get())
-                .filter(|key| *key & wjsm_ir::constants::NAME_ID_SYMBOL_FLAG == 0),
+                .filter_map(|(_, key)| key.name_id()),
         );
         names.extend(
             self.callable_accessors
                 .keys()
-                .map(|(_, key)| key.get())
-                .filter(|key| *key & wjsm_ir::constants::NAME_ID_SYMBOL_FLAG == 0),
+                .filter_map(|(_, key)| key.name_id()),
         );
         names.extend(
             self.callable_property_flags
                 .keys()
-                .map(|(_, key)| key.get())
-                .filter(|key| *key & wjsm_ir::constants::NAME_ID_SYMBOL_FLAG == 0),
+                .filter_map(|(_, key)| key.name_id()),
         );
         self.string_ids
             .values()
@@ -4174,7 +4203,27 @@ impl NativeAgentState {
         });
     }
 
+    fn encode_inline_ascii_units(units: &[u16]) -> Option<i64> {
+        if units.len() > value::INLINE_STRING_MAX_LEN {
+            return None;
+        }
+        let mut bytes = [0_u8; value::INLINE_STRING_MAX_LEN];
+        for (byte, unit) in bytes.iter_mut().zip(units.iter().copied()) {
+            if unit > u16::from(0x7f_u8) {
+                return None;
+            }
+            *byte = unit as u8;
+        }
+        value::encode_inline_ascii(&bytes[..units.len()])
+    }
+
     fn intern_text(&mut self, text: String, tag: u64) -> Option<i64> {
+        if tag == value::TAG_STRING
+            && let Some(encoded) = value::encode_inline_ascii(text.as_bytes())
+        {
+            self.gc.record_inline_string();
+            return Some(encoded);
+        }
         let units = text.encode_utf16().collect::<Vec<_>>();
         self.publish_string_units(&units, tag, true)
     }
@@ -4189,6 +4238,12 @@ impl NativeAgentState {
     }
 
     fn publish_string_units(&mut self, units: &[u16], tag: u64, interned: bool) -> Option<i64> {
+        if tag == value::TAG_STRING
+            && let Some(encoded) = Self::encode_inline_ascii_units(units)
+        {
+            self.gc.record_inline_string();
+            return Some(encoded);
+        }
         let length = u32::try_from(units.len()).ok()?;
         let key = (content_hash_units(units), length);
         if interned
@@ -4434,9 +4489,13 @@ impl NativeAgentState {
 
     /// 属性名必须内容唯一：同一名字在任何路径下都要解析到同一 handle。
     pub(crate) fn intern_property_string(&mut self, text: RuntimeString) -> Option<PropertyKey> {
-        let units = text.as_flat_slice().to_vec();
-        let encoded = self.publish_string_units(&units, value::TAG_STRING, true)?;
-        let handle = value::decode_handle(encoded);
+        let units = text.as_flat_slice();
+        if let Some(encoded) = Self::encode_inline_ascii_units(units) {
+            self.gc.record_inline_property_key();
+            return PropertyKey::inline_string(encoded);
+        }
+        let encoded = self.publish_string_units(units, value::TAG_STRING, true)?;
+        let handle = value::decode_runtime_string_handle(encoded);
         self.gc.record_host_write(encoded, None, Some(encoded));
         Some(PropertyKey::from_name_id(handle))
     }
@@ -4448,13 +4507,21 @@ impl NativeAgentState {
     fn intern_runtime_string(&mut self, text: RuntimeString, tag: u64) -> Option<i64> {
         let is_builder = text.is_builder();
         let dedup = tag == value::TAG_STRING && text.utf16_len() <= 64 && text.is_flat();
-        let units = text.as_flat_slice().to_vec();
-        let encoded = if is_builder {
-            self.publish_builder_units(&units, tag)?
+        let units = text.as_flat_slice();
+        let encoded = if !is_builder
+            && tag == value::TAG_STRING
+            && let Some(encoded) = Self::encode_inline_ascii_units(units)
+        {
+            self.gc.record_inline_string();
+            encoded
+        } else if is_builder {
+            self.publish_builder_units(units, tag)?
         } else {
-            self.publish_string_units(&units, tag, dedup)?
+            self.publish_string_units(units, tag, dedup)?
         };
-        self.gc.record_host_write(encoded, None, Some(encoded));
+        if value::is_handle_backed_reference(encoded) {
+            self.gc.record_host_write(encoded, None, Some(encoded));
+        }
         Some(encoded)
     }
 
@@ -4470,37 +4537,106 @@ impl NativeAgentState {
 
     fn allocate_object_with_gc_retry(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
         capacity: u32,
         array: bool,
     ) -> Result<i64, NativeRuntimeError> {
+        self.try_native_object_allocation(ctx, capacity, array)
+    }
+
+    fn try_native_object_allocation(
+        &mut self,
+        ctx: &mut NativeVmContext,
+        capacity: u32,
+        array: bool,
+    ) -> Result<i64, NativeRuntimeError> {
+        let capacity = if array {
+            capacity
+        } else {
+            capacity.max(wjsm_ir::constants::HEAP_OBJECT_INITIAL_VALUE_CAPACITY)
+        };
+        if self.gc.take_pacing_poll_request() {
+            self.poll_gc(ctx)?;
+        }
+        if let Some(value) = self.try_native_object_allocation_fast(ctx, capacity, array)? {
+            return Ok(value);
+        }
+        self.gc.flush_native_tlab(ctx)?;
         let prototype = if array {
             self.array_prototype
         } else {
             self.object_prototype
         }
         .map_or(PROTO_NULL_SENTINEL, value::decode_handle);
-        if self.gc.take_pacing_poll_request() {
-            self.poll_gc(ctx)?;
-        }
-
+        self.gc.allocation_diagnostics_slow_allocation();
         match self.allocate_object_with_prototype(capacity, array, prototype) {
             Ok(value) => Ok(value),
             Err(
-                err @ (HeapAccessV2Error::HeapExhausted { .. }
-                | HeapAccessV2Error::Allocator(wjsm_gc::AllocatorError::OutOfPages { .. })),
+                error @ (HeapAccessV2Error::HeapExhausted { .. }
+                | HeapAccessV2Error::Allocator(wjsm_gc::AllocatorError::OutOfPages {
+                    ..
+                })),
             ) => {
-                if self.collect_garbage(ctx).is_ok() {
-                    let _ = self.gc.heap().finish_relocation_epoch();
-                    let _ = self.gc.heap().advance_epoch_and_reclaim();
-                    self.allocate_object_with_prototype(capacity, array, prototype)
-                        .map_err(NativeRuntimeError::from)
-                } else {
-                    Err(err.into())
-                }
+                self.collect_garbage(ctx)
+                    .map_err(NativeRuntimeError::from)?;
+                let _ = self.gc.heap().finish_relocation_epoch();
+                let _ = self.gc.heap().advance_epoch_and_reclaim();
+                self.allocate_object_with_prototype(capacity, array, prototype)
+                    .map_err(|retry| match retry {
+                        HeapAccessV2Error::HeapExhausted { .. }
+                        | HeapAccessV2Error::Allocator(wjsm_gc::AllocatorError::OutOfPages {
+                            ..
+                        }) => error.into(),
+                        retry => retry.into(),
+                    })
             }
             Err(error) => Err(error.into()),
         }
+    }
+
+    fn try_native_object_allocation_fast(
+        &mut self,
+        ctx: &mut NativeVmContext,
+        capacity: u32,
+        array: bool,
+    ) -> Result<Option<i64>, NativeRuntimeError> {
+        if ctx.allocation_fast_flags & wjsm_native_abi::NATIVE_ALLOCATION_FAST_HOST == 0
+            || !self.gc.host_fast_allocation_allowed()
+        {
+            return Ok(None);
+        }
+        let bytes = object_payload_bytes(capacity)?;
+        if bytes > ctx.allocation_small_limit
+            || ctx
+                .bump_ptr
+                .checked_add(bytes)
+                .is_none_or(|end| end > ctx.bump_limit)
+            || ctx.bump_handle_cursor >= ctx.bump_handle_limit
+        {
+            return Ok(None);
+        }
+        let object = ctx.bump_ptr;
+        let handle = ctx.bump_handle_cursor;
+        let prototype = if array {
+            ctx.array_prototype_handle
+        } else {
+            ctx.object_prototype_handle
+        };
+        self.gc
+            .publish_native_tlab_object(ctx, handle, object, prototype, array, capacity)?;
+        ctx.bump_ptr = ctx.bump_ptr.checked_add(bytes).ok_or_else(|| {
+            NativeRuntimeError::Invariant("native TLAB object cursor overflow".into())
+        })?;
+        ctx.bump_handle_cursor += 1;
+        self.gc.commit_native_tlab_cursor(ctx);
+        Ok(Some(value::encode_handle(
+            if array {
+                value::TAG_ARRAY
+            } else {
+                value::TAG_OBJECT
+            },
+            handle,
+        )))
     }
 
     fn allocate_object_with_prototype(
@@ -4539,7 +4675,7 @@ impl NativeAgentState {
 
     fn collect_garbage_if_needed(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
     ) -> Result<bool, NativeRuntimeError> {
         if !self.gc.take_safepoint_poll_request() {
             return Ok(false);
@@ -4634,7 +4770,7 @@ impl NativeAgentState {
 
     pub(crate) fn allocate_array_values_with_gc_retry(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
         values: &[i64],
     ) -> Result<i64, NativeRuntimeError> {
         let initial_temp_roots = self.temporary_roots.len();
@@ -4675,27 +4811,33 @@ impl NativeAgentState {
         self.temporary_roots.truncate(initial_temp_roots);
         Ok(array)
     }
-    fn collect_garbage(
+    pub(crate) fn collect_garbage(
         &mut self,
-        ctx: &NativeVmContext,
+        ctx: &mut NativeVmContext,
     ) -> Result<wjsm_gc::RuntimeGcReport, NativeRuntimeError> {
+        self.gc.flush_native_tlab(ctx)?;
         let frame_roots = native_root_values(ctx)?;
         let graph = dispatch::weak::snapshot_gc_graph(ctx, self, frame_roots, 0);
-        let report = self.gc.collect_full(graph)?;
+        let report = self.gc.collect_full(ctx, graph)?;
         dispatch::weak::finish_gc_cycle(self, &report);
         Ok(report)
     }
 
-    fn poll_gc(&mut self, ctx: &NativeVmContext) -> Result<bool, NativeRuntimeError> {
+    fn poll_gc(&mut self, ctx: &mut NativeVmContext) -> Result<bool, NativeRuntimeError> {
         let action = self.gc.safepoint_action();
         let snapshot = if let wjsm_gc::GcSafepointAction::PublishRoots { epoch } = action {
+            self.gc.flush_native_tlab(ctx)?;
             let frame_roots = native_root_values(ctx)?;
-            let graph = dispatch::weak::snapshot_gc_graph(ctx, self, frame_roots, epoch);
-            Some(graph)
+            Some(dispatch::weak::snapshot_gc_graph(
+                ctx,
+                self,
+                frame_roots,
+                epoch,
+            ))
         } else {
             None
         };
-        let report = self.gc.at_safepoint(snapshot)?;
+        let report = self.gc.at_safepoint(ctx, action, snapshot)?;
         if let Some(report) = report {
             dispatch::weak::finish_gc_cycle(self, &report);
             return Ok(true);
@@ -4745,7 +4887,7 @@ impl NativeAgentState {
         self.promise_reactions.retain(|handle, _| is_live(handle));
         self.intl.slots.retain(|handle, _| is_live(handle));
     }
-    fn drain_gc_cycle(&mut self, ctx: &NativeVmContext) -> Result<(), NativeRuntimeError> {
+    fn drain_gc_cycle(&mut self, ctx: &mut NativeVmContext) -> Result<(), NativeRuntimeError> {
         let mut backoff = Backoff::new();
         while self.gc.cycle_active() {
             self.poll_gc(ctx)?;
@@ -5343,7 +5485,11 @@ impl NativeRuntime {
         // `activate_image` 重新同步（每次 execute 必经）。
         context.handle_table_base = state.gc.heap().handle_table_base();
         context.latin1_char_strings = state.latin1_char_strings.as_ptr();
-        state.gc.bind_context(context);
+        let object_prototype = state.object_prototype.map(value::decode_handle);
+        let array_prototype = state.array_prototype.map(value::decode_handle);
+        state
+            .gc
+            .bind_context(context, object_prototype, array_prototype)?;
         Ok(Self {
             state,
             vmctx,
@@ -5437,11 +5583,16 @@ impl NativeRuntime {
         self.assert_owner_thread()?;
         self.state.output.borrow_mut().clear();
         self.state.stderr.borrow_mut().clear();
+        self.state.reset_execution();
         self.state
             .restore_startup_snapshot(snapshot::STARTUP_SNAPSHOT_BYTES)?;
-        self.state
-            .gc
-            .bind_context(Pin::as_mut(&mut self.vmctx).get_mut());
+        let object_prototype = self.state.object_prototype.map(value::decode_handle);
+        let array_prototype = self.state.array_prototype.map(value::decode_handle);
+        self.state.gc.bind_context(
+            Pin::as_mut(&mut self.vmctx).get_mut(),
+            object_prototype,
+            array_prototype,
+        )?;
         self.state.process_entry = process_entry_for_store(artifact, store)?;
         self.state.working_directory = working_directory
             .canonicalize()
@@ -5565,15 +5716,16 @@ impl NativeRuntime {
             .map(String::as_str)
             .filter(|name| is_module_scope_var(name))
             .collect::<HashSet<_>>();
+        let context = Pin::as_mut(&mut self.vmctx).get_mut();
         self.state.install_program(
-            &self.vmctx,
+            context,
             builtin_image,
             &builtin_program,
             &builtin_slots,
             &shared_module_slots,
         )?;
         self.state.install_program(
-            &self.vmctx,
+            context,
             user_image.clone(),
             &user_program,
             &user_slots,
@@ -5630,13 +5782,9 @@ impl NativeRuntime {
             artifact.manifest(),
         )
         .map_err(NativeRuntimeError::Invariant)?;
-        self.state.install_program(
-            &self.vmctx,
-            image,
-            artifact.program(),
-            &slots,
-            &HashSet::new(),
-        )?;
+        let context = Pin::as_mut(&mut self.vmctx).get_mut();
+        self.state
+            .install_program(context, image, artifact.program(), &slots, &HashSet::new())?;
         Ok((entry, image_id))
     }
 
@@ -5671,7 +5819,7 @@ impl NativeRuntime {
                 value = drained;
             }
         }
-        self.state.drain_gc_cycle(context)?;
+        self.state.gc.flush_native_tlab(context)?;
         self.state
             .finish_call(context)
             .ok_or_else(|| NativeRuntimeError::Invariant("entry activation is missing".into()))?;
@@ -5712,6 +5860,9 @@ impl NativeRuntime {
     }
     pub fn reset_gc_telemetry(&self) {
         self.state.gc.reset_telemetry();
+    }
+    pub fn allocation_diagnostics(&self) -> NativeAllocationDiagnostics {
+        self.state.gc.allocation_diagnostics()
     }
 
     pub fn take_output(&mut self) -> Vec<u8> {
@@ -5832,6 +5983,28 @@ mod tests {
             GcAlgorithmKind::Zgc,
             "in-process 执行入口同样默认 zgc"
         );
+    }
+    #[test]
+    fn allocation_diagnostics_follow_runtime_switch() {
+        let disabled = gc::NativeGc::new(GcAlgorithmKind::Zgc, DEFAULT_MAX_HEAP_BYTES, false)
+            .expect("disabled diagnostics heap should initialize");
+        disabled
+            .allocate(64)
+            .expect("disabled diagnostics allocation should succeed");
+        assert_eq!(
+            disabled.allocation_diagnostics(),
+            gc::NativeAllocationDiagnostics::default()
+        );
+
+        let enabled = gc::NativeGc::new(GcAlgorithmKind::Zgc, DEFAULT_MAX_HEAP_BYTES, true)
+            .expect("enabled diagnostics heap should initialize");
+        enabled
+            .allocate(64)
+            .expect("enabled diagnostics allocation should succeed");
+        let diagnostics = enabled.allocation_diagnostics();
+        assert_eq!(diagnostics.slow_allocations, 1);
+        assert_eq!(diagnostics.tlab_refills, 1);
+        assert_eq!(diagnostics.tlab_fast_allocations, 0);
     }
 
     #[test]
@@ -6011,6 +6184,146 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inline_ascii_and_property_keys_survive_zgc() {
+        let artifact = artifact(
+            r#"
+                const s = "abcdef";
+                const o = {};
+                o.name = 1;
+                gc();
+                console.log(s.length, s === "abcdef", s[5], o.name, Object.keys(o)[0]);
+            "#,
+        );
+        let config = NativeRuntimeConfig::default()
+            .with_gc_algorithm(GcAlgorithmKind::Zgc)
+            .with_allocation_diagnostics_enabled(true);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("ZGC runtime should initialize");
+        let before = runtime.host_side_table_stats().string_ids;
+        let execution = runtime.execute(
+            &artifact,
+            std::path::Path::new("."),
+            std::path::Path::new("."),
+        );
+        let execution = execution.unwrap_or_else(|error| {
+            panic!(
+                "ZGC SSO execution failed: {error:?}; stderr={:?}",
+                runtime.take_stderr()
+            )
+        });
+        assert_eq!(execution.stdout, b"6 true f 1 name\n");
+        assert_eq!(runtime.host_side_table_stats().string_ids, before);
+        let diagnostics = runtime.allocation_diagnostics();
+        assert!(
+            diagnostics.inline_string_constructions > 0,
+            "{diagnostics:?}"
+        );
+        assert!(diagnostics.inline_property_keys > 0, "{diagnostics:?}");
+    }
+
+    #[test]
+    fn inline_ascii_operations_stay_inline_under_zgc() {
+        let artifact = artifact(
+            r#"
+                const s = "abcdef";
+                console.log(
+                    typeof s,
+                    s.length,
+                    s[0],
+                    s[5],
+                    s.charAt(1),
+                    s.charCodeAt(2),
+                    s === "abcdef"
+                );
+            "#,
+        );
+        let config = NativeRuntimeConfig::default()
+            .with_gc_algorithm(GcAlgorithmKind::Zgc)
+            .with_allocation_diagnostics_enabled(true);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("ZGC runtime should initialize");
+        let before = runtime.host_side_table_stats().string_ids;
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .expect("ZGC SSO operations should execute");
+        assert_eq!(execution.stdout, b"string 6 a f b 99 true\n");
+        assert_eq!(runtime.host_side_table_stats().string_ids, before);
+        assert!(
+            runtime.allocation_diagnostics().inline_string_constructions > 0,
+            "{:?}",
+            runtime.allocation_diagnostics()
+        );
+    }
+
+    #[test]
+    fn native_tlab_fast_allocations_are_observable() {
+        let artifact = artifact(
+            r#"
+                let sink = 0;
+                for (let i = 0; i < 64; i++) {
+                    const object = {};
+                    object.name = i;
+                    const array = [i, i];
+                    sink += object.name + array[0] + array[1];
+                }
+                console.log(sink);
+            "#,
+        );
+        let config = NativeRuntimeConfig::default()
+            .with_gc_algorithm(GcAlgorithmKind::Zgc)
+            .with_allocation_diagnostics_enabled(true);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("runtime should initialize");
+        let execution = runtime.execute(
+            &artifact,
+            std::path::Path::new("."),
+            std::path::Path::new("."),
+        );
+        let execution = execution.unwrap_or_else(|error| {
+            panic!(
+                "native TLAB workload should execute: {error:?}; stderr={:?}",
+                runtime.take_stderr()
+            )
+        });
+        assert_eq!(execution.stdout, b"6048\n");
+        assert_ne!(
+            runtime.vmctx.allocation_fast_flags & wjsm_native_abi::NATIVE_ALLOCATION_FAST_HOST,
+            0,
+            "allocation flags: {}",
+            runtime.vmctx.allocation_fast_flags
+        );
+        assert_ne!(
+            runtime.vmctx.allocation_fast_flags & wjsm_native_abi::NATIVE_ALLOCATION_FAST_OBJECT,
+            0,
+            "object fast path must be enabled under idle ZGC"
+        );
+        assert_ne!(
+            runtime.vmctx.allocation_fast_flags & wjsm_native_abi::NATIVE_ALLOCATION_FAST_ARRAY,
+            0,
+            "array fast path must be enabled under idle ZGC"
+        );
+        assert!(runtime.vmctx.allocation_small_limit > 0);
+        assert!(runtime.vmctx.bump_ptr < runtime.vmctx.bump_limit);
+        assert!(runtime.vmctx.bump_handle_cursor < runtime.vmctx.bump_handle_limit);
+        let diagnostics = runtime.allocation_diagnostics();
+        assert!(
+            diagnostics.tlab_fast_allocations >= 128,
+            "{diagnostics:?}, small_limit={} cursor={}/{} ptr={}/{} flags={}",
+            runtime.vmctx.allocation_small_limit,
+            runtime.vmctx.bump_handle_cursor,
+            runtime.vmctx.bump_handle_limit,
+            runtime.vmctx.bump_ptr,
+            runtime.vmctx.bump_limit,
+            runtime.vmctx.allocation_fast_flags
+        );
+        assert!(diagnostics.tlab_fast_bytes > 0, "{diagnostics:?}");
+        assert!(diagnostics.tlab_refills > 0, "{diagnostics:?}");
+    }
     #[test]
     fn unbounded_string_accumulation_survives_gc_pressure() {
         // 单个 builder 无界增长 + 循环内小字符串拼接：zgc 年代耗尽时 mutator 必须

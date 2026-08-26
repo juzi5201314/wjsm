@@ -30,7 +30,7 @@ pub(super) fn parse(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     let Some(reviver) = reviver else {
         return parsed;
     };
-    let Ok(root) = state.allocate_object(1, false) else {
+    let Ok(root) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return runtime::fail_dispatch(ctx);
     };
     if modules::set_named_property(state, root, "", parsed).is_err() {
@@ -97,14 +97,14 @@ fn materialize(
                 values.push(materialize(ctx, state, item)?);
             }
             state
-                .allocate_array_values(&values)
+                .allocate_array_values_with_gc_retry(ctx, &values)
                 .map_err(|_| runtime::fail_dispatch(ctx))
         }
         JsonValue::Object(properties) => {
             let capacity =
                 u32::try_from(properties.len()).map_err(|_| runtime::fail_dispatch(ctx))?;
             let object = state
-                .allocate_object(capacity, false)
+                .allocate_object_with_gc_retry(ctx, capacity, false)
                 .map_err(|_| runtime::fail_dispatch(ctx))?;
             let handle = value::decode_handle(object);
             for (name, property) in properties {

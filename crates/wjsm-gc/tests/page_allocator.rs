@@ -1,6 +1,6 @@
 use wjsm_gc::{
-    AllocationClass, HandleGeneration, ManagedAllocator, ManagedHeapLayout, Nlab, ObjectRef,
-    PAGE_GRANULE_BYTES,
+    AllocationClass, GrowableHeapMemory, HandleGeneration, HandleTableV2, ManagedAllocator,
+    ManagedHeapLayout, Nlab, ObjectRef, PAGE_GRANULE_BYTES,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -92,6 +92,46 @@ fn object_map_and_generation_bitmaps_stream_live_objects_without_size_table() {
     assert_eq!(stats[0].old_live_bytes, 32);
     assert_eq!(stats[0].object_count, 2);
     assert!(!stats[0].dedicated);
+}
+
+#[test]
+fn native_tlab_zeroes_range_and_materializes_small_objects() {
+    let allocator = allocator();
+    let layout = allocator.layout().clone();
+    let memory = wjsm_gc::TestHeapMemory::for_layout(&layout);
+    memory
+        .grow_to(layout.object_heap_base() + PAGE_GRANULE_BYTES)
+        .unwrap();
+    let table = HandleTableV2::new(layout).unwrap();
+    let handles = table.reserve_range(4).unwrap();
+    let mut reservation = allocator.reserve_native_tlab(handles).unwrap();
+    let object_start = reservation.object_start();
+    memory
+        .store_word(wjsm_gc::HeapAddress::new(object_start), u64::MAX)
+        .unwrap();
+    reservation.zero_range(&memory).unwrap();
+    assert!(reservation.is_zeroed());
+    assert_eq!(
+        memory
+            .load_word(wjsm_gc::HeapAddress::new(object_start))
+            .unwrap(),
+        0
+    );
+    memory
+        .store_word(wjsm_gc::HeapAddress::new(object_start), 3)
+        .unwrap();
+    reservation
+        .materialize_native_tlab(
+            object_start + 24,
+            reservation.handle_start() + 1,
+            |_, _| Ok(24),
+            &allocator,
+            Some(HandleGeneration::Young),
+        )
+        .unwrap();
+    assert_eq!(allocator.allocated_bytes(), 24);
+    assert_eq!(allocator.page_stats()[0].object_count, 1);
+    assert_eq!(allocator.page_stats()[0].young_live_bytes, 24);
 }
 
 #[test]

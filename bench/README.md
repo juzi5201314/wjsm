@@ -5,7 +5,7 @@
 ## 目录
 
 ```
-bench/scenarios/   十个自包含场景（node 与 wjsm 双跑同一份源码）
+bench/scenarios/   自包含场景（node 与 wjsm 双跑同一份源码）
 crates/wjsm-bench/ Rust harness：CLI、环境快照、hyperfine 调用、RSS、JSON 报告
 ```
 

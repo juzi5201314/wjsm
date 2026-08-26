@@ -11,8 +11,8 @@ use thiserror::Error;
 use wjsm_ir::{Builtin, Program};
 
 const MAGIC: &[u8; 8] = b"WJSMART\0";
-// v4：String 常量改为烘焙编码（repr + hash + 码元长 + Latin-1/UTF-16 载荷）。
-const FORMAT_VERSION: u16 = 4;
+// v5：运行时NaN-box/属性键布局进入ABI域，旧artifact必须重新构建。
+const FORMAT_VERSION: u16 = 5;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;
@@ -227,6 +227,7 @@ pub fn semantic_abi_hash() -> [u8; 32] {
             hasher.update([0]);
         }
         hasher.update(include_bytes!("../../wjsm-ir/src/constants.rs"));
+        hasher.update(include_bytes!("../../wjsm-ir/src/value.rs"));
         hasher.finalize().into()
     })
 }

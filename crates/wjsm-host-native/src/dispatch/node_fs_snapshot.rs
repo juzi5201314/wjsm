@@ -108,7 +108,7 @@ pub(super) fn readdir(
             values.push(name_value);
             continue;
         }
-        let Ok(object) = state.allocate_object(2, false) else {
+        let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
             return fail_dispatch(ctx);
         };
         let kind = if is_dir { "directory" } else { "file" };
@@ -123,7 +123,7 @@ pub(super) fn readdir(
         values.push(object);
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -152,7 +152,7 @@ fn snapshot_stat_object(
     size: f64,
     kind: &str,
 ) -> i64 {
-    let Ok(object) = state.allocate_object(7, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 7, false) else {
         return fail_dispatch(ctx);
     };
     let kind = state

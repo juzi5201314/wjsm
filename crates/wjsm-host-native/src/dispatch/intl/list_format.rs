@@ -146,7 +146,7 @@ fn format_list(
     if value::is_undefined(list) {
         return if parts {
             state
-                .allocate_array_values(&[])
+                .allocate_array_values_with_gc_retry(ctx, &[])
                 .unwrap_or_else(|_| fail_dispatch(ctx))
         } else {
             intern(ctx, state, "")

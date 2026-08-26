@@ -621,7 +621,7 @@ fn result_pair(
     read: usize,
     written: usize,
 ) -> i64 {
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let read = value::encode_f64(read as f64);

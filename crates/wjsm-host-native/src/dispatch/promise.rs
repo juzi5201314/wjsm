@@ -473,7 +473,7 @@ fn new_promise_with_trigger(
     state: &mut NativeAgentState,
     trigger: Option<u64>,
 ) -> Option<i64> {
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         fail_dispatch(ctx);
         return None;
     };
@@ -1454,7 +1454,7 @@ fn continuation_create(
     if let Some(promise) = state.promises.get_mut(&value::decode_handle(outer_promise)) {
         promise.report_unhandled = false;
     }
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     state.continuations.insert(
@@ -1620,7 +1620,7 @@ fn with_resolvers(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i6
     let Some(promise) = new_promise(ctx, state) else {
         return fail_dispatch(ctx);
     };
-    let Ok(result) = state.allocate_object(4, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(promise);

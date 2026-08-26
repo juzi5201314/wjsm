@@ -559,7 +559,7 @@ fn resource_new(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         .is_some_and(|manual| value::is_bool(manual) && value::decode_bool(manual));
     let async_id = state.node_async_hooks.next_async_id;
     state.node_async_hooks.next_async_id = async_id.saturating_add(1);
-    let Ok(resource) = state.allocate_object(0, false) else {
+    let Ok(resource) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     state.node_async_hooks.resources.insert(
@@ -724,7 +724,7 @@ fn create_hook(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
             .is_some_and(|value| value::is_bool(*value) && value::decode_bool(*value)),
         enabled: false,
     });
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let Some(enable) = state.native_callable(NativeCallableKind::NodeAsyncHooks(
@@ -753,7 +753,7 @@ fn set_hook_enabled(state: &mut NativeAgentState, id: u32, enabled: bool, object
 }
 
 fn providers(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
-    let Ok(object) = state.allocate_object(3, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         return fail_dispatch(ctx);
     };
     for (name, id) in [("NONE", 0.0), ("PROMISE", 27.0), ("ELDHISTOGRAM", 3.0)] {

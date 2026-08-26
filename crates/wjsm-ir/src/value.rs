@@ -29,8 +29,7 @@ pub fn encode_proxy_handle(handle: u32) -> i64 {
 }
 
 pub fn is_proxy(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_PROXY
+    is_tagged(val, TAG_PROXY)
 }
 
 pub fn decode_proxy_handle(val: i64) -> u32 {
@@ -45,8 +44,7 @@ pub fn encode_scope_record_handle(handle: u32) -> i64 {
 }
 
 pub fn is_scope_record(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_SCOPE_RECORD
+    is_tagged(val, TAG_SCOPE_RECORD)
 }
 
 pub fn decode_scope_record_handle(val: i64) -> u32 {
@@ -61,8 +59,7 @@ pub fn encode_array_hole() -> i64 {
 }
 
 pub fn is_array_hole(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ARRAY_HOLE
+    is_tagged(val, TAG_ARRAY_HOLE)
 }
 
 pub const TAG_ARRAY: u64 = 0xB;
@@ -82,8 +79,7 @@ pub fn encode_regexp_handle(handle: u32) -> i64 {
 }
 
 pub fn is_regexp(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_REGEXP
+    is_tagged(val, TAG_REGEXP)
 }
 
 pub fn decode_regexp_handle(val: i64) -> u32 {
@@ -96,8 +92,7 @@ pub fn encode_bigint_handle(handle: u32) -> i64 {
 }
 
 pub fn is_bigint(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_BIGINT
+    is_tagged(val, TAG_BIGINT)
 }
 
 pub fn decode_bigint_handle(val: i64) -> u32 {
@@ -113,8 +108,7 @@ pub fn encode_symbol_handle(handle: u32) -> i64 {
 }
 
 pub fn is_symbol(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_SYMBOL
+    is_tagged(val, TAG_SYMBOL)
 }
 
 pub fn decode_symbol_handle(val: i64) -> u32 {
@@ -122,8 +116,7 @@ pub fn decode_symbol_handle(val: i64) -> u32 {
 }
 
 pub fn is_array(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ARRAY
+    is_tagged(val, TAG_ARRAY)
 }
 
 pub fn decode_array_handle(val: i64) -> u32 {
@@ -135,19 +128,69 @@ pub const TAG_MASK: u64 = 0x1F;
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x20;
 
 /// 非激活 GC reference color 占用 payload 的 bit 38–43；只允许附着于 heap-backed handle。
+/// ASCII SSO 的最大 UTF-8/UTF-16 码元长度；每个码元使用 7 bit。
+pub const INLINE_STRING_MAX_LEN: usize = 6;
+pub const INLINE_STRING_MARKER_SHIFT: u32 = 48;
+pub const INLINE_STRING_MARKER: u64 = 0b101;
+pub const INLINE_STRING_MARKER_MASK: u64 = 0b111 << INLINE_STRING_MARKER_SHIFT;
+pub const INLINE_STRING_LENGTH_SHIFT: u32 = 45;
+pub const INLINE_STRING_LENGTH_MASK: u64 = 0b111 << INLINE_STRING_LENGTH_SHIFT;
+pub const INLINE_STRING_PAYLOAD_MASK: u64 = (1_u64 << 42) - 1;
+
+/// 以独立 marker 编码 0–6 个 ASCII 码元；尾部槽位保持为零。
+pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
+    if bytes.len() > INLINE_STRING_MAX_LEN || !bytes.iter().all(u8::is_ascii) {
+        return None;
+    }
+    let mut payload = INLINE_STRING_MARKER << INLINE_STRING_MARKER_SHIFT;
+    payload |= (bytes.len() as u64) << INLINE_STRING_LENGTH_SHIFT;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        payload |= u64::from(byte) << (index * 7);
+    }
+    Some((BOX_BASE | payload) as i64)
+}
+
+pub fn is_inline_string(value: i64) -> bool {
+    let bits = value as u64;
+    let length = (bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT;
+    let used_payload = if length == 0 {
+        0
+    } else {
+        (1_u64 << (length * 7)) - 1
+    };
+    (bits & BOX_BASE) == BOX_BASE
+        && (bits & INLINE_STRING_MARKER_MASK)
+            == (INLINE_STRING_MARKER << INLINE_STRING_MARKER_SHIFT)
+        && length <= INLINE_STRING_MAX_LEN as u64
+        && bits & (0b111_u64 << 42) == 0
+        && bits & INLINE_STRING_PAYLOAD_MASK & !used_payload == 0
+}
+
+pub fn decode_inline_ascii<'a>(value: i64, output: &'a mut [u8; 6]) -> Option<&'a [u8]> {
+    if !is_inline_string(value) {
+        return None;
+    }
+    let bits = value as u64;
+    let length = ((bits & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as usize;
+    for (index, slot) in output.iter_mut().enumerate().take(length) {
+        *slot = ((bits >> (index * 7)) & 0x7f) as u8;
+    }
+    Some(&output[..length])
+}
+
+pub fn inline_string_len(value: i64) -> Option<u8> {
+    is_inline_string(value)
+        .then(|| ((value as u64 & INLINE_STRING_LENGTH_MASK) >> INLINE_STRING_LENGTH_SHIFT) as u8)
+}
+fn is_tagged(value: i64, tag: u64) -> bool {
+    !is_inline_string(value)
+        && (value as u64 & BOX_BASE) == BOX_BASE
+        && ((value as u64 >> 32) & TAG_MASK) == tag
+}
+
 pub const GC_COLOR_SHIFT: u32 = 38;
 pub const GC_COLOR_BITS: u32 = 6;
 pub const GC_COLOR_MASK: u64 = ((1_u64 << GC_COLOR_BITS) - 1) << GC_COLOR_SHIFT;
-
-/// 只清除 heap-backed reference 的 GC color；raw f64 的 payload bits 永远原样返回。
-pub fn strip_gc_color(value: i64) -> i64 {
-    if is_handle_backed_reference(value) {
-        (value as u64 & !GC_COLOR_MASK) as i64
-    } else {
-        value
-    }
-}
-
 /// young mark color 占用 bit 38–39（双 epoch 之一）。
 pub const YOUNG_MARK_COLOR_SHIFT: u32 = GC_COLOR_SHIFT;
 pub const YOUNG_MARK_COLOR_BITS: u32 = 2;
@@ -164,6 +207,15 @@ pub const REMEMBERED_COLOR_SHIFT: u32 = GC_COLOR_SHIFT + 4;
 pub const REMEMBERED_COLOR_BITS: u32 = 2;
 pub const REMEMBERED_COLOR_MASK: u64 =
     ((1_u64 << REMEMBERED_COLOR_BITS) - 1) << REMEMBERED_COLOR_SHIFT;
+
+/// 只清除 heap-backed reference 的 GC color；raw f64 的 payload bits 永远原样返回。
+pub fn strip_gc_color(value: i64) -> i64 {
+    if is_handle_backed_reference(value) {
+        (value as u64 & !GC_COLOR_MASK) as i64
+    } else {
+        value
+    }
+}
 
 /// 当前 generation 的 mark/remembered color 快照（仅 2 bit 字段）。
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -189,6 +241,9 @@ impl GcColorMask {
 
 /// 仅对 handle-backed reference 附着 color；非引用值原样返回且 color bits 必须为零。
 pub fn apply_gc_color(value: i64, mask: GcColorMask) -> i64 {
+    if is_inline_string(value) {
+        return value;
+    }
     if !is_handle_backed_reference(value) {
         debug_assert_eq!(value as u64 & GC_COLOR_MASK, 0);
         return value;
@@ -297,13 +352,11 @@ pub fn is_f64(val: i64) -> bool {
 }
 
 pub fn is_string(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_STRING
+    is_inline_string(val) || is_tagged(val, TAG_STRING)
 }
 
 pub fn is_runtime_string_handle(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & STRING_RUNTIME_HANDLE_FLAG) != 0
+    is_tagged(val, TAG_STRING) && ((val as u64 >> 32) & STRING_RUNTIME_HANDLE_FLAG) != 0
 }
 
 pub fn decode_string_ptr(val: i64) -> u32 {
@@ -320,8 +373,7 @@ pub fn encode_undefined() -> i64 {
 }
 
 pub fn is_undefined(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_UNDEFINED
+    is_tagged(val, TAG_UNDEFINED)
 }
 
 pub fn encode_null() -> i64 {
@@ -329,8 +381,7 @@ pub fn encode_null() -> i64 {
 }
 
 pub fn is_null(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_NULL
+    is_tagged(val, TAG_NULL)
 }
 
 pub fn encode_bool(val: bool) -> i64 {
@@ -339,8 +390,7 @@ pub fn encode_bool(val: bool) -> i64 {
 }
 
 pub fn is_bool(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_BOOL
+    is_tagged(val, TAG_BOOL)
 }
 
 pub fn decode_bool(val: i64) -> bool {
@@ -364,16 +414,14 @@ pub fn is_falsy(val: i64) -> bool {
     }
     if is_f64(val) {
         let f = f64::from_bits(val as u64);
-        // +0, -0, NaN
         return f == 0.0 || f.is_nan();
     }
+    if is_inline_string(val) {
+        return inline_string_len(val) == Some(0);
+    }
     if is_string(val) {
-        // 空串的 truthiness 由 backend 的 emit_to_bool_i32 在运行时
-        // 通过加载内存首字节来判断（i32.load8_u → eqz → falsy）。
-        // 此处 is_falsy 仅用于 IR 层面的分析，保守地返回 false（即视为 truthy）。
         return false;
     }
-    // 所有其他 NaN-boxed 类型（object/function/exception/iterator/enumerator handle 等）均为 truthy。
     false
 }
 
@@ -394,8 +442,7 @@ pub fn decode_handle(val: i64) -> u32 {
 }
 
 pub fn is_exception(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_EXCEPTION
+    is_tagged(val, TAG_EXCEPTION)
 }
 /// Encode a value as TAG_EXCEPTION.
 pub fn encode_exception(handle: u32) -> i64 {
@@ -403,13 +450,11 @@ pub fn encode_exception(handle: u32) -> i64 {
 }
 
 pub fn is_iterator(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ITERATOR
+    is_tagged(val, TAG_ITERATOR)
 }
 
 pub fn is_enumerator(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ENUMERATOR
+    is_tagged(val, TAG_ENUMERATOR)
 }
 
 // ── Object handle ──────────────────────────────────────────────────────
@@ -420,8 +465,7 @@ pub fn encode_object_handle(ptr: u32) -> i64 {
 }
 
 pub fn is_object(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_OBJECT
+    is_tagged(val, TAG_OBJECT)
 }
 
 pub fn decode_object_handle(val: i64) -> u32 {
@@ -436,8 +480,7 @@ pub fn encode_function_idx(idx: u32) -> i64 {
 }
 
 pub fn is_function(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_FUNCTION
+    is_tagged(val, TAG_FUNCTION)
 }
 
 pub fn decode_function_idx(val: i64) -> u32 {
@@ -453,8 +496,7 @@ pub fn encode_closure_idx(idx: u32) -> i64 {
 }
 
 pub fn is_closure(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_CLOSURE
+    is_tagged(val, TAG_CLOSURE)
 }
 
 pub fn decode_closure_idx(val: i64) -> u32 {
@@ -515,7 +557,7 @@ pub fn is_handle_backed_reference(value: i64) -> bool {
 /// 数据段字符串指针是编译期静态数据，不属于堆引用；运行时字符串和 BigInt
 /// 句柄则与对象、数组一样需要进入 GC 的堆引用扫描路径。
 pub fn is_heap_reference(value: i64) -> bool {
-    is_object(value) || is_array(value) || is_string(value) || is_bigint(value)
+    is_object(value) || is_array(value) || is_runtime_string_handle(value) || is_bigint(value)
 }
 
 // ── Bound function ────────────────────────────────────────────────────
@@ -526,8 +568,7 @@ pub fn encode_bound_idx(idx: u32) -> i64 {
 }
 
 pub fn is_bound(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_BOUND
+    is_tagged(val, TAG_BOUND)
 }
 
 pub fn decode_bound_idx(val: i64) -> u32 {
@@ -541,8 +582,7 @@ pub fn encode_native_callable_idx(idx: u32) -> i64 {
 }
 
 pub fn is_native_callable(val: i64) -> bool {
-    let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_NATIVE_CALLABLE
+    is_tagged(val, TAG_NATIVE_CALLABLE)
 }
 
 pub fn decode_native_callable_idx(val: i64) -> u32 {

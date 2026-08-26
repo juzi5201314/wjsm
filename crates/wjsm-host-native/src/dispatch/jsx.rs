@@ -23,7 +23,7 @@ fn create_element(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     let [tag, props, children] = args else {
         return fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(3, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(object);

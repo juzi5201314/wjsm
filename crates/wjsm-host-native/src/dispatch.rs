@@ -235,7 +235,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
             return fail_dispatch(ctx);
         }
         // SAFETY: compiler creates a stack slot containing exactly `args_count` initialized i64
-        // values and keeps it live for this synchronous dispatcher call.
+        // values and the dispatcher borrows it only for this synchronous call.
         unsafe { std::slice::from_raw_parts(args, count) }
     };
     // SAFETY: heap_state is initialized from the boxed owner state and remains valid/pinned for the
@@ -243,6 +243,63 @@ pub(super) unsafe extern "C" fn native_host_operation(
     let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_mut() }) else {
         return fail_dispatch(ctx);
     };
+    let runtime_operation = NativeRuntimeOp::from_id(operation);
+    let tlab_visibility = state
+        .gc
+        .operation_requires_native_tlab_flush(
+            ctx,
+            runtime_operation,
+            operation <= u32::from(Builtin::last_wire_id()),
+            args,
+        )
+        .and_then(|requires_flush| {
+            if requires_flush {
+                state.gc.flush_native_tlab(ctx)
+            } else {
+                Ok(())
+            }
+        });
+    if let Err(error) = tlab_visibility {
+        ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
+        state
+            .stderr
+            .borrow_mut()
+            .extend_from_slice(error.to_string().as_bytes());
+        return fail_dispatch(ctx);
+    }
+    let allocation_operation = matches!(
+        runtime_operation,
+        Some(NativeRuntimeOp::NewObject | NativeRuntimeOp::NewArray)
+    );
+    if allocation_operation {
+        if let Err(error) = state.gc.adopt_native_tlab_cursor(ctx) {
+            ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
+            state
+                .stderr
+                .borrow_mut()
+                .extend_from_slice(error.to_string().as_bytes());
+            return fail_dispatch(ctx);
+        }
+        if state.gc.native_tlab_needs_refill(ctx)
+            && state.gc.should_collect_before_native_tlab_refill()
+            && let Err(error) = state.collect_garbage(ctx)
+        {
+            ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
+            state
+                .stderr
+                .borrow_mut()
+                .extend_from_slice(error.to_string().as_bytes());
+            return fail_dispatch(ctx);
+        }
+        if let Err(error) = state.gc.refill_native_tlab_if_exhausted(ctx) {
+            ctx.pending_exception_kind = PendingExceptionKind::InternalInvariant;
+            state
+                .stderr
+                .borrow_mut()
+                .extend_from_slice(error.to_string().as_bytes());
+            return fail_dispatch(ctx);
+        }
+    }
 
     // owner 边界：先收敛后台特化编译结果（发布/丢弃都不阻塞 JS），再校验反馈槽。
     let feedback = if state.runtime_config.specialization_enabled {
@@ -265,11 +322,6 @@ pub(super) unsafe extern "C" fn native_host_operation(
         state.record_value_feedback(feedback, operation, args);
     }
 
-    let runtime_operation = if operation <= u32::from(Builtin::last_wire_id()) {
-        None
-    } else {
-        NativeRuntimeOp::from_id(operation)
-    };
     let result = if operation <= u32::from(Builtin::last_wire_id()) {
         let builtin_id = match u16::try_from(operation) {
             Ok(id) => id,

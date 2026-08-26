@@ -106,7 +106,7 @@ pub(super) fn construct_transform(
     else {
         return super::super::fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(3, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         return super::super::fail_dispatch(ctx);
     };
     state.streams.transforms.push(TransformState {
@@ -336,7 +336,7 @@ fn get_writer(ctx: &mut NativeVmContext, state: &mut NativeAgentState, stream: u
         return super::super::fail_dispatch(ctx);
     };
     super::super::promise::settle_promise(state, ready_promise, value::encode_undefined(), false);
-    let Ok(object) = state.allocate_object(8, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 8, false) else {
         return super::super::fail_dispatch(ctx);
     };
     let writer = state.streams.writers.len() as u32;

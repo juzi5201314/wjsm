@@ -269,7 +269,7 @@ pub(super) fn result_object(
     done: bool,
     stored: i64,
 ) -> i64 {
-    let Ok(result) = state.allocate_object(2, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return super::fail_dispatch(ctx);
     };
     if super::modules::set_named_property(state, result, "done", value::encode_bool(done)).is_err()
@@ -491,7 +491,7 @@ fn queuing_strategy(
             "highWaterMark must be a non-negative finite number",
         );
     }
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return super::fail_dispatch(ctx);
     };
     let Some(size) = state.native_callable(NativeCallableKind::Stream(

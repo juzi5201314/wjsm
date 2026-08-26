@@ -21,6 +21,22 @@ fn handle_table_reserves_32_gib_without_committing_every_entry() {
 }
 
 #[test]
+fn handle_range_reservation_commits_each_covered_block_once() {
+    let layout = ManagedHeapLayout::new(4 * GIB, 64 * 1024).unwrap();
+    let table = HandleTableV2::new(layout).unwrap();
+    let first = table.reserve_range(3).unwrap();
+    assert_eq!(first.start(), 0);
+    assert_eq!(first.limit(), 3);
+    assert_eq!(table.committed_bytes(), table.block_bytes());
+
+    let second = table
+        .reserve_range((table.block_bytes() / HANDLE_ENTRY_BYTES) as u32)
+        .unwrap();
+    assert_eq!(second.start(), 3);
+    assert_eq!(table.committed_bytes(), table.block_bytes() * 2);
+}
+
+#[test]
 fn handle_table_addresses_high_u32_handle_and_resolves_single_live_entry() {
     let layout = ManagedHeapLayout::new(16 * GIB, 64 * 1024).unwrap();
     let table = HandleTableV2::new(layout.clone()).unwrap();

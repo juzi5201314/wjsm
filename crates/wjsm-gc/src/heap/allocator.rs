@@ -4,13 +4,16 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use parking_lot::Mutex;
-
 use super::ManagedHeapLayout;
 use super::epoch::HeapEpoch;
+use super::handle::HandleRangeReservation;
+use parking_lot::Mutex;
+
 use super::handle_entry::HandleGeneration;
+use super::memory::HeapMemory;
 use super::object_map::{PageMetadata, PageObjectIter, PageStats};
 use super::page::{AllocationClass, ObjectRef, PageConfig, PageId, PageRange};
+use super::word::{HeapAddress, HeapMemoryError};
 
 const OBJECT_ALIGNMENT: u64 = 8;
 
@@ -112,6 +115,247 @@ impl Nlab {
 impl Default for Nlab {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Native code 可直接消费的单页 Small-object reservation。
+///
+/// reservation 只在 flush/materialize 时更新 page object-start metadata；生成代码消费
+/// `object_start..object_limit` 与 `handle_start..handle_limit` 内的连续游标，不能把
+/// reusable handle 或尚未 materialize 的对象暴露给 collector。
+pub struct NativeTlabReservation {
+    page: Arc<PageMetadata>,
+    object_start: u64,
+    object_limit: u64,
+    small_object_limit: u64,
+    handles: HandleRangeReservation,
+    materialized_top: u64,
+    materialized_handles: u32,
+    zeroed: bool,
+}
+
+impl NativeTlabReservation {
+    pub const fn object_start(&self) -> u64 {
+        self.object_start
+    }
+
+    pub const fn object_limit(&self) -> u64 {
+        self.object_limit
+    }
+
+    pub const fn handle_start(&self) -> u32 {
+        self.handles.start()
+    }
+
+    pub const fn handle_limit(&self) -> u32 {
+        self.handles.limit()
+    }
+    pub const fn handle_range(&self) -> HandleRangeReservation {
+        self.handles
+    }
+
+    pub fn page_range(&self) -> PageRange {
+        self.page.range
+    }
+
+    pub const fn is_zeroed(&self) -> bool {
+        self.zeroed
+    }
+
+    pub const fn materialized_top(&self) -> u64 {
+        self.materialized_top
+    }
+
+    pub const fn materialized_handles(&self) -> u32 {
+        self.materialized_handles
+    }
+
+    pub const fn small_object_limit(&self) -> u64 {
+        self.small_object_limit
+    }
+
+    /// 在 reservation 重新绑定前清零整个范围；新提交页本身也经此路径建立显式保证。
+    pub fn zero_range<M: HeapMemory>(&mut self, memory: &M) -> Result<(), AllocatorError> {
+        let mut address = self.object_start;
+        let mut remaining = self.object_limit - self.object_start;
+        const ZERO_CHUNK: [u8; 4096] = [0; 4096];
+        while remaining != 0 {
+            let length = remaining.min(ZERO_CHUNK.len() as u64) as usize;
+            memory
+                .copy_from(HeapAddress::new(address), &ZERO_CHUNK[..length])
+                .map_err(AllocatorError::NativeTlabZeroing)?;
+            address += length as u64;
+            remaining -= length as u64;
+        }
+        self.zeroed = true;
+        Ok(())
+    }
+
+    /// 把尚未登记的 object header 区间 materialize 到 page metadata。
+    ///
+    /// `read_object_size` 必须读取当前 header、校验其 heap type/capacity/handle，并返回
+    /// 已按 8 字节对齐的完整对象大小；allocator 只负责校验连续边界、handle 数量和
+    /// object-start/allocated-byte/mark 元数据发布。
+    pub fn materialize_native_tlab(
+        &mut self,
+        top: u64,
+        next_handle: u32,
+        mut read_object_size: impl FnMut(u64, u32) -> Result<u64, AllocatorError>,
+        allocator: &ManagedAllocator,
+        mark_generation: Option<HandleGeneration>,
+    ) -> Result<(), AllocatorError> {
+        if !self.zeroed {
+            return Err(AllocatorError::NativeTlabNotZeroed);
+        }
+        if top < self.materialized_top || top > self.object_limit {
+            return Err(AllocatorError::NativeTlabTopOutOfBounds {
+                top,
+                start: self.materialized_top,
+                limit: self.object_limit,
+            });
+        }
+        if next_handle < self.materialized_handles || next_handle > self.handle_limit() {
+            return Err(AllocatorError::NativeTlabHandleOutOfBounds {
+                next_handle,
+                start: self.materialized_handles,
+                limit: self.handle_limit(),
+            });
+        }
+        if self.materialized_top < top && next_handle == self.materialized_handles.saturating_add(1)
+        {
+            let object = self.materialized_top;
+            let bytes = read_object_size(object, self.materialized_handles)?;
+            let end = object
+                .checked_add(bytes)
+                .ok_or(AllocatorError::NativeTlabInvalidObject { object, bytes })?;
+            if bytes < u64::from(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE)
+                || bytes > self.small_object_limit
+                || !bytes.is_multiple_of(OBJECT_ALIGNMENT)
+                || end != top
+                || end > self.object_limit
+            {
+                return Err(AllocatorError::NativeTlabInvalidObject { object, bytes });
+            }
+            if !self.page.record(ObjectRef::new(object), bytes) {
+                return Err(AllocatorError::DuplicateObject {
+                    object: ObjectRef::new(object),
+                });
+            }
+            if let Some(generation) = mark_generation {
+                self.page
+                    .try_mark(ObjectRef::new(object), bytes, generation);
+            }
+            allocator
+                .allocated_bytes
+                .fetch_add(bytes, Ordering::Relaxed);
+            self.materialized_top = top;
+            self.materialized_handles = next_handle;
+            return Ok(());
+        }
+        let mut objects = Vec::with_capacity((next_handle - self.materialized_handles) as usize);
+        let mut object = self.materialized_top;
+        let mut handle = self.materialized_handles;
+        while object < top {
+            let bytes = read_object_size(object, handle)?;
+            if bytes < u64::from(wjsm_ir::constants::HEAP_OBJECT_HEADER_SIZE)
+                || bytes > self.small_object_limit
+                || !bytes.is_multiple_of(OBJECT_ALIGNMENT)
+            {
+                return Err(AllocatorError::NativeTlabInvalidObject { object, bytes });
+            }
+            let end = object
+                .checked_add(bytes)
+                .ok_or(AllocatorError::NativeTlabInvalidObject { object, bytes })?;
+            if end > top || end > self.object_limit {
+                return Err(AllocatorError::NativeTlabInvalidObject { object, bytes });
+            }
+            objects.push((ObjectRef::new(object), bytes));
+            object = end;
+            handle = handle
+                .checked_add(1)
+                .ok_or(AllocatorError::NativeTlabHandleOutOfBounds {
+                    next_handle,
+                    start: self.materialized_handles,
+                    limit: self.handle_limit(),
+                })?;
+        }
+        if object != top || handle != next_handle {
+            return Err(AllocatorError::NativeTlabHandleCountMismatch {
+                expected: handle,
+                actual: next_handle,
+            });
+        }
+        let total_bytes = objects
+            .iter()
+            .try_fold(0_u64, |total, (_, bytes)| total.checked_add(*bytes));
+        let Some(total_bytes) = total_bytes else {
+            return Err(AllocatorError::RequestTooLarge { bytes: top });
+        };
+        for (object, bytes) in &objects {
+            if !bytes.is_multiple_of(OBJECT_ALIGNMENT) {
+                return Err(AllocatorError::NativeTlabInvalidObject {
+                    object: object.offset(),
+                    bytes: *bytes,
+                });
+            }
+        }
+        for (object, bytes) in objects {
+            if !self.page.record(object, bytes) {
+                return Err(AllocatorError::DuplicateObject { object });
+            }
+            if let Some(generation) = mark_generation {
+                self.page.try_mark(object, bytes, generation);
+            }
+        }
+        allocator
+            .allocated_bytes
+            .fetch_add(total_bytes, Ordering::Relaxed);
+        self.materialized_top = top;
+        self.materialized_handles = next_handle;
+        Ok(())
+    }
+}
+
+impl ManagedAllocator {
+    /// 使用 allocator 的真实 page/class 判定建立单页 native reservation。
+    pub fn reserve_native_tlab(
+        &self,
+        handles: HandleRangeReservation,
+    ) -> Result<NativeTlabReservation, AllocatorError> {
+        if handles.start() >= handles.limit() {
+            return Err(AllocatorError::NativeTlabHandleOutOfBounds {
+                next_handle: handles.start(),
+                start: handles.start(),
+                limit: handles.limit(),
+            });
+        }
+        let page = self.acquire_pages(1, false)?;
+        let object_start = page.base_offset;
+        let object_limit =
+            object_start
+                .checked_add(self.config.bytes)
+                .ok_or(AllocatorError::RequestTooLarge {
+                    bytes: self.config.bytes,
+                })?;
+        Ok(NativeTlabReservation {
+            page,
+            object_start,
+            object_limit,
+            small_object_limit: self.config.small_limit,
+            handles,
+            materialized_top: object_start,
+            materialized_handles: handles.start(),
+            zeroed: false,
+        })
+    }
+
+    pub fn allocation_class(&self, bytes: u64) -> Result<AllocationClass, AllocatorError> {
+        let bytes = align_object_size(bytes)?;
+        Ok(self.class_for(bytes))
+    }
+    /// 生成代码使用的 Small class 上界；该值来自 allocator 的 PageConfig 唯一判定。
+    pub const fn small_object_limit(&self) -> u64 {
+        self.config.small_limit
     }
 }
 
@@ -356,6 +600,12 @@ impl ManagedAllocator {
         Ok(())
     }
 
+    /// 对象是否已登记到 page object-start metadata，可由 collector 与 relocation 观察。
+    pub fn contains_object(&self, object: ObjectRef) -> bool {
+        self.metadata_for_object(object)
+            .is_ok_and(|metadata| metadata.contains(object))
+    }
+
     pub fn forget_object(&self, object: ObjectRef, bytes: u64) -> Result<(), AllocatorError> {
         self.metadata_for_object(object)?.forget(object, bytes);
         self.allocated_bytes.fetch_sub(bytes, Ordering::Relaxed);
@@ -427,6 +677,19 @@ impl ManagedAllocator {
         state.remove_range(metadata.range);
         state.free.insert(metadata.range);
         Ok(true)
+    }
+    /// 回收尚未登记任何对象的 TLAB 页面；页面已被 collector 移除时返回 false。
+    pub fn release_empty_page_if_present(&self, page: PageId) -> bool {
+        let mut state = self.state.lock();
+        let Some(metadata) = state.pages.get(&page).cloned() else {
+            return false;
+        };
+        if metadata.range.len() != 1 || metadata.object_count() != 0 {
+            return false;
+        }
+        state.remove_range(metadata.range);
+        state.free.insert(metadata.range);
+        true
     }
 
     pub fn clear_marks(&self, generation: HandleGeneration) {
@@ -770,15 +1033,54 @@ impl FreePageRanges {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AllocatorError {
-    DuplicateObject { object: ObjectRef },
+    DuplicateObject {
+        object: ObjectRef,
+    },
     InvalidLayout(&'static str),
-    NlabRefillTooSmall { bytes: u64 },
-    OutOfPages { requested: u32, available: u32 },
-    RequestTooLarge { bytes: u64 },
-    RestorePageUnavailable { page: PageId },
+    NlabRefillTooSmall {
+        bytes: u64,
+    },
+    NativeTlabHandleCountMismatch {
+        expected: u32,
+        actual: u32,
+    },
+    NativeTlabHandleOutOfBounds {
+        next_handle: u32,
+        start: u32,
+        limit: u32,
+    },
+    NativeTlabInvalidHeader {
+        object: u64,
+        detail: String,
+    },
+    NativeTlabInvalidObject {
+        object: u64,
+        bytes: u64,
+    },
+    NativeTlabNotZeroed,
+    NativeTlabTopOutOfBounds {
+        top: u64,
+        start: u64,
+        limit: u64,
+    },
+    NativeTlabZeroing(HeapMemoryError),
+    OutOfPages {
+        requested: u32,
+        available: u32,
+    },
+    RequestTooLarge {
+        bytes: u64,
+    },
+    RestorePageUnavailable {
+        page: PageId,
+    },
     SharedNlabAllocation,
-    UnknownObject { object: ObjectRef },
-    UnknownPage { page: PageId },
+    UnknownObject {
+        object: ObjectRef,
+    },
+    UnknownPage {
+        page: PageId,
+    },
     UnknownRelocationReserve,
     ZeroSizedObject,
 }
@@ -792,6 +1094,38 @@ impl fmt::Display for AllocatorError {
             Self::NlabRefillTooSmall { bytes } => {
                 write!(formatter, "NLAB cannot fit {bytes} bytes")
             }
+            Self::NativeTlabHandleCountMismatch { expected, actual } => write!(
+                formatter,
+                "native TLAB materialized handle count {expected} does not match cursor {actual}"
+            ),
+            Self::NativeTlabHandleOutOfBounds {
+                next_handle,
+                start,
+                limit,
+            } => write!(
+                formatter,
+                "native TLAB handle cursor {next_handle} is outside [{start}, {limit})"
+            ),
+            Self::NativeTlabInvalidHeader { object, detail } => {
+                write!(
+                    formatter,
+                    "invalid native TLAB object header at {object}: {detail}"
+                )
+            }
+            Self::NativeTlabInvalidObject { object, bytes } => {
+                write!(
+                    formatter,
+                    "invalid native TLAB object at {object} with size {bytes}"
+                )
+            }
+            Self::NativeTlabNotZeroed => formatter.write_str("native TLAB range is not zeroed"),
+            Self::NativeTlabZeroing(error) => {
+                write!(formatter, "native TLAB zeroing failed: {error}")
+            }
+            Self::NativeTlabTopOutOfBounds { top, start, limit } => write!(
+                formatter,
+                "native TLAB top {top} is outside [{start}, {limit}]"
+            ),
             Self::OutOfPages {
                 requested,
                 available,

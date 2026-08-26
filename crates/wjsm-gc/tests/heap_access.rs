@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use wjsm_gc::{
     BarrierEpoch, BarrierRecord, HandleGeneration, HandleTableV2, HeaderLayout, HeapAccessV2,
-    HeapBarrier, ManagedHeapLayout, Nlab, PAGE_GRANULE_BYTES, PROTO_NULL_SENTINEL, PropertyKey,
-    RelocationDescriptor, TestHeapMemory, ZgcBarrierSet,
+    HeapAddress, HeapBarrier, ManagedHeapLayout, Nlab, PAGE_GRANULE_BYTES, PROTO_NULL_SENTINEL,
+    PropertyKey, RelocationDescriptor, TestHeapMemory, ZgcBarrierSet,
 };
 use wjsm_ir::constants;
 
@@ -14,6 +14,61 @@ fn allocate(heap: &HeapAccessV2<TestHeapMemory>, bytes: u64) -> u64 {
         .offset()
 }
 
+#[test]
+fn native_tlab_materializes_header_and_published_handle() {
+    let layout = Arc::new(ManagedHeapLayout::new(1024 * 1024, PAGE_GRANULE_BYTES).unwrap());
+    let memory = TestHeapMemory::for_layout(&layout);
+    let memory_view = memory.clone();
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let heap = HeapAccessV2::with_handles(memory, layout, handles, HeapBarrier::Disabled).unwrap();
+    let mut reservation = heap.reserve_native_tlab(2).unwrap();
+    let handle = reservation.handle_start();
+    let object = reservation.object_start();
+    memory_view
+        .store_word(HeapAddress::new(object), u64::from(PROTO_NULL_SENTINEL))
+        .unwrap();
+    memory_view
+        .store_word(HeapAddress::new(object + 8), 1)
+        .unwrap();
+    memory_view
+        .store_word(HeapAddress::new(object + 16), u64::from(handle))
+        .unwrap();
+    heap.publish_native_tlab_handle(&reservation, handle, object, HandleGeneration::Young)
+        .unwrap();
+    heap.materialize_native_tlab(&mut reservation, object + 32, handle + 1)
+        .unwrap();
+    assert_eq!(heap.object_handle_at(object).unwrap(), handle);
+    assert_eq!(heap.object_size(handle).unwrap(), 32);
+    assert_eq!(heap.page_stats()[0].object_count, 1);
+    assert_eq!(heap.page_stats()[0].allocated_bytes, 32);
+}
+
+#[test]
+fn native_tlab_rejects_mismatched_published_handle() {
+    let layout = Arc::new(ManagedHeapLayout::new(1024 * 1024, PAGE_GRANULE_BYTES).unwrap());
+    let memory = TestHeapMemory::for_layout(&layout);
+    let memory_view = memory.clone();
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let heap = HeapAccessV2::with_handles(memory, layout, handles, HeapBarrier::Disabled).unwrap();
+    let mut reservation = heap.reserve_native_tlab(2).unwrap();
+    let handle = reservation.handle_start();
+    let object = reservation.object_start();
+    memory_view
+        .store_word(HeapAddress::new(object), u64::from(PROTO_NULL_SENTINEL))
+        .unwrap();
+    memory_view
+        .store_word(HeapAddress::new(object + 8), 1)
+        .unwrap();
+    memory_view
+        .store_word(HeapAddress::new(object + 16), u64::from(handle + 1))
+        .unwrap();
+    heap.publish_native_tlab_handle(&reservation, handle, object, HandleGeneration::Young)
+        .unwrap();
+    let error = heap
+        .materialize_native_tlab(&mut reservation, object + 32, handle + 1)
+        .expect_err("mismatched header handle must fail closed");
+    assert!(error.to_string().contains("GC handle"));
+}
 #[test]
 fn property_growth_consumes_exact_relocation_bytes() {
     const HEAP_BYTES: u64 = 1024 * 1024;

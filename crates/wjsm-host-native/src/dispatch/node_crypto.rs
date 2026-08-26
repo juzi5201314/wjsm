@@ -166,7 +166,7 @@ fn create_context(
     let Ok(context) = u32::try_from(state.node_crypto.contexts.len()) else {
         return fail_dispatch(ctx);
     };
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let Some(update) = state.native_callable(NativeCallableKind::NodeCrypto(

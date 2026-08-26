@@ -247,10 +247,12 @@ fn run(
         state.node_vm.deadlines.push(deadline);
     }
     let previous_array_prototype = state.array_prototype;
+    let previous_array_prototype_handle = ctx.array_prototype_handle;
     if target != RunTarget::ThisContext
         && let Some(prototype) = array_prototype_for_handle(state, value::decode_handle(global))
     {
         state.array_prototype = Some(prototype);
+        ctx.array_prototype_handle = value::decode_handle(prototype);
     }
     let result = (|| {
         state.node_vm.active_contexts.push(global);
@@ -281,6 +283,7 @@ fn run(
         result
     })();
     state.array_prototype = previous_array_prototype;
+    ctx.array_prototype_handle = previous_array_prototype_handle;
     result
 }
 

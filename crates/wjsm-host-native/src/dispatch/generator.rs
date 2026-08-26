@@ -62,7 +62,7 @@ fn start(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     };
     *state_slot = value::encode_f64(0.0);
     *completion_slot = value::encode_f64(0.0);
-    let Ok(generator) = state.allocate_object(0, false) else {
+    let Ok(generator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     state.generators.insert(

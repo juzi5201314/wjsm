@@ -32,7 +32,7 @@ fn from(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     let Some(keys) = enumerable_keys(state, source) else {
         return fail_dispatch(ctx);
     };
-    let Ok(enumerator) = state.allocate_object(0, false) else {
+    let Ok(enumerator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     state.enumerators.insert(

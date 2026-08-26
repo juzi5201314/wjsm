@@ -550,7 +550,7 @@ fn wait_async(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     };
 
     // 构造返回对象 { async, value }。
-    let Ok(object) = state.allocate_object(2, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     let Some(async_key) = state.intern_property_string("async".into()) else {

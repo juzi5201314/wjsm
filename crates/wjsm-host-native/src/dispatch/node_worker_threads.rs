@@ -830,7 +830,7 @@ fn receive_message_on_port(
         Ok(message) => message,
         Err(message) => return structured_clone::data_clone_error(ctx, state, &message),
     };
-    let result = match state.allocate_object(1, false) {
+    let result = match state.allocate_object_with_gc_retry(ctx, 1, false) {
         Ok(result) => result,
         Err(_) => return fail_dispatch(ctx),
     };
@@ -1235,7 +1235,7 @@ fn id_pair(
     second_name: &str,
     second: u32,
 ) -> i64 {
-    let Ok(result) = state.allocate_object(2, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
     if modules::set_named_property(

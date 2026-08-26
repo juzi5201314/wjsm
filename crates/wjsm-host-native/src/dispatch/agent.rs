@@ -147,7 +147,7 @@ fn create_realm(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 
     let Some(global) = state.global_object else {
         return fail_dispatch(ctx);
     };
-    let Ok(record) = state.allocate_object(1, false) else {
+    let Ok(record) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
     let Some(key) = state.intern_property_string("global".into()) else {

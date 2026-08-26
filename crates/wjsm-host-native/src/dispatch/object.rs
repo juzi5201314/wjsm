@@ -46,7 +46,7 @@ pub(super) fn dispatch_object(
                     .collect()
             };
             state
-                .allocate_array_values(&symbols)
+                .allocate_array_values_with_gc_retry(ctx, &symbols)
                 .unwrap_or_else(|_| fail_dispatch(ctx))
         }
         Builtin::ObjectRest => object_rest(ctx, state, args),
@@ -282,7 +282,7 @@ fn create_global_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState)
     } else if state.ensure_intrinsic_prototypes().is_err() {
         fail_dispatch(ctx)
     } else {
-        match state.allocate_object(0, false) {
+        match state.allocate_object_with_gc_retry(ctx, 0, false) {
             Ok(global) => {
                 state.global_object = Some(global);
                 global
@@ -304,7 +304,7 @@ pub(crate) fn construct_object(
     if value::is_js_object(input) || value::is_regexp(input) {
         return input;
     }
-    let Ok(object) = state.allocate_object(0, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
     if !value::is_null(input) && !value::is_undefined(input) {
@@ -484,11 +484,11 @@ pub(crate) fn own_keys(
     }
     let slots = state.gc.heap().own_property_slots(handle).ok()?;
     let mut properties = Vec::with_capacity(slots.len());
-    for (name_id, flags) in slots {
+    for (key, flags) in slots {
         if enumerable_only && flags & ENUMERABLE == 0 {
             continue;
         }
-        let key = PropertyKey::from_name_id(name_id);
+        let key = key;
         let property = state
             .gc
             .heap()
@@ -544,7 +544,9 @@ fn enumerate(
                     values.push(property_value)
                 }
                 EnumerationKind::Entries => {
-                    let Ok(entry) = state.allocate_array_values(&[key, property_value]) else {
+                    let Ok(entry) =
+                        state.allocate_array_values_with_gc_retry(ctx, &[key, property_value])
+                    else {
                         return fail_dispatch(ctx);
                     };
                     values.push(entry);
@@ -552,7 +554,7 @@ fn enumerate(
             }
         }
         return state
-            .allocate_array_values(&values)
+            .allocate_array_values_with_gc_retry(ctx, &values)
             .unwrap_or_else(|_| fail_dispatch(ctx));
     }
     let Some(properties) = own_keys(state, object, !matches!(kind, EnumerationKind::Names)) else {
@@ -567,7 +569,9 @@ fn enumerate(
             EnumerationKind::Keys | EnumerationKind::Names => values.push(key),
             EnumerationKind::Values => values.push(property_value),
             EnumerationKind::Entries => {
-                let Ok(entry) = state.allocate_array_values(&[key, property_value]) else {
+                let Ok(entry) =
+                    state.allocate_array_values_with_gc_retry(ctx, &[key, property_value])
+                else {
                     return fail_dispatch(ctx);
                 };
                 values.push(entry);
@@ -575,7 +579,7 @@ fn enumerate(
         }
     }
     state
-        .allocate_array_values(&values)
+        .allocate_array_values_with_gc_retry(ctx, &values)
         .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
@@ -587,7 +591,7 @@ fn from_entries(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
     if value::is_exception(iterator) {
         return iterator;
     }
-    let Ok(result) = state.allocate_object(4, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
         return fail_dispatch(ctx);
     };
     loop {
@@ -645,7 +649,7 @@ fn group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     if value::is_exception(iterator) {
         return iterator;
     }
-    let Ok(result) = state.allocate_object(4, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
         return fail_dispatch(ctx);
     };
     if state
@@ -687,7 +691,7 @@ fn group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
         let group = match state.gc.heap().get_property(result_handle, key) {
             Ok(Some(group)) => group as i64,
             Ok(None) => {
-                let Ok(group) = state.allocate_array_values(&[]) else {
+                let Ok(group) = state.allocate_array_values_with_gc_retry(ctx, &[]) else {
                     return fail_dispatch(ctx);
                 };
                 if state
@@ -738,7 +742,7 @@ fn object_rest(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
             excluded_keys.push(stored);
         }
     }
-    let Ok(result) = state.allocate_object(4, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
         return fail_dispatch(ctx);
     };
     match copy_data_properties(ctx, state, result, *source, &excluded_keys) {
@@ -864,7 +868,7 @@ fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
     } else {
         return type_error(ctx, state, "Object prototype may only be an Object or null");
     };
-    let Ok(object) = state.allocate_object(4, false) else {
+    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
         return fail_dispatch(ctx);
     };
     if state
@@ -1133,7 +1137,7 @@ fn descriptor_object(
     state: &mut NativeAgentState,
     property: wjsm_gc::HeapAccessV2Property,
 ) -> i64 {
-    let Ok(descriptor) = state.allocate_object(5, false) else {
+    let Ok(descriptor) = state.allocate_object_with_gc_retry(ctx, 5, false) else {
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(descriptor);
@@ -1599,7 +1603,7 @@ fn get_own_property_descriptors(
     let Some(keys) = own_keys(state, object, false) else {
         return fail_dispatch(ctx);
     };
-    let Ok(result) = state.allocate_object(keys.len() as u32, false) else {
+    let Ok(result) = state.allocate_object_with_gc_retry(ctx, keys.len() as u32, false) else {
         return fail_dispatch(ctx);
     };
     let result_handle = value::decode_handle(result);
@@ -1697,8 +1701,7 @@ fn seal_or_freeze(
     let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
     };
-    for (name_id, flags) in properties {
-        let key = PropertyKey::from_name_id(name_id);
+    for (key, flags) in properties {
         let flags = flags & !CONFIGURABLE & if freeze { !WRITABLE } else { u32::MAX };
         if state
             .gc

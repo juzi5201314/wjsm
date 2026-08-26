@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 14;
+pub const NATIVE_ABI_VERSION: u32 = 18;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -39,6 +39,11 @@ pub struct NativeBarrierState {
 /// `NativeVmContext::flags` 的位定义：bit0 置位时生成代码的守卫快路径才内联
 /// 更新反馈槽（宿主在 runtime 构造时按 `specialization_enabled` 写入）。
 pub const NATIVE_FLAGS_FEEDBACK_ENABLED: u32 = 1;
+/// `NativeVmContext::allocation_fast_flags` 的对象/数组 TLAB 快路径位。
+pub const NATIVE_ALLOCATION_FAST_OBJECT: u32 = 1 << 0;
+pub const NATIVE_ALLOCATION_FAST_ARRAY: u32 = 1 << 1;
+/// 宿主调用内立即 materialize 的快路径位，不能被generated code消费。
+pub const NATIVE_ALLOCATION_FAST_HOST: u32 = 1 << 2;
 
 /// 每次循环回边生成的代码从 `NativeVmContext::stack_budget_bytes` 扣除的字节数。
 ///
@@ -118,10 +123,20 @@ pub struct NativeVmContext {
     /// 当前 image 的字符串常量盒装值数组基址（8 字节对齐，元素为 NaN-boxed
     /// 运行时字符串句柄，install 期发布后不再变化）；无字符串常量时为 null。
     /// 生成代码在函数入口按 `常量下标 * 8` 直读，替代旧的 MaterializeString
-    /// 宿主往返。由宿主在 image 激活时与 `ic_slots_base` 同步设置。
+    /// 宿主往返。
     pub string_constants_base: *const i64,
+    /// 当前 Native TLAB 对象游标；只在 allocation_fast_flags 非零时可由生成代码消费。
+    pub bump_ptr: u64,
+    pub bump_limit: u64,
+    pub bump_handle_cursor: u32,
+    pub bump_handle_limit: u32,
+    pub allocation_fast_flags: u32,
+    /// 当前 allocator 真实 Small class 上界；生成代码不得复制 page 配置常量。
+    pub allocation_small_limit: u64,
+    /// 当前 canonical Object/Array prototype 的 stable handle；其余 prototype 走宿主慢路径。
+    pub object_prototype_handle: u32,
+    pub array_prototype_handle: u32,
 }
-
 impl Default for NativeVmContext {
     fn default() -> Self {
         Self {
@@ -161,10 +176,17 @@ impl Default for NativeVmContext {
             feedback_slots_base: std::ptr::null_mut(),
             heap_object_delta: 0,
             string_constants_base: std::ptr::null(),
+            bump_ptr: 0,
+            bump_limit: 0,
+            bump_handle_cursor: 0,
+            bump_handle_limit: 0,
+            allocation_fast_flags: 0,
+            allocation_small_limit: 0,
+            object_prototype_handle: 0,
+            array_prototype_handle: 0,
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct NativeSourceSlot {
@@ -210,6 +232,9 @@ impl NativeFeedbackTag {
     /// 按运行时编码判别一个 boxed 值的反馈类别。
     pub fn of(encoded: i64) -> Self {
         use wjsm_ir::value;
+        if value::is_inline_string(encoded) {
+            return Self::String;
+        }
         if value::is_f64(encoded) {
             return Self::Number;
         }
@@ -752,12 +777,11 @@ impl NativeHostSymbol {
             .find(|symbol| symbol.symbol_name() == name)
     }
 }
-
 pub fn native_abi_hash() -> [u8; 32] {
     static HASH: OnceLock<[u8; 32]> = OnceLock::new();
     *HASH.get_or_init(|| {
         let mut hasher = Sha256::new();
-        hasher.update(b"wjsm-native-abi-v13\0");
+        hasher.update(b"wjsm-native-abi-v18");
         hasher.update(wjsm_artifact_format::semantic_abi_hash());
         hash_layout::<NativeVmContext>(&mut hasher, b"NativeVmContext");
         hash_layout::<NativeFunctionEntry>(&mut hasher, b"NativeFunctionEntry");
@@ -785,6 +809,14 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, feedback_slots_base),
             offset_of!(NativeVmContext, heap_object_delta),
             offset_of!(NativeVmContext, string_constants_base),
+            offset_of!(NativeVmContext, bump_ptr),
+            offset_of!(NativeVmContext, bump_limit),
+            offset_of!(NativeVmContext, bump_handle_cursor),
+            offset_of!(NativeVmContext, bump_handle_limit),
+            offset_of!(NativeVmContext, allocation_fast_flags),
+            offset_of!(NativeVmContext, allocation_small_limit),
+            offset_of!(NativeVmContext, object_prototype_handle),
+            offset_of!(NativeVmContext, array_prototype_handle),
         ] {
             hasher.update(
                 u64::try_from(offset)
@@ -822,6 +854,10 @@ pub fn native_abi_hash() -> [u8; 32] {
                     .to_le_bytes(),
             );
         }
+        hasher.update(wjsm_ir::value::INLINE_STRING_MARKER.to_le_bytes());
+        hasher.update(wjsm_ir::value::INLINE_STRING_LENGTH_SHIFT.to_le_bytes());
+        hasher.update(wjsm_ir::value::INLINE_STRING_MAX_LEN.to_le_bytes());
+        hasher.update((std::mem::size_of::<u64>() as u64).to_le_bytes());
         hasher.update(wjsm_ir::constants::FEEDBACK_SLOT_SIZE.to_le_bytes());
         hasher.update([
             NativeFeedbackTag::Number.code(),
@@ -993,6 +1029,31 @@ const _: () = {
     assert!(NativeFeedbackTag::Number.code() <= 0x1f);
     assert!(NativeFeedbackTag::Other.code() <= 0x1f);
 };
+const _: () = {
+    assert!(align_of::<NativeVmContext>() == 8);
+    assert!(offset_of!(NativeVmContext, bump_ptr) < offset_of!(NativeVmContext, bump_limit));
+    assert!(
+        offset_of!(NativeVmContext, bump_limit) < offset_of!(NativeVmContext, bump_handle_cursor)
+    );
+    assert!(
+        offset_of!(NativeVmContext, bump_handle_cursor)
+            < offset_of!(NativeVmContext, bump_handle_limit)
+    );
+    assert!(
+        offset_of!(NativeVmContext, bump_handle_limit)
+            < offset_of!(NativeVmContext, allocation_fast_flags)
+    );
+    assert!(
+        offset_of!(NativeVmContext, allocation_fast_flags)
+            < offset_of!(NativeVmContext, allocation_small_limit)
+    );
+    assert!(
+        offset_of!(NativeVmContext, array_prototype_handle) + size_of::<u32>()
+            <= size_of::<NativeVmContext>()
+    );
+    assert!(size_of::<NativeBarrierState>() == 32);
+    assert!(align_of::<NativeBarrierState>() == 8);
+};
 
 #[cfg(test)]
 mod tests {
@@ -1066,6 +1127,10 @@ mod tests {
         );
         assert_eq!(
             NativeFeedbackTag::of(value::encode_handle(value::TAG_STRING, 7)),
+            NativeFeedbackTag::String
+        );
+        assert_eq!(
+            NativeFeedbackTag::of(value::encode_inline_ascii(b"abcdef").unwrap()),
             NativeFeedbackTag::String
         );
         assert_eq!(

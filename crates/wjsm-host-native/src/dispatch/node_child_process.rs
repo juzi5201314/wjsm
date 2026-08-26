@@ -731,7 +731,7 @@ fn string_array(
 }
 
 fn id_pair(ctx: &mut NativeVmContext, state: &mut NativeAgentState, id: u32, pid: u32) -> i64 {
-    let object = match state.allocate_object(2, false) {
+    let object = match state.allocate_object_with_gc_retry(ctx, 2, false) {
         Ok(object) => object,
         Err(_) => return runtime::fail_dispatch(ctx),
     };

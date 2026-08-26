@@ -116,15 +116,20 @@ fn parse_runtimes(runtimes: &str) -> Result<Vec<RuntimeKind>> {
 
 fn discover_scenarios(filter: &str) -> Result<Vec<String>> {
     let dir = scenarios_dir();
+    let filters = filter
+        .split(',')
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+        .collect::<Vec<_>>();
     let mut names = Vec::new();
     for entry in
         std::fs::read_dir(&dir).with_context(|| format!("读取场景目录 {}", dir.display()))?
     {
         let entry = entry.context("读取场景目录项")?;
         let path = entry.path();
-        if path.extension().map(|ext| ext == "js").unwrap_or(false)
+        if path.extension().map_or(false, |ext| ext == "js")
             && let Some(name) = path.file_stem().and_then(|stem| stem.to_str())
-            && (filter.is_empty() || name.contains(filter))
+            && (filters.is_empty() || filters.iter().any(|filter| name.contains(filter)))
         {
             names.push(name.to_owned());
         }

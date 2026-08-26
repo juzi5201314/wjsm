@@ -132,7 +132,22 @@ impl HandleRegion {
     }
 
     fn commit(&self, handle: HandleId) -> Result<(), HandleTableError> {
-        let block = handle.get() as usize / HANDLE_BLOCK_ENTRIES;
+        self.commit_block(handle.get() as usize / HANDLE_BLOCK_ENTRIES)
+    }
+
+    fn commit_range(&self, start: u32, limit: u32) -> Result<(), HandleTableError> {
+        if start >= limit {
+            return Err(HandleTableError::InvalidHandleRange);
+        }
+        let first = start as usize / HANDLE_BLOCK_ENTRIES;
+        let last = (limit - 1) as usize / HANDLE_BLOCK_ENTRIES;
+        for block in first..=last {
+            self.commit_block(block)?;
+        }
+        Ok(())
+    }
+
+    fn commit_block(&self, block: usize) -> Result<(), HandleTableError> {
         loop {
             match self.committed_blocks[block].load(Ordering::Acquire) {
                 2 => return Ok(()),
@@ -180,6 +195,31 @@ pub struct RestoredHandleEntry {
     pub handle: HandleId,
     pub address: u64,
     pub generation: HandleGeneration,
+}
+
+/// 只包含 fresh monotonic handle 的连续 reservation；epoch reusable slot 不会进入其中。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HandleRangeReservation {
+    start: u32,
+    limit: u32,
+}
+
+impl HandleRangeReservation {
+    pub const fn start(&self) -> u32 {
+        self.start
+    }
+
+    pub const fn limit(&self) -> u32 {
+        self.limit
+    }
+
+    pub const fn len(&self) -> u32 {
+        self.limit - self.start
+    }
+
+    pub const fn contains(&self, handle: u32) -> bool {
+        handle >= self.start && handle < self.limit
+    }
 }
 
 pub struct HandleTableV2 {
@@ -255,6 +295,8 @@ impl HandleTableV2 {
 
     pub fn allocate_handle(&self) -> Result<HandleId, HandleTableError> {
         if let Some(handle) = self.epochs.take_reusable() {
+            let next = u64::from(handle.get()) + 1;
+            self.next_handle.fetch_max(next, Ordering::SeqCst);
             return Ok(handle);
         }
         let raw = self
@@ -264,6 +306,86 @@ impl HandleTableV2 {
             })
             .map_err(|_| HandleTableError::HandleExhausted)?;
         Ok(HandleId::new(raw as u32))
+    }
+
+    /// 一次性预留 fresh monotonic handle 区间，并预提交覆盖的 64 KiB blocks。
+    ///
+    /// reusable handle 只允许由 `allocate_handle` 的宿主慢路径消费，避免生成代码
+    /// reservation 与 epoch reclaim 共享可复用 cursor。
+    pub fn reserve_range(&self, count: u32) -> Result<HandleRangeReservation, HandleTableError> {
+        if count == 0 {
+            return Err(HandleTableError::InvalidHandleRange);
+        }
+        let mut start = self.next_handle.load(Ordering::Acquire);
+        loop {
+            let end = start
+                .checked_add(u64::from(count))
+                .filter(|end| *end <= u64::from(u32::MAX))
+                .ok_or(HandleTableError::HandleExhausted)?;
+            let start_raw = start as u32;
+            let limit = end as u32;
+            self.region.commit_range(start_raw, limit)?;
+            let mut occupied_end = start;
+            for raw in start_raw..limit {
+                let state =
+                    ColoredHandleEntry::from_raw(self.region.load_entry(HandleId::new(raw)))
+                        .state();
+                if !matches!(state, HandleState::Free | HandleState::Retired) {
+                    occupied_end = u64::from(raw) + 1;
+                }
+            }
+            if occupied_end != start {
+                self.next_handle.fetch_max(occupied_end, Ordering::AcqRel);
+                start = occupied_end;
+                continue;
+            }
+            match self
+                .next_handle
+                .compare_exchange(start, end, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    return Ok(HandleRangeReservation {
+                        start: start_raw,
+                        limit,
+                    });
+                }
+                Err(actual) => start = actual,
+            }
+        }
+    }
+
+    /// 发布已预留区间中的 stable entry。fast generated code 使用同一编码直接 release-store；
+    /// 此方法供宿主 materialize、测试与 slow owner 共享验证逻辑。
+    pub fn publish_reserved(
+        &self,
+        reservation: &HandleRangeReservation,
+        handle: u32,
+        address: u64,
+        generation: HandleGeneration,
+    ) -> Result<(), HandleTableError> {
+        if !reservation.contains(handle) {
+            return Err(HandleTableError::UnallocatedHandle {
+                handle: HandleId::new(handle),
+            });
+        }
+        if u64::from(handle) >= self.allocated_count() {
+            return Err(HandleTableError::UnallocatedHandle {
+                handle: HandleId::new(handle),
+            });
+        }
+        self.require_object_address(address)?;
+        let entry = ColoredHandleEntry::new(address, HandleState::stable_for(generation))?;
+        let slot = self.region.entry(HandleId::new(handle));
+        let current = ColoredHandleEntry::from_raw(slot.load(Ordering::Acquire));
+        if current.state() != HandleState::Free {
+            return Err(HandleTableError::InvalidTransition {
+                handle: HandleId::new(handle),
+                expected: HandleState::Free,
+                actual: current.state(),
+            });
+        }
+        slot.store(entry.raw(), Ordering::Release);
+        Ok(())
     }
 
     pub fn allocated_count(&self) -> u64 {
