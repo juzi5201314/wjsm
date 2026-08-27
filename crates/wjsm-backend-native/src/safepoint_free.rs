@@ -1,12 +1,18 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
-use wjsm_ir::{Constant, FunctionId, Instruction, Program, UnaryOp, ValueId};
+use wjsm_ir::{
+    Constant, EVAL_SCOPE_ENV_PARAM, Function, FunctionId, Instruction, Program, Terminator,
+    UnaryOp, ValueId,
+};
 use wjsm_native_abi::NativeHostSymbol;
 
 use crate::call_graph::{collect_direct_calls, direct_call_targets};
 use crate::f64_analysis::infer_f64_values;
 use crate::root_plan::RootPlan;
-pub(crate) fn infer_safepoint_free_functions(program: &Program) -> HashSet<FunctionId> {
+pub(crate) fn infer_safepoint_free_functions(
+    program: &Program,
+    variable_slots: &HashMap<String, u32>,
+) -> HashSet<FunctionId> {
     let call_info = collect_direct_calls(program);
     let inferred_f64 = infer_f64_values(program);
     let frame_locals = program.frame_local_variable_names_by_function();
@@ -23,6 +29,12 @@ pub(crate) fn infer_safepoint_free_functions(program: &Program) -> HashSet<Funct
                 .get(&function_id)
                 .expect("f64 analysis covers every function");
             if has_bigint_constant(function, constants) {
+                return false;
+            }
+            if has_throw_terminator(function) {
+                return false;
+            }
+            if parameters_need_host_store(function, &frame_locals[index], variable_slots) {
                 return false;
             }
             let call_only_refs = call_only_function_ref_values(function, constants);
@@ -80,6 +92,56 @@ fn has_bigint_constant(function: &wjsm_ir::Function, constants: &[Constant]) -> 
             )
         })
     })
+}
+
+fn has_throw_terminator(function: &wjsm_ir::Function) -> bool {
+    function
+        .blocks()
+        .iter()
+        .any(|block| matches!(block.terminator(), Terminator::Throw { .. }))
+}
+
+/// 与 `lower_function_parameters` 一致：非 frame local 的参数会经宿主 `StoreVar` 落槽。
+fn parameters_need_host_store(
+    function: &wjsm_ir::Function,
+    frame_locals: &BTreeSet<&str>,
+    variable_slots: &HashMap<String, u32>,
+) -> bool {
+    let uses_canonical_this = function.blocks().iter().any(|block| {
+        block.instructions().iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                    if name == "$this"
+            )
+        })
+    });
+    for (index, name) in function.params().iter().enumerate() {
+        let storage_name = if index == 0
+            && (function.name().ends_with("$async")
+                || function.name().ends_with("$asyncgen")
+                || name == EVAL_SCOPE_ENV_PARAM)
+        {
+            name.as_str()
+        } else if index == 0 {
+            "$env"
+        } else if index == 1
+            && uses_canonical_this
+            && !function.name().ends_with("$async")
+            && !function.name().ends_with("$asyncgen")
+        {
+            "$this"
+        } else {
+            name.as_str()
+        };
+        if frame_locals.contains(storage_name) {
+            continue;
+        }
+        if variable_slots.contains_key(storage_name) {
+            return true;
+        }
+    }
+    false
 }
 
 fn function_instructions_allowed(
@@ -216,6 +278,19 @@ mod tests {
     use super::*;
     use wjsm_ir::{BasicBlock, BasicBlockId, Builtin, Constant, Function, Terminator};
 
+    fn test_variable_slots(program: &Program) -> HashMap<String, u32> {
+        wjsm_native_abi::native_variable_names(program)
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| {
+                (
+                    name,
+                    u32::try_from(index).expect("test variable slot index fits u32"),
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn numeric_leaf_add_is_safepoint_free() {
         let mut program = Program::new();
@@ -268,7 +343,7 @@ mod tests {
         callee.push_block(block);
         program.push_function(callee);
 
-        let free = infer_safepoint_free_functions(&program);
+        let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
         assert_eq!(free, HashSet::from([FunctionId(1)]));
     }
 
@@ -291,7 +366,7 @@ mod tests {
         function.push_block(block);
         program.push_function(function);
 
-        let free = infer_safepoint_free_functions(&program);
+        let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
         assert!(free.is_empty());
     }
 
@@ -317,7 +392,27 @@ mod tests {
         function.push_block(block);
         program.push_function(function);
 
-        let free = infer_safepoint_free_functions(&program);
+        let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
+        assert!(free.is_empty());
+    }
+
+    #[test]
+    fn throw_disqualifies_function() {
+        let mut program = Program::new();
+        let number = program.add_constant(Constant::Number(42.0));
+        let mut function = Function::new("fail", BasicBlockId(0));
+        function.set_direct_callable(true);
+        function.set_params(vec!["$env".into(), "$this".into()]);
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: number,
+        });
+        block.set_terminator(Terminator::Throw { value: ValueId(0) });
+        function.push_block(block);
+        program.push_function(function);
+
+        let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
         assert!(free.is_empty());
     }
 }

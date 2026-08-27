@@ -1017,7 +1017,7 @@ fn compile_program_inner(
         .filter(|(_, f)| f.direct_callable())
         .map(|(i, _)| FunctionId(u32::try_from(i).expect("function index fits u32")))
         .collect();
-    let safepoint_free_functions = infer_safepoint_free_functions(program);
+    let safepoint_free_functions = infer_safepoint_free_functions(program, variable_slots);
     let compiled: Vec<CompiledFunction> = program
         .functions()
         .par_iter()

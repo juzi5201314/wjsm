@@ -76,14 +76,18 @@ pub(crate) fn collect_direct_calls(program: &Program) -> DirectCallInfo {
                             if callee == value
                     );
                     if !used_as_callee || instruction_uses_other_than_callee(instruction, *value) {
-                        escaped_target[target.0 as usize] = true;
+                        if let Some(escaped) = escaped_target.get_mut(target.0 as usize) {
+                            *escaped = true;
+                        }
                     }
                 }
             }
             let terminator = block.terminator();
             for (value, target) in &targets {
-                if terminator_uses_value(terminator, *value) {
-                    escaped_target[target.0 as usize] = true;
+                if terminator_uses_value(terminator, *value)
+                    && let Some(escaped) = escaped_target.get_mut(target.0 as usize)
+                {
+                    *escaped = true;
                 }
             }
         }
