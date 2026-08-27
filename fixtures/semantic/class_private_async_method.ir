@@ -1904,7 +1904,8 @@ module {
       %11 = const c435
       %12 = get_prop %10, %11
       %13 = call builtin.op_instanceof(%9, %12)
-      branch %13, bb6, bb7
+      %14 = is_exception %13
+      branch %14, bb7, bb6
     bb4:
       %7 = const c434
       return %7
@@ -1913,14 +1914,19 @@ module {
       store var $tmp.0, %6
       jump bb3
     bb6:
-      %14 = const c436
-      jump bb8
+      branch %13, bb8, bb9
     bb7:
-      %15 = const c437
-      jump bb8
+      %15 = call builtin.exception_value(%13)
+      throw %15
     bb8:
-      %16 = phi [(bb6, %14), (bb7, %15)]
-      return %16
+      %16 = const c436
+      jump bb10
+    bb9:
+      %17 = const c437
+      jump bb10
+    bb10:
+      %18 = phi [(bb8, %16), (bb9, %17)]
+      return %18
 
   fn @arrow_36 [captures: $0.outer, $0.Task] [params: $48.$env, $48.$this, $48.value] [entry=bb0]:
     bb0:
