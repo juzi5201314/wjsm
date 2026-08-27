@@ -8654,9 +8654,16 @@ pub(crate) fn emit_strip_gc_color(
     builder.ins().select(keep_raw, input, stripped)
 }
 
+/// CLIF 版 `value::is_exception`：与 `value::is_tagged` 一致，boxed 判定必须
+/// 同时要求 SSO marker 位（48–50）为零。inline ASCII 字符串的 7-bit 码元载荷
+/// 可覆盖 bits 32–36（如 `"[2,3]"` 第 5 个码元 `']'` 恰好落成 TAG_EXCEPTION），
+/// 只查 BOX_BASE + tag 会把这类字符串误判为异常哨兵；标准 tagged handle 的
+/// bits 44–50 恒为零，因此并入掩码不会漏判真实异常。
 fn emit_is_exception(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-    let boxed_bits = builder.ins().band_imm_s(input, box_base);
+    let boxed_mask =
+        i64::from_ne_bytes((value::BOX_BASE | value::INLINE_STRING_MARKER_MASK).to_ne_bytes());
+    let boxed_bits = builder.ins().band_imm_s(input, boxed_mask);
     let boxed = builder
         .ins()
         .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
