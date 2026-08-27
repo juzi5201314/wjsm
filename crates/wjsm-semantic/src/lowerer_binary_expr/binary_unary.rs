@@ -35,6 +35,15 @@ impl Lowerer {
                 }
             },
             swc_ast::Expr::Seq(seq) => seq.exprs.iter().any(|expr| self.expr_can_throw(expr)),
+            // 条件表达式的结果 Phi 直接携带分支值：任一分支可抛时结果可能是异常哨兵。
+            swc_ast::Expr::Cond(cond) => {
+                self.expr_can_throw(cond.test.as_ref())
+                    || self.expr_can_throw(cond.cons.as_ref())
+                    || self.expr_can_throw(cond.alt.as_ref())
+            }
+            // 模板字面量：插值表达式可抛，且任意插值对象的 ToString 可能调用用户
+            // toString 抛出（StringConcatVa 会把异常哨兵透传为结果），保守判定。
+            swc_ast::Expr::Tpl(tpl) => !tpl.exprs.is_empty(),
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
             swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),
@@ -81,6 +90,22 @@ impl Lowerer {
         }
         if self.exception_fork_suppressed() && self.expr_can_throw(expr) {
             *block = self.defer_value_exception_branch(*block, value);
+        }
+        Ok(value)
+    }
+
+    /// 按 ArgumentListEvaluation 求值单个实参/操作数：求值后若该表达式可能直接
+    /// 产生 TAG_EXCEPTION 且允许表达式级异常分叉，则立即检查并传播异常。
+    /// 用于调用/构造实参、方法 receiver、被调用者等消费点，防止异常哨兵
+    /// 被当作普通实参值流入调用（ECMAScript 要求实参求值抛出即中止调用）。
+    pub(crate) fn lower_call_operand_then_continue(
+        &mut self,
+        expr: &swc_ast::Expr,
+        block: &mut BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let value = self.lower_expr_then_continue(expr, block)?;
+        if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+            *block = self.lower_value_exception_branch(*block, value)?;
         }
         Ok(value)
     }
@@ -363,6 +388,14 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+        // 左操作数抛出时必须中止整个逻辑表达式：异常哨兵的原始位恒为真值，
+        // 直接作为 Branch 条件会让 `&&` 错误地继续求值右侧并丢失异常。
+        let block = if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref())
+        {
+            self.lower_value_exception_branch(block, lhs)?
+        } else {
+            block
+        };
         let branch_block = self.resolve_store_block(block);
         // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
         // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch，违反 CFG codegen 契约。

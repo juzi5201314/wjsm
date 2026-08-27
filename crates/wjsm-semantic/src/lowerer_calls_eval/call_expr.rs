@@ -1,26 +1,9 @@
 use super::*;
 
 impl Lowerer {
-    /// 原型方法拦截的公共发射逻辑：把 `obj.method(args...)` 降为
-    /// `CallBuiltin(builtin, [this, args...])`，其中 this = obj。
-    ///
-    /// `lower_call_expr` 中多个拦截点（String/Object/Number/Boolean/
-    /// SharedArrayBuffer/DataView 原型方法）此前各自重复这段「lower obj 为 this →
-    /// lower 每个实参 → 追加 CallBuiltin → 返回 dest」样板。抽成单一 helper 后，
-    /// 拦截点只保留各自的「模式识别 + receiver guard」判定，发射逻辑集中一处。
-    /// Whether `expr` is an unshadowed direct `eval(...)` call (expression form).
-    fn is_direct_eval_call_expr(&self, expr: &swc_ast::Expr) -> bool {
-        let swc_ast::Expr::Call(call) = expr else {
-            return false;
-        };
-        matches!(
-            &call.callee,
-            swc_ast::Callee::Expr(callee)
-                if matches!(callee.as_ref(), swc_ast::Expr::Ident(ident) if ident.sym.as_ref() == "eval")
-        ) && self.scopes.lookup("eval").is_err()
-    }
     /// 将调用实参按 ArgumentListEvaluation 收集为数组。
     /// 普通实参追加一个元素，spread 实参经 iterator 协议追加全部元素。
+    /// 每个实参求值后立即检查异常哨兵：实参抛出必须中止调用并传播。
     pub(crate) fn lower_call_args_to_array(
         &mut self,
         args: &[swc_ast::ExprOrSpread],
@@ -39,7 +22,7 @@ impl Lowerer {
 
         let mut current = block;
         for arg in args {
-            let value = self.lower_expr_then_continue(&arg.expr, &mut current)?;
+            let value = self.lower_call_operand_then_continue(&arg.expr, &mut current)?;
             let builtin = if arg.spread.is_some() {
                 Builtin::ArrayPushSpread
             } else {
@@ -184,10 +167,11 @@ impl Lowerer {
             return self.emit_proto_builtin_call(builtin, member_expr, args, block);
         }
         let mut eval_block = block;
-        let receiver = self.lower_expr_then_continue(member_expr.obj.as_ref(), &mut eval_block)?;
+        let receiver =
+            self.lower_call_operand_then_continue(member_expr.obj.as_ref(), &mut eval_block)?;
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
-            values.push(self.lower_expr_then_continue(&arg.expr, &mut eval_block)?);
+            values.push(self.lower_call_operand_then_continue(&arg.expr, &mut eval_block)?);
         }
         let guard = self.alloc_value();
         self.current_function.append_instruction(
@@ -267,6 +251,13 @@ impl Lowerer {
         Ok(result)
     }
 
+    /// 原型方法拦截的公共发射逻辑：把 `obj.method(args...)` 降为
+    /// `CallBuiltin(builtin, [this, args...])`，其中 this = obj。
+    ///
+    /// `lower_call_expr` 中多个拦截点（String/Object/Number/Boolean/
+    /// SharedArrayBuffer/DataView 原型方法）共用这段「lower obj 为 this →
+    /// lower 每个实参 → 追加 CallBuiltin → 返回 dest」样板，
+    /// 拦截点只保留各自的「模式识别 + receiver guard」判定。
     fn emit_proto_builtin_call(
         &mut self,
         builtin: Builtin,
@@ -274,11 +265,12 @@ impl Lowerer {
         args: &[swc_ast::ExprOrSpread],
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        // 实参求值可能引入控制流（闭包共享环境 phi、三元、new RegExp 异常分叉等），
-        // 必须用 lower_expr_then_continue 推进 call_block，否则 CallBuiltin 会发射在
+        // 实参求值可能引入控制流（闭包共享环境 phi、三元、异常分叉等），
+        // 必须用延续块推进 call_block，否则 CallBuiltin 会发射在
         // 过时的入口块上、先于实参指令执行。
         let mut call_block = block;
-        let this_val = self.lower_expr_then_continue(member_expr.obj.as_ref(), &mut call_block)?;
+        let this_val =
+            self.lower_call_operand_then_continue(member_expr.obj.as_ref(), &mut call_block)?;
         let dest;
         if Self::call_args_have_spread(args) {
             let callee_val =
@@ -297,7 +289,8 @@ impl Lowerer {
         } else {
             let mut builtin_args = vec![this_val];
             for arg in args {
-                builtin_args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+                builtin_args
+                    .push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
             }
             dest = self.alloc_value();
             self.current_function.append_instruction(
@@ -381,11 +374,7 @@ impl Lowerer {
         } else {
             let mut args = Vec::with_capacity(call.args.len());
             for arg in &call.args {
-                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(&arg.expr) {
-                    call_block = self.lower_value_exception_branch(call_block, arg_val)?;
-                }
-                args.push(arg_val);
+                args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
             }
             dest = self.alloc_value();
             self.current_function.append_instruction(
@@ -477,9 +466,10 @@ impl Lowerer {
                                 args.push(self.lower_call_array_element(args_array, 0, call_block));
                             } else {
                                 for arg in &call.args {
-                                    args.push(
-                                        self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
-                                    );
+                                    args.push(self.lower_call_operand_then_continue(
+                                        &arg.expr,
+                                        &mut call_block,
+                                    )?);
                                 }
                                 // 无参数时补 undefined。
                                 if args.len() == 1 {
@@ -647,8 +637,8 @@ impl Lowerer {
                             builtin_from_regexp_proto_method(&prop_ident.sym)
                     {
                         let mut call_block = block;
-                        this_val =
-                            self.lower_expr_then_continue(&member_expr.obj, &mut call_block)?;
+                        this_val = self
+                            .lower_call_operand_then_continue(&member_expr.obj, &mut call_block)?;
                         let mut builtin_args = vec![this_val];
                         if Self::call_args_have_spread(&call.args) {
                             let (args_array, end_block) =
@@ -657,8 +647,9 @@ impl Lowerer {
                             builtin_args
                                 .push(self.lower_call_array_element(args_array, 0, call_block));
                         } else if let Some(arg) = call.args.first() {
-                            builtin_args
-                                .push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+                            builtin_args.push(
+                                self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?,
+                            );
                         } else {
                             let undef_const = self.module.add_constant(Constant::Undefined);
                             let undef_val = self.alloc_value();
@@ -702,7 +693,7 @@ impl Lowerer {
                             call_block = end_block;
                             self.lower_call_array_element(args_array, 0, call_block)
                         } else if let Some(first_arg) = call.args.first() {
-                            self.lower_expr_then_continue(&first_arg.expr, &mut call_block)?
+                            self.lower_call_operand_then_continue(&first_arg.expr, &mut call_block)?
                         } else {
                             let undef_const = self.module.add_constant(Constant::Undefined);
                             let undef_val = self.alloc_value();
@@ -748,8 +739,10 @@ impl Lowerer {
                             builtin_from_promise_proto_method(&prop_ident.sym)
                         {
                             let mut call_block = block;
-                            this_val =
-                                self.lower_expr_then_continue(&member_expr.obj, &mut call_block)?;
+                            this_val = self.lower_call_operand_then_continue(
+                                &member_expr.obj,
+                                &mut call_block,
+                            )?;
                             let mut builtin_args = vec![this_val];
                             let required_args: usize = match promise_proto_builtin {
                                 Builtin::PromiseThen => 3,
@@ -771,9 +764,10 @@ impl Lowerer {
                                 }
                             } else {
                                 for arg in &call.args {
-                                    builtin_args.push(
-                                        self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
-                                    );
+                                    builtin_args.push(self.lower_call_operand_then_continue(
+                                        &arg.expr,
+                                        &mut call_block,
+                                    )?);
                                 }
                                 while builtin_args.len() < required_args {
                                     let undef_const = self.module.add_constant(Constant::Undefined);
@@ -831,10 +825,11 @@ impl Lowerer {
                     }
 
                     // obj.method() → obj 是 this，method 是 callee（未被拦截时）。
-                    // obj 可能因捕获绑定读取产生分支/phi，后续取属性必须接在继续块上。
+                    // obj 可能因捕获绑定读取产生分支/phi，后续取属性必须接在继续块上；
+                    // receiver 求值抛出时必须在取属性前中止并传播。
                     let mut member_block = block;
                     this_val =
-                        self.lower_expr_then_continue(&member_expr.obj, &mut member_block)?;
+                        self.lower_call_operand_then_continue(&member_expr.obj, &mut member_block)?;
                     callee_val = self.lower_member_expr_from_object(
                         member_expr,
                         this_val,
@@ -853,7 +848,10 @@ impl Lowerer {
                             constant: undef_const,
                         },
                     );
-                    callee_val = self.lower_expr(expr, block)?;
+                    // callee 表达式（如 `(f())()`）抛出时必须在调用前中止并传播。
+                    let mut callee_eval_block = block;
+                    callee_val = self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
+                    callee_block = callee_eval_block;
                 }
             }
             swc_ast::Callee::Import { .. } => {
@@ -888,7 +886,7 @@ impl Lowerer {
                 } else {
                     let mut args = Vec::with_capacity(call.args.len());
                     for arg in &call.args {
-                        args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+                        args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
                     }
                     self.current_function.append_instruction(
                         call_block,
@@ -901,7 +899,11 @@ impl Lowerer {
                         },
                     );
                 }
-                let (result, _) = self.select_construct_result(call_block, ctor_result, this_val);
+                // 实参分叉/结果选择都会引入控制流，必须把 merge 块上报为表达式
+                // 延续块；否则语句层 resolve_store_block 会退回已终结的入口块。
+                let (result, merge_block) =
+                    self.select_construct_result(call_block, ctor_result, this_val);
+                self.expr_merge_block = Some(merge_block);
                 return Ok(result);
             }
         }
@@ -922,11 +924,7 @@ impl Lowerer {
         } else {
             let mut args = Vec::with_capacity(call.args.len());
             for arg in &call.args {
-                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-                if self.expr_exception_fork_allowed() && self.is_direct_eval_call_expr(&arg.expr) {
-                    call_block = self.lower_value_exception_branch(call_block, arg_val)?;
-                }
-                args.push(arg_val);
+                args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
             }
             dest = self.alloc_value();
             self.current_function.append_instruction(
@@ -1010,7 +1008,7 @@ impl Lowerer {
         }
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
-            args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+            args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
         }
 
         let dest = self.alloc_value();
@@ -1037,9 +1035,9 @@ impl Lowerer {
         let mut eval_block = block;
         self.current_function.mark_has_eval();
 
-        // 1. Lower the code argument
+        // 1. Lower the code argument（实参抛出必须在构建 ScopeRecord 前中止并传播）
         let code_val = if let Some(first_arg) = call.args.first() {
-            self.lower_expr_then_continue(&first_arg.expr, &mut eval_block)?
+            self.lower_call_operand_then_continue(&first_arg.expr, &mut eval_block)?
         } else {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();
@@ -1052,12 +1050,6 @@ impl Lowerer {
             );
             undef_val
         };
-        if let Some(first_arg) = call.args.first()
-            && self.is_direct_eval_call_expr(&first_arg.expr)
-            && self.expr_exception_fork_allowed()
-        {
-            eval_block = self.lower_value_exception_branch(eval_block, code_val)?;
-        }
 
         // 2. Get all lexically visible bindings (including TDZ)
         let all_bindings: Vec<_> = self

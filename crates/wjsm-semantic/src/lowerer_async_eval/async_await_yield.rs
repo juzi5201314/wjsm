@@ -630,7 +630,7 @@ impl Lowerer {
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
         if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             if ident.sym == "Promise" && self.scopes.lookup(&ident.sym).is_err() {
-                return Ok((self.lower_new_promise(new_expr, block)?, block));
+                return self.lower_new_promise(new_expr, block);
             }
             if ident.sym == "Proxy" && self.scopes.lookup(&ident.sym).is_err() {
                 // new Proxy(target, handler) → CallBuiltin(ProxyCreate, [target, handler])
@@ -662,14 +662,8 @@ impl Lowerer {
                     },
                 );
 
-                let cap = new_expr.args.as_ref().map_or(0, |a| a.len());
-                let mut arg_vals = Vec::with_capacity(cap);
-                if let Some(args) = &new_expr.args {
-                    for arg in args {
-                        let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-                        arg_vals.push(arg_val);
-                    }
-                }
+                let arg_vals =
+                    self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
 
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
@@ -919,16 +913,8 @@ impl Lowerer {
             },
         );
 
-        // Lower arguments.
-        // 性能优化：预分配容量避免循环中多次 reallocation
-        let cap = new_expr.args.as_ref().map_or(0, |a| a.len());
-        let mut arg_vals = Vec::with_capacity(cap);
-        if let Some(args) = &new_expr.args {
-            for arg in args {
-                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
-                arg_vals.push(arg_val);
-            }
-        }
+        // Lower arguments（实参抛出即中止构造并传播）。
+        let arg_vals = self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
 
         // Call the constructor with the new object as `this`.
         let ctor_result = self.alloc_value();
