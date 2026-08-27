@@ -181,14 +181,13 @@ module {
     c178 = number(5)
     c179 = functionref(@15)
     c180 = string("$0.generatorValue")
-    c181 = string("home")
-    c182 = string("prototype")
-    c183 = string("read")
-    c184 = string("$0.generatorValue")
-    c185 = number(2)
-    c186 = string("next")
-    c187 = string("value")
-    c188 = number(2)
+    c181 = string("prototype")
+    c182 = string("read")
+    c183 = string("$0.generatorValue")
+    c184 = number(2)
+    c185 = string("next")
+    c186 = string("value")
+    c187 = number(2)
 
   fn @$0.value [captures: $0.getterValue] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -1027,20 +1026,16 @@ module {
       %335 = load var $0.generatorValue
       %336 = const c180
       %337 = set_prop %334, %336, %335
-      %338 = new_object(capacity=1)
-      set_proto %338, %334
-      %339 = const c181
-      %340 = set_prop %338, %339, %329
-      %341 = call builtin.create_closure(%333, %338)
-      %342 = set_prop %329, %332, %341
-      %343 = const c182
-      %344 = set_prop %328, %343, %329
+      %338 = call builtin.create_closure(%333, %334)
+      %339 = set_prop %329, %332, %338
+      %340 = const c181
+      %341 = set_prop %328, %340, %329
       store var $17.GeneratorClosure, %328
       store var $0.GeneratorClosure, %328
-      %345 = const c154
-      %346 = new_object(capacity=4)
-      %347 = call builtin.get_prototype_from_constructor(%345)
-      set_proto %346, %347
+      %342 = const c154
+      %343 = new_object(capacity=4)
+      %344 = call builtin.get_prototype_from_constructor(%342)
+      set_proto %343, %344
       jump bb97
     bb82:
       %326 = call builtin.exception_value(%324)
@@ -1056,44 +1051,44 @@ module {
     bb87:
       jump bb88
     bb88:
-      %354 = const c183
-      %355 = get_prop %346, %354
-      %356 = call %355, this=%346
-      %357 = is_exception %356
-      branch %357, bb91, bb90
+      %351 = const c182
+      %352 = get_prop %343, %351
+      %353 = call %352, this=%343
+      %354 = is_exception %353
+      branch %354, bb91, bb90
     bb89:
       unreachable
     bb90:
-      store var $0.generator, %356
-      %359 = load var $0.$shared_env
-      %360 = const c184
-      %361 = const c185
-      %362 = set_prop %359, %360, %361
-      %363 = is_exception %362
-      branch %363, bb93, bb92
+      store var $0.generator, %353
+      %356 = load var $0.$shared_env
+      %357 = const c183
+      %358 = const c184
+      %359 = set_prop %356, %357, %358
+      %360 = is_exception %359
+      branch %360, bb93, bb92
     bb91:
-      %358 = call builtin.exception_value(%356)
-      throw %358
+      %355 = call builtin.exception_value(%353)
+      throw %355
     bb92:
-      %365 = load var $0.generator
+      %362 = load var $0.generator
+      %363 = const c185
+      %364 = get_prop %362, %363
+      %365 = call %364, this=%362
       %366 = const c186
       %367 = get_prop %365, %366
-      %368 = call %367, this=%365
-      %369 = const c187
-      %370 = get_prop %368, %369
-      %371 = const c188
-      %372 = call builtin.strict_eq(%370, %371)
-      %373 = call builtin.console.log(%372)
-      %374 = is_exception %373
-      branch %374, bb95, bb94
+      %368 = const c187
+      %369 = call builtin.strict_eq(%367, %368)
+      %370 = call builtin.console.log(%369)
+      %371 = is_exception %370
+      branch %371, bb95, bb94
     bb93:
-      %364 = call builtin.exception_value(%362)
-      throw %364
+      %361 = call builtin.exception_value(%359)
+      throw %361
     bb94:
       return
     bb95:
-      %375 = call builtin.exception_value(%373)
-      throw %375
+      %372 = call builtin.exception_value(%370)
+      throw %372
     bb96:
       jump bb84
     bb97:
@@ -1125,27 +1120,27 @@ module {
       %185 = const c106
       branch %184, bb31, bb32
     bb105:
-      %382 = const c96
+      %379 = const c96
       jump bb106
     bb106:
-      %383 = phi [(bb105, %171), (bb108, %385)]
-      %384 = call builtin.object.has_own(%383, %382)
-      branch %384, bb107, bb108
+      %380 = phi [(bb105, %171), (bb108, %382)]
+      %381 = call builtin.object.has_own(%380, %379)
+      branch %381, bb107, bb108
     bb107:
       jump bb109
     bb108:
-      %385 = call builtin.object.get_prototype_of(%383)
-      %386 = is_nullish %385
-      branch %386, bb107, bb106
+      %382 = call builtin.object.get_prototype_of(%380)
+      %383 = is_nullish %382
+      branch %383, bb107, bb106
     bb109:
-      %388 = const c97
-      %389 = const c98
-      %390 = set_prop %383, %388, %389
-      %391 = is_exception %390
-      branch %391, bb111, bb110
+      %385 = const c97
+      %386 = const c98
+      %387 = set_prop %380, %385, %386
+      %388 = is_exception %387
+      branch %388, bb111, bb110
     bb110:
       jump bb104
     bb111:
-      %392 = call builtin.exception_value(%390)
-      throw %392
+      %389 = call builtin.exception_value(%387)
+      throw %389
 }

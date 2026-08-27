@@ -420,15 +420,25 @@ impl Lowerer {
                             .set_initialised(sid, class_name, true)
                             .map_err(|msg| self.error(method.span, msg))?;
                     }
+                    // generator（含 async generator）body 目前不消费 env 上的 `home`
+                    // （body 内 super 是 early error），若仍包一层持有 `home` 的 method env，
+                    // body 深度 0 的捕获写会落在该 wrapper 上并遮蔽共享 env（外层读不到写回）。
+                    // 故 generator wrapper 直接以共享 env 为闭包 env，与对象字面量路径一致；
+                    // 仅 async 非 generator 方法保留 home wrapper（super 经其接线）。
+                    let method_home = if method.function.is_generator {
+                        None
+                    } else {
+                        Some(target)
+                    };
                     let function =
-                        self.lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
+                        self.lower_method_prop_to_fn(&method.key, &method.function, method_home)?;
                     if let Some(sid) = class_scope_id {
                         let _ = self.scopes.set_initialised(sid, class_name, false);
                     }
                     let (continuation, mut method_value) = self.materialize_method_function_value(
                         block,
                         &function,
-                        Some(target),
+                        method_home,
                         method.function.span,
                     )?;
                     block = continuation;
