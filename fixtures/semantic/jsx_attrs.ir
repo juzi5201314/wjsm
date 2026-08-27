@@ -91,22 +91,34 @@ module {
       %32 = load var $0.el
       %33 = const c26
       %34 = get_prop %32, %33
-      %35 = call builtin.console.log(%34)
-      %36 = is_exception %35
-      branch %36, bb2, bb1
+      %35 = is_exception %34
+      branch %35, bb2, bb1
     bb1:
-      %38 = load var $0.el
-      %39 = const c27
-      %40 = get_prop %38, %39
-      %41 = call builtin.console.log(%40)
-      %42 = is_exception %41
-      branch %42, bb4, bb3
+      %37 = call builtin.console.log(%34)
+      %38 = is_exception %37
+      branch %38, bb4, bb3
     bb2:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %36 = call builtin.exception_value(%34)
+      throw %36
     bb3:
-      return
+      %40 = load var $0.el
+      %41 = const c27
+      %42 = get_prop %40, %41
+      %43 = is_exception %42
+      branch %43, bb6, bb5
     bb4:
-      %43 = call builtin.exception_value(%41)
-      throw %43
+      %39 = call builtin.exception_value(%37)
+      throw %39
+    bb5:
+      %45 = call builtin.console.log(%42)
+      %46 = is_exception %45
+      branch %46, bb8, bb7
+    bb6:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb7:
+      return
+    bb8:
+      %47 = call builtin.exception_value(%45)
+      throw %47
 }

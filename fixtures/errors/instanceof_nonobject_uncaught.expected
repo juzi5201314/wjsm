@@ -1,0 +1,4 @@
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: TypeError: Right-hand side of 'instanceof' is not an object

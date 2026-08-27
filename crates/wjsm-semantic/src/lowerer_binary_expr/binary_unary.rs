@@ -35,6 +35,26 @@ impl Lowerer {
                 }
             },
             swc_ast::Expr::Seq(seq) => seq.exprs.iter().any(|expr| self.expr_can_throw(expr)),
+            // 条件表达式的结果 Phi 直接携带分支值：任一分支可抛时结果可能是异常哨兵。
+            swc_ast::Expr::Cond(cond) => {
+                self.expr_can_throw(cond.test.as_ref())
+                    || self.expr_can_throw(cond.cons.as_ref())
+                    || self.expr_can_throw(cond.alt.as_ref())
+            }
+            // 模板字面量：插值表达式可抛，且任意插值对象的 ToString 可能调用用户
+            // toString 抛出（StringConcatVa 会把异常哨兵透传为结果），保守判定。
+            swc_ast::Expr::Tpl(tpl) => !tpl.exprs.is_empty(),
+            // -/+/~ 经 ToNumeric 可调用用户 valueOf/toString 抛出（Symbol/BigInt
+            // 混用也抛 TypeError）；delete 成员可抛（严格模式不可配置属性、Proxy
+            // trap）。!/void/typeof 自身不产出异常哨兵（ToBoolean/常量/typeof 表
+            // 全定义），其操作数异常已在 lower_unary 内经操作数分叉传播。
+            swc_ast::Expr::Unary(unary) => match unary.op {
+                swc_ast::UnaryOp::Minus | swc_ast::UnaryOp::Plus | swc_ast::UnaryOp::Tilde => true,
+                swc_ast::UnaryOp::Delete => {
+                    matches!(unary.arg.as_ref(), swc_ast::Expr::Member(_))
+                }
+                _ => false,
+            },
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
             swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),
@@ -83,6 +103,39 @@ impl Lowerer {
             *block = self.defer_value_exception_branch(*block, value);
         }
         Ok(value)
+    }
+
+    /// 按 ArgumentListEvaluation 求值单个实参/操作数：求值后若该表达式可能直接
+    /// 产生 TAG_EXCEPTION 且允许表达式级异常分叉，则立即检查并传播异常。
+    /// 用于调用/构造实参、方法 receiver、被调用者等消费点，防止异常哨兵
+    /// 被当作普通实参值流入调用（ECMAScript 要求实参求值抛出即中止调用）。
+    pub(crate) fn lower_call_operand_then_continue(
+        &mut self,
+        expr: &swc_ast::Expr,
+        block: &mut BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let value = self.lower_expr_then_continue(expr, block)?;
+        if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+            *block = self.lower_value_exception_branch(*block, value)?;
+        }
+        Ok(value)
+    }
+
+    /// 对可能为异常哨兵的值做三态检查：普通体内立即分叉传播；规范拥有者
+    /// （动态 import 等）抑制期间延迟分叉交拥有者处理；async 状态机体内
+    /// 不插入表达式级分叉（见 `expr_exception_fork_allowed`）。
+    pub(crate) fn fork_or_defer_exception_branch(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        if self.expr_exception_fork_allowed() {
+            return self.lower_value_exception_branch(block, value);
+        }
+        if self.exception_fork_suppressed() {
+            return Ok(self.defer_value_exception_branch(block, value));
+        }
+        Ok(block)
     }
 
     pub(crate) fn lower_expr_collecting_exception_forks_then_continue(
@@ -153,13 +206,7 @@ impl Lowerer {
                 args: vec![array, source],
             },
         );
-        if self.expr_exception_fork_allowed() {
-            return self.lower_value_exception_branch(block, result);
-        }
-        if self.exception_fork_suppressed() {
-            return Ok(self.defer_value_exception_branch(block, result));
-        }
-        Ok(block)
+        self.fork_or_defer_exception_branch(block, result)
     }
 
     /// 发射 `ObjectSpread` 并检查其结果：CopyDataProperties 读取 source 自有
@@ -309,8 +356,18 @@ impl Lowerer {
                 }
                 let mut current_block = block;
                 let prop = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                // ES §13.10.1 步骤 2 `? GetValue(lref)`：LHS 求值异常必须先传播并
+                // 短路 RHS 求值，不得作为普通键值流入 HasProperty。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, prop)?;
+                }
                 let object =
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                // 步骤 4 `? GetValue(rref)`：RHS 求值异常传播，不得被吞掉返回 false
+                //（抑制上下文的延迟分叉由 lower_expr_then_continue 处理）。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, object)?;
+                }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -320,7 +377,13 @@ impl Lowerer {
                         args: vec![object, prop],
                     },
                 );
-                if current_block != block {
+                // 步骤 5：RHS 非对象的 TypeError 与 Proxy has trap 异常须在本函数内
+                // 分叉抛出，try/catch 才能本地捕获；抑制上下文由延迟分叉兜底
+                //（expr_can_throw 含 In），async 状态机内由宿主端透传异常值。
+                if self.expr_exception_fork_allowed() {
+                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                    self.expr_merge_block = Some(continue_block);
+                } else if current_block != block {
                     self.expr_merge_block = Some(current_block);
                 }
                 Ok(dest)
@@ -329,8 +392,17 @@ impl Lowerer {
             InstanceOf => {
                 let mut current_block = block;
                 let value = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                // ES §13.10.1 步骤 2：LHS 求值异常先传播并短路 RHS 求值。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, value)?;
+                }
                 let constructor =
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                // 步骤 4：RHS 求值异常传播，不得被吞掉返回 false。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
+                    current_block =
+                        self.lower_value_exception_branch(current_block, constructor)?;
+                }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -340,7 +412,12 @@ impl Lowerer {
                         args: vec![value, constructor],
                     },
                 );
-                if current_block != block {
+                // InstanceofOperator 自身的 TypeError（RHS 非对象/非可调用、非对象
+                // prototype）与 @@hasInstance 用户码异常须分叉传播；三态处理同 In。
+                if self.expr_exception_fork_allowed() {
+                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                    self.expr_merge_block = Some(continue_block);
+                } else if current_block != block {
                     self.expr_merge_block = Some(current_block);
                 }
                 Ok(dest)
@@ -462,6 +539,14 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+        // 左操作数抛出时必须中止整个逻辑表达式：异常哨兵的原始位恒为真值，
+        // 直接作为 Branch 条件会让 `&&` 错误地继续求值右侧并丢失异常。
+        let block = if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref())
+        {
+            self.lower_value_exception_branch(block, lhs)?
+        } else {
+            block
+        };
         let branch_block = self.resolve_store_block(block);
         // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
         // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch，违反 CFG codegen 契约。
@@ -557,7 +642,8 @@ impl Lowerer {
         match unary.op {
             Bang => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -572,7 +658,8 @@ impl Lowerer {
             }
             Minus => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -587,7 +674,8 @@ impl Lowerer {
             }
             Plus => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -602,7 +690,8 @@ impl Lowerer {
             }
             Tilde => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -617,7 +706,7 @@ impl Lowerer {
             }
             Void => {
                 let mut current_block = block;
-                let _ = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let _ = self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 // void returns undefined
                 let undef = self.module.add_constant(Constant::Undefined);
                 let dest = self.alloc_value();
@@ -665,7 +754,7 @@ impl Lowerer {
                 }
 
                 let mut current_block = block;
-                let arg = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let arg = self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -684,8 +773,9 @@ impl Lowerer {
                     // delete obj.prop → DeleteProp 指令
                     swc_ast::Expr::Member(member) => {
                         let mut current_block = block;
+                        // 对象/计算键求值抛出必须在 DeleteProp 前中止并传播。
                         let object =
-                            self.lower_expr_then_continue(&member.obj, &mut current_block)?;
+                            self.lower_call_operand_then_continue(&member.obj, &mut current_block)?;
                         let key = match &member.prop {
                             swc_ast::MemberProp::Ident(ident) => {
                                 let key_str = ident.sym.to_string();
@@ -700,9 +790,11 @@ impl Lowerer {
                                 );
                                 key_val
                             }
-                            swc_ast::MemberProp::Computed(computed) => {
-                                self.lower_expr_then_continue(&computed.expr, &mut current_block)?
-                            }
+                            swc_ast::MemberProp::Computed(computed) => self
+                                .lower_call_operand_then_continue(
+                                    &computed.expr,
+                                    &mut current_block,
+                                )?,
                             _ => {
                                 return Err(self.error(
                                     member.span(),
@@ -747,7 +839,7 @@ impl Lowerer {
         update: &swc_ast::UpdateExpr,
         mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        use swc_ast::UpdateOp;
+        let entry_block = block;
 
         // ── Step 1: 确定存储目标类型并加载当前值 ──
         enum Target {
@@ -822,7 +914,8 @@ impl Lowerer {
             }
             swc_ast::Expr::Member(member) => {
                 let mut current_block = block;
-                let obj = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
+                // 对象/计算键求值抛出必须在属性读取前中止并传播。
+                let obj = self.lower_call_operand_then_continue(&member.obj, &mut current_block)?;
                 let key = match &member.prop {
                     swc_ast::MemberProp::Ident(ident) => {
                         let key_const = self
@@ -839,7 +932,7 @@ impl Lowerer {
                         key_dest
                     }
                     swc_ast::MemberProp::Computed(computed) => {
-                        self.lower_expr_then_continue(&computed.expr, &mut current_block)?
+                        self.lower_call_operand_then_continue(&computed.expr, &mut current_block)?
                     }
                     _ => {
                         return Err(self.error(
@@ -890,6 +983,8 @@ impl Lowerer {
                         key: *key,
                     },
                 );
+                // 成员读取可触发用户 getter 抛出，必须在 ToNumeric 前中止传播。
+                block = self.fork_or_defer_exception_branch(block, old_val)?;
             }
         }
         if let Some(name) = &tdz_checked_name {
@@ -898,43 +993,9 @@ impl Lowerer {
             block = continue_block;
         }
 
-        // 2. 转换为 Number (ToNumber)
-        let num_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Unary {
-                dest: num_val,
-                op: UnaryOp::Pos,
-                value: old_val,
-            },
-        );
-
-        // 3. 常量 1.0
-        let one = self.module.add_constant(Constant::Number(1.0));
-        let one_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: one_val,
-                constant: one,
-            },
-        );
-
-        // 4. 执行加法或减法
-        let new_val = self.alloc_value();
-        let op = match update.op {
-            UpdateOp::PlusPlus => BinaryOp::Add,
-            UpdateOp::MinusMinus => BinaryOp::Sub,
-        };
-        self.current_function.append_instruction(
-            block,
-            Instruction::Binary {
-                dest: new_val,
-                op,
-                lhs: num_val,
-                rhs: one_val,
-            },
-        );
+        // 2–4. ToNumeric（抛出即中止、不得写回）后执行 ±1。
+        let (num_val, new_val, math_block) = self.append_update_math(block, old_val, update.op)?;
+        block = math_block;
 
         // 5. 写回 (StoreVar / SetProp / SetProp for captured)
         match target {
@@ -950,11 +1011,11 @@ impl Lowerer {
                         value: new_val,
                     },
                 );
+                // owner 解析 / TDZ / ToNumeric 异常分叉都可能推进块；最终延续块
+                // 必须上报，否则后续语句会误写已终结的入口块。
                 let after_write_block =
                     self.append_eval_var_leak_if_needed(&name, kind, new_val, block)?;
-                if after_write_block != block {
-                    self.expr_merge_block = Some(after_write_block);
-                }
+                self.publish_expr_continuation(entry_block, after_write_block);
             }
             Target::Captured(env_val, key_val) => {
                 let write_result = self.emit_set_prop(block, env_val, key_val, new_val);
@@ -972,12 +1033,16 @@ impl Lowerer {
         Ok(if update.prefix { new_val } else { num_val })
     }
 
+    /// 发射 update 表达式的 ToNumeric 与 ±1，返回 (旧数值, 新数值, 延续块)。
+    /// ToNumeric（UnaryOp::Pos）对对象操作数可调用用户 valueOf/toString 抛出，
+    /// 必须在写回前检查并传播；证明为 Number 的热路径（循环计数器等）由
+    /// typed_cfg 按值类分析折叠该分叉，不产生运行时代价。
     pub(crate) fn append_update_math(
         &mut self,
         block: BasicBlockId,
         old_val: ValueId,
         update_op: swc_ast::UpdateOp,
-    ) -> (ValueId, ValueId) {
+    ) -> Result<(ValueId, ValueId, BasicBlockId), LoweringError> {
         let num_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -987,6 +1052,7 @@ impl Lowerer {
                 value: old_val,
             },
         );
+        let block = self.fork_or_defer_exception_branch(block, num_val)?;
 
         let one = self.module.add_constant(Constant::Number(1.0));
         let one_val = self.alloc_value();
@@ -1013,7 +1079,7 @@ impl Lowerer {
             },
         );
 
-        (num_val, new_val)
+        Ok((num_val, new_val, block))
     }
 
     fn lower_update_shared_local(
@@ -1084,9 +1150,10 @@ impl Lowerer {
                 name: ir_name.clone(),
             },
         );
-        let (local_num, local_new) = self.append_update_math(local_block, local_old, update.op);
+        let (local_num, local_new, local_continue) =
+            self.append_update_math(local_block, local_old, update.op)?;
         self.current_function.append_instruction(
-            local_block,
+            local_continue,
             Instruction::StoreVar {
                 name: ir_name.clone(),
                 value: local_new,
@@ -1094,7 +1161,7 @@ impl Lowerer {
         );
         let local_result = if update.prefix { local_new } else { local_num };
         self.current_function
-            .set_terminator(local_block, Terminator::Jump { target: merge });
+            .set_terminator(local_continue, Terminator::Jump { target: merge });
 
         let key_val = self.append_env_key_const(env_block, binding);
         let env_old = self.alloc_value();
@@ -1106,9 +1173,10 @@ impl Lowerer {
                 key: key_val,
             },
         );
-        let (env_num, env_new) = self.append_update_math(env_block, env_old, update.op);
-        let write_result = self.emit_set_prop(env_block, env_val, key_val, env_new);
-        let env_continue = self.lower_value_exception_branch(env_block, write_result)?;
+        let (env_num, env_new, env_math_continue) =
+            self.append_update_math(env_block, env_old, update.op)?;
+        let write_result = self.emit_set_prop(env_math_continue, env_val, key_val, env_new);
+        let env_continue = self.lower_value_exception_branch(env_math_continue, write_result)?;
         self.current_function.append_instruction(
             env_continue,
             Instruction::StoreVar {
@@ -1127,7 +1195,7 @@ impl Lowerer {
                 dest: result,
                 sources: vec![
                     PhiSource {
-                        predecessor: local_block,
+                        predecessor: local_continue,
                         value: local_result,
                     },
                     PhiSource {

@@ -124,30 +124,36 @@ module {
       call builtin.define_property(%22, %30, %31)
       %36 = const c33
       %37 = const c34
-      %42 = const c0
-      jump bb4
+      %44 = const c0
+      jump bb6
     bb1:
-      return
+      %41 = call builtin.console.log(%59)
+      %42 = is_exception %41
+      branch %42, bb4, bb3
     bb2:
-      %41 = call builtin.exception_value(%39)
-      throw %41
+      %40 = call builtin.exception_value(%59)
+      throw %40
     bb3:
-      %39 = call builtin.console.log(%57)
-      %40 = is_exception %39
-      branch %40, bb2, bb1
+      return
     bb4:
-      %44 = const c20
-      %45 = get_elem %22, %44
-      %47 = add %45, %36
-      %49 = const c21
-      %50 = get_elem %22, %49
-      %51 = add %47, %50
-      %53 = add %51, %37
-      %55 = const c22
-      %56 = get_elem %22, %55
-      %57 = add %53, %56
-      store var $1.a, %42
-      store var $1.b, %42
-      store var $1.strings, %42
-      jump bb3
+      %43 = call builtin.exception_value(%41)
+      throw %43
+    bb5:
+      %39 = is_exception %59
+      branch %39, bb2, bb1
+    bb6:
+      %46 = const c20
+      %47 = get_elem %22, %46
+      %49 = add %47, %36
+      %51 = const c21
+      %52 = get_elem %22, %51
+      %53 = add %49, %52
+      %55 = add %53, %37
+      %57 = const c22
+      %58 = get_elem %22, %57
+      %59 = add %55, %58
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      jump bb5
 }

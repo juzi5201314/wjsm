@@ -87,15 +87,21 @@ module {
       %30 = const c24
       %31 = load var $0.proxy
       %32 = call builtin.reflect.get(%29, %30, %31)
-      %33 = call builtin.console.log(%32)
-      %34 = is_exception %33
-      branch %34, bb4, bb3
+      %33 = is_exception %32
+      branch %33, bb4, bb3
     bb2:
       %28 = call builtin.exception_value(%26)
       throw %28
     bb3:
-      return
+      %35 = call builtin.console.log(%32)
+      %36 = is_exception %35
+      branch %36, bb6, bb5
     bb4:
-      %35 = call builtin.exception_value(%33)
-      throw %35
+      %34 = call builtin.exception_value(%32)
+      throw %34
+    bb5:
+      return
+    bb6:
+      %37 = call builtin.exception_value(%35)
+      throw %37
 }

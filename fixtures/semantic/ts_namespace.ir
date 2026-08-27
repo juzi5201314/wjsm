@@ -94,12 +94,18 @@ module {
       %29 = get_prop %27, %28
       %30 = const c25
       %31 = call %29, this=%27, args=[%30]
-      %32 = call builtin.console.log(%31)
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %32 = is_exception %31
+      branch %32, bb2, bb1
     bb1:
-      return
+      %34 = call builtin.console.log(%31)
+      %35 = is_exception %34
+      branch %35, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %33 = call builtin.exception_value(%31)
+      throw %33
+    bb3:
+      return
+    bb4:
+      %36 = call builtin.exception_value(%34)
+      throw %36
 }

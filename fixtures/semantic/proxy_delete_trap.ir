@@ -95,15 +95,21 @@ module {
       %31 = load var $0.proxy
       %32 = const c26
       %33 = delete_prop %31, %32
-      %34 = call builtin.console.log(%33)
-      %35 = is_exception %34
-      branch %35, bb4, bb3
+      %34 = is_exception %33
+      branch %34, bb4, bb3
     bb2:
       %30 = call builtin.exception_value(%28)
       throw %30
     bb3:
-      return
+      %36 = call builtin.console.log(%33)
+      %37 = is_exception %36
+      branch %37, bb6, bb5
     bb4:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %35 = call builtin.exception_value(%33)
+      throw %35
+    bb5:
+      return
+    bb6:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

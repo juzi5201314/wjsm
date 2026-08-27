@@ -14,9 +14,9 @@ use super::proxy;
 use super::runtime::PrimitiveHint;
 use super::runtime::{
     abstract_equal, fail_dispatch, get_property, has_property, is_truthy, reference_error,
-    strict_equal, to_number, to_primitive, type_error,
+    render_value, strict_equal, to_number, to_primitive, type_error,
 };
-use crate::NativeAgentState;
+use crate::{NativeAgentState, NativeCallableKind};
 
 pub(super) fn dispatch_operator(
     ctx: &mut NativeVmContext,
@@ -47,11 +47,7 @@ pub(super) fn dispatch_operator(
             let [object, key] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            if value::is_proxy(*object) {
-                proxy::has(ctx, state, &[*object, *key])
-            } else {
-                value::encode_bool(has_property(state, *object, *key))
-            }
+            op_in(ctx, state, *object, *key)
         }
         Builtin::Throw => args
             .first()
@@ -178,16 +174,60 @@ fn type_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
+/// ES §13.10.1 `in`：lval（key）先于 rval（object）求值。async 状态机等
+/// 不插表达式级分叉的上下文里，求值异常以 TAG_EXCEPTION 流入，按求值顺序
+/// 原样透传；rval 非对象（null/undefined/原始值）抛 TypeError（步骤 5，
+/// 先于 ToPropertyKey），文案与 V8/Node 对齐；Proxy 走 has trap，trap
+/// 异常由返回值传播。
+fn op_in(ctx: &mut NativeVmContext, state: &mut NativeAgentState, object: i64, key: i64) -> i64 {
+    if value::is_exception(key) {
+        return key;
+    }
+    if value::is_exception(object) {
+        return object;
+    }
+    if !(value::is_js_object(object) || value::is_regexp(object)) {
+        let rendered_key = render_value(state, key);
+        let rendered_object = render_value(state, object);
+        return type_error(
+            ctx,
+            state,
+            &format!(
+                "Cannot use 'in' operator to search for '{rendered_key}' in {rendered_object}"
+            ),
+        );
+    }
+    if value::is_proxy(object) {
+        return proxy::has(ctx, state, &[object, key]);
+    }
+    value::encode_bool(has_property(state, object, key))
+}
+
+/// ES InstanceofOperator：步骤 1 target 非对象抛 TypeError（先于
+/// @@hasInstance 查找），随后 @@hasInstance → OrdinaryHasInstance。
+/// async 状态机上下文的求值异常按求值顺序（lval 先于 rval）透传。
 fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [object, constructor] = args else {
         return fail_dispatch(ctx);
     };
+    if value::is_exception(*object) {
+        return *object;
+    }
+    if value::is_exception(*constructor) {
+        return *constructor;
+    }
+    if !(value::is_js_object(*constructor) || value::is_regexp(*constructor)) {
+        return type_error(
+            ctx,
+            state,
+            "Right-hand side of 'instanceof' is not an object",
+        );
+    }
     let has_instance_key = value::encode_handle(value::TAG_SYMBOL, wk_symbol::HAS_INSTANCE);
     let method = match get_property(ctx, state, *constructor, has_instance_key) {
         Ok(method) => method,
-        Err(()) => {
-            return type_error(ctx, state, "Right-hand side of instanceof is not an object");
-        }
+        // 步骤 1 已保证 target 是对象，取 @@hasInstance 失败属内部错误。
+        Err(()) => return fail_dispatch(ctx),
     };
     if value::is_exception(method) {
         return method;
@@ -205,7 +245,26 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         return value::encode_bool(is_truthy(state, result));
     }
     if !state.is_callable_value(*constructor) {
-        return type_error(ctx, state, "Right-hand side of instanceof is not callable");
+        return type_error(
+            ctx,
+            state,
+            "Right-hand side of 'instanceof' is not callable",
+        );
+    }
+    // OrdinaryHasInstance 步骤 2：bound function（Function.prototype.bind 产物，
+    // 表示为 NativeCallableKind::Bound）委托 [[BoundTargetFunction]] 重新走
+    // InstanceofOperator（含目标自身的 @@hasInstance 查找），而不是读 bound
+    // 包装（无 prototype 属性）误抛 TypeError。
+    if let Some(NativeCallableKind::Bound(index)) = state.native_callable_kind(*constructor) {
+        let Some(target) = state
+            .bound_functions
+            .get(index as usize)
+            .and_then(|bound| bound.as_ref())
+            .map(|bound| bound.target)
+        else {
+            return fail_dispatch(ctx);
+        };
+        return instance_of(ctx, state, &[*object, target]);
     }
     let Some(prototype_key) = state.intern_text("prototype".into(), value::TAG_STRING) else {
         return fail_dispatch(ctx);
@@ -217,15 +276,19 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     if value::is_exception(prototype) {
         return prototype;
     }
+    // prototype 只需是对象（含 RegExp 等 exotic 对象）；非对象时文案与
+    // V8/Node 对齐（渲染实际值）。
     if !(value::is_object(prototype)
         || value::is_array(prototype)
         || value::is_callable(prototype)
-        || value::is_proxy(prototype))
+        || value::is_proxy(prototype)
+        || value::is_regexp(prototype))
     {
+        let rendered = render_value(state, prototype);
         return type_error(
             ctx,
             state,
-            "Function has non-object prototype in instanceof check",
+            &format!("Function has non-object prototype '{rendered}' in instanceof check"),
         );
     }
     value::encode_bool(state.prototype_chain_contains_value(*object, prototype))

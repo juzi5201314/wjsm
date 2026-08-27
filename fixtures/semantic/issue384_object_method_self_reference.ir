@@ -439,30 +439,36 @@ module {
       throw %14
     bb5:
       %22 = pos %19
-      %23 = const c160
-      %24 = add %22, %23
-      %25 = set_prop %15, %16, %24
-      %26 = is_exception %25
-      branch %26, bb8, bb7
+      %23 = is_exception %22
+      branch %23, bb8, bb7
     bb6:
       %21 = call builtin.exception_value(%19)
       throw %21
     bb7:
-      %28 = load var $env
-      %29 = const c161
-      %30 = get_prop %28, %29
-      %31 = const c162
-      %32 = call builtin.tdz_check(%30, %31)
-      %33 = is_exception %32
-      branch %33, bb10, bb9
+      %25 = const c160
+      %26 = add %22, %25
+      %27 = set_prop %15, %16, %26
+      %28 = is_exception %27
+      branch %28, bb10, bb9
     bb8:
-      %27 = call builtin.exception_value(%25)
-      throw %27
+      %24 = call builtin.exception_value(%22)
+      throw %24
     bb9:
-      return %32
+      %30 = load var $env
+      %31 = const c161
+      %32 = get_prop %30, %31
+      %33 = const c162
+      %34 = call builtin.tdz_check(%32, %33)
+      %35 = is_exception %34
+      branch %35, bb12, bb11
     bb10:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %29 = call builtin.exception_value(%27)
+      throw %29
+    bb11:
+      return %34
+    bb12:
+      %36 = call builtin.exception_value(%34)
+      throw %36
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -621,408 +627,456 @@ module {
     bb14:
       %98 = phi [(bb11, %96), (bb13, %97)]
       %99 = call builtin.strict_eq(%90, %98)
-      %100 = call builtin.console.log(%99)
-      %101 = is_exception %100
-      branch %101, bb16, bb15
+      %100 = is_exception %99
+      branch %100, bb16, bb15
     bb15:
-      %103 = load var $0.$shared_env
-      %104 = const c91
-      %105 = stricteq %103, %104
-      %106 = const c92
-      branch %105, bb17, bb18
+      %102 = call builtin.console.log(%99)
+      %103 = is_exception %102
+      branch %103, bb18, bb17
     bb16:
-      %102 = call builtin.exception_value(%100)
-      throw %102
+      %101 = call builtin.exception_value(%99)
+      throw %101
     bb17:
-      %108 = load var $0.set
-      jump bb20
+      %105 = load var $0.$shared_env
+      %106 = const c91
+      %107 = stricteq %105, %106
+      %108 = const c92
+      branch %107, bb19, bb20
     bb18:
-      %107 = call builtin.object.has_own(%103, %106)
-      branch %107, bb19, bb17
+      %104 = call builtin.exception_value(%102)
+      throw %104
     bb19:
-      %109 = get_prop %103, %106
-      jump bb20
+      %110 = load var $0.set
+      jump bb22
     bb20:
-      %110 = phi [(bb17, %108), (bb19, %109)]
-      %111 = const c93
-      %112 = get_prop %110, %111
-      %113 = load var $0.$shared_env
-      %114 = const c94
-      %115 = stricteq %113, %114
-      %116 = const c95
-      branch %115, bb21, bb22
+      %109 = call builtin.object.has_own(%105, %108)
+      branch %109, bb21, bb19
     bb21:
-      %118 = load var $0.set
-      jump bb24
+      %111 = get_prop %105, %108
+      jump bb22
     bb22:
-      %117 = call builtin.object.has_own(%113, %116)
-      branch %117, bb23, bb21
+      %112 = phi [(bb19, %110), (bb21, %111)]
+      %113 = const c93
+      %114 = get_prop %112, %113
+      %115 = load var $0.$shared_env
+      %116 = const c94
+      %117 = stricteq %115, %116
+      %118 = const c95
+      branch %117, bb23, bb24
     bb23:
-      %119 = get_prop %113, %116
-      jump bb24
+      %120 = load var $0.set
+      jump bb26
     bb24:
-      %120 = phi [(bb21, %118), (bb23, %119)]
-      %121 = call builtin.strict_eq(%112, %120)
-      %122 = call builtin.console.log(%121)
-      %123 = is_exception %122
-      branch %123, bb26, bb25
+      %119 = call builtin.object.has_own(%115, %118)
+      branch %119, bb25, bb23
     bb25:
-      %125 = load var $0.$shared_env
-      %126 = const c96
-      %127 = stricteq %125, %126
-      %128 = const c97
-      branch %127, bb27, bb28
+      %121 = get_prop %115, %118
+      jump bb26
     bb26:
-      %124 = call builtin.exception_value(%122)
-      throw %124
+      %122 = phi [(bb23, %120), (bb25, %121)]
+      %123 = call builtin.strict_eq(%114, %122)
+      %124 = is_exception %123
+      branch %124, bb28, bb27
     bb27:
-      %130 = load var $0.set
-      jump bb30
+      %126 = call builtin.console.log(%123)
+      %127 = is_exception %126
+      branch %127, bb30, bb29
     bb28:
-      %129 = call builtin.object.has_own(%125, %128)
-      branch %129, bb29, bb27
+      %125 = call builtin.exception_value(%123)
+      throw %125
     bb29:
-      %131 = get_prop %125, %128
-      jump bb30
+      %129 = load var $0.$shared_env
+      %130 = const c96
+      %131 = stricteq %129, %130
+      %132 = const c97
+      branch %131, bb31, bb32
     bb30:
-      %132 = phi [(bb27, %130), (bb29, %131)]
-      %133 = const c98
-      %134 = load var $0.$shared_env
-      %135 = const c99
-      %136 = stricteq %134, %135
-      %137 = const c100
-      branch %136, bb31, bb32
+      %128 = call builtin.exception_value(%126)
+      throw %128
     bb31:
-      %139 = load var $0.set
+      %134 = load var $0.set
       jump bb34
     bb32:
-      %138 = call builtin.object.has_own(%134, %137)
-      branch %138, bb33, bb31
+      %133 = call builtin.object.has_own(%129, %132)
+      branch %133, bb33, bb31
     bb33:
-      %140 = get_prop %134, %137
+      %135 = get_prop %129, %132
       jump bb34
     bb34:
-      %141 = phi [(bb31, %139), (bb33, %140)]
-      %142 = set_prop %132, %133, %141
-      %143 = is_exception %142
-      branch %143, bb36, bb35
+      %136 = phi [(bb31, %134), (bb33, %135)]
+      %137 = const c98
+      %138 = load var $0.$shared_env
+      %139 = const c99
+      %140 = stricteq %138, %139
+      %141 = const c100
+      branch %140, bb35, bb36
     bb35:
-      %145 = load var $0.$shared_env
-      %146 = const c101
-      %147 = stricteq %145, %146
-      %148 = const c102
-      branch %147, bb37, bb38
+      %143 = load var $0.set
+      jump bb38
     bb36:
-      %144 = call builtin.exception_value(%142)
-      throw %144
+      %142 = call builtin.object.has_own(%138, %141)
+      branch %142, bb37, bb35
     bb37:
-      %150 = load var $0.set
-      jump bb40
+      %144 = get_prop %138, %141
+      jump bb38
     bb38:
-      %149 = call builtin.object.has_own(%145, %148)
-      branch %149, bb39, bb37
+      %145 = phi [(bb35, %143), (bb37, %144)]
+      %146 = set_prop %136, %137, %145
+      %147 = is_exception %146
+      branch %147, bb40, bb39
     bb39:
-      %151 = get_prop %145, %148
-      jump bb40
+      %149 = load var $0.$shared_env
+      %150 = const c101
+      %151 = stricteq %149, %150
+      %152 = const c102
+      branch %151, bb41, bb42
     bb40:
-      %152 = phi [(bb37, %150), (bb39, %151)]
-      %153 = const c103
-      %154 = get_prop %152, %153
-      %155 = call builtin.console.log(%154)
-      %156 = is_exception %155
-      branch %156, bb42, bb41
+      %148 = call builtin.exception_value(%146)
+      throw %148
     bb41:
-      %158 = load var $0.$shared_env
-      %159 = const c104
-      %160 = stricteq %158, %159
-      %161 = const c105
-      branch %160, bb43, bb44
+      %154 = load var $0.set
+      jump bb44
     bb42:
-      %157 = call builtin.exception_value(%155)
-      throw %157
+      %153 = call builtin.object.has_own(%149, %152)
+      branch %153, bb43, bb41
     bb43:
-      %163 = load var $0.set
-      jump bb46
+      %155 = get_prop %149, %152
+      jump bb44
     bb44:
-      %162 = call builtin.object.has_own(%158, %161)
-      branch %162, bb45, bb43
+      %156 = phi [(bb41, %154), (bb43, %155)]
+      %157 = const c103
+      %158 = get_prop %156, %157
+      %159 = is_exception %158
+      branch %159, bb46, bb45
     bb45:
-      %164 = get_prop %158, %161
-      jump bb46
+      %161 = call builtin.console.log(%158)
+      %162 = is_exception %161
+      branch %162, bb48, bb47
     bb46:
-      %165 = phi [(bb43, %163), (bb45, %164)]
-      %166 = const c106
-      %167 = get_prop %165, %166
-      %168 = call %167, this=%165
-      %169 = const c107
-      %170 = get_prop %168, %169
-      %171 = call %170, this=%168
-      %172 = load var $0.$shared_env
-      %173 = const c108
-      %174 = stricteq %172, %173
-      %175 = const c109
-      branch %174, bb47, bb48
+      %160 = call builtin.exception_value(%158)
+      throw %160
     bb47:
-      %177 = load var $0.set
-      jump bb50
+      %164 = load var $0.$shared_env
+      %165 = const c104
+      %166 = stricteq %164, %165
+      %167 = const c105
+      branch %166, bb49, bb50
     bb48:
-      %176 = call builtin.object.has_own(%172, %175)
-      branch %176, bb49, bb47
+      %163 = call builtin.exception_value(%161)
+      throw %163
     bb49:
-      %178 = get_prop %172, %175
-      jump bb50
+      %169 = load var $0.set
+      jump bb52
     bb50:
-      %179 = phi [(bb47, %177), (bb49, %178)]
-      %180 = call builtin.strict_eq(%171, %179)
-      %181 = call builtin.console.log(%180)
-      %182 = is_exception %181
-      branch %182, bb52, bb51
+      %168 = call builtin.object.has_own(%164, %167)
+      branch %168, bb51, bb49
     bb51:
-      %184 = load var $0.$shared_env
-      %185 = const c110
-      %186 = stricteq %184, %185
-      %187 = const c111
-      branch %186, bb53, bb54
+      %170 = get_prop %164, %167
+      jump bb52
     bb52:
-      %183 = call builtin.exception_value(%181)
-      throw %183
+      %171 = phi [(bb49, %169), (bb51, %170)]
+      %172 = const c106
+      %173 = get_prop %171, %172
+      %174 = call %173, this=%171
+      %175 = is_exception %174
+      branch %175, bb54, bb53
     bb53:
-      %189 = load var $0.set
-      jump bb56
+      %177 = const c107
+      %178 = get_prop %174, %177
+      %179 = call %178, this=%174
+      %180 = load var $0.$shared_env
+      %181 = const c108
+      %182 = stricteq %180, %181
+      %183 = const c109
+      branch %182, bb55, bb56
     bb54:
-      %188 = call builtin.object.has_own(%184, %187)
-      branch %188, bb55, bb53
+      %176 = call builtin.exception_value(%174)
+      throw %176
     bb55:
-      %190 = get_prop %184, %187
-      jump bb56
+      %185 = load var $0.set
+      jump bb58
     bb56:
-      %191 = phi [(bb53, %189), (bb55, %190)]
-      %192 = const c112
-      %193 = get_prop %191, %192
-      %194 = call %193, this=%191
-      %195 = const c113
-      %196 = get_prop %194, %195
-      %197 = load var $0.$shared_env
-      %198 = const c114
-      %199 = stricteq %197, %198
-      %200 = const c115
-      branch %199, bb57, bb58
+      %184 = call builtin.object.has_own(%180, %183)
+      branch %184, bb57, bb55
     bb57:
-      %202 = load var $0.set
-      jump bb60
+      %186 = get_prop %180, %183
+      jump bb58
     bb58:
-      %201 = call builtin.object.has_own(%197, %200)
-      branch %201, bb59, bb57
+      %187 = phi [(bb55, %185), (bb57, %186)]
+      %188 = call builtin.strict_eq(%179, %187)
+      %189 = is_exception %188
+      branch %189, bb60, bb59
     bb59:
-      %203 = get_prop %197, %200
-      jump bb60
+      %191 = call builtin.console.log(%188)
+      %192 = is_exception %191
+      branch %192, bb62, bb61
     bb60:
-      %204 = phi [(bb57, %202), (bb59, %203)]
-      %205 = call builtin.strict_eq(%196, %204)
-      %206 = call builtin.console.log(%205)
-      %207 = is_exception %206
-      branch %207, bb62, bb61
+      %190 = call builtin.exception_value(%188)
+      throw %190
     bb61:
-      %209 = new_object(capacity=4)
-      %210 = const c116
-      %211 = const c121
-      %212 = load var $0.$shared_env
-      %213 = const c122
-      %214 = const c123
-      %215 = set_prop %212, %214, %213
-      %216 = call builtin.create_closure(%211, %212)
-      %217 = new_object(capacity=4)
-      %218 = const c124
-      %219 = set_prop %217, %218, %216
-      %220 = const c125
-      %221 = const c126
-      %222 = set_prop %217, %220, %221
-      %223 = const c127
-      %224 = const c128
-      %225 = set_prop %217, %223, %224
-      call builtin.define_property(%209, %210, %217)
-      store var $0.mutable, %209
-      %226 = const c129
-      %227 = set_prop %212, %226, %209
-      %228 = load var $0.$shared_env
-      %229 = const c130
-      %230 = stricteq %228, %229
-      %231 = const c131
-      branch %230, bb63, bb64
+      %194 = load var $0.$shared_env
+      %195 = const c110
+      %196 = stricteq %194, %195
+      %197 = const c111
+      branch %196, bb63, bb64
     bb62:
-      %208 = call builtin.exception_value(%206)
-      throw %208
+      %193 = call builtin.exception_value(%191)
+      throw %193
     bb63:
-      %233 = load var $0.mutable
+      %199 = load var $0.set
       jump bb66
     bb64:
-      %232 = call builtin.object.has_own(%228, %231)
-      branch %232, bb65, bb63
+      %198 = call builtin.object.has_own(%194, %197)
+      branch %198, bb65, bb63
     bb65:
-      %234 = get_prop %228, %231
+      %200 = get_prop %194, %197
       jump bb66
     bb66:
-      %235 = phi [(bb63, %233), (bb65, %234)]
-      %236 = const c132
-      %237 = get_prop %235, %236
-      %238 = load var $0.$shared_env
-      %239 = const c133
-      %240 = stricteq %238, %239
-      %241 = const c134
-      branch %240, bb67, bb68
+      %201 = phi [(bb63, %199), (bb65, %200)]
+      %202 = const c112
+      %203 = get_prop %201, %202
+      %204 = call %203, this=%201
+      %205 = const c113
+      %206 = get_prop %204, %205
+      %207 = load var $0.$shared_env
+      %208 = const c114
+      %209 = stricteq %207, %208
+      %210 = const c115
+      branch %209, bb67, bb68
     bb67:
-      %243 = load var $0.mutable
+      %212 = load var $0.set
       jump bb70
     bb68:
-      %242 = call builtin.object.has_own(%238, %241)
-      branch %242, bb69, bb67
+      %211 = call builtin.object.has_own(%207, %210)
+      branch %211, bb69, bb67
     bb69:
-      %244 = get_prop %238, %241
+      %213 = get_prop %207, %210
       jump bb70
     bb70:
-      %245 = phi [(bb67, %243), (bb69, %244)]
-      %246 = call builtin.strict_eq(%237, %245)
-      %247 = call builtin.console.log(%246)
-      %248 = is_exception %247
-      branch %248, bb72, bb71
+      %214 = phi [(bb67, %212), (bb69, %213)]
+      %215 = call builtin.strict_eq(%206, %214)
+      %216 = is_exception %215
+      branch %216, bb72, bb71
     bb71:
-      %250 = new_object(capacity=4)
-      %251 = const c135
-      %252 = const c140
-      %253 = load var $0.$shared_env
-      %254 = const c141
-      %255 = const c142
-      %256 = set_prop %253, %255, %254
-      %257 = call builtin.create_closure(%252, %253)
-      %258 = set_prop %250, %251, %257
-      store var $0.assigned, %250
-      %259 = const c143
-      %260 = set_prop %253, %259, %250
-      %261 = load var $0.$shared_env
-      %262 = const c144
-      %263 = stricteq %261, %262
-      %264 = const c145
-      branch %263, bb73, bb74
+      %218 = call builtin.console.log(%215)
+      %219 = is_exception %218
+      branch %219, bb74, bb73
     bb72:
-      %249 = call builtin.exception_value(%247)
-      throw %249
+      %217 = call builtin.exception_value(%215)
+      throw %217
     bb73:
-      %266 = load var $0.assigned
-      jump bb76
+      %221 = new_object(capacity=4)
+      %222 = const c116
+      %223 = const c121
+      %224 = load var $0.$shared_env
+      %225 = const c122
+      %226 = const c123
+      %227 = set_prop %224, %226, %225
+      %228 = call builtin.create_closure(%223, %224)
+      %229 = new_object(capacity=4)
+      %230 = const c124
+      %231 = set_prop %229, %230, %228
+      %232 = const c125
+      %233 = const c126
+      %234 = set_prop %229, %232, %233
+      %235 = const c127
+      %236 = const c128
+      %237 = set_prop %229, %235, %236
+      call builtin.define_property(%221, %222, %229)
+      store var $0.mutable, %221
+      %238 = const c129
+      %239 = set_prop %224, %238, %221
+      %240 = load var $0.$shared_env
+      %241 = const c130
+      %242 = stricteq %240, %241
+      %243 = const c131
+      branch %242, bb75, bb76
     bb74:
-      %265 = call builtin.object.has_own(%261, %264)
-      branch %265, bb75, bb73
+      %220 = call builtin.exception_value(%218)
+      throw %220
     bb75:
-      %267 = get_prop %261, %264
-      jump bb76
+      %245 = load var $0.mutable
+      jump bb78
     bb76:
-      %268 = phi [(bb73, %266), (bb75, %267)]
-      store var $0.assignOwner, %268
-      %269 = const c148
-      %270 = init_object_literal(c147, values=[%269])
-      store var $0.replacement, %270
-      %271 = load var $0.assignOwner
-      %272 = const c149
-      %273 = get_prop %271, %272
-      %274 = load var $0.replacement
-      %275 = call %273, this=%271, args=[%274]
-      %276 = is_exception %275
-      branch %276, bb78, bb77
+      %244 = call builtin.object.has_own(%240, %243)
+      branch %244, bb77, bb75
     bb77:
-      %278 = load var $0.$shared_env
-      %279 = const c150
-      %280 = stricteq %278, %279
-      %281 = const c151
-      branch %280, bb79, bb80
+      %246 = get_prop %240, %243
+      jump bb78
     bb78:
-      %277 = call builtin.exception_value(%275)
-      throw %277
+      %247 = phi [(bb75, %245), (bb77, %246)]
+      %248 = const c132
+      %249 = get_prop %247, %248
+      %250 = load var $0.$shared_env
+      %251 = const c133
+      %252 = stricteq %250, %251
+      %253 = const c134
+      branch %252, bb79, bb80
     bb79:
-      %283 = load var $0.assigned
+      %255 = load var $0.mutable
       jump bb82
     bb80:
-      %282 = call builtin.object.has_own(%278, %281)
-      branch %282, bb81, bb79
+      %254 = call builtin.object.has_own(%250, %253)
+      branch %254, bb81, bb79
     bb81:
-      %284 = get_prop %278, %281
+      %256 = get_prop %250, %253
       jump bb82
     bb82:
-      %285 = phi [(bb79, %283), (bb81, %284)]
-      %286 = load var $0.replacement
-      %287 = call builtin.strict_eq(%285, %286)
-      %288 = call builtin.console.log(%287)
-      %289 = is_exception %288
-      branch %289, bb84, bb83
+      %257 = phi [(bb79, %255), (bb81, %256)]
+      %258 = call builtin.strict_eq(%249, %257)
+      %259 = is_exception %258
+      branch %259, bb84, bb83
     bb83:
-      %291 = new_object(capacity=4)
-      %292 = const c152
-      %293 = const c163
-      %294 = load var $0.$shared_env
-      %295 = const c164
-      %296 = const c165
-      %297 = set_prop %294, %296, %295
-      %298 = call builtin.create_closure(%293, %294)
-      %299 = set_prop %291, %292, %298
-      store var $0.updated, %291
-      %300 = const c166
-      %301 = set_prop %294, %300, %291
-      %302 = load var $0.$shared_env
-      %303 = const c167
-      %304 = stricteq %302, %303
-      %305 = const c168
-      branch %304, bb85, bb86
+      %261 = call builtin.console.log(%258)
+      %262 = is_exception %261
+      branch %262, bb86, bb85
     bb84:
-      %290 = call builtin.exception_value(%288)
-      throw %290
+      %260 = call builtin.exception_value(%258)
+      throw %260
     bb85:
-      %307 = load var $0.updated
-      jump bb88
+      %264 = new_object(capacity=4)
+      %265 = const c135
+      %266 = const c140
+      %267 = load var $0.$shared_env
+      %268 = const c141
+      %269 = const c142
+      %270 = set_prop %267, %269, %268
+      %271 = call builtin.create_closure(%266, %267)
+      %272 = set_prop %264, %265, %271
+      store var $0.assigned, %264
+      %273 = const c143
+      %274 = set_prop %267, %273, %264
+      %275 = load var $0.$shared_env
+      %276 = const c144
+      %277 = stricteq %275, %276
+      %278 = const c145
+      branch %277, bb87, bb88
     bb86:
-      %306 = call builtin.object.has_own(%302, %305)
-      branch %306, bb87, bb85
+      %263 = call builtin.exception_value(%261)
+      throw %263
     bb87:
-      %308 = get_prop %302, %305
-      jump bb88
+      %280 = load var $0.assigned
+      jump bb90
     bb88:
-      %309 = phi [(bb85, %307), (bb87, %308)]
-      store var $0.updateOwner, %309
-      %310 = load var $0.updateOwner
-      %311 = const c169
-      %312 = get_prop %310, %311
-      %313 = call %312, this=%310
-      %314 = const c170
-      %315 = call builtin.strict_eq(%313, %314)
-      %316 = call builtin.console.log(%315)
-      %317 = is_exception %316
-      branch %317, bb90, bb89
+      %279 = call builtin.object.has_own(%275, %278)
+      branch %279, bb89, bb87
     bb89:
-      %319 = load var $0.$shared_env
-      %320 = const c171
-      %321 = stricteq %319, %320
-      %322 = const c172
-      branch %321, bb91, bb92
+      %281 = get_prop %275, %278
+      jump bb90
     bb90:
-      %318 = call builtin.exception_value(%316)
-      throw %318
+      %282 = phi [(bb87, %280), (bb89, %281)]
+      store var $0.assignOwner, %282
+      %283 = const c148
+      %284 = init_object_literal(c147, values=[%283])
+      store var $0.replacement, %284
+      %285 = load var $0.assignOwner
+      %286 = const c149
+      %287 = get_prop %285, %286
+      %288 = load var $0.replacement
+      %289 = call %287, this=%285, args=[%288]
+      %290 = is_exception %289
+      branch %290, bb92, bb91
     bb91:
-      %324 = load var $0.updated
-      jump bb94
+      %292 = load var $0.$shared_env
+      %293 = const c150
+      %294 = stricteq %292, %293
+      %295 = const c151
+      branch %294, bb93, bb94
     bb92:
-      %323 = call builtin.object.has_own(%319, %322)
-      branch %323, bb93, bb91
+      %291 = call builtin.exception_value(%289)
+      throw %291
     bb93:
-      %325 = get_prop %319, %322
-      jump bb94
+      %297 = load var $0.assigned
+      jump bb96
     bb94:
-      %326 = phi [(bb91, %324), (bb93, %325)]
-      %327 = const c173
-      %328 = call builtin.strict_eq(%326, %327)
-      %329 = call builtin.console.log(%328)
-      %330 = is_exception %329
-      branch %330, bb96, bb95
+      %296 = call builtin.object.has_own(%292, %295)
+      branch %296, bb95, bb93
     bb95:
-      return
+      %298 = get_prop %292, %295
+      jump bb96
     bb96:
+      %299 = phi [(bb93, %297), (bb95, %298)]
+      %300 = load var $0.replacement
+      %301 = call builtin.strict_eq(%299, %300)
+      %302 = call builtin.console.log(%301)
+      %303 = is_exception %302
+      branch %303, bb98, bb97
+    bb97:
+      %305 = new_object(capacity=4)
+      %306 = const c152
+      %307 = const c163
+      %308 = load var $0.$shared_env
+      %309 = const c164
+      %310 = const c165
+      %311 = set_prop %308, %310, %309
+      %312 = call builtin.create_closure(%307, %308)
+      %313 = set_prop %305, %306, %312
+      store var $0.updated, %305
+      %314 = const c166
+      %315 = set_prop %308, %314, %305
+      %316 = load var $0.$shared_env
+      %317 = const c167
+      %318 = stricteq %316, %317
+      %319 = const c168
+      branch %318, bb99, bb100
+    bb98:
+      %304 = call builtin.exception_value(%302)
+      throw %304
+    bb99:
+      %321 = load var $0.updated
+      jump bb102
+    bb100:
+      %320 = call builtin.object.has_own(%316, %319)
+      branch %320, bb101, bb99
+    bb101:
+      %322 = get_prop %316, %319
+      jump bb102
+    bb102:
+      %323 = phi [(bb99, %321), (bb101, %322)]
+      store var $0.updateOwner, %323
+      %324 = load var $0.updateOwner
+      %325 = const c169
+      %326 = get_prop %324, %325
+      %327 = call %326, this=%324
+      %328 = const c170
+      %329 = call builtin.strict_eq(%327, %328)
+      %330 = is_exception %329
+      branch %330, bb104, bb103
+    bb103:
+      %332 = call builtin.console.log(%329)
+      %333 = is_exception %332
+      branch %333, bb106, bb105
+    bb104:
       %331 = call builtin.exception_value(%329)
       throw %331
+    bb105:
+      %335 = load var $0.$shared_env
+      %336 = const c171
+      %337 = stricteq %335, %336
+      %338 = const c172
+      branch %337, bb107, bb108
+    bb106:
+      %334 = call builtin.exception_value(%332)
+      throw %334
+    bb107:
+      %340 = load var $0.updated
+      jump bb110
+    bb108:
+      %339 = call builtin.object.has_own(%335, %338)
+      branch %339, bb109, bb107
+    bb109:
+      %341 = get_prop %335, %338
+      jump bb110
+    bb110:
+      %342 = phi [(bb107, %340), (bb109, %341)]
+      %343 = const c173
+      %344 = call builtin.strict_eq(%342, %343)
+      %345 = call builtin.console.log(%344)
+      %346 = is_exception %345
+      branch %346, bb112, bb111
+    bb111:
+      return
+    bb112:
+      %347 = call builtin.exception_value(%345)
+      throw %347
 }

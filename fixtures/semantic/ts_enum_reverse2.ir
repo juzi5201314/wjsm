@@ -95,32 +95,50 @@ module {
       %34 = load var $0.E
       %35 = const c28
       %36 = get_prop %34, %35
-      %37 = call builtin.console.log(%36)
-      %38 = is_exception %37
-      branch %38, bb2, bb1
+      %37 = is_exception %36
+      branch %37, bb2, bb1
     bb1:
-      %40 = load var $0.E
-      %41 = const c29
-      %42 = get_elem %40, %41
-      %43 = call builtin.console.log(%42)
-      %44 = is_exception %43
-      branch %44, bb4, bb3
+      %39 = call builtin.console.log(%36)
+      %40 = is_exception %39
+      branch %40, bb4, bb3
     bb2:
-      %39 = call builtin.exception_value(%37)
-      throw %39
+      %38 = call builtin.exception_value(%36)
+      throw %38
     bb3:
-      %46 = load var $0.E
-      %47 = const c30
-      %48 = get_elem %46, %47
-      %49 = call builtin.console.log(%48)
-      %50 = is_exception %49
-      branch %50, bb6, bb5
+      %42 = load var $0.E
+      %43 = const c29
+      %44 = get_elem %42, %43
+      %45 = is_exception %44
+      branch %45, bb6, bb5
     bb4:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %41 = call builtin.exception_value(%39)
+      throw %41
     bb5:
-      return
+      %47 = call builtin.console.log(%44)
+      %48 = is_exception %47
+      branch %48, bb8, bb7
     bb6:
-      %51 = call builtin.exception_value(%49)
-      throw %51
+      %46 = call builtin.exception_value(%44)
+      throw %46
+    bb7:
+      %50 = load var $0.E
+      %51 = const c30
+      %52 = get_elem %50, %51
+      %53 = is_exception %52
+      branch %53, bb10, bb9
+    bb8:
+      %49 = call builtin.exception_value(%47)
+      throw %49
+    bb9:
+      %55 = call builtin.console.log(%52)
+      %56 = is_exception %55
+      branch %56, bb12, bb11
+    bb10:
+      %54 = call builtin.exception_value(%52)
+      throw %54
+    bb11:
+      return
+    bb12:
+      %57 = call builtin.exception_value(%55)
+      throw %57
 }

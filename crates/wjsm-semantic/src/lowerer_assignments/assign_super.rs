@@ -210,9 +210,16 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let access = self.lower_super_prop_access(super_prop, block)?;
         let old_val = self.emit_super_prop_get(block, &access);
+        // super getter 可抛出，必须在 ToNumeric 前中止并传播。
+        let read_block = self.fork_or_defer_exception_branch(block, old_val)?;
 
-        let (num_val, new_val) = self.append_update_math(block, old_val, update.op);
-        self.emit_super_prop_set(block, &access, new_val);
+        let (num_val, new_val, math_block) =
+            self.append_update_math(read_block, old_val, update.op)?;
+        self.emit_super_prop_set(math_block, &access, new_val);
+        // 分叉推进了块时必须上报延续块，否则后续语句会误写已终结的入口块。
+        if math_block != block {
+            self.expr_merge_block = Some(math_block);
+        }
 
         Ok(if update.prefix { new_val } else { num_val })
     }

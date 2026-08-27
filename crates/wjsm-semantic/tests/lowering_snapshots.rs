@@ -835,6 +835,11 @@ fn private_in_brand_check_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn in_instanceof_exceptions_fixture_matches_ir_snapshot() {
+    assert_snapshot("in_instanceof_exceptions");
+}
+
+#[test]
 fn issue373_loop_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("issue373_loop_closure_capture");
 }

@@ -107,27 +107,39 @@ module {
       %23 = const c24
       %24 = const c25
       %25 = call builtin.promise.resolve_static(%23, %24)
-      %26 = const c27
-      %27 = const c28
-      store var $0.$shared_env, %27
-      %28 = new_object(capacity=1)
-      %29 = load var $env
-      set_proto %28, %29
-      store var $0.$shared_env, %28
-      %30 = load var $0.thenable
-      %31 = const c29
-      %32 = set_prop %28, %31, %30
-      %33 = call builtin.create_closure(%26, %28)
-      %34 = const c30
-      %35 = call builtin.promise.then(%25, %33, %34)
-      %36 = const c31
-      %37 = const c32
-      %38 = call builtin.promise.then(%35, %36, %37)
-      %39 = is_exception %38
-      branch %39, bb2, bb1
+      %26 = is_exception %25
+      %29 = const c28
+      store var $0.$shared_env, %29
+      branch %26, bb2, bb1
     bb1:
-      return
+      %28 = const c27
+      %30 = new_object(capacity=1)
+      %31 = load var $env
+      set_proto %30, %31
+      store var $0.$shared_env, %30
+      %32 = load var $0.thenable
+      %33 = const c29
+      %34 = set_prop %30, %33, %32
+      %35 = call builtin.create_closure(%28, %30)
+      %36 = const c30
+      %37 = call builtin.promise.then(%25, %35, %36)
+      %38 = is_exception %37
+      branch %38, bb4, bb3
     bb2:
-      %40 = call builtin.exception_value(%38)
-      throw %40
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb3:
+      %40 = const c31
+      %41 = const c32
+      %42 = call builtin.promise.then(%37, %40, %41)
+      %43 = is_exception %42
+      branch %43, bb6, bb5
+    bb4:
+      %39 = call builtin.exception_value(%37)
+      throw %39
+    bb5:
+      return
+    bb6:
+      %44 = call builtin.exception_value(%42)
+      throw %44
 }

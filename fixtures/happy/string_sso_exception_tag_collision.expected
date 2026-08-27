@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+[2,3] 5
+[2,3]
+[2,3]
+abcd] 5
+abcdP 5
+abcd_ 5
+aaaaZ 5
+abcdP@ 6
+[2,3] 5
+true 5
+done
+--- stderr ---

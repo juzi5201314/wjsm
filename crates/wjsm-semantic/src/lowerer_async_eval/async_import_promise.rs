@@ -1,24 +1,27 @@
 use super::*;
 
 impl Lowerer {
+    /// 返回 (promise 值, 延续块)：executor 实参求值可能分叉异常/引入控制流，
+    /// 调用方必须在返回的延续块上继续，不能停留在入口块。
     pub(crate) fn lower_new_promise(
         &mut self,
         new_expr: &swc_ast::NewExpr,
         block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
         let promise_val = self.alloc_value();
         self.current_function
             .append_instruction(block, Instruction::NewPromise { dest: promise_val });
 
+        let mut end_block = block;
         if let Some(args) = &new_expr.args
             && let Some(first_arg) = args.first()
         {
-            let mut call_block = block;
-            let callback_val = self.lower_expr_then_continue(&first_arg.expr, &mut call_block)?;
+            let callback_val =
+                self.lower_call_operand_then_continue(&first_arg.expr, &mut end_block)?;
 
             let resolve_fn = self.alloc_value();
             self.current_function.append_instruction(
-                call_block,
+                end_block,
                 Instruction::CallBuiltin {
                     dest: Some(resolve_fn),
                     builtin: Builtin::PromiseCreateResolveFunction,
@@ -28,7 +31,7 @@ impl Lowerer {
 
             let reject_fn = self.alloc_value();
             self.current_function.append_instruction(
-                call_block,
+                end_block,
                 Instruction::CallBuiltin {
                     dest: Some(reject_fn),
                     builtin: Builtin::PromiseCreateRejectFunction,
@@ -39,7 +42,7 @@ impl Lowerer {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();
             self.current_function.append_instruction(
-                call_block,
+                end_block,
                 Instruction::Const {
                     dest: undef_val,
                     constant: undef_const,
@@ -47,7 +50,7 @@ impl Lowerer {
             );
 
             self.current_function.append_instruction(
-                call_block,
+                end_block,
                 Instruction::Call {
                     dest: None,
                     callee: callback_val,
@@ -57,7 +60,7 @@ impl Lowerer {
             );
         }
 
-        Ok(promise_val)
+        Ok((promise_val, end_block))
     }
 
     // ── Identifiers ─────────────────────────────────────────────────────────
@@ -85,7 +88,8 @@ impl Lowerer {
         } else {
             let mut args = Vec::with_capacity(call.args.len().max(1));
             for arg in &call.args {
-                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
+                // 实参抛出必须中止宿主调用并传播，不得把异常哨兵当作实参值传入。
+                let arg_val = self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?;
                 args.push(arg_val);
             }
             (builtin, args)

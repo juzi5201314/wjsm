@@ -758,4 +758,37 @@ mod tests {
         let inline_raw = inline_property_key_raw(encoded).expect("inline raw");
         assert!(template_key_name_ref(inline_raw).is_none());
     }
+
+    /// inline SSO 字符串同样带 `BOX_BASE`，其 7-bit ASCII 码元载荷可把 tag 位
+    /// （32–36）伪造成任意 tag：`"[2,3]"` 第 5 码元 `']'` 落成 TAG_EXCEPTION、
+    /// `[.., 0x01, 'a']` 落成 TAG_OBJECT、`"abcd3a"` 落成 TAG_ARRAY。`is_tagged`
+    /// 系列谓词凭 SSO marker 位（48–50）非零一律拒绝，绝不把 inline 字符串误判
+    /// 成句柄；后端 `wjsm-backend-native` 的 CLIF 谓词与此保持一致。
+    #[test]
+    fn inline_sso_never_mistaken_for_tagged_handle() {
+        let cases: [(&[u8], u64); 3] = [
+            (b"[2,3]", TAG_EXCEPTION),
+            (&[97, 98, 99, 100, 1, 97], TAG_OBJECT),
+            (b"abcd3a", TAG_ARRAY),
+        ];
+        for (bytes, spoofed) in cases {
+            let encoded = encode_inline_ascii(bytes).expect("payload 必须可 inline");
+            let bits = encoded as u64;
+            // 载荷确实把 tag 位伪造成了目标 tag。
+            assert_eq!(
+                (bits >> 32) & TAG_MASK,
+                spoofed,
+                "样例 {bytes:?} 未命中期望的 tag 碰撞"
+            );
+            // 但 SSO marker 位非零，tagged 判定必须拒绝。
+            assert_ne!(bits & INLINE_STRING_MARKER_MASK, 0);
+            assert!(is_inline_string(encoded));
+            assert!(is_string(encoded));
+            assert!(!is_object(encoded));
+            assert!(!is_array(encoded));
+            assert!(!is_exception(encoded));
+            assert!(!is_runtime_string_handle(encoded));
+            assert!(!is_tagged(encoded, spoofed));
+        }
+    }
 }

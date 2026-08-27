@@ -154,79 +154,83 @@ module {
     bb15:
       %61 = const c28
       %62 = neg %61
-      store var $0.u, %62
-      %63 = load var $0.u
-      %64 = const c29
-      %65 = ushr %63, %64
-      store var $0.u, %65
       jump bb17
     bb16:
       %60 = call builtin.exception_value(%58)
       throw %60
     bb17:
-      %68 = load var $0.u
-      %69 = call builtin.console.log(%68)
-      %70 = is_exception %69
-      branch %70, bb20, bb19
+      store var $0.u, %62
+      %65 = load var $0.u
+      %66 = const c29
+      %67 = ushr %65, %66
+      store var $0.u, %67
+      jump bb19
     bb18:
       unreachable
     bb19:
-      %72 = const c30
-      store var $0.v, %72
-      %73 = load var $0.v
-      %74 = const c31
-      %75 = bitor %73, %74
-      store var $0.v, %75
-      jump bb21
+      %70 = load var $0.u
+      %71 = call builtin.console.log(%70)
+      %72 = is_exception %71
+      branch %72, bb22, bb21
     bb20:
-      %71 = call builtin.exception_value(%69)
-      throw %71
+      unreachable
     bb21:
-      %78 = load var $0.v
-      %79 = call builtin.console.log(%78)
-      %80 = is_exception %79
-      branch %80, bb24, bb23
+      %74 = const c30
+      store var $0.v, %74
+      %75 = load var $0.v
+      %76 = const c31
+      %77 = bitor %75, %76
+      store var $0.v, %77
+      jump bb23
     bb22:
-      unreachable
+      %73 = call builtin.exception_value(%71)
+      throw %73
     bb23:
-      %82 = const c32
-      store var $0.a, %82
-      %83 = load var $0.a
-      %84 = const c33
-      %85 = bitand %83, %84
-      store var $0.a, %85
-      jump bb25
+      %80 = load var $0.v
+      %81 = call builtin.console.log(%80)
+      %82 = is_exception %81
+      branch %82, bb26, bb25
     bb24:
-      %81 = call builtin.exception_value(%79)
-      throw %81
+      unreachable
     bb25:
-      %88 = load var $0.a
-      %89 = call builtin.console.log(%88)
-      %90 = is_exception %89
-      branch %90, bb28, bb27
+      %84 = const c32
+      store var $0.a, %84
+      %85 = load var $0.a
+      %86 = const c33
+      %87 = bitand %85, %86
+      store var $0.a, %87
+      jump bb27
     bb26:
-      unreachable
+      %83 = call builtin.exception_value(%81)
+      throw %83
     bb27:
-      %92 = const c34
-      store var $0.b, %92
-      %93 = load var $0.b
-      %94 = const c35
-      %95 = bitxor %93, %94
-      store var $0.b, %95
-      jump bb29
+      %90 = load var $0.a
+      %91 = call builtin.console.log(%90)
+      %92 = is_exception %91
+      branch %92, bb30, bb29
     bb28:
-      %91 = call builtin.exception_value(%89)
-      throw %91
-    bb29:
-      %98 = load var $0.b
-      %99 = call builtin.console.log(%98)
-      %100 = is_exception %99
-      branch %100, bb32, bb31
-    bb30:
       unreachable
+    bb29:
+      %94 = const c34
+      store var $0.b, %94
+      %95 = load var $0.b
+      %96 = const c35
+      %97 = bitxor %95, %96
+      store var $0.b, %97
+      jump bb31
+    bb30:
+      %93 = call builtin.exception_value(%91)
+      throw %93
     bb31:
-      return
+      %100 = load var $0.b
+      %101 = call builtin.console.log(%100)
+      %102 = is_exception %101
+      branch %102, bb34, bb33
     bb32:
-      %101 = call builtin.exception_value(%99)
-      throw %101
+      unreachable
+    bb33:
+      return
+    bb34:
+      %103 = call builtin.exception_value(%101)
+      throw %103
 }
