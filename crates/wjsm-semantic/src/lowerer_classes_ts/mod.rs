@@ -540,6 +540,7 @@ impl Lowerer {
         for (member_index, member) in members.iter().enumerate() {
             match member {
                 swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
+                    self.check_field_initializer_arguments(prop.value.as_deref())?;
                     let field_name =
                         self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
                     block = self.emit_field_init(
@@ -551,6 +552,7 @@ impl Lowerer {
                     )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
+                    self.check_field_initializer_arguments(prop.value.as_deref())?;
                     block = if let Some(key_name) = computed_instance_keys.get(&member_index) {
                         // 计算键在类定义期已求值并 ToPropertyKey（求值一次），
                         // 存于构造器闭包的 key env；此处沿 $env 链按名读取，
@@ -1140,3 +1142,4 @@ mod class_body;
 mod decl;
 mod expr;
 mod function_values;
+mod static_field;

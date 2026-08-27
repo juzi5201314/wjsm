@@ -399,8 +399,10 @@ impl Lowerer {
 
         // 第二遍（源顺序）：静态元素执行期 —— 静态字段初始化器与 static block。
         // 键已全部求值完毕，此处只求初始化器/执行块体（ES ClassDefinitionEvaluation
-        // 对 staticElements 的 DefineField / Call 步骤）。
+        // 对 staticElements 的 DefineField / Call 步骤）；静态字段初始化器以
+        // 合成函数求值，`this` 为构造器本身（见 lower_static_field_member）。
         let mut static_init_idx = 0u32;
+        let mut static_field_init_idx = 0u32;
         for (member_index, member) in class.body.iter().enumerate() {
             match member {
                 swc_ast::ClassMember::StaticBlock(static_block) => {
@@ -417,13 +419,21 @@ impl Lowerer {
                 swc_ast::ClassMember::PrivateProp(prop) if prop.is_static => {
                     let field_name =
                         self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
-                    block = self.emit_static_field_init(
+                    let key_dest = self.emit_string_const(block, &field_name);
+                    block = self.lower_static_field_member(
                         block,
-                        ctor_dest,
-                        &field_name,
-                        prop.value.as_deref(),
-                        true,
+                        &static_field::StaticFieldInit {
+                            class_name,
+                            ctor_function_id,
+                            ctor_dest,
+                            key_dest,
+                            init_value: prop.value.as_deref(),
+                            is_private: true,
+                            span: prop.span,
+                            init_index: static_field_init_idx,
+                        },
                     )?;
+                    static_field_init_idx += 1;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if prop.is_static => {
                     let key_dest = match static_computed_keys.get(&member_index) {
@@ -431,13 +441,20 @@ impl Lowerer {
                         // 静态属性名只发射 Const，不产生控制流。
                         None => self.lower_prop_name(&prop.key, block)?,
                     };
-                    block = self.emit_static_field_init_common(
+                    block = self.lower_static_field_member(
                         block,
-                        ctor_dest,
-                        key_dest,
-                        prop.value.as_deref(),
-                        false,
+                        &static_field::StaticFieldInit {
+                            class_name,
+                            ctor_function_id,
+                            ctor_dest,
+                            key_dest,
+                            init_value: prop.value.as_deref(),
+                            is_private: false,
+                            span: prop.span,
+                            init_index: static_field_init_idx,
+                        },
                     )?;
+                    static_field_init_idx += 1;
                 }
                 _ => {}
             }
@@ -787,7 +804,7 @@ impl Lowerer {
     }
 
     /// 收尾方法 IR 函数：提取 blocks、设置元数据，并返回统一的 class function metadata。
-    fn finalize_class_method_function(
+    pub(super) fn finalize_class_method_function(
         &mut self,
         fn_name: &str,
         span: Span,
