@@ -58,14 +58,21 @@ module {
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = const c23
-      %9 = const c24
-      %10 = call builtin.create_closure(%8, %9)
-      %11 = set_prop %0, %5, %10
-      return %0
+      %8 = call builtin.to_property_key(%5)
+      %9 = is_exception %8
+      branch %9, bb4, bb3
     bb2:
       %7 = call builtin.exception_value(%5)
       throw %7
+    bb3:
+      %11 = const c23
+      %12 = const c24
+      %13 = call builtin.create_closure(%11, %12)
+      %14 = set_prop %0, %8, %13
+      return %0
+    bb4:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -157,14 +164,22 @@ module {
       %47 = is_exception %46
       branch %47, bb11, bb10
     bb10:
-      %49 = const c23
-      %50 = const c24
-      %51 = call builtin.create_closure(%49, %50)
-      %52 = set_prop %41, %46, %51
-      store var $1.name, %40
-      jump bb8
+      %49 = call builtin.to_property_key(%46)
+      %50 = is_exception %49
+      branch %50, bb13, bb12
     bb11:
       %48 = call builtin.exception_value(%46)
       store var $1.name, %40
       throw %48
+    bb12:
+      %52 = const c23
+      %53 = const c24
+      %54 = call builtin.create_closure(%52, %53)
+      %55 = set_prop %41, %49, %54
+      store var $1.name, %40
+      jump bb8
+    bb13:
+      %51 = call builtin.exception_value(%49)
+      store var $1.name, %40
+      throw %51
 }

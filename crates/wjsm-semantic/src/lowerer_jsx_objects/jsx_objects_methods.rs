@@ -34,10 +34,8 @@ impl Lowerer {
                         if is_proto_object_literal_key(&kv.key) {
                             // `__proto__: value` 走 SetProto；静态键无副作用，
                             // 仅需按规范传播属性值求值抛出的异常。
-                            let val_dest =
-                                self.lower_expr_then_continue(&kv.value, &mut block)?;
-                            if self.expr_exception_fork_allowed()
-                                && self.expr_can_throw(&kv.value)
+                            let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+                            if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value)
                             {
                                 block = self.lower_value_exception_branch(block, val_dest)?;
                             }
@@ -261,7 +259,9 @@ impl Lowerer {
     }
 
     /// 求值属性名并推进 block。计算键遵循 PropertyDefinitionEvaluation：
-    /// 键表达式抛出的异常必须在求属性值 / 构建方法闭包之前传播。
+    /// 键表达式抛出的异常必须在求属性值 / 构建方法闭包之前传播；随后按
+    /// ComputedPropertyName 语义在求属性值之前完成 ToPropertyKey（对象键
+    /// 再入用户 `toString` / `valueOf` / `Symbol.toPrimitive`，异常同样传播）。
     fn lower_prop_name_checked(
         &mut self,
         key: &swc_ast::PropName,
@@ -275,7 +275,21 @@ impl Lowerer {
         if self.expr_exception_fork_allowed() && self.expr_can_throw(&computed.expr) {
             *block = self.lower_value_exception_branch(*block, key_dest)?;
         }
-        Ok(key_dest)
+        let converted = self.alloc_value();
+        self.current_function.append_instruction(
+            *block,
+            Instruction::CallBuiltin {
+                dest: Some(converted),
+                builtin: Builtin::ToPropertyKey,
+                args: vec![key_dest],
+            },
+        );
+        // 转换本身可抛（用户转换函数 throw / 无法转为 primitive 的 TypeError），
+        // 与键表达式是否可抛无关，必须无条件分叉传播。
+        if self.expr_exception_fork_allowed() {
+            *block = self.lower_value_exception_branch(*block, converted)?;
+        }
+        Ok(converted)
     }
 
     fn create_method_env_with_home(
