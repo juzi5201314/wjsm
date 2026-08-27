@@ -28,6 +28,7 @@ impl Lowerer {
         {
             self.current_function
                 .set_terminator(after, Terminator::Jump { target });
+            self.label_stack[target_index].break_reached = true;
         }
         Ok(StmtFlow::Terminated)
     }
@@ -197,9 +198,16 @@ impl Lowerer {
                 UnwindStep::Finalizer { fin_block, fi } => {
                     // finally 内部的 abrupt completion 只继续展开更外层 finalizer。
                     self.active_finalizers = saved[..fi].to_vec();
+                    // eval 完成值：break/continue/return 穿越 finally 时，
+                    // finally 的正常完成值同样被丢弃（保存/重置/恢复）。
+                    let saved_completion = self.eval_completion_save_for_finalizer(current);
                     match self.lower_block_body(&fin_block, StmtFlow::Open(current))? {
                         StmtFlow::Open(after) => {
                             current = after;
+                            self.eval_completion_restore_after_finalizer(
+                                current,
+                                saved_completion.as_deref(),
+                            );
                             if let Some(name) = completion_slot {
                                 let restored = self.alloc_value();
                                 self.current_function.append_instruction(
@@ -424,6 +432,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: None,
             iterator_to_close: None,
+            break_reached: false,
         });
 
         let inner_flow = self.lower_stmt(&labeled.body, StmtFlow::Open(block))?;
@@ -431,7 +440,16 @@ impl Lowerer {
             .current_function
             .ensure_jump_or_terminated(inner_flow, exit);
 
-        self.label_stack.pop();
+        let break_reached = self
+            .label_stack
+            .pop()
+            .expect("label context pushed above")
+            .break_reached;
+        // body 以 abrupt 完成结束，但存在 break 跳转到 exit 时，exit 仍可达，
+        // 后续语句必须继续从 exit 降低（`l: { break l; } after;`）。
+        if matches!(after, StmtFlow::Terminated) && break_reached {
+            return Ok(StmtFlow::Open(exit));
+        }
         Ok(after)
     }
 
@@ -746,6 +764,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: None,
             iterator_to_close: None,
+            break_reached: false,
         });
 
         for (i, case) in switch_stmt.cases.iter().enumerate() {
@@ -1012,6 +1031,8 @@ impl Lowerer {
 
             if let Some(catch) = &try_stmt.handler {
                 let catch_entry = catch_entry.expect("has_catch implies catch_entry");
+                // eval 完成值：catch 路径从 empty 起步，try 体的部分完成值不泄漏。
+                self.eval_completion_reset_catch_entry(catch_entry);
                 self.scopes.push_scope(ScopeKind::Block);
                 if let Some(param) = &catch.param {
                     match param {
@@ -1125,7 +1146,16 @@ impl Lowerer {
 
             self.active_finalizers.pop();
 
+            // eval 完成值：finally 的正常完成值被丢弃 —— 求值前保存并重置，
+            // 正常退出后恢复；abrupt 退出保留 finally 内部的线程化值。
+            let saved_completion = self.eval_completion_save_for_finalizer(finally_entry);
             let finally_flow = self.lower_block_body(finally, StmtFlow::Open(finally_entry))?;
+            if let StmtFlow::Open(after_finally) = finally_flow {
+                self.eval_completion_restore_after_finalizer(
+                    after_finally,
+                    saved_completion.as_deref(),
+                );
+            }
             let _ = self
                 .current_function
                 .ensure_jump_or_terminated(finally_flow, exit);
@@ -1134,6 +1164,8 @@ impl Lowerer {
         } else if let Some(catch) = &try_stmt.handler {
             let mut catch_entry = catch_entry.expect("handler present");
             // try/catch without finally
+            // eval 完成值：catch 路径从 empty 起步，try 体的部分完成值不泄漏。
+            self.eval_completion_reset_catch_entry(catch_entry);
             self.scopes.push_scope(ScopeKind::Block);
             if let Some(param) = &catch.param {
                 match param {

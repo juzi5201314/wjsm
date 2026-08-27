@@ -8815,7 +8815,10 @@ fn collect_phi_edges(
     edges
 }
 
-fn infer_boolean_values(function: &wjsm_ir::Function, constants: &[Constant]) -> HashSet<ValueId> {
+pub(crate) fn infer_boolean_values(
+    function: &wjsm_ir::Function,
+    constants: &[Constant],
+) -> HashSet<ValueId> {
     let mut booleans = HashSet::new();
     loop {
         let before = booleans.len();
