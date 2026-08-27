@@ -288,6 +288,15 @@ fn demote_value_to_var(
     value: ValueId,
     name: &str,
 ) {
+    insert_spill_store_after_def(blocks, value, name);
+    for block in blocks.iter_mut() {
+        rewrite_block_uses(block, next_value, value, name);
+    }
+    patch_phi_sources(blocks, next_value, value, name);
+}
+
+/// 在 `value` 的定义指令之后紧随插入 spill StoreVar。
+fn insert_spill_store_after_def(blocks: &mut [BasicBlock], value: ValueId, name: &str) {
     for block in blocks.iter_mut() {
         if let Some(position) = block
             .instructions()
@@ -301,63 +310,64 @@ fn demote_value_to_var(
                     value,
                 },
             );
-            break;
+            return;
         }
     }
+}
 
-    for block in blocks.iter_mut() {
-        let mut index = 0;
-        while index < block.instructions().len() {
-            let instruction = &block.instructions()[index];
-            let is_spill_store = matches!(
-                instruction,
-                Instruction::StoreVar { name: store_name, value: stored }
-                    if store_name == name && *stored == value
-            );
-            let uses_value = !is_spill_store
-                && !matches!(instruction, Instruction::Phi { .. })
-                && instr_uses(instruction).contains(&value);
-            if uses_value {
-                let fresh = alloc(next_value);
-                block.instructions_mut().insert(
-                    index,
-                    Instruction::LoadVar {
-                        dest: fresh,
-                        name: name.to_string(),
-                    },
-                );
-                replace_value_in_instruction(
-                    &mut block.instructions_mut()[index + 1],
-                    value,
-                    fresh,
-                );
-                index += 2;
-            } else {
-                index += 1;
-            }
-        }
-        if terminator_uses(block.terminator()).contains(&value) {
+/// 把单个块内（含 terminator）对 `value` 的使用改写为紧邻的 LoadVar 新值。
+/// 跳过 spill StoreVar 本身（它必须保持对原值的引用）；phi 由调用方单独处理。
+fn rewrite_block_uses(block: &mut BasicBlock, next_value: &mut u32, value: ValueId, name: &str) {
+    let mut index = 0;
+    while index < block.instructions().len() {
+        let instruction = &block.instructions()[index];
+        let is_spill_store = matches!(
+            instruction,
+            Instruction::StoreVar { name: store_name, value: stored }
+                if store_name == name && *stored == value
+        );
+        let uses_value = !is_spill_store
+            && !matches!(instruction, Instruction::Phi { .. })
+            && instr_uses(instruction).contains(&value);
+        if uses_value {
             let fresh = alloc(next_value);
-            insert_load_at_block_end(
-                block,
+            block.instructions_mut().insert(
+                index,
                 Instruction::LoadVar {
                     dest: fresh,
                     name: name.to_string(),
                 },
             );
-            replace_value_in_terminator(block.terminator_mut(), value, fresh);
+            replace_value_in_instruction(&mut block.instructions_mut()[index + 1], value, fresh);
+            index += 2;
+        } else {
+            index += 1;
         }
     }
+    if terminator_uses(block.terminator()).contains(&value) {
+        let fresh = alloc(next_value);
+        insert_load_at_block_end(
+            block,
+            Instruction::LoadVar {
+                dest: fresh,
+                name: name.to_string(),
+            },
+        );
+        replace_value_in_terminator(block.terminator_mut(), value, fresh);
+    }
+}
 
-    // phi source 的 use 发生在前驱边：装载插到前驱块末尾。phi 一定位于块首，
-    // 向前驱末尾插入不影响已记录的 phi 指令下标。
-    let mut phi_patches: Vec<(usize, usize, usize, BasicBlockId)> = Vec::new();
+/// 把 phi source 对 `value` 的使用改写为前驱块末尾的 LoadVar 新值。
+/// phi 的语义 use 发生在前驱边；phi 一定位于块首，向前驱末尾插入
+/// 不影响已记录的 phi 指令下标。
+fn patch_phi_sources(blocks: &mut [BasicBlock], next_value: &mut u32, value: ValueId, name: &str) {
+    let mut patches: Vec<(usize, usize, usize, BasicBlockId)> = Vec::new();
     for (block_index, block) in blocks.iter().enumerate() {
         for (instruction_index, instruction) in block.instructions().iter().enumerate() {
             if let Instruction::Phi { sources, .. } = instruction {
                 for (source_index, source) in sources.iter().enumerate() {
                     if source.value == value {
-                        phi_patches.push((
+                        patches.push((
                             block_index,
                             instruction_index,
                             source_index,
@@ -368,7 +378,7 @@ fn demote_value_to_var(
             }
         }
     }
-    for (block_index, instruction_index, source_index, predecessor) in phi_patches {
+    for (block_index, instruction_index, source_index, predecessor) in patches {
         let fresh = alloc(next_value);
         insert_load_at_block_end(
             &mut blocks[predecessor.0 as usize],
