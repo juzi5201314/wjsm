@@ -482,10 +482,14 @@ impl Lowerer {
             },
         );
 
-        // then_block: 求值默认表达式
+        // then_block: 求值默认表达式。表达式可能在内部延续到新块（闭包物化、
+        // 异常分叉等会发布 expr_merge_block 等延续），必须先 resolve 到真正的
+        // 延续块再跳 merge——这同时消耗掉残留延续，防止其泄漏给调用方的
+        // resolve_store_block 而把后续 store 误写进分支块（phi 支配性破坏）。
         let default_val = self.lower_expr(default_expr, then_block)?;
+        let then_exit = self.resolve_store_block(then_block);
         self.current_function.set_terminator(
-            then_block,
+            then_exit,
             Terminator::Jump {
                 target: merge_block,
             },
@@ -507,7 +511,7 @@ impl Lowerer {
                 dest: result,
                 sources: vec![
                     PhiSource {
-                        predecessor: then_block,
+                        predecessor: then_exit,
                         value: default_val,
                     },
                     PhiSource {
