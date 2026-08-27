@@ -2150,7 +2150,11 @@ impl NativeAgentState {
                 return true;
             }
             if value::is_callable(current) {
-                let Some(parent) = self.callable_prototypes.get(&current).copied() else {
+                let Some(parent) = self
+                    .callable_prototypes
+                    .get(&value::strip_gc_color(current))
+                    .copied()
+                else {
                     return false;
                 };
                 current = parent;

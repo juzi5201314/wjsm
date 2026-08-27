@@ -1,0 +1,21 @@
+exit_code: 0
+--- stdout ---
+get: k
+in: true
+reflect-get: k
+reflect-has: true
+own: false
+grand: k
+shadow: own k true
+unshadow: k false
+ro: 1 true
+acc-get: get/true
+acc-set: set/7 true
+get-only: only true
+obj-proto: 42 true undefined
+null-proto: undefined false null
+builtin-static: true true
+reflect-set: true 3
+meta-name: meta
+meta-prototype: replaced
+--- stderr ---
