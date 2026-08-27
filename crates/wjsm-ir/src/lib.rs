@@ -1281,9 +1281,12 @@ pub enum Instruction {
         this_val: ValueId,
         args: Vec<ValueId>,
     },
-    /// 对象 spread：将 source 的 own enumerable 属性复制到 dest
+    /// 对象 spread：将 source 的 own enumerable 属性复制到 object。
+    /// dest 接收运行时结果——成功为 object 本身，属性读取/getter 抛错时为
+    /// TAG_EXCEPTION，由 lowering 插桩检查以按 CopyDataProperties 传播异常。
     ObjectSpread {
         dest: ValueId,
+        object: ValueId,
         source: ValueId,
     },
     /// 获取 super 属性基对象：实例方法为 Base.prototype，静态方法为 Base 构造器。
@@ -1600,8 +1603,12 @@ impl fmt::Display for Instruction {
                 }
                 Ok(())
             }
-            Self::ObjectSpread { dest, source } => {
-                write!(formatter, "object_spread {source} into {dest}")
+            Self::ObjectSpread {
+                dest,
+                object,
+                source,
+            } => {
+                write!(formatter, "{dest} = object_spread {source} into {object}")
             }
             Self::GetSuperBase { dest } => {
                 write!(formatter, "{dest} = get_super_base")
@@ -1857,8 +1864,13 @@ impl Instruction {
                     *arg = f(*arg);
                 }
             }
-            Self::ObjectSpread { dest, source } => {
+            Self::ObjectSpread {
+                dest,
+                object,
+                source,
+            } => {
                 *dest = f(*dest);
+                *object = f(*object);
                 *source = f(*source);
             }
             Self::GetSuperBase { dest } | Self::GetSuperConstructor { dest } => {

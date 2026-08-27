@@ -257,8 +257,13 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             add(this_val);
             add_vec(args);
         }
-        ObjectSpread { dest, source } => {
+        ObjectSpread {
+            dest,
+            object,
+            source,
+        } => {
             add(dest);
+            add(object);
             add(source);
         }
         GetSuperBase { dest } => add(dest),
@@ -507,8 +512,13 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(this_val);
             rep_vec(args);
         }
-        ObjectSpread { dest, source } => {
+        ObjectSpread {
+            dest,
+            object,
+            source,
+        } => {
             rep(dest);
+            rep(object);
             rep(source);
         }
         GetSuperBase { dest } => rep(dest),

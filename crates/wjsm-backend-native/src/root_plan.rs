@@ -208,14 +208,14 @@ fn instruction_destination(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::IsException { dest, .. }
         | Instruction::GuardSameFunction { dest, .. }
         | Instruction::EncodeException { dest, .. }
-        | Instruction::ExceptionToObject { dest, .. } => Some(*dest),
+        | Instruction::ExceptionToObject { dest, .. }
+        | Instruction::ObjectSpread { dest, .. } => Some(*dest),
         Instruction::CallBuiltin { dest, .. }
         | Instruction::Call { dest, .. }
         | Instruction::SuperCall { dest, .. }
         | Instruction::ConstructCall { dest, .. } => *dest,
         Instruction::StoreVar { .. }
         | Instruction::SetProto { .. }
-        | Instruction::ObjectSpread { .. }
         | Instruction::PromiseResolve { .. }
         | Instruction::PromiseReject { .. }
         | Instruction::Suspend { .. }

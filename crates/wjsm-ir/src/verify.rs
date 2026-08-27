@@ -402,8 +402,8 @@ fn verify_instruction_uses(
         | Instruction::ExceptionToObject { value, .. } => {
             verify_value_use(function, definitions, *value, site, dominance)?;
         }
-        Instruction::ObjectSpread { dest, source } => {
-            verify_value_use(function, definitions, *dest, site, dominance)?;
+        Instruction::ObjectSpread { object, source, .. } => {
+            verify_value_use(function, definitions, *object, site, dominance)?;
             verify_value_use(function, definitions, *source, site, dominance)?;
         }
         Instruction::GuardSameFunction { callee, .. } => {
@@ -765,14 +765,14 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::GuardSameFunction { dest, .. }
         | Instruction::EncodeException { dest, .. }
         | Instruction::ExceptionToObject { dest, .. }
-        | Instruction::CreateDataProperty { dest, .. } => Some(*dest),
+        | Instruction::CreateDataProperty { dest, .. }
+        | Instruction::ObjectSpread { dest, .. } => Some(*dest),
 
         Instruction::CallBuiltin { dest, .. }
         | Instruction::Call { dest, .. }
         | Instruction::SuperCall { dest, .. }
         | Instruction::ConstructCall { dest, .. } => *dest,
         Instruction::StoreVar { .. }
-        | Instruction::ObjectSpread { .. }
         | Instruction::SetProto { .. }
         | Instruction::PromiseResolve { .. }
         | Instruction::PromiseReject { .. }
