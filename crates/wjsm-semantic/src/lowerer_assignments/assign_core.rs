@@ -103,7 +103,14 @@ impl Lowerer {
                 );
                 return Ok(dest);
             }
-            Err(msg) => return Err(self.error(ident.span, msg)),
+            Err(msg) => {
+                // 跨函数前向引用（延迟执行的函数体读取后声明的 let/const/class）：
+                // 静态无法判定调用是否先于声明执行，改为运行时 TdzCheck。
+                if let Some((scope_id, _)) = self.runtime_tdz_binding(&name) {
+                    return self.lower_tdz_checked_read(block, &name, scope_id);
+                }
+                return Err(self.error(ident.span, msg));
+            }
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
@@ -417,7 +424,17 @@ impl Lowerer {
                 }
                 return self.lower_assign_eval_env(assign, block, &name);
             }
-            Err(msg) => return Err(self.error(assign.span, msg)),
+            Err(msg) => {
+                // 跨函数前向赋值：写入前经 TdzCheck 校验绑定已初始化
+                //（const 的重赋值错误在 lookup_for_assign 中先行返回，不会到达此处）。
+                if let Some((scope_id, kind)) = self.runtime_tdz_binding(&name)
+                    && !matches!(kind, VarKind::Const)
+                {
+                    let binding = CapturedBinding::new(name.clone(), scope_id);
+                    return self.lower_assign_captured_checked(assign, block, &binding, true);
+                }
+                return Err(self.error(assign.span, msg));
+            }
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);

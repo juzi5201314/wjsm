@@ -114,11 +114,14 @@ pub(crate) fn scope_record_add(
     let Some(scope) = state.scope_records.get_mut(&record) else {
         return false;
     };
+    // 运行时 TDZ 哨兵优先于静态标志：跨函数前向引用的绑定在 lowering 期无法
+    // 静态判定初始化状态，语义层传 is_tdz=0 并让此处按当前 env 值动态判定。
+    let initialized = initialized == 0 && !value::is_uninitialized(stored);
     scope.bindings.insert(
         key,
         NativeScopeBinding {
             value: stored,
-            initialized: initialized == 0,
+            initialized,
             constant: constant != 0,
         },
     );

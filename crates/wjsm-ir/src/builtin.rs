@@ -525,6 +525,9 @@ pub enum Builtin {
     StringBuilderFinish,
     /// NaN-box runtime value 的字符串类型守卫。
     IsString,
+    /// TDZ 运行时检查：值为未初始化哨兵时抛 ReferenceError，否则原样返回。
+    /// args: [value, name(字符串常量，用于错误消息)]。
+    TdzCheck,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -560,7 +563,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::IsString as u16
+        Self::TdzCheck as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1047,6 +1050,7 @@ impl Builtin {
             Self::StringBuilderAppend => "string.builder_append",
             Self::StringBuilderFinish => "string.builder_finish",
             Self::IsString => "is_string",
+            Self::TdzCheck => "tdz_check",
         }
     }
 }

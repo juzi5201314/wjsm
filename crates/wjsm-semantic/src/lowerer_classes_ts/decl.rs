@@ -53,18 +53,20 @@ impl Lowerer {
             .scopes
             .resolve_scope_id(&class_name)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
-        let ir_name = format!("${outer_scope_id}.{class_name}");
+        let outer_binding = CapturedBinding::new(&class_name, outer_scope_id);
         if let Some(function_id) = ctor_function_id {
             self.current_function
-                .record_known_callee(ir_name.clone(), function_id);
+                .record_known_callee(outer_binding.var_ir_name(), function_id);
         }
-        self.current_function.append_instruction(
+        // 经 store_binding_value 写入：被闭包捕获（前向引用）时同步共享 env，
+        // 覆盖 env 快照中的 TDZ 未初始化哨兵。
+        let outer_block = self.store_binding_value(
             outer_block,
-            Instruction::StoreVar {
-                name: ir_name,
-                value: ctor_dest,
-            },
-        );
+            &outer_binding,
+            ctor_dest,
+            class_decl.span(),
+            true,
+        )?;
 
         Ok(StmtFlow::Open(outer_block))
     }

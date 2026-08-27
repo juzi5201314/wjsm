@@ -339,6 +339,13 @@ impl Lowerer {
                     object: previous_env,
                     key,
                 }
+            } else if self.binding_in_tdz(binding) {
+                // 首个迭代 env 在循环头声明执行前创建：TDZ 绑定写入哨兵，
+                // 声明执行时经 store_binding_value 覆盖。
+                Instruction::Const {
+                    dest: value,
+                    constant: self.module.add_constant(Constant::Uninitialized),
+                }
             } else {
                 Instruction::LoadVar {
                     dest: value,
@@ -507,6 +514,20 @@ impl Lowerer {
             return current_val;
         }
         if self.binding_belongs_to_current_function(binding) {
+            // 闭包先于声明创建（前向引用）：绑定仍处 TDZ，局部槽尚无有效值，
+            // 快照写入未初始化哨兵；声明执行时 store_binding_value 同步覆盖 env。
+            if self.binding_in_tdz(binding) {
+                let sentinel = self.module.add_constant(Constant::Uninitialized);
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: current_val,
+                        constant: sentinel,
+                    },
+                );
+                return current_val;
+            }
             let current_val = self.alloc_value();
             self.current_function.append_instruction(
                 block,

@@ -2256,6 +2256,14 @@ pub(super) fn syntax_error(
     named_error(ctx, state, "SyntaxError", message)
 }
 
+pub(super) fn reference_error(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    message: &str,
+) -> i64 {
+    named_error(ctx, state, "ReferenceError", message)
+}
+
 pub(super) fn range_error(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,

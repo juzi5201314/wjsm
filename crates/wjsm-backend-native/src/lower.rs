@@ -3235,6 +3235,10 @@ fn lower_instruction(
                     .builder
                     .ins()
                     .iconst(types::I64, value::encode_undefined()),
+                Constant::Uninitialized => cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_uninitialized()),
                 Constant::FunctionRef(function) => {
                     let index = cx.builder.ins().iconst(types::I64, i64::from(function.0));
                     cx.call(NativeRuntimeOp::MaterializeFunction.id(), &[index], None)?
@@ -8763,6 +8767,7 @@ fn switch_constant_immediate(constant: &Constant) -> Result<i64> {
         Constant::ObjectTemplate { .. } => {
             bail!("object templates are not valid switch keys")
         }
+        Constant::Uninitialized => bail!("uninitialized sentinel is not a valid switch key"),
     }
 }
 

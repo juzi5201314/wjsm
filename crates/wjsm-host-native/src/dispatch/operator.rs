@@ -13,8 +13,8 @@ use super::bigint;
 use super::proxy;
 use super::runtime::PrimitiveHint;
 use super::runtime::{
-    abstract_equal, fail_dispatch, get_property, has_property, is_truthy, strict_equal, to_number,
-    to_primitive, type_error,
+    abstract_equal, fail_dispatch, get_property, has_property, is_truthy, reference_error,
+    strict_equal, to_number, to_primitive, type_error,
 };
 use crate::NativeAgentState;
 
@@ -82,6 +82,21 @@ pub(super) fn dispatch_operator(
             .first()
             .map(|input| value::encode_bool(value::is_runtime_string_handle(*input)))
             .unwrap_or_else(|| fail_dispatch(ctx)),
+        Builtin::TdzCheck => {
+            let [checked, name] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            if value::is_uninitialized(*checked) {
+                let name = state.string_to_utf8(*name).unwrap_or_default();
+                reference_error(
+                    ctx,
+                    state,
+                    &format!("Cannot access '{name}' before initialization"),
+                )
+            } else {
+                *checked
+            }
+        }
         Builtin::GetPrototypeFromConstructor => {
             let Some(constructor) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));

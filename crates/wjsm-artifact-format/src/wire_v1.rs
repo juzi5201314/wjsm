@@ -209,6 +209,7 @@ fn encode_constant(
                 encoder.u64(*key);
             }
         }
+        Constant::Uninitialized => encoder.u16(12),
     }
     Ok(())
 }
@@ -289,6 +290,7 @@ fn decode_constant(
             }
             Ok((Constant::ObjectTemplate { keys }, None))
         }
+        12 => Ok((Constant::Uninitialized, None)),
         _ => Err(ArtifactFormatError::UnknownTag("constant", tag.into())),
     }
 }

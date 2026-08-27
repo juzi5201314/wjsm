@@ -347,6 +347,9 @@ pub enum Constant {
     Bool(bool),
     Null,
     Undefined,
+    /// TDZ 未初始化哨兵（`value::encode_uninitialized()`）；仅由闭包环境快照
+    /// 在被前向引用的 let/const/class 绑定声明执行前写入，永不暴露给用户代码。
+    Uninitialized,
     FunctionRef(FunctionId),
     /// 运行时原生可调用对象；当前用于全局 eval 被作为值读取时。
     NativeCallableEval,
@@ -371,6 +374,7 @@ impl fmt::Display for Constant {
             Self::Bool(value) => write!(formatter, "bool({value})"),
             Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
+            Self::Uninitialized => formatter.write_str("uninitialized"),
             Self::FunctionRef(id) => write!(formatter, "functionref(@{id})"),
             Self::NativeCallableEval => formatter.write_str("native_callable(eval)"),
             Self::BigInt(value) => write!(formatter, "bigint({value})"),
