@@ -54,6 +54,11 @@ impl Lowerer {
         let user_param_ir_names =
             self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
         self.init_async_continuation_slots(&user_param_ir_names, 5);
+        // 形参槽之后预留两个固定槽位：wrapper 把在真实调用帧物化好的 arguments
+        // 对象与收集好的 rest 实参数组存进来（body 的原生调用帧没有用户实参可收集）。
+        let args_object_slot = self.async_next_continuation_slot;
+        let rest_args_slot = args_object_slot + 1;
+        self.async_next_continuation_slot += 2;
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
             format!("${this_scope_id}.$this"),
@@ -147,7 +152,8 @@ impl Lowerer {
             },
         );
 
-        for (i, _param) in fn_decl.function.params.iter().enumerate() {
+        // rest 形参不占 ir_name 槽位，按 ir_names 迭代（跳过 $env/$this）。
+        for (i, param_ir_name) in user_param_ir_names.iter().skip(2).enumerate() {
             let slot_const = self.module.add_constant(Constant::Number((5 + i) as f64));
             let slot_val = self.alloc_value();
             self.current_function.append_instruction(
@@ -166,7 +172,6 @@ impl Lowerer {
                     args: vec![cont_val, slot_val],
                 },
             );
-            let param_ir_name = &user_param_ir_names[2 + i];
             self.current_function.append_instruction(
                 entry,
                 Instruction::StoreVar {
@@ -175,6 +180,20 @@ impl Lowerer {
                 },
             );
         }
+
+        // 从续体槽位取出 wrapper 侧物化的 arguments 对象与 rest 实参数组。
+        self.set_arguments_source_from_slot(
+            &fn_decl.function.params,
+            entry,
+            cont_val,
+            args_object_slot,
+        );
+        self.set_rest_args_source_from_slot(
+            &fn_decl.function.params,
+            entry,
+            cont_val,
+            rest_args_slot,
+        );
 
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
@@ -392,8 +411,8 @@ impl Lowerer {
             );
         }
 
-        for (i, _arg) in fn_decl.function.params.iter().enumerate() {
-            let param_ir_name = &wrapper_user_param_ir_names[2 + i];
+        // rest 形参不占 ir_name 槽位，按 ir_names 迭代（跳过 $env/$this）。
+        for (i, param_ir_name) in wrapper_user_param_ir_names.iter().skip(2).enumerate() {
             let arg_val = self.alloc_value();
             self.current_function.append_instruction(
                 wrapper_after_inits,
@@ -420,6 +439,20 @@ impl Lowerer {
                 },
             );
         }
+
+        // 把 wrapper 物化的 arguments 对象与收集的 rest 实参数组保存进固定槽位。
+        self.emit_wrapper_arguments_slot_save(
+            &fn_decl.function.params,
+            wrapper_after_inits,
+            cont_val,
+            args_object_slot,
+        );
+        self.emit_wrapper_rest_args_slot_save(
+            &fn_decl.function.params,
+            wrapper_after_inits,
+            cont_val,
+            rest_args_slot,
+        );
 
         self.current_function.set_terminator(
             wrapper_after_inits,

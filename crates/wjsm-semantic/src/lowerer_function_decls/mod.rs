@@ -120,6 +120,241 @@ impl Lowerer {
         Ok(StmtFlow::Open(store_block))
     }
 
+    /// wrapper 侧：把 `emit_arguments_init` 在真实调用帧物化好的 arguments 对象
+    /// 保存到续体的固定槽位（紧随形参槽之后），供 generator/async body 绑定同一对象。
+    /// 形参绑定名为 `arguments` 时按规范无隐式 arguments 对象，跳过。
+    pub(crate) fn emit_wrapper_arguments_slot_save(
+        &mut self,
+        params: &[swc_ast::Param],
+        block: BasicBlockId,
+        cont_val: ValueId,
+        args_object_slot: u32,
+    ) {
+        if Self::detect_param_arguments(params) {
+            return;
+        }
+        let Ok((args_scope_id, _)) = self.scopes.lookup("arguments") else {
+            return;
+        };
+        let args_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: args_val,
+                name: format!("${args_scope_id}.arguments"),
+            },
+        );
+        let slot_const = self
+            .module
+            .add_constant(Constant::Number(args_object_slot as f64));
+        let slot_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: slot_val,
+                constant: slot_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, slot_val, args_val],
+            },
+        );
+    }
+
+    /// body 侧：从续体固定槽位取出 wrapper 物化的 arguments 对象，
+    /// 设为 `emit_arguments_init` 的绑定来源（override 在其入口被 take 消费）。
+    pub(crate) fn set_arguments_source_from_slot(
+        &mut self,
+        params: &[swc_ast::Param],
+        block: BasicBlockId,
+        cont_val: ValueId,
+        args_object_slot: u32,
+    ) {
+        if Self::detect_param_arguments(params) {
+            return;
+        }
+        let slot_const = self
+            .module
+            .add_constant(Constant::Number(args_object_slot as f64));
+        let slot_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: slot_val,
+                constant: slot_const,
+            },
+        );
+        let args_from_cont = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(args_from_cont),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot_val],
+            },
+        );
+        self.arguments_source_override = Some(args_from_cont);
+    }
+
+    /// wrapper 侧：在真实调用帧收集 rest 实参数组并保存到续体固定槽位，
+    /// 供 generator/async body 解构（body 的原生调用帧没有用户实参可收集）。
+    pub(crate) fn emit_wrapper_rest_args_slot_save(
+        &mut self,
+        params: &[swc_ast::Param],
+        block: BasicBlockId,
+        cont_val: ValueId,
+        rest_args_slot: u32,
+    ) {
+        if !params
+            .iter()
+            .any(|p| matches!(p.pat, swc_ast::Pat::Rest(_)))
+        {
+            return;
+        }
+        let skip = Self::count_regular_params(params);
+        let rest_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CollectRestArgs {
+                dest: rest_val,
+                skip,
+            },
+        );
+        let slot_const = self
+            .module
+            .add_constant(Constant::Number(rest_args_slot as f64));
+        let slot_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: slot_val,
+                constant: slot_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, slot_val, rest_val],
+            },
+        );
+    }
+
+    /// body 侧：从续体固定槽位取出 wrapper 收集的 rest 实参数组，
+    /// 设为 `emit_pat_inits_impl` 的解构来源（override 在其入口被 take 消费）。
+    pub(crate) fn set_rest_args_source_from_slot(
+        &mut self,
+        params: &[swc_ast::Param],
+        block: BasicBlockId,
+        cont_val: ValueId,
+        rest_args_slot: u32,
+    ) {
+        if !params
+            .iter()
+            .any(|p| matches!(p.pat, swc_ast::Pat::Rest(_)))
+        {
+            return;
+        }
+        let slot_const = self
+            .module
+            .add_constant(Constant::Number(rest_args_slot as f64));
+        let slot_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: slot_val,
+                constant: slot_const,
+            },
+        );
+        let rest_from_cont = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(rest_from_cont),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot_val],
+            },
+        );
+        self.rest_args_source_override = Some(rest_from_cont);
+    }
+
+    /// wrapper 侧：把调用时的原始 `this` 保存到续体固定槽位。
+    /// async 函数族 body 的 `$this` 形参被 resume 值复用，原始 `this` 必须经槽位传递。
+    pub(crate) fn emit_wrapper_this_slot_save(
+        &mut self,
+        block: BasicBlockId,
+        cont_val: ValueId,
+        this_slot: u32,
+        wrapper_this_scope_id: usize,
+    ) {
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: this_val,
+                name: format!("${wrapper_this_scope_id}.$this"),
+            },
+        );
+        let slot_const = self.module.add_constant(Constant::Number(this_slot as f64));
+        let slot_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: slot_val,
+                constant: slot_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, slot_val, this_val],
+            },
+        );
+    }
+
+    /// body 侧：`$this` 形参承载 resume 值，先复制到 `$resume_val`（调用方已完成），
+    /// 再从续体槽位恢复原始 `this` 写回 `$this`，使函数体内的 `this` 表达式取到正确值。
+    pub(crate) fn emit_body_this_restore_from_slot(
+        &mut self,
+        block: BasicBlockId,
+        cont_val: ValueId,
+        this_slot: u32,
+        this_scope_id: usize,
+    ) {
+        let slot_const = self.module.add_constant(Constant::Number(this_slot as f64));
+        let slot_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: slot_val,
+                constant: slot_const,
+            },
+        );
+        let original_this = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(original_this),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot_val],
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: format!("${this_scope_id}.$this"),
+                value: original_this,
+            },
+        );
+    }
+
     /// 声明 async 续体的公共作用域变量
     /// ($env, $this, $state, $resume_val, $is_rejected, $promise, $closure_env)
     #[allow(clippy::type_complexity)]

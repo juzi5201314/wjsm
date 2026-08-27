@@ -629,6 +629,9 @@ impl Lowerer {
         block: BasicBlockId,
         references_arguments: bool,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 入口即 take：即使后续任一守卫提前返回，也不会把过期的来源泄漏给
+        // 之后降级的其他函数。
+        let args_override = self.arguments_source_override.take();
         if self.scopes.current_function_has_param_arguments() {
             return Ok(block);
         }
@@ -652,6 +655,24 @@ impl Lowerer {
             }
         };
         let ir_name = format!("${scope_id}.arguments");
+
+        // generator/async 函数 body：wrapper 已在真实调用帧物化 arguments 对象并经
+        // 续体槽位传入，这里直接绑定同一对象——每次调用恰好一个 arguments、
+        // 携带真实实参，且 callee 指向用户可见的 wrapper 函数。
+        if let Some(source) = args_override {
+            let store_block = self.resolve_store_block(block);
+            self.current_function.append_instruction(
+                store_block,
+                Instruction::StoreVar {
+                    name: ir_name,
+                    value: source,
+                },
+            );
+            if self.scopes.mark_initialised("arguments").is_err() {
+                // 已初始化过，无需处理
+            }
+            return Ok(self.resolve_store_block(block));
+        }
 
         // 1) Collect all arguments into an array
         let args_array = self.alloc_value();

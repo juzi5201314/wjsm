@@ -7,6 +7,8 @@ impl Lowerer {
         param_ir_names: &[String],
         mut block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 入口即 take：即使本次没有 rest 形参，也不会把过期的来源泄漏给后续函数。
+        let rest_override = self.rest_args_source_override.take();
         // param_ir_names[0] = $env, [1] = $this, [2..] = user params (excluding rest)
         let mut ir_name_idx: usize = 2;
         let mut regular_param_count: u32 = 0;
@@ -19,15 +21,22 @@ impl Lowerer {
 
         for pat in pats.iter() {
             if let swc_ast::Pat::Rest(rest) = pat {
-                let skip = regular_param_count;
-                let rest_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CollectRestArgs {
-                        dest: rest_val,
-                        skip,
-                    },
-                );
+                // generator/async 函数 body：wrapper 已在真实调用帧收集 rest 实参并经
+                // 续体槽位传入，直接解构该数组（body 的原生调用帧没有用户实参）。
+                let rest_val = if let Some(source) = rest_override {
+                    source
+                } else {
+                    let skip = regular_param_count;
+                    let rest_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CollectRestArgs {
+                            dest: rest_val,
+                            skip,
+                        },
+                    );
+                    rest_val
+                };
                 block = self.lower_destructure_pattern(&rest.arg, rest_val, block, VarKind::Let)?;
                 block = self.resolve_store_block(block);
                 break;

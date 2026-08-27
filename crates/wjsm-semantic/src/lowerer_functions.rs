@@ -8,6 +8,38 @@ impl Lowerer {
         fn_expr: &swc_ast::FnExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if fn_expr.function.is_async && fn_expr.function.is_generator {
+            // async generator 表达式复用声明路径（与同步 generator 表达式的临时名技巧一致）。
+            let temp_name = format!("$__wjsm_async_gen_expr_{}", self.module.functions().len());
+            let _ = self
+                .scopes
+                .declare(&temp_name, VarKind::Let, true)
+                .map_err(|msg| self.error(fn_expr.span(), msg))?;
+            let fake_decl = swc_ast::FnDecl {
+                ident: swc_ast::Ident::new(
+                    temp_name.clone().into(),
+                    fn_expr.span(),
+                    swc_core::common::SyntaxContext::empty(),
+                ),
+                declare: false,
+                function: fn_expr.function.clone(),
+            };
+            let flow = self.lower_async_gen_fn_decl(&fake_decl, StmtFlow::Open(block))?;
+            let load_block = self.ensure_open(flow)?;
+            let (scope_id, _) = self
+                .scopes
+                .lookup(&temp_name)
+                .map_err(|msg| self.error(fn_expr.span(), msg))?;
+            let callee = self.alloc_value();
+            self.current_function.append_instruction(
+                load_block,
+                Instruction::LoadVar {
+                    dest: callee,
+                    name: format!("${scope_id}.{temp_name}"),
+                },
+            );
+            return Ok(callee);
+        }
         if fn_expr.function.is_async {
             return self.lower_async_fn_expr(fn_expr, block);
         }
@@ -191,6 +223,47 @@ impl Lowerer {
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
         );
+        let (wrapper_fn_id, captured) = self.lower_async_function_parts(&name, fn_expr)?;
+
+        let wrapper_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let wrapper_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: wrapper_ref_val,
+                constant: wrapper_ref_const,
+            },
+        );
+
+        let callee_val = if captured.is_empty() {
+            wrapper_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(block, &captured, fn_expr.span())?;
+            let closure_block = self.resolve_store_block(block);
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                closure_block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![wrapper_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        Ok(callee_val)
+    }
+
+    /// 构建 async 函数的 body + wrapper 两个 IR 函数，返回 wrapper 的 FunctionId
+    /// 与捕获集合；由表达式与对象/类方法路径共享（声明路径在 async_fn_decls.rs）。
+    pub(crate) fn lower_async_function_parts(
+        &mut self,
+        name: &str,
+        fn_expr: &swc_ast::FnExpr,
+    ) -> Result<(FunctionId, Vec<CapturedBinding>), LoweringError> {
         let async_name = format!("{name}$async");
 
         self.push_function_context(&async_name, BasicBlockId(0));
@@ -246,6 +319,12 @@ impl Lowerer {
         let user_param_ir_names =
             self.build_param_ir_names(&fn_expr.function.params, env_scope_id, this_scope_id)?;
         self.init_async_continuation_slots(&user_param_ir_names, 4);
+        // 形参槽之后预留三个固定槽位：wrapper 把物化好的 arguments 对象、收集好的
+        // rest 实参数组与调用时的原始 this 存进来（$this 形参被 resume 值复用）。
+        let args_object_slot = self.async_next_continuation_slot;
+        let rest_args_slot = args_object_slot + 1;
+        let this_slot = args_object_slot + 2;
+        self.async_next_continuation_slot += 3;
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -336,6 +415,9 @@ impl Lowerer {
             },
         );
 
+        // 从续体槽位恢复原始 this（$this 形参承载的是 resume 值）。
+        self.emit_body_this_restore_from_slot(entry, cont_val, this_slot, this_scope_id);
+
         let slot2_const = self.module.add_constant(Constant::Number(2.0));
         let slot2_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -388,7 +470,8 @@ impl Lowerer {
             },
         );
 
-        for (i, _param) in fn_expr.function.params.iter().enumerate() {
+        // rest 形参不占 ir_name 槽位，按 ir_names 迭代（跳过 $env/$this）。
+        for (i, param_ir_name) in user_param_ir_names.iter().skip(2).enumerate() {
             let slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
             let slot_val = self.alloc_value();
             self.current_function.append_instruction(
@@ -407,7 +490,6 @@ impl Lowerer {
                     args: vec![cont_val, slot_val],
                 },
             );
-            let param_ir_name = &user_param_ir_names[2 + i];
             self.current_function.append_instruction(
                 entry,
                 Instruction::StoreVar {
@@ -416,6 +498,20 @@ impl Lowerer {
                 },
             );
         }
+
+        // 从续体槽位取出 wrapper 侧物化的 arguments 对象与 rest 实参数组。
+        self.set_arguments_source_from_slot(
+            &fn_expr.function.params,
+            entry,
+            cont_val,
+            args_object_slot,
+        );
+        self.set_rest_args_source_from_slot(
+            &fn_expr.function.params,
+            entry,
+            cont_val,
+            rest_args_slot,
+        );
 
         let after_inits =
             self.emit_param_inits(&fn_expr.function.params, &user_param_ir_names, entry)?;
@@ -553,7 +649,7 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        self.push_function_context(&name, BasicBlockId(0));
+        self.push_function_context(name, BasicBlockId(0));
 
         let wrapper_env_scope_id = self
             .scopes
@@ -759,8 +855,8 @@ impl Lowerer {
             },
         );
 
-        for (i, _arg) in fn_expr.function.params.iter().enumerate() {
-            let param_ir_name = &wrapper_user_param_ir_names[2 + i];
+        // rest 形参不占 ir_name 槽位，按 ir_names 迭代（跳过 $env/$this）。
+        for (i, param_ir_name) in wrapper_user_param_ir_names.iter().skip(2).enumerate() {
             let arg_val = self.alloc_value();
             self.current_function.append_instruction(
                 wrapper_after_inits,
@@ -787,6 +883,26 @@ impl Lowerer {
                 },
             );
         }
+
+        // 把 wrapper 物化的 arguments 对象、收集的 rest 实参数组与原始 this 保存进固定槽位。
+        self.emit_wrapper_arguments_slot_save(
+            &fn_expr.function.params,
+            wrapper_after_inits,
+            cont_val,
+            args_object_slot,
+        );
+        self.emit_wrapper_rest_args_slot_save(
+            &fn_expr.function.params,
+            wrapper_after_inits,
+            cont_val,
+            rest_args_slot,
+        );
+        self.emit_wrapper_this_slot_save(
+            wrapper_after_inits,
+            cont_val,
+            this_slot,
+            wrapper_this_scope_id,
+        );
 
         let zero_const = self.module.add_constant(Constant::Number(0.0));
         let zero_val = self.alloc_value();
@@ -837,7 +953,7 @@ impl Lowerer {
         );
         let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
-        let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
+        let mut wrapper_ir_function = Function::new(name, BasicBlockId(0));
         wrapper_ir_function.set_has_eval(has_eval);
         if let Some(span) = self.span_to_source_span(fn_expr.span()) {
             wrapper_ir_function.set_source_span(span);
@@ -852,35 +968,6 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        let wrapper_ref_const = self
-            .module
-            .add_constant(Constant::FunctionRef(wrapper_fn_id));
-        let wrapper_ref_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: wrapper_ref_val,
-                constant: wrapper_ref_const,
-            },
-        );
-
-        let callee_val = if captured.is_empty() {
-            wrapper_ref_val
-        } else {
-            let env_val = self.ensure_shared_env(block, &captured, fn_expr.span())?;
-            let closure_block = self.resolve_store_block(block);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                closure_block,
-                Instruction::CallBuiltin {
-                    dest: Some(closure_val),
-                    builtin: Builtin::CreateClosure,
-                    args: vec![wrapper_ref_val, env_val],
-                },
-            );
-            closure_val
-        };
-
-        Ok(callee_val)
+        Ok((wrapper_fn_id, captured))
     }
 }

@@ -6,6 +6,22 @@ impl Lowerer {
         fn_decl: &swc_ast::FnDecl,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        let (wrapper_fn_id, captured) = self.lower_async_gen_function(fn_decl)?;
+        self.store_wrapper_in_outer_scope(
+            flow,
+            fn_decl.ident.sym.as_ref(),
+            wrapper_fn_id,
+            &captured,
+            fn_decl.span(),
+        )
+    }
+
+    /// 构建 async generator 的 body + wrapper 两个 IR 函数，返回 wrapper 的
+    /// FunctionId 与捕获集合；由声明 / 表达式 / 方法路径共享。
+    pub(crate) fn lower_async_gen_function(
+        &mut self,
+        fn_decl: &swc_ast::FnDecl,
+    ) -> Result<(FunctionId, Vec<CapturedBinding>), LoweringError> {
         let name = fn_decl.ident.sym.to_string();
         let async_gen_name = format!("{name}$asyncgen");
 
@@ -41,6 +57,12 @@ impl Lowerer {
         let user_param_ir_names =
             self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
         self.init_async_continuation_slots(&user_param_ir_names, 4);
+        // 形参槽之后预留三个固定槽位：wrapper 把物化好的 arguments 对象、收集好的
+        // rest 实参数组与调用时的原始 this 存进来（$this 形参被 resume 值复用）。
+        let args_object_slot = self.async_next_continuation_slot;
+        let rest_args_slot = args_object_slot + 1;
+        let this_slot = args_object_slot + 2;
+        self.async_next_continuation_slot += 3;
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -135,6 +157,9 @@ impl Lowerer {
             },
         );
 
+        // 从续体槽位恢复原始 this（$this 形参承载的是 resume 值）。
+        self.emit_body_this_restore_from_slot(entry, cont_val, this_slot, this_scope_id);
+
         // slot 2: generator
         let slot2_const = self.module.add_constant(Constant::Number(2.0));
         let slot2_val = self.alloc_value();
@@ -189,8 +214,8 @@ impl Lowerer {
             },
         );
 
-        // slots 4+: 用户参数
-        for (i, _param) in fn_decl.function.params.iter().enumerate() {
+        // slots 4+: 用户参数（rest 形参不占 ir_name 槽位，按 ir_names 迭代）
+        for (i, param_ir_name) in user_param_ir_names.iter().skip(2).enumerate() {
             let slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
             let slot_val = self.alloc_value();
             self.current_function.append_instruction(
@@ -209,7 +234,6 @@ impl Lowerer {
                     args: vec![cont_val, slot_val],
                 },
             );
-            let param_ir_name = &user_param_ir_names[2 + i];
             self.current_function.append_instruction(
                 entry,
                 Instruction::StoreVar {
@@ -218,6 +242,20 @@ impl Lowerer {
                 },
             );
         }
+
+        // 从续体槽位取出 wrapper 侧物化的 arguments 对象与 rest 实参数组。
+        self.set_arguments_source_from_slot(
+            &fn_decl.function.params,
+            entry,
+            cont_val,
+            args_object_slot,
+        );
+        self.set_rest_args_source_from_slot(
+            &fn_decl.function.params,
+            entry,
+            cont_val,
+            rest_args_slot,
+        );
 
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
@@ -465,9 +503,8 @@ impl Lowerer {
             },
         );
 
-        // slots 4+: 保存用户参数到续体槽位
-        for (i, _arg) in fn_decl.function.params.iter().enumerate() {
-            let param_ir_name = &wrapper_user_param_ir_names[2 + i];
+        // slots 4+: 保存用户参数到续体槽位（rest 形参不占 ir_name 槽位，按 ir_names 迭代）
+        for (i, param_ir_name) in wrapper_user_param_ir_names.iter().skip(2).enumerate() {
             let arg_val = self.alloc_value();
             self.current_function.append_instruction(
                 wrapper_after_inits,
@@ -494,6 +531,26 @@ impl Lowerer {
                 },
             );
         }
+
+        // 把 wrapper 物化的 arguments 对象、收集的 rest 实参数组与原始 this 保存进固定槽位。
+        self.emit_wrapper_arguments_slot_save(
+            &fn_decl.function.params,
+            wrapper_after_inits,
+            cont_val,
+            args_object_slot,
+        );
+        self.emit_wrapper_rest_args_slot_save(
+            &fn_decl.function.params,
+            wrapper_after_inits,
+            cont_val,
+            rest_args_slot,
+        );
+        self.emit_wrapper_this_slot_save(
+            wrapper_after_inits,
+            cont_val,
+            this_slot,
+            wrapper_this_scope_id,
+        );
 
         self.current_function.set_terminator(
             wrapper_after_inits,
@@ -522,6 +579,6 @@ impl Lowerer {
         let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
         self.pop_function_context();
 
-        self.store_wrapper_in_outer_scope(flow, &name, wrapper_fn_id, &captured, fn_decl.span())
+        Ok((wrapper_fn_id, captured))
     }
 }

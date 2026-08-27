@@ -130,6 +130,8 @@ impl Lowerer {
             is_arrow: false,
             is_method: false,
             arguments_param_count: 0,
+            arguments_source_override: None,
+            rest_args_source_override: None,
             script_mode: false,
             emit_debug_checks: false,
             diagnostic_source: None,

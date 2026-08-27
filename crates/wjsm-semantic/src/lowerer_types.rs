@@ -150,6 +150,14 @@ pub(crate) struct Lowerer {
     pub(crate) is_method: bool,
     /// 当前函数形参个数，供 emit_arguments_init 使用。
     pub(crate) arguments_param_count: u32,
+    /// `arguments` 对象的预物化来源：generator/async 函数 body 从续体槽位加载 wrapper
+    /// 侧物化好的 arguments 对象时设置；`emit_arguments_init` 在入口 take 消费，
+    /// 命中时直接绑定该对象而不再发射 `CollectRestArgs`（body 的原生调用帧没有用户实参）。
+    pub(crate) arguments_source_override: Option<ValueId>,
+    /// rest 形参的预收集来源：generator/async 函数 body 从续体槽位加载 wrapper 侧
+    /// 收集好的 rest 实参数组时设置；`emit_pat_inits_impl` 在入口 take 消费，
+    /// 命中时直接解构该数组而不再发射 `CollectRestArgs`。
+    pub(crate) rest_args_source_override: Option<ValueId>,
     pub(crate) script_mode: bool,
     /// 是否在语句入口发射 `Instruction::DebugCheck`（默认关闭，不影响现有 IR 快照）。
     pub(crate) emit_debug_checks: bool,
