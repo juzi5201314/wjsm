@@ -480,6 +480,10 @@ fn binding_candidates(function: &Function) -> Vec<&str> {
 
 /// 绑定的读取是否必为原始值：非协议槽、非本函数形参，全模块写站点都在本
 /// 函数内且写入值已证明原始（无站点 ⇒ 只能读到 undefined）。
+///
+/// direct eval 不构成漏网写者：eval 桥接对每个可见绑定发出
+/// `eval_get_binding` + StoreVar 写回，可被 eval 改写的绑定必然带有
+/// 一个值不可证明原始的写站点，本检查自动拒绝。
 fn binding_is_primitive(
     view: &LoopView<'_>,
     facts: &ModuleFacts,
