@@ -334,7 +334,7 @@ impl Lowerer {
 
     fn emit_field_init_common(
         &mut self,
-        block: BasicBlockId,
+        mut block: BasicBlockId,
         this_scope_id: usize,
         key_dest: ValueId,
         init_value: Option<&swc_ast::Expr>,
@@ -348,8 +348,10 @@ impl Lowerer {
                 name: format!("${this_scope_id}.$this"),
             },
         );
+        // 初始化器内部可能产生表达式级控制流（调用继续块、操作数异常分叉等），
+        // 写回必须落在推进后的延续块，否则值定义不支配使用（IR 验证失败）。
         let init_val = if let Some(value) = init_value {
-            self.lower_expr(value, block)?
+            self.lower_expr_then_continue(value, &mut block)?
         } else {
             let ud_const = self.module.add_constant(Constant::Undefined);
             let ud_dest = self.alloc_value();
