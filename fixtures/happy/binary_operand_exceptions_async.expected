@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+gen-caught: gen-boom
+asyncAdd rejected: Error | async-add
+asyncEq rejected: Error | async-eq
+asyncNeq rejected: Error | async-neq
+asyncSeq rejected: Error | async-seq
+asyncLt rejected: Error | async-lt
+--- stderr ---
