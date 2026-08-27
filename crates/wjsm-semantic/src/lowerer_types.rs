@@ -36,6 +36,16 @@ pub(crate) enum MethodSuperBinding {
     ClosureEnv,
 }
 
+/// 类私有名词法条目。
+#[derive(Clone)]
+pub(crate) struct PrivateNameEntry {
+    /// 该声明类的不可公开运行时槽名（`#名@类id`）。
+    pub(crate) storage_name: String,
+    /// `#x in 非对象` TypeError 的显示名：实例私有方法/访问器为类 brand（类名），
+    /// 其余为 `#名`（与 V8/Node 文案一致）。
+    pub(crate) in_display_name: String,
+}
+
 pub(crate) struct Lowerer {
     pub(crate) module: Module,
     pub(crate) next_value: u32,
@@ -52,8 +62,8 @@ pub(crate) struct Lowerer {
     pub(crate) active_finalizers: Vec<PendingFinalizer>,
     /// 匿名类 / 匿名函数计数器
     pub(crate) anon_counter: u32,
-    /// 类私有名词法栈：源名 → 该声明类的不可公开运行时槽名。
-    pub(crate) private_name_stack: Vec<std::collections::HashMap<String, String>>,
+    /// 类私有名词法栈：源名 → 该声明类的槽名与 `in` 错误显示名。
+    pub(crate) private_name_stack: Vec<std::collections::HashMap<String, PrivateNameEntry>>,
     pub(crate) next_private_name_id: u32,
     // ── Function context stack ────────────────────────────────────────────
     pub(crate) function_stack: Vec<FunctionBuilder>,

@@ -236,8 +236,41 @@ impl Lowerer {
                 }
                 Ok(dest)
             }
-            // in 操作符：检查对象是否有属性
+            // in 操作符：检查对象是否有属性。
+            // 左操作数为私有名（`#x in obj`）时按 ES §13.10.1 做 brand 检查：
+            // 私有名在编译期解析为存储名，运行时经 PrivateHas 查实例/构造器的
+            // 私有槽（字段/方法/访问器同一存储），RHS 非对象抛 TypeError，
+            // 错误显示名（字段 `#x` / 实例方法访问器为类 brand）对齐 V8/Node。
             In => {
+                if let swc_ast::Expr::PrivateName(private_name) = bin.left.as_ref() {
+                    let (field_name, display_name) = self
+                        .resolve_private_in_names(private_name.name.as_ref(), private_name.span)?;
+                    let mut current_block = block;
+                    let object =
+                        self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                    // `? GetValue(rref)`：RHS 求值异常必须先传播，不得流入 brand 检查
+                    // 被误报为 TypeError（抑制上下文的延迟分叉由 lower_expr_then_continue
+                    // 处理，async 状态机内由 PrivateHas 宿主端透传异常值）。
+                    if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref())
+                    {
+                        current_block = self.lower_value_exception_branch(current_block, object)?;
+                    }
+                    let key = self.emit_string_const(current_block, &field_name);
+                    let display = self.emit_string_const(current_block, &display_name);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        current_block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::PrivateHas,
+                            args: vec![object, key, display],
+                        },
+                    );
+                    if current_block != block {
+                        self.expr_merge_block = Some(current_block);
+                    }
+                    return Ok(dest);
+                }
                 let mut current_block = block;
                 let prop = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
                 let object =

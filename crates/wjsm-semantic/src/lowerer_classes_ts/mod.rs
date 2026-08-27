@@ -243,19 +243,31 @@ struct PrivateFunctionMeta {
 }
 
 impl Lowerer {
-    fn push_class_private_name_scope(&mut self, body: &[swc_ast::ClassMember]) {
+    fn push_class_private_name_scope(&mut self, class_name: &str, body: &[swc_ast::ClassMember]) {
         let class_private_id = self.next_private_name_id;
         self.next_private_name_id += 1;
         let mut names = std::collections::HashMap::new();
         for member in body {
-            let source_name = match member {
-                swc_ast::ClassMember::PrivateMethod(method) => method.key.name.to_string(),
-                swc_ast::ClassMember::PrivateProp(prop) => prop.key.name.to_string(),
+            // 实例私有方法/访问器共享类 brand，其 `in` 错误显示名为类名（对齐 V8/Node）；
+            // 实例字段与全部 static 私有成员各有独立槽，显示 `#名`。
+            let (source_name, brand_display) = match member {
+                swc_ast::ClassMember::PrivateMethod(method) => {
+                    (method.key.name.to_string(), !method.is_static)
+                }
+                swc_ast::ClassMember::PrivateProp(prop) => (prop.key.name.to_string(), false),
                 _ => continue,
+            };
+            let in_display_name = if brand_display {
+                class_name.to_string()
+            } else {
+                format!("#{source_name}")
             };
             names
                 .entry(source_name.clone())
-                .or_insert_with(|| format!("#{source_name}@{class_private_id}"));
+                .or_insert_with(|| PrivateNameEntry {
+                    storage_name: format!("#{source_name}@{class_private_id}"),
+                    in_display_name,
+                });
         }
         self.private_name_stack.push(names);
     }
@@ -264,22 +276,42 @@ impl Lowerer {
         self.private_name_stack.pop();
     }
 
-    pub(crate) fn resolve_private_storage_name(
+    fn resolve_private_name_entry(
         &self,
         source_name: &str,
         span: Span,
-    ) -> Result<String, LoweringError> {
+    ) -> Result<&PrivateNameEntry, LoweringError> {
         self.private_name_stack
             .iter()
             .rev()
             .find_map(|scope| scope.get(source_name))
-            .cloned()
             .ok_or_else(|| {
                 self.error(
                     span,
                     format!("Private field '#{source_name}' is not declared"),
                 )
             })
+    }
+
+    pub(crate) fn resolve_private_storage_name(
+        &self,
+        source_name: &str,
+        span: Span,
+    ) -> Result<String, LoweringError> {
+        Ok(self
+            .resolve_private_name_entry(source_name, span)?
+            .storage_name
+            .clone())
+    }
+
+    /// `#x in obj` 需要的（槽名, 错误显示名）二元组。
+    pub(crate) fn resolve_private_in_names(
+        &self,
+        source_name: &str,
+        span: Span,
+    ) -> Result<(String, String), LoweringError> {
+        let entry = self.resolve_private_name_entry(source_name, span)?;
+        Ok((entry.storage_name.clone(), entry.in_display_name.clone()))
     }
 
     pub(crate) fn emit_string_const(&mut self, block: BasicBlockId, value: &str) -> ValueId {

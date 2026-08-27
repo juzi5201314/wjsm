@@ -22,7 +22,7 @@
 | 生成器、异步生成器 | 可用 | 含 `for await` |
 | `async` / `await` | 可用 | |
 | 类字段、静态字段 | 可用 | |
-| 私有字段 `#x` | 可用 | |
+| 私有字段 `#x` | 可用 | 含 `#x in obj` brand 检查 |
 | 继承与 `super` | 可用 | |
 | getter / setter | 可用 | 含类原型与 `defineProperty` |
 | 计算属性名 | 可用 | |
