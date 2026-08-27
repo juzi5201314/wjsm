@@ -628,6 +628,10 @@ impl Lowerer {
     }
 
     /// 处理类静态块成员：创建 IR 函数并在当前 block 发起调用。
+    ///
+    /// ClassDefinitionEvaluation 对 ClassStaticBlockDefinition 的
+    /// `? Call(bodyFunction, F)`：块体抛出的异常必须在类定义期传播
+    /// （与静态字段初始化器同一路径），后续静态元素与类名绑定不得执行。
     fn lower_class_static_block(
         &mut self,
         block: BasicBlockId,
@@ -646,16 +650,17 @@ impl Lowerer {
         )?;
         let (continuation, function_value) =
             self.materialize_class_function_value(block, &function, static_block.span)?;
+        let result = self.alloc_value();
         self.current_function.append_instruction(
             continuation,
             Instruction::Call {
-                dest: None,
+                dest: Some(result),
                 callee: function_value,
                 this_val: ctor_dest,
                 args: vec![],
             },
         );
-        Ok(continuation)
+        self.lower_value_exception_branch(continuation, result)
     }
 
     /// 为类方法/访问器创建 IR 函数并返回其函数标识及捕获集合。
