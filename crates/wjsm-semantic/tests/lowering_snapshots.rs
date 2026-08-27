@@ -855,6 +855,11 @@ fn object_literal_static_keys_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn object_computed_key_eval_order_fixture_matches_ir_snapshot() {
+    assert_snapshot("object_computed_key_eval_order");
+}
+
+#[test]
 fn escape_scalar_record_loop_fixture_matches_ir_snapshot() {
     assert_snapshot("escape_scalar_record_loop");
 }

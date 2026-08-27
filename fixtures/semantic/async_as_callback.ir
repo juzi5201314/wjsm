@@ -209,32 +209,56 @@ module {
       %22 = const c49
       %23 = const c50
       %24 = call builtin.promise.resolve_static(%22, %23)
-      %25 = load var $0.double
-      %26 = const c51
-      %27 = call builtin.promise.then(%24, %25, %26)
-      %28 = const c52
-      %29 = const c53
-      %30 = call builtin.promise.then(%27, %28, %29)
-      %31 = is_exception %30
-      branch %31, bb2, bb1
+      %25 = is_exception %24
+      branch %25, bb2, bb1
     bb1:
-      %33 = const c54
-      %34 = const c55
-      %35 = call builtin.promise.resolve_static(%33, %34)
-      %36 = load var $0.double
-      %37 = const c56
-      %38 = call builtin.promise.then(%35, %36, %37)
-      %39 = const c57
-      %40 = const c58
-      %41 = call builtin.promise.then(%38, %39, %40)
-      %42 = is_exception %41
-      branch %42, bb4, bb3
+      %27 = load var $0.double
+      %28 = const c51
+      %29 = call builtin.promise.then(%24, %27, %28)
+      %30 = is_exception %29
+      branch %30, bb4, bb3
     bb2:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %26 = call builtin.exception_value(%24)
+      throw %26
     bb3:
-      return
+      %32 = const c52
+      %33 = const c53
+      %34 = call builtin.promise.then(%29, %32, %33)
+      %35 = is_exception %34
+      branch %35, bb6, bb5
     bb4:
-      %43 = call builtin.exception_value(%41)
-      throw %43
+      %31 = call builtin.exception_value(%29)
+      throw %31
+    bb5:
+      %37 = const c54
+      %38 = const c55
+      %39 = call builtin.promise.resolve_static(%37, %38)
+      %40 = is_exception %39
+      branch %40, bb8, bb7
+    bb6:
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb7:
+      %42 = load var $0.double
+      %43 = const c56
+      %44 = call builtin.promise.then(%39, %42, %43)
+      %45 = is_exception %44
+      branch %45, bb10, bb9
+    bb8:
+      %41 = call builtin.exception_value(%39)
+      throw %41
+    bb9:
+      %47 = const c57
+      %48 = const c58
+      %49 = call builtin.promise.then(%44, %47, %48)
+      %50 = is_exception %49
+      branch %50, bb12, bb11
+    bb10:
+      %46 = call builtin.exception_value(%44)
+      throw %46
+    bb11:
+      return
+    bb12:
+      %51 = call builtin.exception_value(%49)
+      throw %51
 }

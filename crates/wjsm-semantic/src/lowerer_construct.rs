@@ -2,6 +2,7 @@ use super::*;
 
 impl Lowerer {
     /// 按求值顺序降低 `new` 参数，并推进到可能的异常继续块。
+    /// 实参抛出时必须在 [[Construct]] 前中止并传播，不得作为实参值流入构造器。
     pub(crate) fn lower_construct_args(
         &mut self,
         args: Option<&[swc_ast::ExprOrSpread]>,
@@ -12,7 +13,7 @@ impl Lowerer {
         };
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
-            values.push(self.lower_expr_then_continue(&arg.expr, block)?);
+            values.push(self.lower_call_operand_then_continue(&arg.expr, block)?);
         }
         Ok(values)
     }

@@ -113,15 +113,21 @@ module {
       %33 = const c27
       %34 = const c28
       %35 = call %32, this=%31, args=[%33, %34]
-      %36 = call builtin.console.log(%35)
-      %37 = is_exception %36
-      branch %37, bb4, bb3
+      %36 = is_exception %35
+      branch %36, bb4, bb3
     bb2:
       %30 = call builtin.exception_value(%28)
       throw %30
     bb3:
-      return
+      %38 = call builtin.console.log(%35)
+      %39 = is_exception %38
+      branch %39, bb6, bb5
     bb4:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb5:
+      return
+    bb6:
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }

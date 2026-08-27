@@ -82,8 +82,14 @@ module {
       %8 = load var $1.n
       %9 = const c24
       %10 = sub %8, %9
+      %11 = is_exception %10
+      branch %11, bb4, bb3
+    bb3:
       store var $1.n, %10
       jump bb0
+    bb4:
+      %12 = call builtin.exception_value(%10)
+      throw %12
 
   fn @sum [needs_prototype] [captures: $0.sum] [params: $3.$env, $3.$this, $3.n, $3.acc] [entry=bb0]:
     bb0:
@@ -98,12 +104,24 @@ module {
       %8 = load var $3.n
       %9 = const c44
       %10 = sub %8, %9
-      %11 = load var $3.acc
-      %12 = load var $3.n
-      %13 = add %11, %12
+      %11 = is_exception %10
+      branch %11, bb4, bb3
+    bb3:
+      %13 = load var $3.acc
+      %14 = load var $3.n
+      %15 = add %13, %14
+      %16 = is_exception %15
+      branch %16, bb6, bb5
+    bb4:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb5:
       store var $3.n, %10
-      store var $3.acc, %13
+      store var $3.acc, %15
       jump bb0
+    bb6:
+      %17 = call builtin.exception_value(%15)
+      throw %17
 
   fn @factorial [needs_prototype] [captures: $0.factorial] [params: $5.$env, $5.$this, $5.n] [entry=bb0]:
     bb0:
@@ -125,9 +143,15 @@ module {
       %11 = load var $5.n
       %12 = const c59
       %13 = sub %11, %12
-      %14 = call %10, this=%7, args=[%13]
-      %15 = mul %6, %14
-      return %15
+      %14 = is_exception %13
+      branch %14, bb4, bb3
+    bb3:
+      %16 = call %10, this=%7, args=[%13]
+      %17 = mul %6, %16
+      return %17
+    bb4:
+      %15 = call builtin.exception_value(%13)
+      throw %15
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -206,135 +230,165 @@ module {
       %39 = phi [(bb1, %37), (bb3, %38)]
       %40 = const c32
       %41 = call %39, this=%31, args=[%40]
-      %42 = call builtin.console.log(%41)
-      %43 = is_exception %42
-      branch %43, bb6, bb5
+      %42 = is_exception %41
+      branch %42, bb6, bb5
     bb5:
-      %45 = const c33
-      %46 = load var $0.$shared_env
-      %47 = const c34
-      %48 = stricteq %46, %47
-      %49 = const c35
-      branch %48, bb7, bb8
+      %44 = call builtin.console.log(%41)
+      %45 = is_exception %44
+      branch %45, bb8, bb7
     bb6:
-      %44 = call builtin.exception_value(%42)
-      throw %44
+      %43 = call builtin.exception_value(%41)
+      throw %43
     bb7:
-      %51 = load var $0.countdown
-      jump bb10
+      %47 = const c33
+      %48 = load var $0.$shared_env
+      %49 = const c34
+      %50 = stricteq %48, %49
+      %51 = const c35
+      branch %50, bb9, bb10
     bb8:
-      %50 = call builtin.object.has_own(%46, %49)
-      branch %50, bb9, bb7
+      %46 = call builtin.exception_value(%44)
+      throw %46
     bb9:
-      %52 = get_prop %46, %49
-      jump bb10
+      %53 = load var $0.countdown
+      jump bb12
     bb10:
-      %53 = phi [(bb7, %51), (bb9, %52)]
-      %54 = const c36
-      %55 = call %53, this=%45, args=[%54]
-      %56 = call builtin.console.log(%55)
-      %57 = is_exception %56
-      branch %57, bb12, bb11
+      %52 = call builtin.object.has_own(%48, %51)
+      branch %52, bb11, bb9
     bb11:
-      %59 = const c37
-      %60 = load var $0.$shared_env
-      %61 = const c38
-      %62 = stricteq %60, %61
-      %63 = const c39
-      branch %62, bb13, bb14
+      %54 = get_prop %48, %51
+      jump bb12
     bb12:
-      %58 = call builtin.exception_value(%56)
-      throw %58
+      %55 = phi [(bb9, %53), (bb11, %54)]
+      %56 = const c36
+      %57 = call %55, this=%47, args=[%56]
+      %58 = is_exception %57
+      branch %58, bb14, bb13
     bb13:
-      %65 = load var $0.countdown
-      jump bb16
+      %60 = call builtin.console.log(%57)
+      %61 = is_exception %60
+      branch %61, bb16, bb15
     bb14:
-      %64 = call builtin.object.has_own(%60, %63)
-      branch %64, bb15, bb13
+      %59 = call builtin.exception_value(%57)
+      throw %59
     bb15:
-      %66 = get_prop %60, %63
-      jump bb16
+      %63 = const c37
+      %64 = load var $0.$shared_env
+      %65 = const c38
+      %66 = stricteq %64, %65
+      %67 = const c39
+      branch %66, bb17, bb18
     bb16:
-      %67 = phi [(bb13, %65), (bb15, %66)]
-      %68 = const c40
-      %69 = call %67, this=%59, args=[%68]
-      %70 = call builtin.console.log(%69)
-      %71 = is_exception %70
-      branch %71, bb18, bb17
+      %62 = call builtin.exception_value(%60)
+      throw %62
     bb17:
-      %73 = const c45
-      %74 = load var $0.$shared_env
-      %75 = load var $0.sum
-      %76 = const c46
-      %77 = set_prop %74, %76, %75
-      %78 = call builtin.create_closure(%73, %74)
-      store var $0.sum, %78
-      %79 = const c47
-      %80 = set_prop %74, %79, %78
-      %81 = const c48
-      %82 = load var $0.$shared_env
-      %83 = const c49
-      %84 = stricteq %82, %83
-      %85 = const c50
-      branch %84, bb19, bb20
+      %69 = load var $0.countdown
+      jump bb20
     bb18:
-      %72 = call builtin.exception_value(%70)
-      throw %72
+      %68 = call builtin.object.has_own(%64, %67)
+      branch %68, bb19, bb17
     bb19:
-      %87 = load var $0.sum
-      jump bb22
+      %70 = get_prop %64, %67
+      jump bb20
     bb20:
-      %86 = call builtin.object.has_own(%82, %85)
-      branch %86, bb21, bb19
+      %71 = phi [(bb17, %69), (bb19, %70)]
+      %72 = const c40
+      %73 = call %71, this=%63, args=[%72]
+      %74 = is_exception %73
+      branch %74, bb22, bb21
     bb21:
-      %88 = get_prop %82, %85
-      jump bb22
+      %76 = call builtin.console.log(%73)
+      %77 = is_exception %76
+      branch %77, bb24, bb23
     bb22:
-      %89 = phi [(bb19, %87), (bb21, %88)]
-      %90 = const c51
-      %91 = const c52
-      %92 = call %89, this=%81, args=[%90, %91]
-      %93 = call builtin.console.log(%92)
-      %94 = is_exception %93
-      branch %94, bb24, bb23
+      %75 = call builtin.exception_value(%73)
+      throw %75
     bb23:
-      %96 = const c60
-      %97 = load var $0.$shared_env
-      %98 = load var $0.factorial
-      %99 = const c61
-      %100 = set_prop %97, %99, %98
-      %101 = call builtin.create_closure(%96, %97)
-      store var $0.factorial, %101
-      %102 = const c62
-      %103 = set_prop %97, %102, %101
-      %104 = const c63
-      %105 = load var $0.$shared_env
-      %106 = const c64
-      %107 = stricteq %105, %106
-      %108 = const c65
-      branch %107, bb25, bb26
+      %79 = const c45
+      %80 = load var $0.$shared_env
+      %81 = load var $0.sum
+      %82 = const c46
+      %83 = set_prop %80, %82, %81
+      %84 = call builtin.create_closure(%79, %80)
+      store var $0.sum, %84
+      %85 = const c47
+      %86 = set_prop %80, %85, %84
+      %87 = const c48
+      %88 = load var $0.$shared_env
+      %89 = const c49
+      %90 = stricteq %88, %89
+      %91 = const c50
+      branch %90, bb25, bb26
     bb24:
-      %95 = call builtin.exception_value(%93)
-      throw %95
+      %78 = call builtin.exception_value(%76)
+      throw %78
     bb25:
-      %110 = load var $0.factorial
+      %93 = load var $0.sum
       jump bb28
     bb26:
-      %109 = call builtin.object.has_own(%105, %108)
-      branch %109, bb27, bb25
+      %92 = call builtin.object.has_own(%88, %91)
+      branch %92, bb27, bb25
     bb27:
-      %111 = get_prop %105, %108
+      %94 = get_prop %88, %91
       jump bb28
     bb28:
-      %112 = phi [(bb25, %110), (bb27, %111)]
-      %113 = const c66
-      %114 = call %112, this=%104, args=[%113]
-      %115 = call builtin.console.log(%114)
-      %116 = is_exception %115
-      branch %116, bb30, bb29
+      %95 = phi [(bb25, %93), (bb27, %94)]
+      %96 = const c51
+      %97 = const c52
+      %98 = call %95, this=%87, args=[%96, %97]
+      %99 = is_exception %98
+      branch %99, bb30, bb29
     bb29:
-      return
+      %101 = call builtin.console.log(%98)
+      %102 = is_exception %101
+      branch %102, bb32, bb31
     bb30:
-      %117 = call builtin.exception_value(%115)
-      throw %117
+      %100 = call builtin.exception_value(%98)
+      throw %100
+    bb31:
+      %104 = const c60
+      %105 = load var $0.$shared_env
+      %106 = load var $0.factorial
+      %107 = const c61
+      %108 = set_prop %105, %107, %106
+      %109 = call builtin.create_closure(%104, %105)
+      store var $0.factorial, %109
+      %110 = const c62
+      %111 = set_prop %105, %110, %109
+      %112 = const c63
+      %113 = load var $0.$shared_env
+      %114 = const c64
+      %115 = stricteq %113, %114
+      %116 = const c65
+      branch %115, bb33, bb34
+    bb32:
+      %103 = call builtin.exception_value(%101)
+      throw %103
+    bb33:
+      %118 = load var $0.factorial
+      jump bb36
+    bb34:
+      %117 = call builtin.object.has_own(%113, %116)
+      branch %117, bb35, bb33
+    bb35:
+      %119 = get_prop %113, %116
+      jump bb36
+    bb36:
+      %120 = phi [(bb33, %118), (bb35, %119)]
+      %121 = const c66
+      %122 = call %120, this=%112, args=[%121]
+      %123 = is_exception %122
+      branch %123, bb38, bb37
+    bb37:
+      %125 = call builtin.console.log(%122)
+      %126 = is_exception %125
+      branch %126, bb40, bb39
+    bb38:
+      %124 = call builtin.exception_value(%122)
+      throw %124
+    bb39:
+      return
+    bb40:
+      %127 = call builtin.exception_value(%125)
+      throw %127
 }

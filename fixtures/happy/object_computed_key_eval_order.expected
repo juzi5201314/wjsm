@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+key,value 1
+k1,v1,v2,k3,v3 1 2 3
+k1,v1,spread,k2,v2 1 9 2
+boomKey caught: key boom
+k1,boomValue caught: value boom
+methodKey caught: method key boom
+getterKey caught: getter key boom
+setterKey caught: setter key boom
+mkey,gkey,k,v method getter plain
+false true
+v two tpl
+--- stderr ---

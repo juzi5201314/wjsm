@@ -379,17 +379,19 @@ impl Lowerer {
         );
         // 4. 解析 callee + this_val（复用 lower_call_expr 的逻辑）
         let (callee_val, this_val) = self.lower_tag_expr(&tagged_tpl.tag, block)?;
-        // 5. 收集参数: [cooked_arr, ...exprs]
+        // 5. 收集参数: [cooked_arr, ...exprs]。插值表达式即 tag 函数实参：
+        //    求值引入控制流/异常分叉时必须推进延续块，抛出即中止调用并传播。
+        let mut current = block;
         let mut args = Vec::with_capacity(1 + tpl.exprs.len());
         args.push(cooked_arr);
         for expr in &tpl.exprs {
-            let expr_val = self.lower_expr(expr, block)?;
+            let expr_val = self.lower_call_operand_then_continue(expr, &mut current)?;
             args.push(expr_val);
         }
         // 6. 发出 Call 指令
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current,
             Instruction::Call {
                 dest: Some(dest),
                 callee: callee_val,
@@ -397,6 +399,9 @@ impl Lowerer {
                 args,
             },
         );
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
         Ok(dest)
     }
 
