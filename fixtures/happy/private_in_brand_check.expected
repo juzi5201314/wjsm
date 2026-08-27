@@ -24,8 +24,13 @@ subclass: true true false
 order: true rhs
 rhs-throw: caught:rhs throw
 chain: true false
+in-method: true local:Cannot use 'in' operator to search for '#q' in 0
+anon-expr: Cannot use 'in' operator to search for 'anonymous' in 1
+named-expr: Cannot use 'in' operator to search for 'Y' in 1
+static-block: true
 gen: true false
 async: true false
 viaThrow rejected: rhs-async
 viaPrimitive rejected: TypeError | Cannot use 'in' operator to search for '#v' in 1
+await-rhs: true false
 --- stderr ---

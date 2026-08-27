@@ -142,6 +142,53 @@ class L {
 }
 console.log("chain:", L.t(new L()), L.t({}));
 
+// 方法体内 try/catch 本地捕获 brand TypeError（不依赖调用点外层捕获）。
+class InMethod {
+  #q = 1;
+  static probe(o) {
+    try {
+      return #q in o;
+    } catch (e) {
+      return "local:" + e.message;
+    }
+  }
+}
+console.log("in-method:", InMethod.probe(new InMethod()), InMethod.probe(0));
+
+// 类表达式的 brand 显示名：匿名为 'anonymous'，命名用源码名（非推断名）。
+const AnonExpr = class {
+  #m() {}
+  static t(o) {
+    try {
+      return #m in o;
+    } catch (e) {
+      return e.message;
+    }
+  }
+};
+const NamedExpr = class Y {
+  #m() {}
+  static t(o) {
+    try {
+      return #m in o;
+    } catch (e) {
+      return e.message;
+    }
+  }
+};
+console.log("anon-expr:", AnonExpr.t(1));
+console.log("named-expr:", NamedExpr.t(1));
+
+// static 块内 brand 检查（this 为构造器）。
+class SB {
+  static #x = 1;
+  static result;
+  static {
+    this.result = #x in this;
+  }
+}
+console.log("static-block:", SB.result);
+
 // generator / async 上下文：结果与异常路径。
 class A {
   #v = 7;
@@ -163,6 +210,9 @@ class A {
     await Promise.resolve();
     return #v in 1;
   }
+  async awaitRhs(p) {
+    return #v in (await p);
+  }
 }
 const a = new A();
 console.log("gen:", a.gen(a).next().value, a.gen({}).next().value);
@@ -177,4 +227,8 @@ a.check(a)
   .then(
     () => console.log("viaPrimitive resolved"),
     (e) => console.log("viaPrimitive rejected:", e.constructor.name, "|", e.message),
+  )
+  .then(() => a.awaitRhs(Promise.resolve(a)))
+  .then((r1) =>
+    a.awaitRhs(Promise.resolve({})).then((r2) => console.log("await-rhs:", r1, r2)),
   );

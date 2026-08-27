@@ -266,7 +266,14 @@ impl Lowerer {
                             args: vec![object, key, display],
                         },
                     );
-                    if current_block != block {
+                    // brand 检查自身的 TypeError（receiver 非对象）须在本函数内分叉，
+                    // 方法体内 try/catch 才能本地捕获；抑制上下文由
+                    // lower_expr_then_continue 的延迟分叉兜底（expr_can_throw 含 In）。
+                    if self.expr_exception_fork_allowed() {
+                        let continue_block =
+                            self.lower_value_exception_branch(current_block, dest)?;
+                        self.expr_merge_block = Some(continue_block);
+                    } else if current_block != block {
                         self.expr_merge_block = Some(current_block);
                     }
                     return Ok(dest);

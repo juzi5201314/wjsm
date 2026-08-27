@@ -22,7 +22,9 @@ impl Lowerer {
         // 避免嵌套类误改外层类已入模的 PENDING 引用。
         let class_function_start = self.module.functions().len();
 
-        self.push_class_private_name_scope(class_name, &class.body);
+        // brand 显示名用源码类名（decorator_name 即声明/表达式的 ident），
+        // 匿名类表达式对齐 V8 显示 'anonymous'，不泄漏内部 anon_class_N。
+        self.push_class_private_name_scope(decorator_name.unwrap_or("anonymous"), &class.body);
         let mut private_members = self.collect_class_private_members(class_name, &class.body)?;
 
         // ── 构造器 IR 函数 ──

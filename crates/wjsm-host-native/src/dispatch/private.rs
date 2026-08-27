@@ -128,10 +128,12 @@ fn establish_brand(state: &mut NativeAgentState, receiver: i64, key: PropertyKey
     let Some(brand) = receiver_brand(state, receiver) else {
         return false;
     };
-    match state.private_brands.get(&(key.raw() as u32)).copied() {
+    // 键必须用完整 64 位 PropertyKey：inline SSO 截断成 32 位会让不同类的
+    // 同前缀私有名（如 `#x@1` 与 `#x@10`）碰撞，误判 brand 不匹配后静默丢槽。
+    match state.private_brands.get(&key).copied() {
         Some(expected) => expected == brand,
         None => {
-            state.private_brands.insert(key.raw() as u32, brand);
+            state.private_brands.insert(key, brand);
             true
         }
     }
