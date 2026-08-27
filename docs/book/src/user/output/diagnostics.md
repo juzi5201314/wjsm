@@ -22,7 +22,8 @@ Error: error: cannot redeclare identifier `a` in the same scope
   |            ^^^^^^^^^^
 ```
 
-TDZ 违规同样在编译期报出，不用等到运行：
+同函数内的 TDZ 违规同样在编译期报出，不用等到运行（跨函数前向引用则降级为运行时
+ReferenceError，见[限制与已知差异](../runtime/limitations.md)）：
 
 ```text
 Error: error: cannot access `z` before initialisation

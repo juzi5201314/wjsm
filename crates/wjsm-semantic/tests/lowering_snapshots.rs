@@ -120,7 +120,8 @@ fn tdz_access_reports_diagnostic() {
 }
 
 #[test]
-fn object_method_declarator_tdz_escape_stays_narrow() {
+fn tdz_same_function_forward_reference_stays_compile_rejected() {
+    // 同函数内的直线前向引用必然在运行时抛错，静态判定零开销且与文档承诺一致。
     let rejected = [
         (
             "const set = { value: set };",
@@ -139,46 +140,6 @@ fn object_method_declarator_tdz_escape_stays_narrow() {
             "cannot access `set` before initialisation",
         ),
         (
-            "let x = { m() { return x; } }.m();",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "let x = { m() { return x; } }.m;",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "let x = { get self() { return x; } }.self;",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "let x = true ? { m() { return x; } } : {};",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "let x = [{ m() { return x; } }];",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "function use(value) { return value; } let x = use({ m() { return x; } });",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "function Box(value) { return value; } let x = new Box({ m() { return x; } });",
-            "cannot access `x` before initialisation",
-        ),
-        (
-            "const set = () => set;",
-            "cannot access `set` before initialisation",
-        ),
-        (
-            "const set = function () { return set; };",
-            "cannot access `set` before initialisation",
-        ),
-        (
-            "const o = { m() { return x; } }; let x = 1;",
-            "cannot access `x` before initialisation",
-        ),
-        (
             "const set = { m() { return set; let set; } };",
             "cannot access `set` before initialisation",
         ),
@@ -194,7 +155,7 @@ fn object_method_declarator_tdz_escape_stays_narrow() {
 
     for (source, expected_message) in rejected {
         let error = lower_module(parse_module(source).expect("parse should succeed"), false)
-            .expect_err("narrow TDZ guards should reject this source");
+            .expect_err("same-function TDZ forward reference should reject this source");
         match error {
             LoweringError::Diagnostic(diagnostic) => {
                 assert!(
@@ -205,14 +166,37 @@ fn object_method_declarator_tdz_escape_stays_narrow() {
             }
         }
     }
+}
 
-    let wrapped_source =
-        "const wrapped = ((({ m() { return wrapped; } } as const) as object) satisfies object)!;";
-    lower_module(
-        parse_module(wrapped_source).expect("wrapped object literal should parse"),
-        false,
-    )
-    .expect("syntax-only wrappers should preserve the direct object initializer escape");
+#[test]
+fn tdz_cross_function_forward_reference_lowers_with_runtime_check() {
+    // 跨函数前向引用静态无法判定执行是否先于声明，降级为运行时 TdzCheck：
+    // 声明执行前 env 槽持有未初始化哨兵，读取时抛 ReferenceError。
+    let runtime_checked = [
+        "let x = { m() { return x; } }.m();",
+        "let x = { m() { return x; } }.m;",
+        "let x = { get self() { return x; } }.self;",
+        "let x = true ? { m() { return x; } } : {};",
+        "let x = [{ m() { return x; } }];",
+        "function use(value) { return value; } let x = use({ m() { return x; } });",
+        "function Box(value) { return value; } let x = new Box({ m() { return x; } });",
+        "const set = () => set;",
+        "const set = function () { return set; };",
+        "const o = { m() { return x; } }; let x = 1;",
+        "const wrapped = ((({ m() { return wrapped; } } as const) as object) satisfies object)!;",
+    ];
+
+    for source in runtime_checked {
+        let program = lower_module(parse_module(source).expect("parse should succeed"), false)
+            .unwrap_or_else(|error| {
+                panic!("cross-function TDZ forward reference should lower {source:?}: {error:?}")
+            });
+        let text = program.dump_text();
+        assert!(
+            text.contains("builtin.tdz_check"),
+            "source {source:?} should emit a runtime TdzCheck, got:\n{text}"
+        );
+    }
 }
 
 #[test]

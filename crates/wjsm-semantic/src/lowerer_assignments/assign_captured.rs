@@ -51,6 +51,19 @@ impl Lowerer {
         block: BasicBlockId,
         binding: &CapturedBinding,
     ) -> Result<ValueId, LoweringError> {
+        self.lower_assign_captured_checked(assign, block, binding, false)
+    }
+
+    /// 捕获绑定赋值；`tdz_check` 为 true 时按规范在取值/写入前发射 TdzCheck：
+    /// 简单赋值先求 RHS 再校验（PutValue → SetMutableBinding 抛错点），
+    /// 复合赋值在 GetValue 处校验（读取旧值即抛错点）。
+    pub(crate) fn lower_assign_captured_checked(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+        tdz_check: bool,
+    ) -> Result<ValueId, LoweringError> {
         let mut current_block = block;
         let env_val = if self.iteration_env_for_binding(binding).is_some() {
             self.load_iteration_env_for_binding(current_block, binding)
@@ -75,7 +88,21 @@ impl Lowerer {
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
-                let store_block = self.resolve_store_block(current_block);
+                let mut store_block = self.resolve_store_block(current_block);
+                if tdz_check {
+                    let loaded = self.alloc_value();
+                    self.current_function.append_instruction(
+                        store_block,
+                        Instruction::GetProp {
+                            dest: loaded,
+                            object: env_val,
+                            key: key_val,
+                        },
+                    );
+                    let (_, continue_block) =
+                        self.emit_tdz_check(store_block, loaded, &binding.name)?;
+                    store_block = continue_block;
+                }
                 let result = self.emit_set_prop(store_block, env_val, key_val, rhs);
                 // 把后续异常分叉/语句接续钉在 owner 解析后的 store_block，
                 // 避免 resolve_store_block 沿着入口 Jump 误入 header 并覆盖 terminator。
@@ -90,12 +117,13 @@ impl Lowerer {
                         | swc_ast::AssignOp::OrAssign
                         | swc_ast::AssignOp::NullishAssign
                 ) {
-                    return self.lower_logical_assign_captured(
+                    return self.lower_logical_assign_captured_checked(
                         assign,
                         current_block,
                         binding,
                         env_val,
                         key_val,
+                        tdz_check,
                     );
                 }
                 // 算术/位运算复合赋值
@@ -103,7 +131,7 @@ impl Lowerer {
                     self.error(assign.span, "unsupported compound assignment operator")
                 })?;
                 // 从 env 对象读取当前值
-                let loaded = self.alloc_value();
+                let mut loaded = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
                     Instruction::GetProp {
@@ -112,6 +140,12 @@ impl Lowerer {
                         key: key_val,
                     },
                 );
+                if tdz_check {
+                    let (checked, continue_block) =
+                        self.emit_tdz_check(current_block, loaded, &binding.name)?;
+                    loaded = checked;
+                    current_block = continue_block;
+                }
                 let mut rhs_block = current_block;
                 let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut rhs_block)?;
                 let dest = self.alloc_value();
@@ -132,17 +166,19 @@ impl Lowerer {
         }
     }
 
-    /// 逻辑复合赋值到捕获变量（通过 env 对象）
-    pub(crate) fn lower_logical_assign_captured(
+    /// 逻辑复合赋值到捕获变量（通过 env 对象）；`tdz_check` 时在 GetValue 处发射 TdzCheck。
+    fn lower_logical_assign_captured_checked(
         &mut self,
         assign: &swc_ast::AssignExpr,
         block: BasicBlockId,
         binding: &CapturedBinding,
         env_val: ValueId,
         key_val: ValueId,
+        tdz_check: bool,
     ) -> Result<ValueId, LoweringError> {
+        let mut block = block;
         // 从 env 读取当前值
-        let loaded = self.alloc_value();
+        let mut loaded = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::GetProp {
@@ -151,6 +187,11 @@ impl Lowerer {
                 key: key_val,
             },
         );
+        if tdz_check {
+            let (checked, continue_block) = self.emit_tdz_check(block, loaded, &binding.name)?;
+            loaded = checked;
+            block = continue_block;
+        }
 
         let assign_block = self.current_function.new_block();
         let merge = self.current_function.new_block();

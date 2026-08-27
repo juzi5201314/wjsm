@@ -50,28 +50,34 @@ new Response("body")                   // 可用
 const R = Response                      // undefined
 ```
 
-## TDZ 静态判定
+## TDZ 混合判定
 
-`let` / `const` 的 Temporal Dead Zone 在 lowering 期静态判定。当前简单 declarator 的
-initializer 本身是对象字面量时（允许括号及不改变求值时机的 TypeScript 类型包装），其
-method/getter/setter 延迟执行体可以引用同一 binding；在初始化完成后调用这些方法时，
-读取、`let` 写入及更新都会访问真实 binding。
+`let` / `const` / `class` 的 Temporal Dead Zone 按引用位置分两种方式处理：
+
+- **同函数内的前向引用**：执行时必然违规，lowering 期直接拒绝
+  （`const set = { value: set }`、`{ console.log(x); let x = 1 }`）。
+  `const` 重赋值同样在编译期报错。
+- **跨函数前向引用**：函数体读取/写入后声明的 binding（[#372](https://github.com/juzi5201314/wjsm/issues/372)），
+  静态无法判定调用是否先于声明执行，按规范降级为运行时检查——声明执行前
+  访问抛 `ReferenceError: Cannot access 'x' before initialization`，之后正常读写。
 
 ```js
+function early() { return x; }
+try { early(); } catch (e) { console.log(e.name); } // "ReferenceError"
+let x = 1;
+console.log(early()); // 1
+
 const set = {
   forEach(action) {
-    action(set); // 支持：调用发生在 set 初始化完成之后
+    action(set); // 初始化完成后调用：读取真实 binding
   },
 };
 set.forEach((value) => console.log(typeof value)); // "object"
 ```
 
-边界仍然精确：紧接对象字面量的 member 读取、方法调用或 getter 访问属于立即求值，
-不会开启逃逸；property value、computed key、spread，以及以调用、`new`、条件表达式、
-数组等包裹对象字面量的非直接 initializer 也继续静态拒绝。任意后声明 binding 和
-箭头/普通函数等其他函数形态仍由 [#372](https://github.com/juzi5201314/wjsm/issues/372)
-及既有限制处理。这不是完整的运行时 TDZ 支持；类名仍使用独立的延迟方法体规则，
-类定义期求值位置保持严格 TDZ。
+类名同样适用：`class C { m() { return C.name } }` 的方法体、
+`function f() { return new C(); } class C {}` 的前向构造都按运行时 TDZ 处理；
+静态字段初始值、`extends` 等类定义期求值位置属于同函数直线执行，保持编译期拒绝。
 
 ## Intl 与 locale 敏感方法
 

@@ -363,7 +363,8 @@ fn constant_kind(constant: &Constant) -> Option<PrimitiveKind> {
         | Constant::RegExp { .. }
         | Constant::ModuleId(_)
         | Constant::ArrayTemplate(_)
-        | Constant::ObjectTemplate { .. } => return None,
+        | Constant::ObjectTemplate { .. }
+        | Constant::Uninitialized => return None,
     })
 }
 

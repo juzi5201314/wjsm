@@ -205,6 +205,29 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
     })
 }
 
+/// 收集本函数中作为 `TdzCheck` 首参的 ValueId 集合。
+///
+/// 这些读取是跨函数前向引用的运行时 TDZ 受检读取：声明执行前 env 槽持有
+/// 未初始化哨兵，必须保留真实的 GetProp/LoadVar 读取，不得替换为
+/// `Const(FunctionRef)`（否则类声明的 TDZ 语义被优化抹掉）。
+fn tdz_checked_reads(function: &Function) -> HashSet<ValueId> {
+    let mut checked = HashSet::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::CallBuiltin {
+                builtin: wjsm_ir::Builtin::TdzCheck,
+                args,
+                ..
+            } = instruction
+                && let Some(value) = args.first()
+            {
+                checked.insert(*value);
+            }
+        }
+    }
+    checked
+}
+
 /// 不可变函数/类声明绑定：`known_callee_vars` 中全模块只被 `StoreVar` 写过一次的名字。
 ///
 /// 唯一一次 store 即声明的初始 store（`record_known_callee` + `StoreVar` 路径），
@@ -253,6 +276,7 @@ pub fn run(module: &mut Module) {
 
     for (func_idx, function) in module.functions().iter().enumerate() {
         let func_id = FunctionId(func_idx as u32);
+        let tdz_checked = tdz_checked_reads(function);
 
         // 本函数 def 表与 Const(String) 常量名映射（ValueId 每函数独立编号）。
         let mut defs: HashMap<ValueId, &Instruction> = HashMap::new();
@@ -324,7 +348,12 @@ pub fn run(module: &mut Module) {
             }
             for use_instr in collect_uses(function, env_dest) {
                 match use_instr {
-                    Instruction::GetProp { object, key, .. } if *object == env_dest => {
+                    Instruction::GetProp { dest, object, key } if *object == env_dest => {
+                        // TDZ 受检读取必须保留真实 env 读取，视为不可解析。
+                        if tdz_checked.contains(dest) {
+                            all_resolvable = false;
+                            continue;
+                        }
                         match defs.get(key) {
                             Some(Instruction::Const { constant, .. }) => {
                                 if let Some(Constant::String(s)) =
@@ -440,11 +469,14 @@ pub fn run(module: &mut Module) {
         let resolvable = resolvable_env_gets.get(&func_id);
         let const_strings = &per_fn_const_strings[func_idx];
         let function = module.function_mut(func_id).unwrap();
+        let tdz_checked = tdz_checked_reads(function);
         for block in function.blocks_mut() {
             for instruction in block.instructions_mut() {
                 match instruction {
                     Instruction::LoadVar { dest, name } => {
-                        if let Some(fn_id) = replaceable.get(name) {
+                        if !tdz_checked.contains(dest)
+                            && let Some(fn_id) = replaceable.get(name)
+                        {
                             let constant = functionref_consts[fn_id];
                             *instruction = Instruction::Const {
                                 dest: *dest,
@@ -453,9 +485,11 @@ pub fn run(module: &mut Module) {
                         }
                     }
                     Instruction::GetProp { dest, object, key } => {
-                        // key 的 def 是 Const(String) 且 (object, key_str) 可解析、key_str 可替换。
-                        if let (Some(resolvable), Some(key_str)) =
-                            (resolvable, const_strings.get(key))
+                        // key 的 def 是 Const(String) 且 (object, key_str) 可解析、key_str 可替换；
+                        // TDZ 受检读取除外（必须在运行时观察 env 槽的哨兵状态）。
+                        if !tdz_checked.contains(dest)
+                            && let (Some(resolvable), Some(key_str)) =
+                                (resolvable, const_strings.get(key))
                             && resolvable.contains(&(*object, key_str.clone()))
                             && let Some(fn_id) = replaceable.get(key_str)
                         {

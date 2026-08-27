@@ -36,14 +36,41 @@ impl Lowerer {
         // 的同一套判定：仅当绑定逃逸出当前函数或已进入共享 env 时才走 env 取值路径，
         // 否则直接 LoadVar。这样既保证被改写导出对导入方可见（live binding，#45），
         // 又不会在共享 env 从未创建时误读未初始化槽。
+        // 循环导入下源绑定可能仍处 TDZ（声明晚于本读取降级）：live binding 读取
+        // 须经 TdzCheck，声明执行前访问按规范抛 ReferenceError。
         if let Some(mid) = module_id
             && let Some(alias_ir_name) = self.import_aliases.get(&(mid, name.clone())).cloned()
         {
             let binding = crate::lowerer_modules::parse_ir_name_to_binding(&alias_ir_name);
+            let in_tdz = self.binding_in_tdz(&binding);
             if !self.binding_belongs_to_current_function(&binding)
                 || self.is_shared_binding(&binding)
             {
-                return self.load_captured_binding(block, &binding);
+                let value = self.load_captured_binding(block, &binding)?;
+                if in_tdz {
+                    let current_block = self.resolve_store_block(block);
+                    let (checked, continue_block) =
+                        self.emit_tdz_check(current_block, value, &name)?;
+                    self.expr_merge_block = Some(continue_block);
+                    return Ok(checked);
+                }
+                return Ok(value);
+            }
+            if in_tdz {
+                // 捆绑后模块顶层直线读取循环导入的未初始化绑定：捆绑执行顺序
+                // 等于降级顺序，读取必然先于声明执行，发射哨兵 + TdzCheck。
+                let sentinel = self.module.add_constant(Constant::Uninitialized);
+                let sentinel_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: sentinel_val,
+                        constant: sentinel,
+                    },
+                );
+                let (checked, continue_block) = self.emit_tdz_check(block, sentinel_val, &name)?;
+                self.expr_merge_block = Some(continue_block);
+                return Ok(checked);
             }
             let dest = self.alloc_value();
             self.current_function.append_instruction(
@@ -103,7 +130,14 @@ impl Lowerer {
                 );
                 return Ok(dest);
             }
-            Err(msg) => return Err(self.error(ident.span, msg)),
+            Err(msg) => {
+                // 跨函数前向引用（延迟执行的函数体读取后声明的 let/const/class）：
+                // 静态无法判定调用是否先于声明执行，改为运行时 TdzCheck。
+                if let Some((scope_id, _)) = self.runtime_tdz_binding(&name) {
+                    return self.lower_tdz_checked_read(block, &name, scope_id);
+                }
+                return Err(self.error(ident.span, msg));
+            }
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
@@ -417,7 +451,17 @@ impl Lowerer {
                 }
                 return self.lower_assign_eval_env(assign, block, &name);
             }
-            Err(msg) => return Err(self.error(assign.span, msg)),
+            Err(msg) => {
+                // 跨函数前向赋值：写入前经 TdzCheck 校验绑定已初始化
+                //（const 的重赋值错误在 lookup_for_assign 中先行返回，不会到达此处）。
+                if let Some((scope_id, kind)) = self.runtime_tdz_binding(&name)
+                    && !matches!(kind, VarKind::Const)
+                {
+                    let binding = CapturedBinding::new(name.clone(), scope_id);
+                    return self.lower_assign_captured_checked(assign, block, &binding, true);
+                }
+                return Err(self.error(assign.span, msg));
+            }
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);

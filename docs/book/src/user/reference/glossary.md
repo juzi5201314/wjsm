@@ -13,7 +13,7 @@
 | **.wjsm artifact** | `wjsm build` 生成的 portable 制品。包含 verified semantic IR 和 module manifest，不含机器码。同一 `.wjsm` 可在支持平台间携带，运行时再编译为当前宿主的 native image。 |
 | **Native cache** | 当前宿主从 IR 编译出的机器码缓存。cache key 绑定 artifact digest、ABI、target、Cranelift 版本等。cache miss 时重新编译，是可重建的派生数据。 |
 | **CLIF** | Cranelift IR 的文本格式。`wjsm dump-clif` 输出 CLIF，用于定位 native codegen 问题。 |
-| **TDZ** | Temporal Dead Zone，`let` / `const` 声明前的访问禁区。wjsm 在编译期静态判定，函数体内的前向引用会被拒绝。 |
+| **TDZ** | Temporal Dead Zone，`let` / `const` 声明前的访问禁区。wjsm 混合判定：同函数内前向引用在编译期拒绝，跨函数前向引用在运行时抛 ReferenceError。 |
 | **Root frame** | `NativeRootFrame`。GC safepoint 时 generated code 发布的活跃句柄视图；collector 只扫描 bitmap 置位的槽。 |
 | **Safepoint** | 程序执行中可以安全暂停做 GC 的点。wjsm 在编译时插入 safepoint 检查，通过 side-channel 触发中断。 |
 | **Startup snapshot** | bootstrap 后的堆状态快照，加速启动。恢复快照跳过 builtin JS 执行，直接从已构造好的 primordial 对象开始。 |

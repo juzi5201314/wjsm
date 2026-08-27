@@ -1,0 +1,24 @@
+exit_code: 0
+--- stdout ---
+ReferenceError: Cannot access 'letValue' before initialization
+1
+ReferenceError: Cannot access 'constValue' before initialization
+2
+ReferenceError: Cannot access 'Later' before initialization
+true
+ReferenceError: Cannot access 'target' before initialization
+ReferenceError: Cannot access 'target' before initialization
+ReferenceError: Cannot access 'target' before initialization
+ReferenceError: Cannot access 'target' before initialization
+7
+ReferenceError: Cannot access 'tdzTypeof' before initialization
+string
+ReferenceError: Cannot access 'blockValue' before initialization
+3
+ReferenceError: Cannot access 'perIteration' before initialization
+0 10
+true
+true
+ReferenceError: Cannot access 'innerValue' before initialization
+7
+--- stderr ---

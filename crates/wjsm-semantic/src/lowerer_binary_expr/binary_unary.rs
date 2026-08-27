@@ -664,12 +664,24 @@ impl Lowerer {
             },
         }
 
+        // 跨函数前向 update（x++ 读取后声明的 let）：GetValue 处需要运行时 TdzCheck。
+        let mut tdz_checked_name: Option<String> = None;
         let target = match update.arg.as_ref() {
             swc_ast::Expr::Ident(ident) => {
                 let name = ident.sym.to_string();
-                let (scope_id, kind) = self
-                    .lookup_binding_for_assign(&name)
-                    .map_err(|msg| self.error(update.span(), msg))?;
+                let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
+                    Ok(found) => found,
+                    Err(msg) => {
+                        let Some((scope_id, kind)) = self.runtime_tdz_binding(&name) else {
+                            return Err(self.error(update.span(), msg));
+                        };
+                        if matches!(kind, VarKind::Const) {
+                            return Err(self.error(update.span(), msg));
+                        }
+                        tdz_checked_name = Some(name.clone());
+                        (scope_id, kind)
+                    }
+                };
 
                 let binding = CapturedBinding::new(name.clone(), scope_id);
                 if self.iteration_env_for_binding(&binding).is_some() {
@@ -749,7 +761,7 @@ impl Lowerer {
         };
 
         // 1. 读取当前值
-        let old_val = self.alloc_value();
+        let mut old_val = self.alloc_value();
         match &target {
             Target::Var { ir_name, .. } => {
                 self.current_function.append_instruction(
@@ -780,6 +792,11 @@ impl Lowerer {
                     },
                 );
             }
+        }
+        if let Some(name) = &tdz_checked_name {
+            let (checked, continue_block) = self.emit_tdz_check(block, old_val, name)?;
+            old_val = checked;
+            block = continue_block;
         }
 
         // 2. 转换为 Number (ToNumber)

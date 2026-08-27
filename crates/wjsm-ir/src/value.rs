@@ -62,6 +62,20 @@ pub fn is_array_hole(val: i64) -> bool {
     is_tagged(val, TAG_ARRAY_HOLE)
 }
 
+// ── TDZ 未初始化哨兵 ──────────────────────────────────────────────────
+// let/const/class 绑定被词法上更早的函数体前向引用时，闭包环境在声明执行前
+// 持有该哨兵；`Builtin::TdzCheck` 读到它即抛 ReferenceError。用户代码无法
+// 构造该值（所有受检读取在暴露前抛错），GC 引用白名单也不含此 tag。
+pub const TAG_UNINITIALIZED: u64 = 0x13;
+
+pub fn encode_uninitialized() -> i64 {
+    (BOX_BASE | (TAG_UNINITIALIZED << 32)) as i64
+}
+
+pub fn is_uninitialized(val: i64) -> bool {
+    is_tagged(val, TAG_UNINITIALIZED)
+}
+
 pub const TAG_ARRAY: u64 = 0xB;
 pub const TAG_BOUND: u64 = 0xC;
 pub const TAG_NATIVE_CALLABLE: u64 = 0x0;

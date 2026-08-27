@@ -151,8 +151,6 @@ impl Lowerer {
             map_bindings: std::collections::HashSet::new(),
             set_bindings: std::collections::HashSet::new(),
             module_const_literals: std::collections::HashMap::new(),
-            declarator_tdz_escape_stack: Vec::new(),
-            object_method_deferred_body_depth: 0,
             eval_continue_block: None,
             new_expr_continue_block: None,
             await_continue_block: None,
@@ -177,50 +175,86 @@ impl Lowerer {
         lowerer
     }
 
-    /// 标识符读取使用的窄 TDZ 逃逸边界。
-    ///
-    /// ScopeTree 始终维持严格 TDZ；只有当前对象字面量方法的延迟体，且解析出的
-    /// `(scope_id, name)` 与正在初始化的 declarator 完全一致时，才返回该绑定。
+    /// 标识符读取的绑定解析；TDZ 由严格 lookup 维持，
+    /// 跨函数前向引用在调用方 Err 分支经 `runtime_tdz_binding` 转运行时检查。
     pub(crate) fn lookup_binding_for_read(&self, name: &str) -> Result<(usize, VarKind), String> {
-        if self.eval_scope_bridge_active() {
-            return self.scopes.lookup(name);
-        }
-        self.scopes
-            .lookup(name)
-            .or_else(|error| self.deferred_declarator_binding(name).ok_or(error))
+        self.scopes.lookup(name)
     }
 
-    /// 赋值使用同一窄边界；const 仍由严格 lookup 返回不可重赋值错误。
+    /// 赋值的绑定解析；const 由严格 lookup 返回不可重赋值错误。
     pub(crate) fn lookup_binding_for_assign(&self, name: &str) -> Result<(usize, VarKind), String> {
-        if self.eval_scope_bridge_active() {
-            return self.scopes.lookup_for_assign(name);
-        }
-        match self.scopes.lookup_for_assign(name) {
-            Ok(binding) => Ok(binding),
-            Err(error) => match self.deferred_declarator_binding(name) {
-                Some((scope_id, VarKind::Let)) => Ok((scope_id, VarKind::Let)),
-                _ => Err(error),
-            },
-        }
+        self.scopes.lookup_for_assign(name)
     }
 
-    fn deferred_declarator_binding(&self, name: &str) -> Option<(usize, VarKind)> {
-        if self.object_method_deferred_body_depth == 0 {
+    /// 跨函数前向引用的 TDZ 绑定：解析 `name` 的最近绑定，若它仍处于 TDZ 且属于
+    /// 外层函数（当前正在降级延迟执行的函数体），返回 `(scope_id, kind)`，
+    /// 调用方对其发射运行时 TdzCheck。同函数内的直接前向引用保持编译期拒绝
+    /// （直线执行必然抛错，静态判定零开销且与文档承诺一致）。
+    pub(crate) fn runtime_tdz_binding(&self, name: &str) -> Option<(usize, VarKind)> {
+        let scope_id = self.scopes.resolve_scope_id(name).ok()?;
+        let info = self.scopes.arenas.get(scope_id)?.variables.get(name)?;
+        if info.initialised {
             return None;
         }
+        let binding = CapturedBinding::new(name, scope_id);
+        (!self.binding_belongs_to_current_function(&binding)).then_some((scope_id, info.kind))
+    }
 
-        let scope_id = self.scopes.resolve_scope_id(name).ok()?;
-        let is_current_declarator = self.declarator_tdz_escape_stack.iter().rev().any(
-            |(declarator_scope_id, declarator_name)| {
-                *declarator_scope_id == scope_id && declarator_name == name
+    /// 绑定当前是否处于 TDZ（按 scope id 精确定位，不沿链回退）。
+    /// 供闭包环境快照决定写入真实值还是未初始化哨兵。
+    pub(crate) fn binding_in_tdz(&self, binding: &CapturedBinding) -> bool {
+        binding
+            .scope_id
+            .and_then(|scope_id| self.scopes.arenas.get(scope_id))
+            .and_then(|scope| scope.variables.get(&binding.name))
+            .is_some_and(|info| !info.initialised)
+    }
+
+    /// 发射跨函数 TDZ 绑定的运行时受检读取：经 env 链取当前值，
+    /// TdzCheck 在值仍为未初始化哨兵时抛 ReferenceError。
+    pub(crate) fn lower_tdz_checked_read(
+        &mut self,
+        block: BasicBlockId,
+        name: &str,
+        scope_id: usize,
+    ) -> Result<ValueId, LoweringError> {
+        let binding = CapturedBinding::new(name, scope_id);
+        let value = self.load_captured_binding(block, &binding)?;
+        let current_block = self.resolve_store_block(block);
+        let (checked, continue_block) = self.emit_tdz_check(current_block, value, name)?;
+        self.expr_merge_block = Some(continue_block);
+        Ok(checked)
+    }
+
+    /// 在 `block` 发射 `TdzCheck(value, name)` 与异常分叉；返回受检值与续接块。
+    pub(crate) fn emit_tdz_check(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+        name: &str,
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
+        let name_const = self
+            .module
+            .add_constant(Constant::String(name.to_string()));
+        let name_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: name_val,
+                constant: name_const,
             },
         );
-        if !is_current_declarator {
-            return None;
-        }
-
-        let info = self.scopes.arenas.get(scope_id)?.variables.get(name)?;
-        (!info.initialised).then_some((scope_id, info.kind))
+        let checked = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(checked),
+                builtin: Builtin::TdzCheck,
+                args: vec![value, name_val],
+            },
+        );
+        let continue_block = self.lower_value_exception_branch(block, checked)?;
+        Ok((checked, continue_block))
     }
 
     /// 将 builtin 段的 Program 与布局元数据预装进本 lowerer（hydration 种子）：
