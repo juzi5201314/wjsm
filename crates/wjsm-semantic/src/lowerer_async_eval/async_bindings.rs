@@ -100,7 +100,10 @@ impl Lowerer {
             return;
         }
 
-        let pending = std::mem::take(&mut self.pending_suspends);
+        let mut pending = std::mem::take(&mut self.pending_suspends);
+        // 先把跨 suspend 存活的 SSA 临时值降级为具名帧局部变量（含注册进
+        // visible_bindings），下方的变量 liveness 才能把它们纳入 save/restore。
+        self.spill_cross_suspend_temps(&mut pending);
         let (successors, live_in) = {
             let blocks = self.current_function.blocks();
             let (successors, _predecessors) = build_cfg(blocks, &pending);

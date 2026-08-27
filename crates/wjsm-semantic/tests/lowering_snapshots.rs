@@ -67,6 +67,11 @@ fn tco_countdown_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn async_compound_await_loop_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_compound_await_loop");
+}
+
+#[test]
 fn undeclared_var_reports_diagnostic() {
     let source = "console.log(z);\n";
     let error = lower_module(parse_module(source).expect("parse should succeed"), false)
