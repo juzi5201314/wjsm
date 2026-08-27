@@ -28,7 +28,8 @@ use rayon::prelude::*;
 use crate::f64_analysis::infer_f64_values;
 use crate::root_plan::RootPlan;
 use crate::template_meta::{
-    TemplateOriginMap, build_template_origin_maps, plan_ic_slots, template_property_index_for_key,
+    TemplateOriginMap, TrioField, build_template_origin_maps, plan_ic_slots,
+    template_property_index_for_key, trio_field_for_access,
 };
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompileError, NativeObject};
@@ -677,6 +678,10 @@ struct LoweringCx<'a, 'f> {
     string_builder_finish: ir::FuncRef,
     ctx: ir::Value,
     target_config: cranelift_codegen::isa::TargetFrontendConfig,
+    /// 入口块缓存的 handle / IC / barrier 基址，函数内 IC 命中路径复用。
+    ht_base: ir::Value,
+    ic_base: ir::Value,
+    barrier_state: ir::Value,
 }
 
 impl LoweringCx<'_, '_> {
@@ -747,6 +752,75 @@ struct PropAccess {
     object: ValueId,
     key: ValueId,
     slot: u32,
+    trio_field: Option<TrioField>,
+}
+
+fn prop_access(
+    tables: &InstructionTables<'_>,
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    slot: u32,
+) -> PropAccess {
+    PropAccess {
+        dest,
+        object,
+        key,
+        slot,
+        trio_field: trio_field_for_access(
+            tables.constants,
+            tables.constant_defs,
+            tables.template_origins,
+            object,
+            key,
+        ),
+    }
+}
+
+fn load_ic_value_index(
+    builder: &mut FunctionBuilder<'_>,
+    ic_ptr: ir::Value,
+    ic_word0: ir::Value,
+    trio_field: Option<TrioField>,
+) -> ir::Value {
+    match trio_field {
+        None | Some(TrioField::Name) => builder.ins().ushr_imm_u(ic_word0, 32),
+        Some(TrioField::Value) => {
+            let index = builder.ins().load(
+                types::I32,
+                MemFlagsData::trusted(),
+                ic_ptr,
+                i32::try_from(constants::IC_SLOT_TRIO_VALUE_INDEX_OFFSET)
+                    .expect("trio value index offset fits i32"),
+            );
+            builder.ins().uextend(types::I64, index)
+        }
+        Some(TrioField::Length) => {
+            let index = builder.ins().load(
+                types::I32,
+                MemFlagsData::trusted(),
+                ic_ptr,
+                i32::try_from(constants::IC_SLOT_TRIO_LENGTH_INDEX_OFFSET)
+                    .expect("trio length index offset fits i32"),
+            );
+            builder.ins().uextend(types::I64, index)
+        }
+    }
+}
+
+fn ic_kind_is_own_hit(
+    builder: &mut FunctionBuilder<'_>,
+    ic_kind: ir::Value,
+    trio_field: Option<TrioField>,
+) -> ir::Value {
+    let expected = if trio_field.is_some() {
+        constants::IC_KIND_OWN_DATA_TRIO
+    } else {
+        constants::IC_KIND_OWN_DATA
+    };
+    builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, ic_kind, i64::from(expected))
 }
 
 fn compile_program_inner(
@@ -1309,6 +1383,25 @@ pub(crate) fn lower_function(
         &frame_locals,
         &boxed_local_order,
     )?;
+    let pointer_type = builder.func.dfg.value_type(ctx_value);
+    let ht_base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx_value,
+        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
+    );
+    let ic_base = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx_value,
+        vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
+    );
+    let barrier_state = builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        ctx_value,
+        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
+    );
     {
         let mut cx = LoweringCx {
             builder: &mut builder,
@@ -1319,6 +1412,9 @@ pub(crate) fn lower_function(
             string_builder_finish: string_builder_finish_ref,
             ctx: ctx_value,
             target_config,
+            ht_base,
+            ic_base,
+            barrier_state,
         };
         lower_function_parameters(
             &mut cx,
@@ -1585,7 +1681,6 @@ fn lower_native_object_allocation(
         .map(|bytes| bytes & !7)
         .context("native object allocation size overflows")?;
     let bytes = i64::try_from(bytes).context("native object allocation size exceeds i64")?;
-    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let fast_block = cx.builder.create_block();
     let slow_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
@@ -1728,12 +1823,7 @@ fn lower_native_object_allocation(
         address,
         i32::try_from(constants::HEAP_OBJECT_GC_WORD_OFFSET).expect("GC word offset fits i32"),
     );
-    let handle_table = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
+    let handle_table = cx.ht_base;
     let entry_offset = cx.builder.ins().ishl_imm_u(handle_value, 3);
     let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
     let object_bits = cx.builder.ins().ishl_imm_u(top, 16);
@@ -1816,8 +1906,8 @@ fn emit_load_object_template_meta_word(
     );
     let entry_offset = (u64::from(meta_index) * u64::from(constants::OBJECT_TEMPLATE_META_WORDS)
         + u64::from(word_index))
-        .checked_mul(4)
-        .context("object template meta offset overflows")?;
+    .checked_mul(4)
+    .context("object template meta offset overflows")?;
     let entry_offset =
         i64::try_from(entry_offset).context("object template meta offset exceeds i64")?;
     let address = cx.builder.ins().iadd_imm_s(meta_base, entry_offset);
@@ -1837,10 +1927,10 @@ fn lower_create_data_property_fast(
     stored: ir::Value,
 ) {
     let value_shift = cx.builder.ins().ishl_imm_u(slot_index, 3);
-    let value_offset = cx.builder.ins().iadd_imm_s(
-        value_shift,
-        i64::from(constants::HEAP_OBJECT_HEADER_SIZE),
-    );
+    let value_offset = cx
+        .builder
+        .ins()
+        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
     let value_addr = cx.builder.ins().iadd(logical_addr, value_offset);
     let value_addr = cx.builder.ins().iadd(value_addr, heap_delta);
     cx.builder
@@ -1862,18 +1952,8 @@ fn lower_get_template_prop_inline(
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let obj = use_value(cx.builder, cx.variables, object)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-    let ht_base = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
-    let barrier_state = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
-    );
+    let ht_base = cx.ht_base;
+    let barrier_state = cx.barrier_state;
     let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
     let is_boxed = cx
         .builder
@@ -2045,18 +2125,10 @@ fn lower_get_prop_with_template_or_ic(
     key: ValueId,
     roots: &[ValueId],
 ) -> Result<()> {
-    let template_inline = tables
-        .template_origins
-        .get(&object)
-        .and_then(|site| {
-            template_property_index_for_key(
-                tables.constants,
-                tables.constant_defs,
-                site.template,
-                key,
-            )
+    let template_inline = tables.template_origins.get(&object).and_then(|site| {
+        template_property_index_for_key(tables.constants, tables.constant_defs, site.template, key)
             .map(|prop_index| (site.meta_index, prop_index))
-        });
+    });
     if let Some((meta_index, prop_index)) = template_inline {
         let merge_block = cx.builder.create_block();
         let fallback_block = cx.builder.create_block();
@@ -2076,12 +2148,7 @@ fn lower_get_prop_with_template_or_ic(
             lower_get_prop_ic_non_nullish(
                 cx,
                 barrier_thunks,
-                PropAccess {
-                    dest,
-                    object,
-                    key,
-                    slot,
-                },
+                prop_access(tables, dest, object, key, slot),
                 roots,
                 merge_block,
             )?;
@@ -2097,12 +2164,7 @@ fn lower_get_prop_with_template_or_ic(
         lower_get_prop_ic(
             cx,
             barrier_thunks,
-            PropAccess {
-                dest,
-                object,
-                key,
-                slot,
-            },
+            prop_access(tables, dest, object, key, slot),
             roots,
         )
     } else {
@@ -2127,10 +2189,10 @@ fn emit_init_object_literal_heap_value_guard(
         }
         let stored = use_value(cx.builder, cx.variables, *value)?;
         let boxed_bits = cx.builder.ins().band_imm_s(stored, box_base);
-        let is_heap_value = cx
-            .builder
-            .ins()
-            .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+        let is_heap_value =
+            cx.builder
+                .ins()
+                .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
         let next_block = cx.builder.create_block();
         cx.builder
             .ins()
@@ -2164,7 +2226,6 @@ fn lower_init_object_literal(
     }
     let prop_count = u32::try_from(keys.len()).context("property count exceeds u32")?;
 
-    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let fast_block = cx.builder.create_block();
     let slow_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
@@ -2199,10 +2260,10 @@ fn lower_init_object_literal(
         cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, allocation_fast_flags))?,
     );
-    let enabled = cx
-        .builder
-        .ins()
-        .band_imm_u(flags, i64::from(wjsm_native_abi::NATIVE_ALLOCATION_FAST_OBJECT));
+    let enabled = cx.builder.ins().band_imm_u(
+        flags,
+        i64::from(wjsm_native_abi::NATIVE_ALLOCATION_FAST_OBJECT),
+    );
     let enabled = cx
         .builder
         .ins()
@@ -2213,14 +2274,14 @@ fn lower_init_object_literal(
         cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, allocation_small_limit))?,
     );
-    let slot_bytes = cx.builder.ins().imul_imm_u(
-        capacity,
-        i64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE),
-    );
-    let header_bytes = cx.builder.ins().iconst(
-        types::I64,
-        i64::from(constants::HEAP_OBJECT_HEADER_SIZE),
-    );
+    let slot_bytes = cx
+        .builder
+        .ins()
+        .imul_imm_u(capacity, i64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE));
+    let header_bytes = cx
+        .builder
+        .ins()
+        .iconst(types::I64, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
     let mut bytes_value = cx.builder.ins().iadd(slot_bytes, header_bytes);
     bytes_value = cx.builder.ins().iadd_imm_u(bytes_value, 7);
     bytes_value = cx.builder.ins().band_imm_s(bytes_value, !7);
@@ -2242,11 +2303,10 @@ fn lower_init_object_literal(
         vmctx_offset(offset_of!(NativeVmContext, bump_limit))?,
     );
     let end = cx.builder.ins().iadd(top, bytes_value);
-    let object_fits = cx.builder.ins().icmp(
-        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
-        end,
-        limit,
-    );
+    let object_fits =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThanOrEqual, end, limit);
     let cursor = cx.builder.ins().load(
         types::I32,
         MemFlagsData::trusted(),
@@ -2259,11 +2319,10 @@ fn lower_init_object_literal(
         cx.ctx,
         vmctx_offset(offset_of!(NativeVmContext, bump_handle_limit))?,
     );
-    let handle_fits = cx.builder.ins().icmp(
-        ir::condcodes::IntCC::UnsignedLessThan,
-        cursor,
-        handle_limit,
-    );
+    let handle_fits =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, cursor, handle_limit);
     let mut ready = cx.builder.ins().band(enabled, small);
     ready = cx.builder.ins().band(ready, object_fits);
     ready = cx.builder.ins().band(ready, handle_fits);
@@ -2319,12 +2378,7 @@ fn lower_init_object_literal(
         address,
         i32::try_from(constants::HEAP_OBJECT_GC_WORD_OFFSET).expect("GC word offset fits i32"),
     );
-    let handle_table = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
+    let handle_table = cx.ht_base;
     let entry_offset = cx.builder.ins().ishl_imm_u(handle_value, 3);
     let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
     let object_bits = cx.builder.ins().ishl_imm_u(top, 16);
@@ -2370,18 +2424,11 @@ fn lower_init_object_literal(
 
     cx.builder.switch_to_block(slow_block);
     cx.builder.seal_block(slow_block);
-    let mut call_args = vec![cx
-        .builder
-        .ins()
-        .iconst(types::I64, i64::from(meta_index))];
+    let mut call_args = vec![cx.builder.ins().iconst(types::I64, i64::from(meta_index))];
     for value in values {
         call_args.push(use_value(cx.builder, cx.variables, *value)?);
     }
-    let slow = cx.call(
-        NativeRuntimeOp::InitObjectLiteral.id(),
-        &call_args,
-        None,
-    )?;
+    let slow = cx.call(NativeRuntimeOp::InitObjectLiteral.id(), &call_args, None)?;
     cx.builder
         .ins()
         .jump(merge_block, &[ir::BlockArg::Value(slow)]);
@@ -2627,7 +2674,8 @@ fn lower_instruction(
         }
         Instruction::CallBuiltin {
             dest: Some(dest),
-            builtin: builtin @ (Builtin::StringCharCodeAt | Builtin::StringCharAt | Builtin::StringAt),
+            builtin:
+                builtin @ (Builtin::StringCharCodeAt | Builtin::StringCharAt | Builtin::StringAt),
             args,
         } if matches!(args.len(), 1 | 2) => lower_string_char_builtin(
             cx,
@@ -2791,9 +2839,7 @@ fn lower_instruction(
             dest: Some(dest),
             builtin: Builtin::StringSlice,
             args,
-        } if !args.is_empty() => {
-            lower_string_slice_builtin(cx, *dest, args, feedback_ptr)
-        }
+        } if !args.is_empty() => lower_string_slice_builtin(cx, *dest, args, feedback_ptr),
         Instruction::CallBuiltin {
             dest: None,
             builtin: Builtin::ArrayPush,
@@ -2930,17 +2976,15 @@ fn lower_instruction(
         Instruction::NewObject { dest, capacity } => {
             lower_native_object_allocation(cx, *dest, *capacity, false)
         }
-        Instruction::GetProp { dest, object, key } => {
-            lower_get_prop_with_template_or_ic(
-                cx,
-                tables,
-                tables.barrier_thunks,
-                *dest,
-                *object,
-                *key,
-                roots,
-            )
-        }
+        Instruction::GetProp { dest, object, key } => lower_get_prop_with_template_or_ic(
+            cx,
+            tables,
+            tables.barrier_thunks,
+            *dest,
+            *object,
+            *key,
+            roots,
+        ),
         Instruction::SetProp {
             dest,
             object,
@@ -2951,12 +2995,7 @@ fn lower_instruction(
                 lower_set_prop_ic(
                     cx,
                     tables.barrier_thunks,
-                    PropAccess {
-                        dest: *dest,
-                        object: *object,
-                        key: *key,
-                        slot,
-                    },
+                    prop_access(tables, *dest, *object, *key, slot),
                     *value,
                 )
             } else {
@@ -3024,12 +3063,7 @@ fn lower_instruction(
                 lower_optional_get_prop_ic(
                     cx,
                     tables.barrier_thunks,
-                    PropAccess {
-                        dest: *dest,
-                        object: *object,
-                        key: *key,
-                        slot,
-                    },
+                    prop_access(tables, *dest, *object, *key, slot),
                     roots,
                 )
             } else {
@@ -3574,12 +3608,7 @@ fn emit_string_address(
     cx.builder.seal_block(entry_block);
     let handle = cx.builder.ins().band_imm_u(encoded, i64::from(u32::MAX));
     let handle_i32 = cx.builder.ins().ireduce(types::I32, handle);
-    let handle_table = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
+    let handle_table = cx.ht_base;
     let entry_offset = cx.builder.ins().ishl_imm_u(handle, 3);
     let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
     let entry = cx
@@ -3593,12 +3622,7 @@ fn emit_string_address(
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
     let logical_address = cx.builder.ins().ushr_imm_u(entry, 16);
-    let barrier_state = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
-    );
+    let barrier_state = cx.barrier_state;
     let barrier_disabled =
         cx.builder
             .ins()
@@ -3724,12 +3748,7 @@ fn emit_array_address(
     cx.builder.seal_block(entry_block);
     let handle = cx.builder.ins().band_imm_u(encoded, i64::from(u32::MAX));
     let handle_i32 = cx.builder.ins().ireduce(types::I32, handle);
-    let handle_table = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
+    let handle_table = cx.ht_base;
     let entry_offset = cx.builder.ins().ishl_imm_u(handle, 3);
     let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
     let entry = cx
@@ -3743,12 +3762,7 @@ fn emit_array_address(
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
     let logical_address = cx.builder.ins().ushr_imm_u(entry, 16);
-    let barrier_state = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
-    );
+    let barrier_state = cx.barrier_state;
     let barrier_disabled =
         cx.builder
             .ins()
@@ -4378,10 +4392,10 @@ fn lower_packed_array_store(
 ) -> Result<()> {
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let boxed_bits = cx.builder.ins().band_imm_s(stored, box_base);
-    let is_heap_value = cx
-        .builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    let is_heap_value =
+        cx.builder
+            .ins()
+            .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
     let needs_host = cx.builder.create_block();
     let array_block = cx.builder.create_block();
     cx.builder
@@ -4422,21 +4436,19 @@ fn lower_packed_array_store(
     let length = cx.builder.ins().band_imm_u(shape, i64::from(u32::MAX));
     let capacity = cx.builder.ins().ushr_imm_u(shape, 32);
     let index_u64 = index;
-    let in_capacity = cx.builder.ins().icmp(
-        ir::condcodes::IntCC::UnsignedLessThan,
-        index_u64,
-        capacity,
-    );
+    let in_capacity =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, index_u64, capacity);
     let not_past_length = cx.builder.ins().icmp(
         ir::condcodes::IntCC::UnsignedLessThanOrEqual,
         index_u64,
         length,
     );
-    let append = cx.builder.ins().icmp(
-        ir::condcodes::IntCC::Equal,
-        index_u64,
-        length,
-    );
+    let append = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, index_u64, length);
     let in_bounds = cx.builder.ins().band(in_capacity, not_past_length);
     let store_block = cx.builder.create_block();
     cx.builder
@@ -4736,9 +4748,10 @@ fn emit_pack_inline_ascii_slice(
     );
     let base_payload = cx.builder.ins().bor(base, marker);
     let zero = cx.builder.ins().iconst(types::I64, 0);
-    cx.builder
-        .ins()
-        .jump(head, &[ir::BlockArg::Value(zero), ir::BlockArg::Value(base_payload)]);
+    cx.builder.ins().jump(
+        head,
+        &[ir::BlockArg::Value(zero), ir::BlockArg::Value(base_payload)],
+    );
 
     cx.builder.switch_to_block(head);
     let index = cx.builder.block_params(head)[0];
@@ -4748,13 +4761,9 @@ fn emit_pack_inline_ascii_slice(
         index,
         result_len,
     );
-    cx.builder.ins().brif(
-        finished,
-        done,
-        &[ir::BlockArg::Value(payload)],
-        body,
-        &[],
-    );
+    cx.builder
+        .ins()
+        .brif(finished, done, &[ir::BlockArg::Value(payload)], body, &[]);
 
     cx.builder.switch_to_block(body);
     let src_index = cx.builder.ins().iadd(start, index);
@@ -4764,18 +4773,19 @@ fn emit_pack_inline_ascii_slice(
     let shifted = cx.builder.ins().ishl(unit, shift);
     let merged = cx.builder.ins().bor(payload, shifted);
     let next = cx.builder.ins().iadd_imm_u(index, 1);
-    cx.builder
-        .ins()
-        .jump(head, &[ir::BlockArg::Value(next), ir::BlockArg::Value(merged)]);
+    cx.builder.ins().jump(
+        head,
+        &[ir::BlockArg::Value(next), ir::BlockArg::Value(merged)],
+    );
 
     cx.builder.switch_to_block(done);
     cx.builder.seal_block(head);
     cx.builder.seal_block(body);
     let payload = cx.builder.block_params(done)[0];
-    let length_bits = cx.builder.ins().ishl_imm_u(
-        result_len,
-        i64::from(value::INLINE_STRING_LENGTH_SHIFT),
-    );
+    let length_bits = cx
+        .builder
+        .ins()
+        .ishl_imm_u(result_len, i64::from(value::INLINE_STRING_LENGTH_SHIFT));
     cx.builder.ins().bor(payload, length_bits)
 }
 
@@ -4834,11 +4844,10 @@ fn lower_string_slice_builtin(
     };
     let empty_block = cx.builder.create_block();
     let slice_block = cx.builder.create_block();
-    let end_before_start = cx.builder.ins().icmp(
-        ir::condcodes::IntCC::UnsignedLessThan,
-        end,
-        start,
-    );
+    let end_before_start =
+        cx.builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::UnsignedLessThan, end, start);
     cx.builder
         .ins()
         .brif(end_before_start, empty_block, &[], slice_block, &[]);
@@ -5083,12 +5092,7 @@ fn emit_idle_string_address(
     cx.builder.switch_to_block(entry_block);
     cx.builder.seal_block(entry_block);
     let handle = cx.builder.ins().band_imm_u(encoded, i64::from(u32::MAX));
-    let handle_table = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
+    let handle_table = cx.ht_base;
     let entry_offset = cx.builder.ins().ishl_imm_u(handle, 3);
     let entry_address = cx.builder.ins().iadd(handle_table, entry_offset);
     let entry = cx
@@ -5102,12 +5106,7 @@ fn emit_idle_string_address(
         i64::from(constants::HANDLE_STATE_STABLE_MIN),
     );
     let logical_address = cx.builder.ins().ushr_imm_u(entry, 16);
-    let barrier_state = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
-    );
+    let barrier_state = cx.barrier_state;
     let barrier_disabled =
         cx.builder
             .ins()
@@ -6317,31 +6316,15 @@ fn lower_get_prop_ic_non_nullish(
         object,
         key,
         slot,
+        trio_field,
     } = access;
-    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let obj = use_value(cx.builder, cx.variables, object)?;
     let key_value = use_value(cx.builder, cx.variables, key)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-
-    // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
-    let ht_base = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
-    let ic_base = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
-    );
-    let barrier_state = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
-    );
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let ht_base = cx.ht_base;
+    let ic_base = cx.ic_base;
+    let barrier_state = cx.barrier_state;
 
     // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
     let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
@@ -6433,7 +6416,7 @@ fn lower_get_prop_ic_non_nullish(
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
     let ic_shape = cx.builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
-    let ic_val_idx = cx.builder.ins().ushr_imm_u(ic_word0, 32);
+    let ic_val_idx = load_ic_value_index(cx.builder, ic_ptr, ic_word0, trio_field);
     let ic_word1 = cx
         .builder
         .ins()
@@ -6446,11 +6429,7 @@ fn lower_get_prop_ic_non_nullish(
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 16);
     let ic_holder = cx.builder.ins().band_imm_u(ic_word2, i64::from(u32::MAX));
     let ic_expected_proto = cx.builder.ins().ushr_imm_u(ic_word2, 32);
-    let kind_own = cx.builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::Equal,
-        ic_kind,
-        i64::from(constants::IC_KIND_OWN_DATA),
-    );
+    let kind_own = ic_kind_is_own_hit(cx.builder, ic_kind, trio_field);
     let kind_proto = cx.builder.ins().icmp_imm_u(
         ir::condcodes::IntCC::Equal,
         ic_kind,
@@ -6785,32 +6764,16 @@ fn lower_set_prop_ic(
         object,
         key,
         slot,
+        trio_field,
     } = access;
-    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let obj = use_value(cx.builder, cx.variables, object)?;
     let key_value = use_value(cx.builder, cx.variables, key)?;
     let stored = use_value(cx.builder, cx.variables, value)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-
-    // vmctx 基址：句柄表 region 与当前 image 的 IC 区。
-    let ht_base = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, handle_table_base))?,
-    );
-    let ic_base = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, ic_slots_base))?,
-    );
-    let barrier_state = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
-    );
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let ht_base = cx.ht_base;
+    let ic_base = cx.ic_base;
+    let barrier_state = cx.barrier_state;
 
     // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
     let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
@@ -6887,17 +6850,13 @@ fn lower_set_prop_ic(
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 0);
     let ic_shape = cx.builder.ins().band_imm_u(ic_word0, i64::from(u32::MAX));
-    let ic_val_idx = cx.builder.ins().ushr_imm_u(ic_word0, 32);
+    let ic_val_idx = load_ic_value_index(cx.builder, ic_ptr, ic_word0, trio_field);
     let ic_word1 = cx
         .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), ic_ptr, 8);
     let ic_kind = cx.builder.ins().band_imm_u(ic_word1, i64::from(u32::MAX));
-    let kind_own = cx.builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::Equal,
-        ic_kind,
-        i64::from(constants::IC_KIND_OWN_DATA),
-    );
+    let kind_own = ic_kind_is_own_hit(cx.builder, ic_kind, trio_field);
     let barrier_disabled =
         cx.builder
             .ins()
@@ -7117,12 +7076,7 @@ fn lower_optional_get_prop_ic(
     access: PropAccess,
     roots: &[ValueId],
 ) -> Result<()> {
-    let PropAccess {
-        dest,
-        object,
-        key,
-        slot,
-    } = access;
+    let PropAccess { dest, object, .. } = access;
     let obj = use_value(cx.builder, cx.variables, object)?;
 
     // 第零级：null / undefined 检查。
@@ -7157,18 +7111,7 @@ fn lower_optional_get_prop_ic(
     // IC 分支入口：非 nullish 值走与 GetProp 相同的共享核心。
     cx.builder.switch_to_block(ic_entry_block);
     cx.builder.seal_block(ic_entry_block);
-    lower_get_prop_ic_non_nullish(
-        cx,
-        barrier_thunks,
-        PropAccess {
-            dest,
-            object,
-            key,
-            slot,
-        },
-        roots,
-        merge_block,
-    )?;
+    lower_get_prop_ic_non_nullish(cx, barrier_thunks, access, roots, merge_block)?;
 
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);

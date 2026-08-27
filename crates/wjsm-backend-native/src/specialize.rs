@@ -28,8 +28,8 @@ use crate::lower::{
     declare_string_add_thunk, declare_string_builder_finish_thunk, emit_feedback_tag_code,
     gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
 };
-use crate::template_meta::build_template_origin_maps;
 use crate::root_plan::RootPlan;
+use crate::template_meta::build_template_origin_maps;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompilationDiagnostics, NativeCompileError, NativeObject};
 

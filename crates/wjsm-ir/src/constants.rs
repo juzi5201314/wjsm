@@ -213,10 +213,14 @@ pub const HEAP_OBJECT_VALUE_SLOT_SIZE: u32 = 8;
 // +0  u32 shape_id      命中要求与对象头 `+12` 的 shape_id 精确相等
 // +4  u32 value_index   值槽下标（×8 即字节偏移；accessor 时为 getter 槽下标）
 // +8  u32 kind          0=Empty 1=OwnData 2=ProtoData 3=Megamorphic 4=Accessor
+//                       5=OwnDataTrio（单态 name/value/length 共用槽）
 // +12 u32 proto_generation  kind=ProtoData/Accessor 时填充时的原型世代
-// +16 u32 holder_handle  kind=ProtoData/Accessor 时属性所在对象的句柄
-// +20 u32 expected_proto kind=ProtoData/Accessor 时 receiver 的直接原型句柄
-// +24..+28 reserved      保留清零，避免旧代码读半槽
+// +16 u32 holder_handle  kind=ProtoData/Accessor 时属性所在对象的句柄；
+//                       kind=OwnDataTrio 时为 `value` 的值槽下标
+// +20 u32 expected_proto kind=ProtoData/Accessor 时 receiver 的直接原型句柄；
+//                       kind=OwnDataTrio 时为 `length` 的值槽下标
+// +24 u32 trio_site      OwnDataTrio 规划槽在预填失败时写 1，供 miss 回填识别
+// +28 reserved           保留清零
 //
 // 空槽判定用 `kind == 0`（而非 shape_id == 0）——`SHAPE_ID_EMPTY` 是合法 shape。
 // IC 区由 data segment 的零填充自动初始化为 Empty，无需运行时初始化。
@@ -232,8 +236,12 @@ pub const IC_SLOT_KIND_OFFSET: u32 = 8;
 pub const IC_SLOT_PROTO_GENERATION_OFFSET: u32 = 12;
 pub const IC_SLOT_HOLDER_HANDLE_OFFSET: u32 = 16;
 pub const IC_SLOT_EXPECTED_PROTO_OFFSET: u32 = 20;
+pub const IC_SLOT_TRIO_VALUE_INDEX_OFFSET: u32 = IC_SLOT_HOLDER_HANDLE_OFFSET;
+pub const IC_SLOT_TRIO_LENGTH_INDEX_OFFSET: u32 = IC_SLOT_EXPECTED_PROTO_OFFSET;
 pub const IC_SLOT_RESERVED1_OFFSET: u32 = 24;
 pub const IC_SLOT_RESERVED2_OFFSET: u32 = 28;
+/// 规划为 trio mega-slot 但尚未填 shape 时写在 reserved1，miss 回填据此一次写三键。
+pub const IC_SLOT_TRIO_SITE_MARKER: u32 = 1;
 /// 空槽：从未命中过，miss 处理器负责回填。
 pub const IC_KIND_EMPTY: u32 = 0;
 /// 自有数据属性：值就在接收者的值槽里。
@@ -245,6 +253,8 @@ pub const IC_KIND_MEGAMORPHIC: u32 = 3;
 /// accessor 属性：getter 在 `holder_handle` 的值槽 `value_index` 里；
 /// shape + 直接原型 + 世代命中后直接 `invoke_callable(getter, receiver)`。
 pub const IC_KIND_ACCESSOR: u32 = 4;
+/// 单态模板对象的 `name`/`value`/`length` 共用一槽：`+4/+16/+20` 分别是三键值槽下标。
+pub const IC_KIND_OWN_DATA_TRIO: u32 = 5;
 
 // ── 类型反馈槽布局（Issue #390 运行时特化）──────────────────────────────────
 // 每个「可观察动态语义」的调用点在编译期分配一个 48 字节反馈槽，由 image loader
@@ -437,6 +447,8 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("ic_kind_proto_data", IC_KIND_PROTO_DATA),
         ("ic_kind_megamorphic", IC_KIND_MEGAMORPHIC),
         ("ic_kind_accessor", IC_KIND_ACCESSOR),
+        ("ic_kind_own_data_trio", IC_KIND_OWN_DATA_TRIO),
+        ("ic_slot_trio_site_marker", IC_SLOT_TRIO_SITE_MARKER),
         // 反馈槽布局：dispatcher 与生成代码共享写协议，改变字段解释方式 → 进 ABI。
         ("feedback_slot_size", FEEDBACK_SLOT_SIZE),
         (

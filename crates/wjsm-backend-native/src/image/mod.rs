@@ -40,18 +40,16 @@ fn prefill_template_ic_slots_slice(
         let Some(meta_index) = hint.template_meta_index else {
             continue;
         };
-        let Some(prop_index) = hint.prop_index else {
-            continue;
-        };
         let Ok(entry_start) = usize::try_from(meta_index) else {
             continue;
         };
-        let Some(entry_start) = entry_start
-            .checked_mul(constants::OBJECT_TEMPLATE_META_WORDS as usize)
+        let Some(entry_start) =
+            entry_start.checked_mul(constants::OBJECT_TEMPLATE_META_WORDS as usize)
         else {
             continue;
         };
-        let Some(entry_end) = entry_start.checked_add(constants::OBJECT_TEMPLATE_META_WORDS as usize)
+        let Some(entry_end) =
+            entry_start.checked_add(constants::OBJECT_TEMPLATE_META_WORDS as usize)
         else {
             continue;
         };
@@ -59,12 +57,6 @@ fn prefill_template_ic_slots_slice(
             continue;
         };
         let Some(&shape_id) = meta.first() else {
-            continue;
-        };
-        let Ok(prop_index) = usize::try_from(prop_index) else {
-            continue;
-        };
-        let Some(value_index) = meta.get(4 + prop_index).copied() else {
             continue;
         };
         let Some(base) = slot_index.checked_mul(words_per_slot) else {
@@ -76,12 +68,59 @@ fn prefill_template_ic_slots_slice(
         let Some(slot) = ic_slots.get_mut(base..end) else {
             continue;
         };
+        if let Some(trio) = hint.trio_prop_indices {
+            prefill_trio_slot(slot, meta, shape_id, trio);
+            continue;
+        }
+        let Some(prop_index) = hint.prop_index else {
+            continue;
+        };
+        let Ok(prop_index) = usize::try_from(prop_index) else {
+            continue;
+        };
+        let Some(value_index) = meta.get(4 + prop_index).copied() else {
+            continue;
+        };
         slot[0] = shape_id;
         slot[1] = value_index;
         slot[2] = constants::IC_KIND_OWN_DATA;
         for word in slot.iter_mut().skip(3) {
             *word = 0;
         }
+    }
+}
+
+fn prefill_trio_slot(slot: &mut [u32], meta: &[u32], shape_id: u32, trio: [u32; 3]) {
+    let Some(name_index) = meta_prop_index(meta, trio[0]) else {
+        mark_trio_site(slot);
+        return;
+    };
+    let Some(value_index) = meta_prop_index(meta, trio[1]) else {
+        mark_trio_site(slot);
+        return;
+    };
+    let Some(length_index) = meta_prop_index(meta, trio[2]) else {
+        mark_trio_site(slot);
+        return;
+    };
+    slot[0] = shape_id;
+    slot[1] = name_index;
+    slot[2] = constants::IC_KIND_OWN_DATA_TRIO;
+    slot[3] = 0;
+    slot[4] = value_index;
+    slot[5] = length_index;
+    slot[6] = 0;
+    slot[7] = 0;
+}
+
+fn meta_prop_index(meta: &[u32], prop_index: u32) -> Option<u32> {
+    meta.get(4 + usize::try_from(prop_index).ok()?).copied()
+}
+
+fn mark_trio_site(slot: &mut [u32]) {
+    slot.fill(0);
+    if let Some(marker) = slot.get_mut(6) {
+        *marker = constants::IC_SLOT_TRIO_SITE_MARKER;
     }
 }
 

@@ -565,8 +565,15 @@ mod tests {
             "expected template-linked IC hints: {hints:?}"
         );
         assert!(
-            hints.iter().filter(|hint| hint.template_meta_index.is_some()).count() >= 3,
-            "expected three template property reads: {hints:?}"
+            hints
+                .iter()
+                .any(|hint| hint.trio_prop_indices == Some([0, 1, 2])),
+            "expected shared trio mega-slot hint: {hints:?}"
+        );
+        assert_eq!(
+            hints.len(),
+            1,
+            "name/value/length should share one IC slot: {hints:?}"
         );
         assert!(
             diagnostics.disassembly.contains("cmp") || diagnostics.clif.contains("icmp"),

@@ -4,6 +4,19 @@ use std::collections::HashMap;
 
 use wjsm_ir::{Constant, ConstantId, Function, Instruction, Program, ValueId, value};
 
+/// 单态 trio mega-slot 覆盖的三个自有数据键（与 property-key 热路径一致）。
+pub(crate) const TRIO_KEY_NAME: &str = "name";
+pub(crate) const TRIO_KEY_VALUE: &str = "value";
+pub(crate) const TRIO_KEY_LENGTH: &str = "length";
+
+/// `name` / `value` / `length` 在 trio 槽内的字段。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TrioField {
+    Name = 0,
+    Value = 1,
+    Length = 2,
+}
+
 /// 单个 `ObjectTemplate` 在 install 烘焙表中的下标与模板常量。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct TemplateSite {
@@ -17,6 +30,8 @@ pub struct IcTemplateHint {
     pub property_key_raw: u64,
     pub template_meta_index: Option<u32>,
     pub prop_index: Option<u32>,
+    /// 模板含 name/value/length 时，三键在模板中的属性下标；预填一次写满 mega-slot。
+    pub trio_prop_indices: Option<[u32; 3]>,
 }
 
 /// IC 槽分配结果：每函数 dest→槽下标、全局 hint 表、总槽数。
@@ -36,6 +51,7 @@ pub(crate) fn plan_ic_slots(program: &Program) -> IcSlotPlan {
     for (function, origins) in program.functions().iter().zip(&template_origins) {
         let const_defs = const_defs_for_function(function);
         let mut slots = HashMap::new();
+        let mut trio_slots: HashMap<u32, u32> = HashMap::new();
         for block in function.blocks() {
             for instruction in block.instructions() {
                 let (dest, object, key) = match instruction {
@@ -43,7 +59,9 @@ pub(crate) fn plan_ic_slots(program: &Program) -> IcSlotPlan {
                     | Instruction::OptionalGetProp { dest, object, key } => {
                         (*dest, Some(*object), *key)
                     }
-                    Instruction::SetProp { dest, key, .. } => (*dest, None, *key),
+                    Instruction::SetProp {
+                        dest, object, key, ..
+                    } => (*dest, Some(*object), *key),
                     _ => continue,
                 };
                 let key_raw =
@@ -55,11 +73,25 @@ pub(crate) fn plan_ic_slots(program: &Program) -> IcSlotPlan {
                     object,
                     key,
                 );
+                if let Some(slot) = trio_slot_for_access(
+                    program.constants(),
+                    &const_defs,
+                    origins,
+                    object,
+                    key,
+                    &mut trio_slots,
+                    &mut hints,
+                    &mut slot_index,
+                ) {
+                    slots.insert(dest, slot);
+                    continue;
+                }
                 slots.insert(dest, slot_index);
                 hints.push(IcTemplateHint {
                     property_key_raw: key_raw,
                     template_meta_index,
                     prop_index,
+                    trio_prop_indices: None,
                 });
                 slot_index += 1;
             }
@@ -89,10 +121,7 @@ pub(crate) fn build_template_origin_maps(program: &Program) -> Vec<TemplateOrigi
         .collect()
 }
 
-fn build_template_origin_map(
-    function: &Function,
-    constants: &[Constant],
-) -> TemplateOriginMap {
+fn build_template_origin_map(function: &Function, constants: &[Constant]) -> TemplateOriginMap {
     let mut value_origins = HashMap::new();
     let mut var_origins: HashMap<&str, TemplateSite> = HashMap::new();
     for block in function.blocks() {
@@ -159,6 +188,104 @@ fn const_defs_for_function(function: &Function) -> HashMap<ValueId, ConstantId> 
     const_defs
 }
 
+/// 模板溯源且含完整 trio 键时，本访问使用共享 mega-slot。
+pub(crate) fn trio_field_for_access(
+    constants: &[Constant],
+    const_defs: &HashMap<ValueId, ConstantId>,
+    origins: &TemplateOriginMap,
+    object: ValueId,
+    key: ValueId,
+) -> Option<TrioField> {
+    let field = trio_field_for_key(constants, const_defs, key)?;
+    let site = origins.get(&object)?;
+    let _ = trio_prop_indices(constants, site.template)?;
+    Some(field)
+}
+
+fn trio_slot_for_access(
+    constants: &[Constant],
+    const_defs: &HashMap<ValueId, ConstantId>,
+    origins: &TemplateOriginMap,
+    object: Option<ValueId>,
+    key: ValueId,
+    trio_slots: &mut HashMap<u32, u32>,
+    hints: &mut Vec<IcTemplateHint>,
+    slot_index: &mut u32,
+) -> Option<u32> {
+    let object = object?;
+    trio_field_for_access(constants, const_defs, origins, object, key)?;
+    let site = origins.get(&object)?;
+    let indices = trio_prop_indices(constants, site.template)?;
+    if let Some(slot) = trio_slots.get(&site.meta_index) {
+        return Some(*slot);
+    }
+    let slot = *slot_index;
+    trio_slots.insert(site.meta_index, slot);
+    hints.push(IcTemplateHint {
+        property_key_raw: 0,
+        template_meta_index: Some(site.meta_index),
+        prop_index: None,
+        trio_prop_indices: Some(indices),
+    });
+    *slot_index += 1;
+    Some(slot)
+}
+
+fn trio_field_for_key(
+    constants: &[Constant],
+    const_defs: &HashMap<ValueId, ConstantId>,
+    key: ValueId,
+) -> Option<TrioField> {
+    if let Some(key_raw) = const_property_key_raw(constants, const_defs, key) {
+        return trio_field_for_key_raw(key_raw);
+    }
+    let constant_id = const_defs.get(&key)?;
+    let index = usize::try_from(constant_id.0).ok()?;
+    let Constant::String(text) = constants.get(index)? else {
+        return None;
+    };
+    TrioField::from_text(text)
+}
+
+fn trio_field_for_key_raw(key_raw: u64) -> Option<TrioField> {
+    for field in [TrioField::Name, TrioField::Value, TrioField::Length] {
+        let text = field.as_str();
+        if let Some(encoded) = value::encode_inline_ascii(text.as_bytes())
+            && value::inline_property_key_raw(encoded) == Some(key_raw)
+        {
+            return Some(field);
+        }
+    }
+    None
+}
+
+impl TrioField {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Name => TRIO_KEY_NAME,
+            Self::Value => TRIO_KEY_VALUE,
+            Self::Length => TRIO_KEY_LENGTH,
+        }
+    }
+
+    fn from_text(text: &str) -> Option<Self> {
+        match text {
+            TRIO_KEY_NAME => Some(Self::Name),
+            TRIO_KEY_VALUE => Some(Self::Value),
+            TRIO_KEY_LENGTH => Some(Self::Length),
+            _ => None,
+        }
+    }
+}
+
+fn trio_prop_indices(constants: &[Constant], template: ConstantId) -> Option<[u32; 3]> {
+    Some([
+        template_property_index_by_key_text(constants, template, TRIO_KEY_NAME)?,
+        template_property_index_by_key_text(constants, template, TRIO_KEY_VALUE)?,
+        template_property_index_by_key_text(constants, template, TRIO_KEY_LENGTH)?,
+    ])
+}
+
 fn template_hint_for_access(
     constants: &[Constant],
     const_defs: &HashMap<ValueId, ConstantId>,
@@ -172,8 +299,7 @@ fn template_hint_for_access(
     let Some(site) = origins.get(&object) else {
         return (None, None);
     };
-    let prop_index =
-        template_property_index_for_key(constants, const_defs, site.template, key);
+    let prop_index = template_property_index_for_key(constants, const_defs, site.template, key);
     (Some(site.meta_index), prop_index)
 }
 

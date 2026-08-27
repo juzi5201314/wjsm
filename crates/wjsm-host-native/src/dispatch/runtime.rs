@@ -461,7 +461,11 @@ pub(super) fn dispatch_runtime(
                             state
                                 .gc
                                 .heap()
-                                .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
+                                .set_element(
+                                    handle,
+                                    index,
+                                    u64::from_ne_bytes(stored.to_ne_bytes()),
+                                )
                                 .map(|()| *stored)
                                 .map_err(|_| fail_dispatch(ctx))
                         }
@@ -842,7 +846,62 @@ unsafe fn write_ic_slot(
 /// SAFETY: 同 [`write_ic_slot`]。
 unsafe fn write_ic_slot_megamorphic(slot: *mut u32) {
     // SAFETY: 调用方保证 slot 有效；退化槽 shape/value 清零后只留 kind。
-    unsafe { write_ic_slot(slot, 0, 0, constants::IC_KIND_MEGAMORPHIC, 0, 0, 0) }
+    // trio 规划槽保留 site marker，后续 miss 仍按三键一次回填，避免共享槽被写成单键 OWN_DATA。
+    let keep_trio = unsafe { ic_slot_is_trio_site(slot) };
+    unsafe { write_ic_slot(slot, 0, 0, constants::IC_KIND_MEGAMORPHIC, 0, 0, 0) };
+    if keep_trio {
+        unsafe { std::ptr::write(slot.add(6), constants::IC_SLOT_TRIO_SITE_MARKER) };
+    }
+}
+
+unsafe fn ic_slot_is_trio_site(slot: *mut u32) -> bool {
+    // SAFETY: 与 write_ic_slot 相同的槽指针契约；只读 kind 与 reserved1。
+    let kind = unsafe { std::ptr::read(slot.add(2)) };
+    let marker = unsafe { std::ptr::read(slot.add(6)) };
+    kind == constants::IC_KIND_OWN_DATA_TRIO || marker == constants::IC_SLOT_TRIO_SITE_MARKER
+}
+
+fn backfill_trio_ic_slot(state: &mut NativeAgentState, handle: u32, slot: *mut u32) -> bool {
+    let Some(name_key) = state.intern_property_string("name".into()) else {
+        return false;
+    };
+    let Some(value_key) = state.intern_property_string("value".into()) else {
+        return false;
+    };
+    let Some(length_key) = state.intern_property_string("length".into()) else {
+        return false;
+    };
+    let Ok(Some((shape_name, idx_name))) =
+        state.gc.heap().own_data_property_index(handle, name_key)
+    else {
+        return false;
+    };
+    let Ok(Some((shape_value, idx_value))) =
+        state.gc.heap().own_data_property_index(handle, value_key)
+    else {
+        return false;
+    };
+    let Ok(Some((shape_length, idx_length))) =
+        state.gc.heap().own_data_property_index(handle, length_key)
+    else {
+        return false;
+    };
+    if shape_name != shape_value || shape_value != shape_length {
+        return false;
+    }
+    // SAFETY: 同 write_ic_slot；trio 布局复用 holder/expected_proto 存放 value/length 下标。
+    unsafe {
+        write_ic_slot(
+            slot,
+            shape_name,
+            idx_name,
+            constants::IC_KIND_OWN_DATA_TRIO,
+            0,
+            idx_value,
+            idx_length,
+        );
+    }
+    true
 }
 
 /// SetPropIc 的 miss 回填：写入成功后，若属性已成为接收者自己的数据属性，回填
@@ -863,6 +922,13 @@ fn backfill_set_prop_ic(
         return;
     }
     let handle = value::decode_object_handle(object);
+    // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算。
+    if unsafe { ic_slot_is_trio_site(ic_slot_ptr) } {
+        if !backfill_trio_ic_slot(state, handle, ic_slot_ptr) {
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+        }
+        return;
+    }
     let Some(name_id) = property_key(state, key) else {
         // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算。
         unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
@@ -1094,6 +1160,13 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
     }
     let ic_slot_ptr = ic_slot_ptr as *mut u32;
     let handle = value::decode_object_handle(object);
+    // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算。
+    if unsafe { ic_slot_is_trio_site(ic_slot_ptr) } {
+        if !backfill_trio_ic_slot(state, handle, ic_slot_ptr) {
+            unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+        }
+        return;
+    }
     let Some(name_id) = property_key(state, key) else {
         return;
     };
@@ -2164,13 +2237,9 @@ fn init_object_literal_or_fail(
     template_index: u32,
     values: &[i64],
 ) -> Option<i64> {
-    let entry_start = usize::try_from(
-        template_index
-            .checked_mul(constants::OBJECT_TEMPLATE_META_WORDS)?,
-    )
-    .ok()?;
-    let entry_end = entry_start
-        .checked_add(constants::OBJECT_TEMPLATE_META_WORDS as usize)?;
+    let entry_start =
+        usize::try_from(template_index.checked_mul(constants::OBJECT_TEMPLATE_META_WORDS)?).ok()?;
+    let entry_end = entry_start.checked_add(constants::OBJECT_TEMPLATE_META_WORDS as usize)?;
     let meta = state.object_template_meta.get(entry_start..entry_end)?;
     let prop_count = meta[3] as usize;
     if values.len() != prop_count {
@@ -2198,11 +2267,11 @@ fn init_object_literal_or_fail(
                 .flush_native_tlab(ctx)
                 .map_err(|_| fail_dispatch(ctx))
                 .ok()?;
-            match state
-                .gc
-                .heap()
-                .write_baked_object_literal_properties(handle, shape_id, &properties)
-            {
+            match state.gc.heap().write_baked_object_literal_properties(
+                handle,
+                shape_id,
+                &properties,
+            ) {
                 Ok(()) => Some(object),
                 Err(HeapAccessV2Error::HeapExhausted { .. }) => {
                     state.collect_garbage(ctx).ok()?;
