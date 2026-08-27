@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+base!
+base-describe/d
+block:base/base-describe/blk
+base-describe/m
+--- stderr ---

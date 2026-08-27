@@ -318,6 +318,15 @@ pub fn run(module: &mut Module) {
                 if matches!(instruction, Instruction::CollectRestArgs { .. }) {
                     has_new_target.insert(func_id);
                 }
+                // GetSuperBase / GetSuperConstructor 读取当前 activation 的
+                // home_object；直接调用不压 activation，会错读外层帧，阻止
+                // direct_callable（静态字段初始化器/static block/方法的 super）。
+                if matches!(
+                    instruction,
+                    Instruction::GetSuperBase { .. } | Instruction::GetSuperConstructor { .. }
+                ) {
+                    has_new_target.insert(func_id);
+                }
             }
         }
 
