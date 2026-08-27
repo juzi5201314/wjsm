@@ -1101,9 +1101,9 @@ impl Lowerer {
             );
 
             let binding = CapturedBinding::new(name.clone(), *scope_id);
-            let value = if !self.binding_belongs_to_current_function(&binding)
-                || self.is_shared_binding(&binding)
-            {
+            let value_from_env = !self.binding_belongs_to_current_function(&binding)
+                || self.is_shared_binding(&binding);
+            let value = if value_from_env {
                 self.load_captured_binding(eval_block, &binding)?
             } else {
                 let value = self.alloc_value();
@@ -1117,7 +1117,17 @@ impl Lowerer {
                 value
             };
 
-            let is_tdz = self.const_val_i64(eval_block, if *is_initialised { 0 } else { 1 });
+            // env 取值路径的 TDZ 状态由宿主按未初始化哨兵动态判定（跨函数前向
+            // 引用的绑定在本 eval 站点降级时静态标志可能已过期）；本地槽路径
+            // 与直线执行一致，静态标志即运行时状态。
+            let is_tdz_flag = if value_from_env {
+                0
+            } else if *is_initialised {
+                0
+            } else {
+                1
+            };
+            let is_tdz = self.const_val_i64(eval_block, is_tdz_flag);
             let is_const = self.const_val_i64(
                 eval_block,
                 if matches!(kind, VarKind::Const) { 1 } else { 0 },
