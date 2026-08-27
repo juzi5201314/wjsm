@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+6 1 undefined
+function a a
+abcd3a 6 undefined
+a 3 51
+true true
+done
+--- stderr ---
