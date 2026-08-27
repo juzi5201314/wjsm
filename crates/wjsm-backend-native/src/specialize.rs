@@ -148,6 +148,10 @@ pub(crate) fn compile_specialized(
         .get(&target_function_id)
         .cloned()
         .unwrap_or_default();
+    // 入口 tag 守卫背书的种子分析结果是**可靠**集合，只有它能提升成 F64 机器
+    // 变量；下面并入的 `classes.numbers` 来自运行时反馈推测，必须留在 boxed 表示
+    // 里由循环头守卫兜底。
+    let typed_f64_values = seeded.get(&target_function_id).cloned().unwrap_or_default();
     seeded
         .entry(target_function_id)
         .or_default()
@@ -240,6 +244,7 @@ pub(crate) fn compile_specialized(
         math_thunks: &math_thunk_decls,
         root_bitmaps: &bitmap_decls,
         f64_values: &seeded_values,
+        typed_f64_values: &typed_f64_values,
         variable_slots,
         root_plan: &root_plan,
         root_capacity,

@@ -10,6 +10,7 @@ pub use template_meta::{IcTemplateHint, ic_template_hints};
 pub(crate) mod root_plan;
 pub(crate) mod specialize;
 pub(crate) mod unwind;
+pub(crate) mod value_repr;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -465,6 +466,163 @@ mod tests {
         .expect("artifact should encode")
     }
 
+    /// `let i = 0; while (i < 4) { i = i + step; } return i;` 的帧局部形状。
+    ///
+    /// `step` 决定 `$1.i` 是纯数值归纳变量还是混合类型局部。
+    fn numeric_loop_artifact(step: Constant) -> PortableArtifact {
+        let mut program = Program::new();
+        let zero = program.add_constant(Constant::Number(0.0));
+        let limit = program.add_constant(Constant::Number(4.0));
+        let step = program.add_constant(step);
+        let mut function = Function::new("loop_sum", BasicBlockId(0));
+
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: zero,
+        });
+        entry.push_instruction(Instruction::StoreVar {
+            name: "$1.i".into(),
+            value: ValueId(0),
+        });
+        entry.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+
+        let mut header = BasicBlock::new(BasicBlockId(1));
+        header.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$1.i".into(),
+        });
+        header.push_instruction(Instruction::Const {
+            dest: ValueId(2),
+            constant: limit,
+        });
+        header.push_instruction(Instruction::Compare {
+            dest: ValueId(3),
+            op: wjsm_ir::CompareOp::Lt,
+            lhs: ValueId(1),
+            rhs: ValueId(2),
+        });
+        header.set_terminator(Terminator::Branch {
+            condition: ValueId(3),
+            true_block: BasicBlockId(2),
+            false_block: BasicBlockId(3),
+        });
+
+        let mut body = BasicBlock::new(BasicBlockId(2));
+        body.push_instruction(Instruction::LoadVar {
+            dest: ValueId(4),
+            name: "$1.i".into(),
+        });
+        body.push_instruction(Instruction::Const {
+            dest: ValueId(5),
+            constant: step,
+        });
+        body.push_instruction(Instruction::Binary {
+            dest: ValueId(6),
+            op: BinaryOp::Add,
+            lhs: ValueId(4),
+            rhs: ValueId(5),
+        });
+        body.push_instruction(Instruction::StoreVar {
+            name: "$1.i".into(),
+            value: ValueId(6),
+        });
+        body.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+
+        let mut exit = BasicBlock::new(BasicBlockId(3));
+        exit.push_instruction(Instruction::LoadVar {
+            dest: ValueId(7),
+            name: "$1.i".into(),
+        });
+        exit.set_terminator(Terminator::Return {
+            value: Some(ValueId(7)),
+        });
+
+        for block in [entry, header, body, exit] {
+            function.push_block(block);
+        }
+        program.push_function(function);
+        PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("artifact should encode")
+    }
+
+    /// 一个输入已证明 f64、另一个输入是 `null` 的 φ 合流。
+    fn mixed_phi_artifact() -> PortableArtifact {
+        let mut program = Program::new();
+        let flag = program.add_constant(Constant::Bool(true));
+        let number = program.add_constant(Constant::Number(1.5));
+        let null = program.add_constant(Constant::Null);
+        let mut function = Function::new("mixed_phi", BasicBlockId(0));
+
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: flag,
+        });
+        entry.set_terminator(Terminator::Branch {
+            condition: ValueId(0),
+            true_block: BasicBlockId(1),
+            false_block: BasicBlockId(2),
+        });
+
+        let mut number_arm = BasicBlock::new(BasicBlockId(1));
+        number_arm.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: number,
+        });
+        number_arm.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+
+        let mut null_arm = BasicBlock::new(BasicBlockId(2));
+        null_arm.push_instruction(Instruction::Const {
+            dest: ValueId(2),
+            constant: null,
+        });
+        null_arm.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+
+        let mut merge = BasicBlock::new(BasicBlockId(3));
+        merge.push_instruction(Instruction::Phi {
+            dest: ValueId(3),
+            sources: vec![
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(1),
+                    value: ValueId(1),
+                },
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(2),
+                    value: ValueId(2),
+                },
+            ],
+        });
+        merge.set_terminator(Terminator::Return {
+            value: Some(ValueId(3)),
+        });
+
+        for block in [entry, number_arm, null_arm, merge] {
+            function.push_block(block);
+        }
+        program.push_function(function);
+        PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("artifact should encode")
+    }
+
     fn property_ic_artifact() -> PortableArtifact {
         let mut program = Program::new();
         let key = program.add_constant(Constant::String("value".into()));
@@ -770,20 +928,135 @@ mod tests {
         );
     }
 
+    /// CLIF 只在控制类型不可推断时打印 `.f64` 后缀，比对 `fcmp` 形状前先归一。
+    fn normalize_fcmp(clif: &str) -> String {
+        clif.replace("fcmp.f64", "fcmp")
+    }
+
+    /// 已证明 f64 的常量与加法全程留在浮点表示里：既不 iconst 编码常量，
+    /// 也不为了喂给 `fadd` 而拆包。
     #[test]
-    fn f64_add_skips_nan_canonicalization() {
+    fn f64_add_stays_unboxed_until_escape() {
         let compiler = NativeCompiler::new().expect("host ISA should be supported");
         let diagnostics = compiler
             .diagnostics(&arithmetic_artifact())
             .expect("arithmetic diagnostics should compile");
+        assert!(
+            diagnostics.clif.contains("f64const"),
+            "number 常量应直接物化成浮点常量:\n{}",
+            diagnostics.clif
+        );
         assert!(
             diagnostics.clif.contains("fadd"),
             "expected native fadd:\n{}",
             diagnostics.clif
         );
         assert!(
-            !diagnostics.clif.contains("uno"),
-            "f64 Add/Sub should bitcast without unordered NaN canonicalize:\n{}",
+            !diagnostics.clif.contains("bitcast.f64"),
+            "typed 表示下不应再有拆包:\n{}",
+            diagnostics.clif
+        );
+        assert_eq!(
+            normalize_fcmp(&diagnostics.clif)
+                .matches("fcmp uno")
+                .count(),
+            1,
+            "只有 return 这一个逃逸点需要规范化 NaN:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    /// 逃逸点必须把原始机器 NaN 换成规范 NaN：硬件默认 QNaN 的位模式与
+    /// `value::BOX_BASE` 相同，直接外泄会被误判成句柄。
+    #[test]
+    fn f64_escape_boxes_canonical_nan() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&arithmetic_artifact())
+            .expect("arithmetic diagnostics should compile");
+        assert!(
+            normalize_fcmp(&diagnostics.clif).contains("fcmp uno"),
+            "逃逸点应测 unordered:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            diagnostics.clif.contains("0x7ff8_0000_0000_0000"),
+            "逃逸点应选出规范 NaN:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    /// 循环携带的归纳变量整轮迭代常驻浮点寄存器：循环头的块参数是 `f64`，
+    /// 回边上没有打标/拆包，只有 `return` 这一个逃逸点转换一次。
+    #[test]
+    fn loop_carried_f64_stays_in_float_registers() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Number(1.0)))
+            .expect("numeric loop diagnostics should compile");
+        assert!(
+            diagnostics.clif.contains(": f64"),
+            "循环头应以 f64 块参数携带归纳变量:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            diagnostics.clif.contains("fadd"),
+            "自增应发原生 fadd:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            normalize_fcmp(&diagnostics.clif).contains("fcmp lt"),
+            "已证明 f64 的关系比较应发原生 fcmp:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            !diagnostics.clif.contains("bitcast.f64"),
+            "循环体内不应有拆包:\n{}",
+            diagnostics.clif
+        );
+        assert_eq!(
+            normalize_fcmp(&diagnostics.clif)
+                .matches("fcmp uno")
+                .count(),
+            1,
+            "只有 return 这一个逃逸点需要规范化 NaN:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    /// 同一帧局部混入非 number 写入时整体退回 boxed：入口 `undefined` 初值与
+    /// `null` 都不是合法的 double 位模式，提升会被逃逸点的规范化改写掉。
+    #[test]
+    fn mixed_type_local_stays_boxed() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Null))
+            .expect("mixed loop diagnostics should compile");
+        assert!(
+            !diagnostics.clif.contains(": f64"),
+            "混合类型局部不得提升成 f64 变量:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    /// φ 只在部分输入已证明 f64 时保持 boxed：typed 那条边打标，另一条边直传。
+    #[test]
+    fn mixed_phi_boxes_only_f64_edge() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&mixed_phi_artifact())
+            .expect("mixed phi diagnostics should compile");
+        assert!(
+            diagnostics.clif.contains("f64const"),
+            "已证明 f64 的那条边仍以浮点常量物化:\n{}",
+            diagnostics.clif
+        );
+        assert_eq!(
+            normalize_fcmp(&diagnostics.clif)
+                .matches("fcmp uno")
+                .count(),
+            1,
+            "只有 f64 那条边需要打标:\n{}",
             diagnostics.clif
         );
     }
