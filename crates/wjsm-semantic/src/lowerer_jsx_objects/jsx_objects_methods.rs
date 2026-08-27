@@ -62,7 +62,7 @@ impl Lowerer {
                             None
                         };
                         let function =
-                            self.lower_object_accessor_to_fn(&getter.key, body, None, home_object)?;
+                            self.lower_method_to_fn(&getter.key, body, None, home_object)?;
                         let (continuation, fn_value) = self.materialize_method_function_value(
                             block,
                             &function,
@@ -93,7 +93,7 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let function = self.lower_object_accessor_to_fn(
+                        let function = self.lower_method_to_fn(
                             &setter.key,
                             body,
                             Some(std::slice::from_ref(&*setter.param)),
@@ -130,7 +130,7 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        let function = self.lower_object_method_prop_to_fn(
+                        let function = self.lower_method_prop_to_fn(
                             &method.key,
                             &method.function,
                             home_object,
@@ -300,31 +300,6 @@ impl Lowerer {
         );
         self.emit_set_prop(block, env, home_key_value, home_object);
         env
-    }
-
-    fn lower_object_accessor_to_fn(
-        &mut self,
-        key: &swc_ast::PropName,
-        body: &swc_ast::BlockStmt,
-        accessor_params: Option<&[swc_ast::Pat]>,
-        home_object: Option<ValueId>,
-    ) -> Result<LoweredMethodFunction, LoweringError> {
-        self.object_method_deferred_body_depth += 1;
-        let result = self.lower_method_to_fn(key, body, accessor_params, home_object);
-        self.object_method_deferred_body_depth -= 1;
-        result
-    }
-
-    fn lower_object_method_prop_to_fn(
-        &mut self,
-        key: &swc_ast::PropName,
-        function: &swc_ast::Function,
-        home_object: Option<ValueId>,
-    ) -> Result<LoweredMethodFunction, LoweringError> {
-        self.object_method_deferred_body_depth += 1;
-        let result = self.lower_method_prop_to_fn(key, function, home_object);
-        self.object_method_deferred_body_depth -= 1;
-        result
     }
 
     /// 将 getter/setter 方法体编译为独立 IR 函数，物化由 caller 在外层 continuation 完成。

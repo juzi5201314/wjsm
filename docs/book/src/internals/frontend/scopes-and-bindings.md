@@ -75,5 +75,5 @@ wjsm dump-ir -e 'let x = 1; { let x = 2; }'
 ## 深入了解
 
 - [两阶段 lowering 如何驱动作用域登记](two-phase-lowering.md)
-- [TDZ 的静态判定与已知限制](hoisting-tdz-and-errors.md)
+- [TDZ 的混合判定与已知限制](hoisting-tdz-and-errors.md)
 - [闭包如何捕获跨作用域变量](functions-closures-and-classes.md)

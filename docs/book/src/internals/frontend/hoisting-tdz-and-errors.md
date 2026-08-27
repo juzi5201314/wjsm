@@ -1,6 +1,6 @@
 # Hoisting、TDZ 与早期错误
 
-这一章说明 wjsm 在编译期如何实现 hoisting、TDZ 和 ECMAScript 早期错误，以及静态判定带来的边界。
+这一章说明 wjsm 如何实现 hoisting、TDZ 和 ECMAScript 早期错误：同函数内的 TDZ 违规在编译期拒绝，跨函数前向引用降级为运行时检查。
 
 ## Hoisting
 
@@ -28,37 +28,33 @@ if !info.initialised {
 
 `resolve_scope_id` 是唯一绕过 TDZ 检查的查找入口，供需要解析作用域归属但不读取值的场景使用。
 
-## 静态判定的边界
+## 混合判定：同函数静态拒绝 + 跨函数运行时检查
 
-TDZ 完全在 lowering 期判定，没有运行时 TDZ 检查。函数体在 lowering 时按词法位置解析标识符，此时后面的 `let`/`const`/`class` 尚未 `mark_initialised`，于是合法的前向引用被拒绝：
+同函数内的直线前向引用（如 `console.log(x); let x = 1`）执行时必然违规，lowering 期直接拒绝，零运行时开销。
+
+跨函数前向引用（延迟执行的函数体读取后声明的 `let`/`const`/`class`）静态无法判定调用是否先于声明执行，按规范降级为运行时检查：
 
 ```js
-function f() { return x }   // lowering 期报 TDZ
+function f() { return x }   // 读取点发射 TdzCheck
 let x = 1;
-console.log(f());           // Node 输出 1
+console.log(f());           // 输出 1；若在声明前调用 f() 则抛 ReferenceError
 ```
 
-类名在自身方法体内同样受影响（`class C { m() { return C.name } }`）。这是当前架构的已知取舍：要放开它需要引入运行时 TDZ 标记，涉及 IR 与后端两层。用户侧的表现和规避写法记录在[限制与已知差异](../../user/runtime/limitations.md)。
+机制（`runtime_tdz_binding` / `lower_tdz_checked_read`，`lowerer_core.rs`）：
 
-> <details><summary>为什么不用「运行时 TDZ 标记」？</summary>
->
-> 运行时 TDZ 标记需要：
->
-> 1. 在每个 let/const/class 声明处发射「标记 binding 为已初始化」指令。
-> 2. 在每次读取前发射「检查 binding 是否已初始化」指令。
-> 3. 检查失败时抛 ReferenceError。
->
-> 这把 TDZ 检查从「编译期一次性」变成「每次访问都检查」，每次读变量多一次开销。
->
-> wjsm 选择静态判定（编译期拒绝所有 TDZ 违规代码）的理由：
->
-> - 性能：每次读变量少一次检查，对热代码影响大。
-> - 简单：后端不需要支持「运行时 binding 状态」概念。
-> - 严格：本来规范里 TDZ 就是「早期错误」（程序根本不该这么写），编译期拒绝更接近规范意图。
->
-> 代价：合法的「延迟到声明后调用」模式被拒（如 `f()` 在 `let x = 1` 之后调 Node 会输出 1，wjsm 会拒绝编译）。这种模式在严格 TypeScript 项目里也越来越少见，是可接受的代价。
->
-> </details>
+1. 标识符解析因 TDZ 失败时，若绑定属于外层函数（跨函数前向引用），改为发射经
+   env 链的受检读取；同函数内仍保持编译期拒绝。
+2. 闭包环境快照（shared env / iteration env）对仍处 TDZ 的绑定写入
+   `Constant::Uninitialized` 哨兵（`TAG_UNINITIALIZED`），声明执行时由
+   `store_binding_value` 覆盖为真实值。
+3. 读取点发射 `Builtin::TdzCheck(value, name)`：值为哨兵时宿主构造
+   `ReferenceError: Cannot access 'name' before initialization`，否则原样返回。
+4. 赋值 / 复合赋值 / 逻辑赋值 / update 的前向引用路径在 GetValue/SetValue
+   处同样发射 TdzCheck；const 重赋值仍在编译期拒绝。
+5. `direct_call` pass 跳过 TDZ 受检读取的 `Const(FunctionRef)` 替换，
+   保证类声明等绑定的运行时哨兵可被观察。
+
+哨兵永不暴露给用户代码：只有 TdzCheck 会消费它，检查通过后向下游传递的是真实值。运行时开销只出现在「静态无法证明已初始化」的读取点，热路径的普通局部读取不受影响。
 
 ## 早期错误
 

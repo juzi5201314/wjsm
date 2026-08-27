@@ -25,141 +25,156 @@ module {
     c22 = functionref(@0)
     c23 = undefined
     c24 = string("$0.set")
-    c25 = functionref(@0)
-    c26 = undefined
-    c27 = string("$0.set")
-    c28 = string("method")
-    c29 = number(0)
-    c30 = functionref(@1)
-    c31 = string("$0.set")
+    c25 = string("set")
+    c26 = functionref(@0)
+    c27 = undefined
+    c28 = uninitialized
+    c29 = string("$0.set")
+    c30 = string("method")
+    c31 = number(0)
     c32 = functionref(@1)
-    c33 = string("self")
-    c34 = number(0)
-    c35 = functionref(@2)
-    c36 = string("$0.set")
-    c37 = functionref(@2)
-    c38 = string("get")
-    c39 = string("enumerable")
-    c40 = bool(true)
-    c41 = string("configurable")
-    c42 = bool(true)
-    c43 = string("self")
-    c44 = number(0)
-    c45 = functionref(@3)
-    c46 = string("setterSawSelf")
-    c47 = string("$0.set")
-    c48 = functionref(@3)
-    c49 = string("set")
-    c50 = string("enumerable")
-    c51 = bool(true)
-    c52 = string("configurable")
-    c53 = bool(true)
-    c54 = string("nested")
-    c55 = number(0)
-    c56 = functionref(@4)
-    c57 = string("method")
-    c58 = number(0)
-    c59 = functionref(@4)
-    c60 = string("$0.set")
+    c33 = string("$0.set")
+    c34 = string("set")
+    c35 = functionref(@1)
+    c36 = string("self")
+    c37 = number(0)
+    c38 = functionref(@2)
+    c39 = string("$0.set")
+    c40 = string("set")
+    c41 = functionref(@2)
+    c42 = string("get")
+    c43 = string("enumerable")
+    c44 = bool(true)
+    c45 = string("configurable")
+    c46 = bool(true)
+    c47 = string("self")
+    c48 = number(0)
+    c49 = functionref(@3)
+    c50 = string("setterSawSelf")
+    c51 = string("$0.set")
+    c52 = string("set")
+    c53 = functionref(@3)
+    c54 = string("set")
+    c55 = string("enumerable")
+    c56 = bool(true)
+    c57 = string("configurable")
+    c58 = bool(true)
+    c59 = string("nested")
+    c60 = number(0)
     c61 = functionref(@4)
-    c62 = undefined
-    c63 = string("self")
-    c64 = number(0)
-    c65 = functionref(@5)
-    c66 = string("$0.set")
-    c67 = functionref(@5)
-    c68 = string("get")
-    c69 = string("enumerable")
-    c70 = bool(true)
-    c71 = string("configurable")
-    c72 = bool(true)
-    c73 = functionref(@6)
-    c74 = string("$0.set")
-    c75 = undefined
-    c76 = string("$0.set")
-    c77 = string("forEach")
-    c78 = functionref(@7)
-    c79 = undefined
-    c80 = string("$0.set")
-    c81 = string("method")
+    c62 = string("method")
+    c63 = number(0)
+    c64 = functionref(@4)
+    c65 = string("$0.set")
+    c66 = string("set")
+    c67 = functionref(@4)
+    c68 = undefined
+    c69 = string("self")
+    c70 = number(0)
+    c71 = functionref(@5)
+    c72 = string("$0.set")
+    c73 = string("set")
+    c74 = functionref(@5)
+    c75 = string("get")
+    c76 = string("enumerable")
+    c77 = bool(true)
+    c78 = string("configurable")
+    c79 = bool(true)
+    c80 = functionref(@6)
+    c81 = string("$0.set")
     c82 = undefined
     c83 = string("$0.set")
-    c84 = undefined
-    c85 = string("$0.set")
-    c86 = string("self")
-    c87 = undefined
-    c88 = string("$0.set")
+    c84 = string("forEach")
+    c85 = functionref(@7)
+    c86 = undefined
+    c87 = string("$0.set")
+    c88 = string("method")
     c89 = undefined
     c90 = string("$0.set")
-    c91 = string("self")
-    c92 = undefined
-    c93 = string("$0.set")
+    c91 = undefined
+    c92 = string("$0.set")
+    c93 = string("self")
     c94 = undefined
     c95 = string("$0.set")
-    c96 = string("setterSawSelf")
-    c97 = undefined
-    c98 = string("$0.set")
-    c99 = string("nested")
-    c100 = string("method")
+    c96 = undefined
+    c97 = string("$0.set")
+    c98 = string("self")
+    c99 = undefined
+    c100 = string("$0.set")
     c101 = undefined
     c102 = string("$0.set")
-    c103 = undefined
-    c104 = string("$0.set")
-    c105 = string("nested")
-    c106 = string("self")
-    c107 = undefined
-    c108 = string("$0.set")
-    c109 = string("self")
-    c110 = number(0)
-    c111 = functionref(@8)
-    c112 = string("$0.mutable")
-    c113 = functionref(@8)
-    c114 = string("$0.mutable")
-    c115 = string("get")
-    c116 = string("enumerable")
-    c117 = bool(true)
-    c118 = string("configurable")
-    c119 = bool(true)
-    c120 = string("$0.mutable")
-    c121 = undefined
-    c122 = string("$0.mutable")
-    c123 = string("self")
-    c124 = undefined
-    c125 = string("$0.mutable")
-    c126 = string("assign")
-    c127 = number(0)
-    c128 = functionref(@9)
-    c129 = string("$0.assigned")
-    c130 = functionref(@9)
-    c131 = string("$0.assigned")
-    c132 = string("$0.assigned")
+    c103 = string("setterSawSelf")
+    c104 = undefined
+    c105 = string("$0.set")
+    c106 = string("nested")
+    c107 = string("method")
+    c108 = undefined
+    c109 = string("$0.set")
+    c110 = undefined
+    c111 = string("$0.set")
+    c112 = string("nested")
+    c113 = string("self")
+    c114 = undefined
+    c115 = string("$0.set")
+    c116 = string("self")
+    c117 = number(0)
+    c118 = functionref(@8)
+    c119 = string("$0.mutable")
+    c120 = string("mutable")
+    c121 = functionref(@8)
+    c122 = uninitialized
+    c123 = string("$0.mutable")
+    c124 = string("get")
+    c125 = string("enumerable")
+    c126 = bool(true)
+    c127 = string("configurable")
+    c128 = bool(true)
+    c129 = string("$0.mutable")
+    c130 = undefined
+    c131 = string("$0.mutable")
+    c132 = string("self")
     c133 = undefined
-    c134 = string("$0.assigned")
-    c135 = string("replaced")
-    c136 = object_template([2305843009213694087])
-    c137 = bool(true)
-    c138 = string("assign")
-    c139 = undefined
-    c140 = string("$0.assigned")
-    c141 = string("update")
-    c142 = number(0)
-    c143 = functionref(@10)
-    c144 = string("$0.updated")
-    c145 = number(40)
-    c146 = string("$0.updated")
-    c147 = number(1)
-    c148 = string("$0.updated")
-    c149 = functionref(@10)
-    c150 = string("$0.updated")
-    c151 = string("$0.updated")
-    c152 = undefined
-    c153 = string("$0.updated")
-    c154 = string("update")
-    c155 = number(41)
-    c156 = undefined
-    c157 = string("$0.updated")
-    c158 = number(41)
-    c159 = bool(false)
+    c134 = string("$0.mutable")
+    c135 = string("assign")
+    c136 = number(0)
+    c137 = functionref(@9)
+    c138 = string("$0.assigned")
+    c139 = string("assigned")
+    c140 = functionref(@9)
+    c141 = uninitialized
+    c142 = string("$0.assigned")
+    c143 = string("$0.assigned")
+    c144 = undefined
+    c145 = string("$0.assigned")
+    c146 = string("replaced")
+    c147 = object_template([2305843009213694098])
+    c148 = bool(true)
+    c149 = string("assign")
+    c150 = undefined
+    c151 = string("$0.assigned")
+    c152 = string("update")
+    c153 = number(0)
+    c154 = functionref(@10)
+    c155 = string("$0.updated")
+    c156 = number(40)
+    c157 = string("updated")
+    c158 = string("$0.updated")
+    c159 = string("updated")
+    c160 = number(1)
+    c161 = string("$0.updated")
+    c162 = string("updated")
+    c163 = functionref(@10)
+    c164 = uninitialized
+    c165 = string("$0.updated")
+    c166 = string("$0.updated")
+    c167 = undefined
+    c168 = string("$0.updated")
+    c169 = string("update")
+    c170 = number(41)
+    c171 = undefined
+    c172 = string("$0.updated")
+    c173 = number(41)
+    c174 = bool(false)
 
   fn @$0.forEach [captures: $0.set] [params: $1.$env, $1.$this, $1.action] [entry=bb0]:
     bb0:
@@ -173,97 +188,145 @@ module {
       %6 = load var $env
       %7 = const c24
       %8 = get_prop %6, %7
-      %9 = call %5, this=%4, args=[%8]
-      %10 = is_exception %9
-      branch %10, bb2, bb1
+      %9 = const c25
+      %10 = call builtin.tdz_check(%8, %9)
+      %11 = is_exception %10
+      branch %11, bb2, bb1
     bb1:
-      return
+      %13 = call %5, this=%4, args=[%10]
+      %14 = is_exception %13
+      branch %14, bb4, bb3
     bb2:
-      %11 = call builtin.exception_value(%9)
-      throw %11
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb3:
+      return
+    bb4:
+      %15 = call builtin.exception_value(%13)
+      throw %15
 
   fn @$0.method [captures: $0.set] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c29
-      %3 = const c30
+      %1 = const c31
+      %3 = const c32
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
       %4 = load var $env
-      %5 = const c31
+      %5 = const c33
       %6 = get_prop %4, %5
-      return %6
+      %7 = const c34
+      %8 = call builtin.tdz_check(%6, %7)
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      return %8
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @$0.self [captures: $0.set] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c34
-      %3 = const c35
+      %1 = const c37
+      %3 = const c38
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
       %4 = load var $env
-      %5 = const c36
+      %5 = const c39
       %6 = get_prop %4, %5
-      return %6
+      %7 = const c40
+      %8 = call builtin.tdz_check(%6, %7)
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      return %8
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @$0.self [captures: $0.set] [params: $4.$env, $4.$this, $4.value] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c44
-      %3 = const c45
+      %1 = const c48
+      %3 = const c49
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $4.arguments, %2
       %4 = load var $4.$this
-      %5 = const c46
+      %5 = const c50
       %6 = load var $4.value
       %7 = load var $env
-      %8 = const c47
+      %8 = const c51
       %9 = get_prop %7, %8
-      %10 = call builtin.strict_eq(%6, %9)
-      %11 = set_prop %4, %5, %10
+      %10 = const c52
+      %11 = call builtin.tdz_check(%9, %10)
       %12 = is_exception %11
       branch %12, bb2, bb1
     bb1:
-      return
+      %14 = call builtin.strict_eq(%6, %11)
+      %15 = set_prop %4, %5, %14
+      %16 = is_exception %15
+      branch %16, bb4, bb3
     bb2:
       %13 = call builtin.exception_value(%11)
       throw %13
+    bb3:
+      return
+    bb4:
+      %17 = call builtin.exception_value(%15)
+      throw %17
 
   fn @$0.method [captures: $0.set] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c58
-      %3 = const c59
+      %1 = const c63
+      %3 = const c64
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $6.arguments, %2
       %4 = load var $env
-      %5 = const c60
+      %5 = const c65
       %6 = get_prop %4, %5
-      return %6
+      %7 = const c66
+      %8 = call builtin.tdz_check(%6, %7)
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      return %8
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @$0.self [captures: $0.set] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c64
-      %3 = const c65
+      %1 = const c70
+      %3 = const c71
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $7.arguments, %2
       %4 = load var $env
-      %5 = const c66
+      %5 = const c72
       %6 = get_prop %4, %5
-      return %6
+      %7 = const c73
+      %8 = call builtin.tdz_check(%6, %7)
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      return %8
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @$0.nested [captures: $0.set] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c55
-      %3 = const c56
+      %1 = const c60
+      %3 = const c61
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $5.arguments, %2
       %4 = new_object(capacity=4)
-      %5 = const c57
-      %6 = const c61
-      %7 = const c62
+      %5 = const c62
+      %6 = const c67
+      %7 = const c68
       store var $5.$shared_env, %7
       %8 = new_object(capacity=0)
       %9 = load var $env
@@ -271,17 +334,17 @@ module {
       store var $5.$shared_env, %8
       %10 = call builtin.create_closure(%6, %8)
       %11 = set_prop %4, %5, %10
-      %12 = const c63
-      %13 = const c67
+      %12 = const c69
+      %13 = const c74
       %14 = call builtin.create_closure(%13, %8)
       %15 = new_object(capacity=4)
-      %16 = const c68
+      %16 = const c75
       %17 = set_prop %15, %16, %14
-      %18 = const c69
-      %19 = const c70
+      %18 = const c76
+      %19 = const c77
       %20 = set_prop %15, %18, %19
-      %21 = const c71
-      %22 = const c72
+      %21 = const c78
+      %22 = const c79
       %23 = set_prop %15, %21, %22
       call builtin.define_property(%4, %12, %15)
       return %4
@@ -296,68 +359,110 @@ module {
   fn @$0.self [captures: $0.mutable] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c110
-      %3 = const c111
+      %1 = const c117
+      %3 = const c118
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $9.arguments, %2
       %4 = load var $env
-      %5 = const c112
+      %5 = const c119
       %6 = get_prop %4, %5
-      return %6
+      %7 = const c120
+      %8 = call builtin.tdz_check(%6, %7)
+      %9 = is_exception %8
+      branch %9, bb2, bb1
+    bb1:
+      return %8
+    bb2:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @$0.assign [captures: $0.assigned] [params: $10.$env, $10.$this, $10.value] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c127
-      %3 = const c128
+      %1 = const c136
+      %3 = const c137
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $10.arguments, %2
       %4 = load var $env
-      %5 = const c129
+      %5 = const c138
       %6 = load var $10.value
-      %7 = set_prop %4, %5, %6
-      %8 = is_exception %7
-      branch %8, bb2, bb1
+      %7 = get_prop %4, %5
+      %8 = const c139
+      %9 = call builtin.tdz_check(%7, %8)
+      %10 = is_exception %9
+      branch %10, bb2, bb1
     bb1:
-      return
+      %12 = set_prop %4, %5, %6
+      %13 = is_exception %12
+      branch %13, bb4, bb3
     bb2:
-      %9 = call builtin.exception_value(%7)
-      throw %9
+      %11 = call builtin.exception_value(%9)
+      throw %11
+    bb3:
+      return
+    bb4:
+      %14 = call builtin.exception_value(%12)
+      throw %14
 
   fn @$0.update [captures: $0.updated] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c142
-      %3 = const c143
+      %1 = const c153
+      %3 = const c154
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $11.arguments, %2
       %4 = load var $env
-      %5 = const c144
-      %6 = const c145
-      %7 = set_prop %4, %5, %6
-      %8 = is_exception %7
-      branch %8, bb2, bb1
+      %5 = const c155
+      %6 = const c156
+      %7 = get_prop %4, %5
+      %8 = const c157
+      %9 = call builtin.tdz_check(%7, %8)
+      %10 = is_exception %9
+      branch %10, bb2, bb1
     bb1:
-      %10 = load var $env
-      %11 = const c146
-      %12 = get_prop %10, %11
-      %13 = pos %12
-      %14 = const c147
-      %15 = add %13, %14
-      %16 = set_prop %10, %11, %15
-      %17 = is_exception %16
-      branch %17, bb4, bb3
+      %12 = set_prop %4, %5, %6
+      %13 = is_exception %12
+      branch %13, bb4, bb3
     bb2:
-      %9 = call builtin.exception_value(%7)
-      throw %9
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb3:
-      %19 = load var $env
-      %20 = const c148
-      %21 = get_prop %19, %20
-      return %21
+      %15 = load var $env
+      %16 = const c158
+      %17 = get_prop %15, %16
+      %18 = const c159
+      %19 = call builtin.tdz_check(%17, %18)
+      %20 = is_exception %19
+      branch %20, bb6, bb5
     bb4:
-      %18 = call builtin.exception_value(%16)
-      throw %18
+      %14 = call builtin.exception_value(%12)
+      throw %14
+    bb5:
+      %22 = pos %19
+      %23 = const c160
+      %24 = add %22, %23
+      %25 = set_prop %15, %16, %24
+      %26 = is_exception %25
+      branch %26, bb8, bb7
+    bb6:
+      %21 = call builtin.exception_value(%19)
+      throw %21
+    bb7:
+      %28 = load var $env
+      %29 = const c161
+      %30 = get_prop %28, %29
+      %31 = const c162
+      %32 = call builtin.tdz_check(%30, %31)
+      %33 = is_exception %32
+      branch %33, bb10, bb9
+    bb8:
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb9:
+      return %32
+    bb10:
+      %34 = call builtin.exception_value(%32)
+      throw %34
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -405,59 +510,59 @@ module {
       store var $this, %20
       %21 = new_object(capacity=5)
       %22 = const c20
-      %23 = const c25
-      %24 = const c26
+      %23 = const c26
+      %24 = const c27
       store var $0.$shared_env, %24
       %25 = new_object(capacity=1)
       %26 = load var $env
       set_proto %25, %26
       store var $0.$shared_env, %25
-      %27 = load var $0.set
-      %28 = const c27
+      %27 = const c28
+      %28 = const c29
       %29 = set_prop %25, %28, %27
       %30 = call builtin.create_closure(%23, %25)
       %31 = set_prop %21, %22, %30
-      %32 = const c28
-      %33 = const c32
+      %32 = const c30
+      %33 = const c35
       %34 = call builtin.create_closure(%33, %25)
       %35 = set_prop %21, %32, %34
-      %36 = const c33
-      %37 = const c37
+      %36 = const c36
+      %37 = const c41
       %38 = call builtin.create_closure(%37, %25)
       %39 = new_object(capacity=4)
-      %40 = const c38
+      %40 = const c42
       %41 = set_prop %39, %40, %38
-      %42 = const c39
-      %43 = const c40
+      %42 = const c43
+      %43 = const c44
       %44 = set_prop %39, %42, %43
-      %45 = const c41
-      %46 = const c42
+      %45 = const c45
+      %46 = const c46
       %47 = set_prop %39, %45, %46
       call builtin.define_property(%21, %36, %39)
-      %48 = const c43
-      %49 = const c48
+      %48 = const c47
+      %49 = const c53
       %50 = call builtin.create_closure(%49, %25)
       %51 = new_object(capacity=4)
-      %52 = const c49
+      %52 = const c54
       %53 = set_prop %51, %52, %50
-      %54 = const c50
-      %55 = const c51
+      %54 = const c55
+      %55 = const c56
       %56 = set_prop %51, %54, %55
-      %57 = const c52
-      %58 = const c53
+      %57 = const c57
+      %58 = const c58
       %59 = set_prop %51, %57, %58
       call builtin.define_property(%21, %48, %51)
-      %60 = const c54
-      %61 = const c73
+      %60 = const c59
+      %61 = const c80
       %62 = call builtin.create_closure(%61, %25)
       %63 = set_prop %21, %60, %62
       store var $0.set, %21
-      %64 = const c74
+      %64 = const c81
       %65 = set_prop %25, %64, %21
       %66 = load var $0.$shared_env
-      %67 = const c75
+      %67 = const c82
       %68 = stricteq %66, %67
-      %69 = const c76
+      %69 = const c83
       branch %68, bb1, bb2
     bb1:
       %71 = load var $0.set
@@ -470,17 +575,17 @@ module {
       jump bb4
     bb4:
       %73 = phi [(bb1, %71), (bb3, %72)]
-      %74 = const c77
+      %74 = const c84
       %75 = get_prop %73, %74
-      %76 = const c78
+      %76 = const c85
       %77 = call %75, this=%73, args=[%76]
       %78 = is_exception %77
       branch %78, bb6, bb5
     bb5:
       %80 = load var $0.$shared_env
-      %81 = const c79
+      %81 = const c86
       %82 = stricteq %80, %81
-      %83 = const c80
+      %83 = const c87
       branch %82, bb7, bb8
     bb6:
       %79 = call builtin.exception_value(%77)
@@ -496,13 +601,13 @@ module {
       jump bb10
     bb10:
       %87 = phi [(bb7, %85), (bb9, %86)]
-      %88 = const c81
+      %88 = const c88
       %89 = get_prop %87, %88
       %90 = call %89, this=%87
       %91 = load var $0.$shared_env
-      %92 = const c82
+      %92 = const c89
       %93 = stricteq %91, %92
-      %94 = const c83
+      %94 = const c90
       branch %93, bb11, bb12
     bb11:
       %96 = load var $0.set
@@ -521,9 +626,9 @@ module {
       branch %101, bb16, bb15
     bb15:
       %103 = load var $0.$shared_env
-      %104 = const c84
+      %104 = const c91
       %105 = stricteq %103, %104
-      %106 = const c85
+      %106 = const c92
       branch %105, bb17, bb18
     bb16:
       %102 = call builtin.exception_value(%100)
@@ -539,12 +644,12 @@ module {
       jump bb20
     bb20:
       %110 = phi [(bb17, %108), (bb19, %109)]
-      %111 = const c86
+      %111 = const c93
       %112 = get_prop %110, %111
       %113 = load var $0.$shared_env
-      %114 = const c87
+      %114 = const c94
       %115 = stricteq %113, %114
-      %116 = const c88
+      %116 = const c95
       branch %115, bb21, bb22
     bb21:
       %118 = load var $0.set
@@ -563,9 +668,9 @@ module {
       branch %123, bb26, bb25
     bb25:
       %125 = load var $0.$shared_env
-      %126 = const c89
+      %126 = const c96
       %127 = stricteq %125, %126
-      %128 = const c90
+      %128 = const c97
       branch %127, bb27, bb28
     bb26:
       %124 = call builtin.exception_value(%122)
@@ -581,11 +686,11 @@ module {
       jump bb30
     bb30:
       %132 = phi [(bb27, %130), (bb29, %131)]
-      %133 = const c91
+      %133 = const c98
       %134 = load var $0.$shared_env
-      %135 = const c92
+      %135 = const c99
       %136 = stricteq %134, %135
-      %137 = const c93
+      %137 = const c100
       branch %136, bb31, bb32
     bb31:
       %139 = load var $0.set
@@ -603,9 +708,9 @@ module {
       branch %143, bb36, bb35
     bb35:
       %145 = load var $0.$shared_env
-      %146 = const c94
+      %146 = const c101
       %147 = stricteq %145, %146
-      %148 = const c95
+      %148 = const c102
       branch %147, bb37, bb38
     bb36:
       %144 = call builtin.exception_value(%142)
@@ -621,16 +726,16 @@ module {
       jump bb40
     bb40:
       %152 = phi [(bb37, %150), (bb39, %151)]
-      %153 = const c96
+      %153 = const c103
       %154 = get_prop %152, %153
       %155 = call builtin.console.log(%154)
       %156 = is_exception %155
       branch %156, bb42, bb41
     bb41:
       %158 = load var $0.$shared_env
-      %159 = const c97
+      %159 = const c104
       %160 = stricteq %158, %159
-      %161 = const c98
+      %161 = const c105
       branch %160, bb43, bb44
     bb42:
       %157 = call builtin.exception_value(%155)
@@ -646,16 +751,16 @@ module {
       jump bb46
     bb46:
       %165 = phi [(bb43, %163), (bb45, %164)]
-      %166 = const c99
+      %166 = const c106
       %167 = get_prop %165, %166
       %168 = call %167, this=%165
-      %169 = const c100
+      %169 = const c107
       %170 = get_prop %168, %169
       %171 = call %170, this=%168
       %172 = load var $0.$shared_env
-      %173 = const c101
+      %173 = const c108
       %174 = stricteq %172, %173
-      %175 = const c102
+      %175 = const c109
       branch %174, bb47, bb48
     bb47:
       %177 = load var $0.set
@@ -674,9 +779,9 @@ module {
       branch %182, bb52, bb51
     bb51:
       %184 = load var $0.$shared_env
-      %185 = const c103
+      %185 = const c110
       %186 = stricteq %184, %185
-      %187 = const c104
+      %187 = const c111
       branch %186, bb53, bb54
     bb52:
       %183 = call builtin.exception_value(%181)
@@ -692,15 +797,15 @@ module {
       jump bb56
     bb56:
       %191 = phi [(bb53, %189), (bb55, %190)]
-      %192 = const c105
+      %192 = const c112
       %193 = get_prop %191, %192
       %194 = call %193, this=%191
-      %195 = const c106
+      %195 = const c113
       %196 = get_prop %194, %195
       %197 = load var $0.$shared_env
-      %198 = const c107
+      %198 = const c114
       %199 = stricteq %197, %198
-      %200 = const c108
+      %200 = const c115
       branch %199, bb57, bb58
     bb57:
       %202 = load var $0.set
@@ -719,30 +824,30 @@ module {
       branch %207, bb62, bb61
     bb61:
       %209 = new_object(capacity=4)
-      %210 = const c109
-      %211 = const c113
+      %210 = const c116
+      %211 = const c121
       %212 = load var $0.$shared_env
-      %213 = load var $0.mutable
-      %214 = const c114
+      %213 = const c122
+      %214 = const c123
       %215 = set_prop %212, %214, %213
       %216 = call builtin.create_closure(%211, %212)
       %217 = new_object(capacity=4)
-      %218 = const c115
+      %218 = const c124
       %219 = set_prop %217, %218, %216
-      %220 = const c116
-      %221 = const c117
+      %220 = const c125
+      %221 = const c126
       %222 = set_prop %217, %220, %221
-      %223 = const c118
-      %224 = const c119
+      %223 = const c127
+      %224 = const c128
       %225 = set_prop %217, %223, %224
       call builtin.define_property(%209, %210, %217)
       store var $0.mutable, %209
-      %226 = const c120
+      %226 = const c129
       %227 = set_prop %212, %226, %209
       %228 = load var $0.$shared_env
-      %229 = const c121
+      %229 = const c130
       %230 = stricteq %228, %229
-      %231 = const c122
+      %231 = const c131
       branch %230, bb63, bb64
     bb62:
       %208 = call builtin.exception_value(%206)
@@ -758,12 +863,12 @@ module {
       jump bb66
     bb66:
       %235 = phi [(bb63, %233), (bb65, %234)]
-      %236 = const c123
+      %236 = const c132
       %237 = get_prop %235, %236
       %238 = load var $0.$shared_env
-      %239 = const c124
+      %239 = const c133
       %240 = stricteq %238, %239
-      %241 = const c125
+      %241 = const c134
       branch %240, bb67, bb68
     bb67:
       %243 = load var $0.mutable
@@ -782,21 +887,21 @@ module {
       branch %248, bb72, bb71
     bb71:
       %250 = new_object(capacity=4)
-      %251 = const c126
-      %252 = const c130
+      %251 = const c135
+      %252 = const c140
       %253 = load var $0.$shared_env
-      %254 = load var $0.assigned
-      %255 = const c131
+      %254 = const c141
+      %255 = const c142
       %256 = set_prop %253, %255, %254
       %257 = call builtin.create_closure(%252, %253)
       %258 = set_prop %250, %251, %257
       store var $0.assigned, %250
-      %259 = const c132
+      %259 = const c143
       %260 = set_prop %253, %259, %250
       %261 = load var $0.$shared_env
-      %262 = const c133
+      %262 = const c144
       %263 = stricteq %261, %262
-      %264 = const c134
+      %264 = const c145
       branch %263, bb73, bb74
     bb72:
       %249 = call builtin.exception_value(%247)
@@ -813,11 +918,11 @@ module {
     bb76:
       %268 = phi [(bb73, %266), (bb75, %267)]
       store var $0.assignOwner, %268
-      %269 = const c137
-      %270 = init_object_literal(c136, values=[%269])
+      %269 = const c148
+      %270 = init_object_literal(c147, values=[%269])
       store var $0.replacement, %270
       %271 = load var $0.assignOwner
-      %272 = const c138
+      %272 = const c149
       %273 = get_prop %271, %272
       %274 = load var $0.replacement
       %275 = call %273, this=%271, args=[%274]
@@ -825,9 +930,9 @@ module {
       branch %276, bb78, bb77
     bb77:
       %278 = load var $0.$shared_env
-      %279 = const c139
+      %279 = const c150
       %280 = stricteq %278, %279
-      %281 = const c140
+      %281 = const c151
       branch %280, bb79, bb80
     bb78:
       %277 = call builtin.exception_value(%275)
@@ -850,21 +955,21 @@ module {
       branch %289, bb84, bb83
     bb83:
       %291 = new_object(capacity=4)
-      %292 = const c141
-      %293 = const c149
+      %292 = const c152
+      %293 = const c163
       %294 = load var $0.$shared_env
-      %295 = load var $0.updated
-      %296 = const c150
+      %295 = const c164
+      %296 = const c165
       %297 = set_prop %294, %296, %295
       %298 = call builtin.create_closure(%293, %294)
       %299 = set_prop %291, %292, %298
       store var $0.updated, %291
-      %300 = const c151
+      %300 = const c166
       %301 = set_prop %294, %300, %291
       %302 = load var $0.$shared_env
-      %303 = const c152
+      %303 = const c167
       %304 = stricteq %302, %303
-      %305 = const c153
+      %305 = const c168
       branch %304, bb85, bb86
     bb84:
       %290 = call builtin.exception_value(%288)
@@ -882,19 +987,19 @@ module {
       %309 = phi [(bb85, %307), (bb87, %308)]
       store var $0.updateOwner, %309
       %310 = load var $0.updateOwner
-      %311 = const c154
+      %311 = const c169
       %312 = get_prop %310, %311
       %313 = call %312, this=%310
-      %314 = const c155
+      %314 = const c170
       %315 = call builtin.strict_eq(%313, %314)
       %316 = call builtin.console.log(%315)
       %317 = is_exception %316
       branch %317, bb90, bb89
     bb89:
       %319 = load var $0.$shared_env
-      %320 = const c156
+      %320 = const c171
       %321 = stricteq %319, %320
-      %322 = const c157
+      %322 = const c172
       branch %321, bb91, bb92
     bb90:
       %318 = call builtin.exception_value(%316)
@@ -910,7 +1015,7 @@ module {
       jump bb94
     bb94:
       %326 = phi [(bb91, %324), (bb93, %325)]
-      %327 = const c158
+      %327 = const c173
       %328 = call builtin.strict_eq(%326, %327)
       %329 = call builtin.console.log(%328)
       %330 = is_exception %329
