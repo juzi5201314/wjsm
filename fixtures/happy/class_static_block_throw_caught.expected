@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+caught-block: block-x
+caught-expr: expr-x
+field-first
+caught-ordered: ordered-x
+done
+--- stderr ---

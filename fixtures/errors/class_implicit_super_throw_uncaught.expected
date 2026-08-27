@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+base-before-throw
+--- stderr ---
+Runtime error: Error: implicit-super-boom
