@@ -535,8 +535,9 @@ impl Lowerer {
         this_scope_id: usize,
         members: &[swc_ast::ClassMember],
         private_members: &[PrivateMemberMeta],
+        computed_instance_keys: &std::collections::HashMap<usize, String>,
     ) -> Result<BasicBlockId, LoweringError> {
-        for member in members {
+        for (member_index, member) in members.iter().enumerate() {
             match member {
                 swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
                     let field_name =
@@ -550,12 +551,36 @@ impl Lowerer {
                     )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
-                    block = self.emit_field_init_with_key(
-                        block,
-                        this_scope_id,
-                        &prop.key,
-                        prop.value.as_deref(),
-                    )?;
+                    block = if let Some(key_name) = computed_instance_keys.get(&member_index) {
+                        // 计算键在类定义期已求值并 ToPropertyKey（求值一次），
+                        // 存于构造器闭包的 key env；此处沿 $env 链按名读取，
+                        // 不得重新求值键表达式。
+                        let env_val = self.load_env_object(block);
+                        let name_const = self.emit_string_const(block, key_name);
+                        let key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::GetProp {
+                                dest: key_dest,
+                                object: env_val,
+                                key: name_const,
+                            },
+                        );
+                        self.emit_field_init_common(
+                            block,
+                            this_scope_id,
+                            key_dest,
+                            prop.value.as_deref(),
+                            false,
+                        )?
+                    } else {
+                        self.emit_field_init_with_key(
+                            block,
+                            this_scope_id,
+                            &prop.key,
+                            prop.value.as_deref(),
+                        )?
+                    };
                 }
                 swc_ast::ClassMember::Constructor(_)
                 | swc_ast::ClassMember::Method(_)

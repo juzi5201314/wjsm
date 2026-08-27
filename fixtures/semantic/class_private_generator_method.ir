@@ -1321,9 +1321,9 @@ module {
   fn @Seq.constructor [home_object=@14.prototype] [needs_prototype] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3, $1.$private_function#1_4] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = const c223
-      %1 = load var $16.$this
-      %2 = const c224
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c224
+      %2 = load var $16.$this
+      call builtin.private_set(%2, %0, %1)
       %3 = load var $16.$this
       %4 = load var $env
       %5 = const c225
@@ -2261,8 +2261,8 @@ module {
       jump bb2
     bb63:
       %246 = const c223
-      %248 = const c224
-      call builtin.private_set(%97, %246, %248)
+      %247 = const c224
+      call builtin.private_set(%97, %246, %247)
       %251 = const c225
       %252 = get_prop %24, %251
       %253 = const c226
