@@ -945,7 +945,7 @@ fn get_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     if value::is_callable(object) {
         return state
             .callable_prototypes
-            .get(&object)
+            .get(&value::strip_gc_color(object))
             .copied()
             .unwrap_or_else(value::encode_null);
     }
@@ -990,14 +990,23 @@ fn set_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
             type_error(ctx, state, "Proxy rejected prototype mutation")
         };
     }
+    if value::is_callable(*object) {
+        // callable 无显式条目表示隐式 Function.prototype 而非 null：显式改设
+        // （含 null）必须落表，[[Get]]/[[Set]]/[[HasProperty]] 的链查找才能
+        // 按 OrdinaryGet 终止；仅当已有显式条目且与新原型一致时短路。
+        let callable = value::strip_gc_color(*object);
+        if state.callable_prototypes.get(&callable).copied() == Some(*prototype) {
+            return *object;
+        }
+        if !value::is_null(*prototype) && state.prototype_chain_contains_value(*prototype, *object)
+        {
+            return type_error(ctx, state, "Cyclic __proto__ value");
+        }
+        state.callable_prototypes.insert(callable, *prototype);
+        return *object;
+    }
     let handle = object_handle(*object);
-    let current = if value::is_callable(*object) {
-        state
-            .callable_prototypes
-            .get(object)
-            .copied()
-            .unwrap_or_else(value::encode_null)
-    } else if let Some(handle) = handle {
+    let current = if let Some(handle) = handle {
         match state.gc.heap().prototype(handle) {
             Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
             Ok(prototype) => value::encode_object_handle(prototype),
@@ -1018,10 +1027,6 @@ fn set_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     }
     if !value::is_null(*prototype) && state.prototype_chain_contains_value(*prototype, *object) {
         return type_error(ctx, state, "Cyclic __proto__ value");
-    }
-    if value::is_callable(*object) {
-        state.callable_prototypes.insert(*object, *prototype);
-        return *object;
     }
     let prototype = if value::is_null(*prototype) {
         PROTO_NULL_SENTINEL
