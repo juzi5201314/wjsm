@@ -265,11 +265,23 @@ module {
       %4 = load var $3.$this
       %5 = const c43
       %6 = get_prop %4, %5
-      %7 = load var $3.a
-      %8 = add %6, %7
-      %9 = load var $3.b
-      %10 = add %8, %9
-      return %10
+      %7 = is_exception %6
+      branch %7, bb2, bb1
+    bb1:
+      %9 = load var $3.a
+      %10 = add %6, %9
+      %11 = is_exception %10
+      branch %11, bb4, bb3
+    bb2:
+      %8 = call builtin.exception_value(%6)
+      throw %8
+    bb3:
+      %13 = load var $3.b
+      %14 = add %10, %13
+      return %14
+    bb4:
+      %12 = call builtin.exception_value(%10)
+      throw %12
 
   fn @Pair.constructor [home_object=@3.prototype] [needs_prototype] [direct_callable] [params: $5.$env, $5.$this, $5.a, $5.b] [entry=bb0]:
     bb0:
@@ -423,34 +435,46 @@ module {
       %9 = const c124
       %10 = const c125
       %8 = call builtin.abstract_compare(%6, %7, %9, %10)
-      branch %8, bb1, bb2
+      %11 = is_exception %8
+      branch %11, bb2, bb1
     bb1:
-      %11 = const c127
-      %12 = init_object_literal(c126, values=[%11])
-      return %12
+      %13 = is_exception %8
+      branch %13, bb4, bb3
     bb2:
-      %13 = load var $env
-      %14 = const c129
-      %15 = get_prop %13, %14
-      %16 = pos %15
-      %17 = is_exception %16
-      branch %17, bb4, bb3
+      %12 = call builtin.exception_value(%8)
+      throw %12
     bb3:
-      %19 = const c130
-      %20 = add %16, %19
-      %21 = set_prop %13, %14, %20
-      %22 = is_exception %21
-      branch %22, bb6, bb5
+      branch %8, bb5, bb6
     bb4:
-      %18 = call builtin.exception_value(%16)
-      throw %18
+      %14 = call builtin.exception_value(%8)
+      throw %14
     bb5:
-      %24 = const c131
-      %25 = init_object_literal(c128, values=[%16, %24])
-      return %25
+      %15 = const c127
+      %16 = init_object_literal(c126, values=[%15])
+      return %16
     bb6:
-      %23 = call builtin.exception_value(%21)
-      throw %23
+      %17 = load var $env
+      %18 = const c129
+      %19 = get_prop %17, %18
+      %20 = pos %19
+      %21 = is_exception %20
+      branch %21, bb8, bb7
+    bb7:
+      %23 = const c130
+      %24 = add %20, %23
+      %25 = set_prop %17, %18, %24
+      %26 = is_exception %25
+      branch %26, bb10, bb9
+    bb8:
+      %22 = call builtin.exception_value(%20)
+      throw %22
+    bb9:
+      %28 = const c131
+      %29 = init_object_literal(c128, values=[%20, %28])
+      return %29
+    bb10:
+      %27 = call builtin.exception_value(%25)
+      throw %27
 
   fn @$0.anonymous [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:

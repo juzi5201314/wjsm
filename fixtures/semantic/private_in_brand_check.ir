@@ -976,8 +976,8 @@ module {
       %12 = load var $52.e
       %13 = const c206
       %14 = get_prop %12, %13
-      %15 = add %11, %14
-      return %15
+      %15 = is_exception %14
+      branch %15, bb9, bb8
     bb4:
       %5 = const c203
       %6 = const c204
@@ -994,6 +994,12 @@ module {
       %9 = call builtin.exception_value(%7)
       store var $tmp.0, %9
       jump bb3
+    bb8:
+      %17 = add %11, %14
+      return %17
+    bb9:
+      %16 = call builtin.exception_value(%14)
+      throw %16
 
   fn @L.constructor [home_object=@25.prototype] [needs_prototype] [direct_callable] [params: $55.$env, $55.$this] [entry=bb0]:
     bb0:
@@ -1069,14 +1075,20 @@ module {
       %8 = load var $62.e
       %9 = const c243
       %10 = get_prop %8, %9
-      %11 = add %7, %10
-      return %11
+      %11 = is_exception %10
+      branch %11, bb7, bb6
     bb4:
       return %3
     bb5:
       %5 = call builtin.exception_value(%3)
       store var $tmp.0, %5
       jump bb3
+    bb6:
+      %13 = add %7, %10
+      return %13
+    bb7:
+      %12 = call builtin.exception_value(%10)
+      throw %12
 
   fn @anon_class_0.m [home_object=@30.prototype] [direct_callable] [params: $64.$env, $64.$this] [entry=bb0]:
     bb0:

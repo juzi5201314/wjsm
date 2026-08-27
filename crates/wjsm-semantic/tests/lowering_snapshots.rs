@@ -840,6 +840,11 @@ fn in_instanceof_exceptions_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn binary_operand_exceptions_fixture_matches_ir_snapshot() {
+    assert_snapshot("binary_operand_exceptions");
+}
+
+#[test]
 fn issue373_loop_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("issue373_loop_closure_capture");
 }

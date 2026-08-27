@@ -30,6 +30,15 @@ pub(super) fn dispatch_operator(
             let [left, right] = args else {
                 return Some(fail_dispatch(ctx));
             };
+            // async 状态机等不插表达式级分叉的上下文里，操作数求值异常以
+            // TAG_EXCEPTION 流入，按求值顺序（lval 先于 rval）原样透传，
+            // 不得当普通值比较后吞掉返回 false。
+            if value::is_exception(*left) {
+                return Some(*left);
+            }
+            if value::is_exception(*right) {
+                return Some(*right);
+            }
             match abstract_equal(ctx, state, *left, *right) {
                 Ok(equal) => value::encode_bool(equal),
                 Err(exception) => exception,
@@ -39,6 +48,13 @@ pub(super) fn dispatch_operator(
             let [left, right] = args else {
                 return Some(fail_dispatch(ctx));
             };
+            // 严格相等自身不抛，但操作数求值异常须透传（同 AbstractEq）。
+            if value::is_exception(*left) {
+                return Some(*left);
+            }
+            if value::is_exception(*right) {
+                return Some(*right);
+            }
             value::encode_bool(strict_equal(state, *left, *right))
         }
         Builtin::TypeOf => type_of(ctx, state, args),

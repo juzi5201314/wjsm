@@ -78,25 +78,29 @@ module {
       %23 = load var $0.i
       %24 = const c22
       %25 = lt %23, %24
-      branch %25, bb2, bb3
+      jump bb4
     bb2:
-      %28 = load var $0.i
-      %29 = call builtin.console.log(%28)
-      %30 = is_exception %29
-      branch %30, bb5, bb4
+      %30 = load var $0.i
+      %31 = call builtin.console.log(%30)
+      %32 = is_exception %31
+      branch %32, bb7, bb6
     bb3:
       return
     bb4:
-      %32 = load var $0.i
-      %33 = const c25
-      %34 = add %32, %33
-      store var $0.i, %34
-      jump bb6
+      branch %25, bb2, bb3
     bb5:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      unreachable
     bb6:
-      jump bb1
+      %34 = load var $0.i
+      %35 = const c25
+      %36 = add %34, %35
+      store var $0.i, %36
+      jump bb8
     bb7:
+      %33 = call builtin.exception_value(%31)
+      throw %33
+    bb8:
+      jump bb1
+    bb9:
       unreachable
 }
