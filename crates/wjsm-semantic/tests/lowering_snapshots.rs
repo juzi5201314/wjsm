@@ -840,6 +840,11 @@ fn in_instanceof_exceptions_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn primitive_setprop_strict_fixture_matches_ir_snapshot() {
+    assert_snapshot("primitive_setprop_strict");
+}
+
+#[test]
 fn issue373_loop_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("issue373_loop_closure_capture");
 }

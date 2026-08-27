@@ -286,11 +286,18 @@ pub(super) fn dispatch_runtime(
             }
             get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
         }
-        NativeRuntimeOp::SetProp => {
+        NativeRuntimeOp::SetProp | NativeRuntimeOp::SetPropStrict => {
             let [object, key, stored] = args else {
                 return fail_dispatch(ctx);
             };
-            set_property_impl(ctx, state, *object, *key, *stored)
+            set_property_impl(
+                ctx,
+                state,
+                *object,
+                *key,
+                *stored,
+                operation == NativeRuntimeOp::SetPropStrict,
+            )
         }
         NativeRuntimeOp::CreateDataProperty => {
             let [object, key, stored] = args else {
@@ -313,11 +320,12 @@ pub(super) fn dispatch_runtime(
                 Err(exception) => exception,
             }
         }
-        NativeRuntimeOp::SetPropIc => {
+        NativeRuntimeOp::SetPropIc | NativeRuntimeOp::SetPropIcStrict => {
             let [object, key, stored, ic_slot_ptr] = args else {
                 return fail_dispatch(ctx);
             };
-            let result = set_property_impl(ctx, state, *object, *key, *stored);
+            let strict = operation == NativeRuntimeOp::SetPropIcStrict;
+            let result = set_property_impl(ctx, state, *object, *key, *stored, strict);
             backfill_set_prop_ic(state, *object, *key, result, *ic_slot_ptr);
             result
         }
@@ -411,10 +419,22 @@ pub(super) fn dispatch_runtime(
             }
             get_property(ctx, state, *object, *index).unwrap_or_else(|()| fail_dispatch(ctx))
         }
-        NativeRuntimeOp::SetElem => {
+        NativeRuntimeOp::SetElem | NativeRuntimeOp::SetElemStrict => {
             let [object, index, stored] = args else {
                 return fail_dispatch(ctx);
             };
+            // 基元接收者先行短路：decode_handle 对 SSO/基元产出无效句柄，
+            // 后续 typed_arrays 等按句柄查表的分支不得先于本判定执行。
+            if let Some(result) = set_on_primitive_receiver(
+                ctx,
+                state,
+                *object,
+                *index,
+                *stored,
+                operation == NativeRuntimeOp::SetElemStrict,
+            ) {
+                return result;
+            }
             if value::is_proxy(*object) {
                 return super::proxy::set(ctx, state, *object, *index, *stored, *object);
             }
@@ -779,15 +799,20 @@ pub(super) fn binary_add(
     }
 }
 
-/// 完整 [[Set]] 语义：proxy / 数组 length / regexp lastIndex / 数组命名属性 /
-/// callable 命名属性 / 普通对象 `ordinary_set`。返回写入后的值或异常。
+/// 完整 [[Set]] 语义：基元接收者 / proxy / 数组 length / regexp lastIndex /
+/// 数组命名属性 / callable 命名属性 / 普通对象 `ordinary_set`。
+/// 返回写入后的值或异常。`strict` 来自赋值点所在代码的严格模式。
 fn set_property_impl(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,
     key: i64,
     stored: i64,
+    strict: bool,
 ) -> i64 {
+    if let Some(result) = set_on_primitive_receiver(ctx, state, object, key, stored, strict) {
+        return result;
+    }
     if value::is_proxy(object) {
         return super::proxy::set(ctx, state, object, key, stored, object);
     }
@@ -848,6 +873,71 @@ fn set_property_impl(
         Ok(_) => stored,
         Err(exception) => exception,
     }
+}
+
+/// PutValue 对基元 base 的 [[Set]] 终局（OrdinarySetWithOwnDescriptor 步骤
+/// 3.d.iv：Receiver 非对象时数据属性写入必然失败）：
+/// - null / undefined base：ToObject 直接抛 TypeError（与 strict 无关）；
+/// - 其余基元（string / number / boolean / symbol / bigint）：sloppy 返回
+///   stored（静默 no-op），strict 抛 TypeError。字符串奇异对象的 in-range
+///   下标与 length 是自有不可写数据属性，错误措辞区分 read only 与 create。
+///
+/// 返回 `None` 表示接收者不是基元，调用方继续走对象路径。
+///
+/// 当前引擎的基元原型链只暴露内建方法（`primitive_property`），用户对
+/// String.prototype 等的扩展在 [[Get]] 路径同样不可见，因此这里不存在可
+/// 命中的用户 accessor setter；若未来打通用户可扩展基元原型，Get/Set 两侧
+/// 需一并补上原型链 accessor 查找。
+fn set_on_primitive_receiver(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    stored: i64,
+    strict: bool,
+) -> Option<i64> {
+    if value::is_null(object) || value::is_undefined(object) {
+        let base = if value::is_null(object) {
+            "null"
+        } else {
+            "undefined"
+        };
+        let message = format!(
+            "Cannot set properties of {base} (setting '{}')",
+            render_value(state, key)
+        );
+        return Some(type_error(ctx, state, &message));
+    }
+    let type_name = if value::is_string(object) {
+        "string"
+    } else if value::is_f64(object) {
+        "number"
+    } else if value::is_bool(object) {
+        "boolean"
+    } else if value::is_symbol(object) {
+        "symbol"
+    } else if value::is_bigint(object) {
+        "bigint"
+    } else {
+        return None;
+    };
+    if !strict {
+        return Some(stored);
+    }
+    let key_text = render_value(state, key);
+    let rendered = render_value(state, object);
+    // 字符串自有 in-range 下标 / length 是不可写数据属性；其余键在基元
+    // 接收者上创建数据属性必然失败（Receiver 非对象）。
+    let own_readonly = value::is_string(object)
+        && (state.text_matches(key, "length")
+            || array_index(state, key)
+                .is_some_and(|index| (index as usize) < state.string_len(object).unwrap_or(0)));
+    let message = if own_readonly {
+        format!("Cannot assign to read only property '{key_text}' of string '{rendered}'")
+    } else {
+        format!("Cannot create property '{key_text}' on {type_name} '{rendered}'")
+    };
+    Some(type_error(ctx, state, &message))
 }
 
 /// 写满整个 32 字节 IC 槽；未用字段清零，防止残留旧值参与后续比较。
@@ -1165,7 +1255,11 @@ fn ordinary_set_key(
             stored,
         );
     }
-    let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
+    // OrdinarySetWithOwnDescriptor 步骤 3.d.iv：Receiver 非对象（如
+    // Reflect.set 显式传入基元 receiver）时数据属性写入返回 false。
+    let Some(receiver_handle) = object_handle(receiver) else {
+        return Ok(false);
+    };
     if let Some(receiver_descriptor) = state
         .gc
         .heap()

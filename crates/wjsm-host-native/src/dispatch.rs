@@ -336,10 +336,12 @@ pub(super) unsafe extern "C" fn native_host_operation(
         matches!(
             operation,
             NativeRuntimeOp::SetProp
+                | NativeRuntimeOp::SetPropStrict
                 | NativeRuntimeOp::CreateDataProperty
                 | NativeRuntimeOp::DeleteProp
                 | NativeRuntimeOp::SetProto
                 | NativeRuntimeOp::SetPropIc
+                | NativeRuntimeOp::SetPropIcStrict
         )
     }) {
         state.bump_ic_epoch(ctx.current_image_id);

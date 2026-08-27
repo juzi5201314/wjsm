@@ -483,6 +483,7 @@ mod tests {
             object: ValueId(12),
             index: ValueId(0),
             value: ValueId(11),
+            strict: false,
         });
         entry.push_instruction(Instruction::SetProto {
             object: ValueId(12),
@@ -1181,6 +1182,10 @@ pub enum Instruction {
         object: ValueId,
         key: ValueId,
         value: ValueId,
+        /// 该赋值点是否处于严格模式代码：基元接收者上写入失败时
+        /// strict 抛 TypeError，sloppy 静默 no-op（PutValue 步骤 6.c）。
+        #[serde(default)]
+        strict: bool,
     },
     /// 以 own data property 语义创建对象属性，不触发原型链 setter。
     /// 成功时返回 object，失败时返回 TAG_EXCEPTION。
@@ -1230,6 +1235,9 @@ pub enum Instruction {
         object: ValueId,
         index: ValueId,
         value: ValueId,
+        /// 与 [`Instruction::SetProp`] 的 `strict` 含义一致。
+        #[serde(default)]
+        strict: bool,
     },
     /// 可选链属性访问：object?.key，object 为 null/undefined 时返回 undefined
     OptionalGetProp {
@@ -1486,8 +1494,13 @@ impl fmt::Display for Instruction {
                 object,
                 key,
                 value,
+                strict,
             } => {
-                write!(formatter, "{dest} = set_prop {object}, {key}, {value}")
+                write!(formatter, "{dest} = set_prop {object}, {key}, {value}")?;
+                if *strict {
+                    formatter.write_str(", strict")?;
+                }
+                Ok(())
             }
             Self::CreateDataProperty {
                 dest,
@@ -1542,8 +1555,13 @@ impl fmt::Display for Instruction {
                 object,
                 index,
                 value,
+                strict,
             } => {
-                write!(formatter, "{dest} = set_elem {object}, {index}, {value}")
+                write!(formatter, "{dest} = set_elem {object}, {index}, {value}")?;
+                if *strict {
+                    formatter.write_str(", strict")?;
+                }
+                Ok(())
             }
             Self::OptionalGetProp { dest, object, key } => {
                 write!(formatter, "{dest} = optional_get_prop {object}, {key}")
@@ -1768,6 +1786,7 @@ impl Instruction {
                 object,
                 key,
                 value,
+                ..
             } => {
                 *dest = f(*dest);
                 *object = f(*object);
@@ -1808,6 +1827,7 @@ impl Instruction {
                 object,
                 index,
                 value,
+                ..
             } => {
                 *dest = f(*dest);
                 *object = f(*object);

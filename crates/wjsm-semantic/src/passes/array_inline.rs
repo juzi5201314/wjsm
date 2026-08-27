@@ -563,6 +563,7 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
                     object: fast_result.expect("map 有 result"),
                     index: loop_index,
                     value: call_result,
+                    strict: false,
                 });
                 Terminator::Jump { target: next }
             }

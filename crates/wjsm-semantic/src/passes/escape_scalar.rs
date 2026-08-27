@@ -288,6 +288,7 @@ fn analyze_candidate(
                     object,
                     key,
                     value,
+                    ..
                 } if family.contains(object) => {
                     let Some(key_name) = const_strings.get(key) else {
                         escapes = true;
@@ -801,6 +802,7 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
             object,
             key,
             value,
+            ..
         }
         | Instruction::CreateDataProperty {
             dest,
@@ -879,6 +881,7 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
             object,
             index,
             value,
+            ..
         } => {
             if let Some(new) = replacements.get(dest) {
                 *dest = *new;

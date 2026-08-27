@@ -2871,7 +2871,15 @@ fn lower_set_prop_with_template_or_ic(
     object: ValueId,
     key: ValueId,
     value: ValueId,
+    strict: bool,
 ) -> Result<()> {
+    // strict 位只改变宿主 miss 路径的失败行为（基元接收者 TypeError vs no-op）；
+    // CLIF 快路径仅命中真实对象自有数据属性，与 strict 无关。
+    let set_prop_op = if strict {
+        NativeRuntimeOp::SetPropStrict
+    } else {
+        NativeRuntimeOp::SetProp
+    };
     let template_inline = tables.template_origins.get(&object).and_then(|site| {
         template_property_index_for_key(tables.constants, tables.constant_defs, site.template, key)
             .map(|prop_index| (site.meta_index, prop_index))
@@ -2892,12 +2900,7 @@ fn lower_set_prop_with_template_or_ic(
         )?;
         cx.builder.switch_to_block(fallback_block);
         cx.builder.seal_block(fallback_block);
-        lower_value_operation(
-            cx,
-            NativeRuntimeOp::SetProp,
-            &[object, key, value],
-            Some(dest),
-        )?;
+        lower_value_operation(cx, set_prop_op, &[object, key, value], Some(dest))?;
         cx.builder.ins().jump(merge_block, &[]);
         cx.builder.switch_to_block(merge_block);
         cx.builder.seal_block(merge_block);
@@ -2909,14 +2912,10 @@ fn lower_set_prop_with_template_or_ic(
             barrier_thunks,
             prop_access(tables, dest, object, key, slot),
             value,
+            strict,
         )
     } else {
-        lower_value_operation(
-            cx,
-            NativeRuntimeOp::SetProp,
-            &[object, key, value],
-            Some(dest),
-        )
+        lower_value_operation(cx, set_prop_op, &[object, key, value], Some(dest))
     }
 }
 
@@ -3774,6 +3773,7 @@ fn lower_instruction(
             object,
             key,
             value,
+            strict,
         } => lower_set_prop_with_template_or_ic(
             cx,
             tables,
@@ -3782,6 +3782,7 @@ fn lower_instruction(
             *object,
             *key,
             *value,
+            *strict,
         ),
         Instruction::CreateDataProperty {
             dest,
@@ -3869,7 +3870,16 @@ fn lower_instruction(
             object,
             index,
             value,
-        } => lower_set_elem(cx, tables.barrier_thunks, *dest, *object, *index, *value),
+            strict,
+        } => lower_set_elem(
+            cx,
+            tables.barrier_thunks,
+            *dest,
+            *object,
+            *index,
+            *value,
+            *strict,
+        ),
         Instruction::OptionalGetProp { dest, object, key } => {
             if let Some(slot) = tables.ic_slots.get(dest).copied() {
                 lower_optional_get_prop_ic(
@@ -5709,6 +5719,7 @@ fn lower_set_elem(
     object: ValueId,
     index: ValueId,
     stored: ValueId,
+    strict: bool,
 ) -> Result<()> {
     let object_val = use_value_boxed(cx.builder, cx.variables, object)?;
     let encoded_index = use_value_boxed(cx.builder, cx.variables, index)?;
@@ -5753,11 +5764,12 @@ fn lower_set_elem(
 
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
-    let result = cx.call(
-        NativeRuntimeOp::SetElem.id(),
-        &[object_val, encoded_index, stored_val],
-        None,
-    )?;
+    let set_elem_op = if strict {
+        NativeRuntimeOp::SetElemStrict
+    } else {
+        NativeRuntimeOp::SetElem
+    };
+    let result = cx.call(set_elem_op.id(), &[object_val, encoded_index, stored_val], None)?;
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
@@ -7953,6 +7965,7 @@ fn lower_set_prop_ic(
     barrier_thunks: &BarrierThunks,
     access: PropAccess,
     value: ValueId,
+    strict: bool,
 ) -> Result<()> {
     let PropAccess {
         dest,
@@ -8271,11 +8284,12 @@ fn lower_set_prop_ic(
     // miss：宿主完整 [[Set]] + IC 回填；`ic_ptr` 作为回填目标传入。
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
-    let result = cx.call(
-        NativeRuntimeOp::SetPropIc.id(),
-        &[obj, key_value, stored, ic_ptr],
-        None,
-    )?;
+    let set_prop_ic_op = if strict {
+        NativeRuntimeOp::SetPropIcStrict
+    } else {
+        NativeRuntimeOp::SetPropIc
+    };
+    let result = cx.call(set_prop_ic_op.id(), &[obj, key_value, stored, ic_ptr], None)?;
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 

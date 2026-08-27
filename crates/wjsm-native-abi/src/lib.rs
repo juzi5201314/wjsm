@@ -476,6 +476,13 @@ pub enum NativeRuntimeOp {
     DebugCheck = 0x1_0703,
     /// overlay 类型 miss：args 为 function_id、block_id、env、this、live_count。
     DeoptToGeneric = 0x1_0704,
+    /// 严格模式代码里的 [[Set]]：与 [`Self::SetProp`] 同参，
+    /// 基元接收者上写入失败抛 TypeError 而非静默 no-op。
+    SetPropStrict = 0x1_0515,
+    /// 严格模式代码里的按索引 [[Set]]：与 [`Self::SetElem`] 同参。
+    SetElemStrict = 0x1_0516,
+    /// 严格模式代码里的带 IC 回填 [[Set]]：与 [`Self::SetPropIc`] 同参。
+    SetPropIcStrict = 0x1_0517,
 }
 
 impl NativeRuntimeOp {
@@ -529,6 +536,9 @@ impl NativeRuntimeOp {
             0x1_0512 => Some(Self::InitPromise),
             0x1_0513 => Some(Self::InitObjectLiteral),
             0x1_0514 => Some(Self::ElemShapeGuard),
+            0x1_0515 => Some(Self::SetPropStrict),
+            0x1_0516 => Some(Self::SetElemStrict),
+            0x1_0517 => Some(Self::SetPropIcStrict),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),

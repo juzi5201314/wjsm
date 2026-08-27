@@ -502,12 +502,14 @@ fn encode_instruction(
             object,
             key,
             value,
+            strict,
         } => {
             encoder.u16(14);
             value_id(encoder, *dest);
             value_id(encoder, *object);
             value_id(encoder, *key);
             value_id(encoder, *value);
+            encoder.u16(u16::from(*strict));
         }
         Instruction::DeleteProp { dest, object, key } => {
             encoder.u16(15);
@@ -540,12 +542,14 @@ fn encode_instruction(
             object,
             index,
             value,
+            strict,
         } => {
             encoder.u16(19);
             value_id(encoder, *dest);
             value_id(encoder, *object);
             value_id(encoder, *index);
             value_id(encoder, *value);
+            encoder.u16(u16::from(*strict));
         }
         Instruction::OptionalGetProp { dest, object, key } => {
             encoder.u16(20);
@@ -801,6 +805,7 @@ fn decode_instruction(
             object: next_value(decoder)?,
             key: next_value(decoder)?,
             value: next_value(decoder)?,
+            strict: decoder.u16()? != 0,
         }),
         15 => {
             let (dest, object, key) = decode_three(decoder)?;
@@ -827,6 +832,7 @@ fn decode_instruction(
             object: next_value(decoder)?,
             index: next_value(decoder)?,
             value: next_value(decoder)?,
+            strict: decoder.u16()? != 0,
         }),
         20 => {
             let (dest, object, key) = decode_three(decoder)?;
