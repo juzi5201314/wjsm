@@ -1,0 +1,28 @@
+exit_code: 0
+--- stdout ---
+sync-arg Error | sync-arg
+log-arg Error | log-arg
+bare rejected Error | bare-arg
+math-max Error | math-max
+json-stringify Error | json-stringify
+from-char-code Error | from-char-code
+object-keys Error | object-keys
+array-includes Error | array-includes
+parse-int Error | parse-int
+boolean Error | boolean
+order Error | order
+order ran: true
+chain Error | chain
+eq Error | eq
+seq Error | seq
+add Error | add
+await-operand Error | await-operand
+gen first: 1
+gen-next-arg Error | gen-next-arg
+agen first: 1 false
+agen-yield rejected Error | agen-yield
+agen done: undefined true
+agen-return rejected Error | agen-return
+plain ok: 2 [1]
+main done
+--- stderr ---

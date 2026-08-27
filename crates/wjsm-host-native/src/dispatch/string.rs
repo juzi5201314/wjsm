@@ -387,6 +387,14 @@ pub(super) fn string_builder_append(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
+    // 累加器/片段在 async 状态机等未分叉上下文可能是 TAG_EXCEPTION：按求值
+    // 顺序（累加器先于片段）透传，不得渲染进字符串或 fail_dispatch。本函数
+    // 同时服务 dispatch 与 backend 直连 thunk，两条路径共享此检查。
+    for &argument in args {
+        if value::is_exception(argument) {
+            return argument;
+        }
+    }
     let Some((current, rest)) = args.split_first() else {
         return fail_dispatch(ctx);
     };
@@ -443,6 +451,11 @@ pub(super) fn string_builder_finish(
     let [encoded] = args else {
         return fail_dispatch(ctx);
     };
+    // 累加器可能已被上游 append 透传成 TAG_EXCEPTION（backend 直连 thunk
+    // 不经 dispatch 入口检查），原样透传给调用点的 is_exception 检查。
+    if value::is_exception(*encoded) {
+        return *encoded;
+    }
     if value::is_inline_string(*encoded) {
         return *encoded;
     }
