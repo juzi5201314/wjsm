@@ -830,6 +830,11 @@ fn class_private_async_method_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn private_in_brand_check_fixture_matches_ir_snapshot() {
+    assert_snapshot("private_in_brand_check");
+}
+
+#[test]
 fn issue373_loop_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("issue373_loop_closure_capture");
 }
