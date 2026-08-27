@@ -426,12 +426,68 @@ pub(super) unsafe extern "C" fn native_rejected_construct(
     rejected_call_error(ctx, state, callee, true)
 }
 
+/// 实参合法携带 `TAG_EXCEPTION` 的 builtin：不参与入口处的实参哨兵透传。
+///
+/// - `ExceptionValue`：本职就是解包异常哨兵。
+/// - `IteratorClose`：completion 实参本身是 abrupt completion 载体（ES
+///   IteratorClose 的 completion 转发语义在 handler 内实现）。
+/// - `ContinuationSaveVar`：状态机持久化，跨挂起点保存的局部值必须保真
+///  （含哨兵），透传会静默丢失保存。
+/// - `AsyncGeneratorReturn` / `AsyncGeneratorThrow`：机器角色以 completion
+///   载荷调用，用户角色与机器角色的哨兵处理在 handler 内按角色区分。
+/// - `In`：实参序（object, key）与求值序（key 先于 object，ES §13.10.1）
+///   相反，handler 内已按求值序透传。
+/// - `PromiseResolveStatic`：await 机器用它包装被等待值，resolve_into 把
+///   哨兵转为 rejected promise，resume 后路由到状态机本地 catch——透传会
+///   跳过该转换、把本地可捕获的异常降级成外层 rejection。
+/// - `GetPrototypeFromConstructor`：new 协议机器，结果直接喂给 set_proto，
+///   消费方无法处理哨兵（维持非对象回落 null 的现状）。
+/// - `ArrayPush`：spread 调用实参收集机器，透传会丢元素破坏位置完整性
+///  （backend 内联快路径亦直存）。
+/// - `Eval*Binding` / `EvalSuperBase` / `ScopeRecord*`：eval 作用域机器，
+///   绑定值保真读写，abrupt completion 由 eval completion 线程化负责。
+fn builtin_accepts_exception_arguments(builtin: Builtin) -> bool {
+    matches!(
+        builtin,
+        Builtin::ExceptionValue
+            | Builtin::IteratorClose
+            | Builtin::ContinuationSaveVar
+            | Builtin::AsyncGeneratorReturn
+            | Builtin::AsyncGeneratorThrow
+            | Builtin::In
+            | Builtin::PromiseResolveStatic
+            | Builtin::GetPrototypeFromConstructor
+            | Builtin::ArrayPush
+            | Builtin::EvalGetBinding
+            | Builtin::EvalSetBinding
+            | Builtin::EvalHasBinding
+            | Builtin::EvalSuperBase
+            | Builtin::ScopeRecordCreate
+            | Builtin::ScopeRecordAddBinding
+            | Builtin::ScopeRecordSetMeta
+            | Builtin::ScopeRecordDestroy
+    )
+}
+
 pub(super) fn dispatch_builtin(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     builtin: Builtin,
     args: &[i64],
 ) -> i64 {
+    // async / async generator 状态机体内不插表达式级异常分叉（见语义层
+    // `expr_exception_fork_allowed`），实参求值异常以 TAG_EXCEPTION 哨兵直接
+    // 流入消费型宿主 builtin。按 ES ArgumentListEvaluation 的 `? GetValue`
+    // 语义，在 dispatch 入口按求值顺序（实参序）透传第一个哨兵，调用点已有
+    // 的 is_exception 检查随后把它路由到本地 catch 或 promise rejection——
+    // 哨兵不得被 render/转换/比较当普通值吞掉。
+    if !builtin_accepts_exception_arguments(builtin) {
+        for &argument in args {
+            if value::is_exception(argument) {
+                return argument;
+            }
+        }
+    }
     // 跳表：`wire_id()` 是连续判别值，编译器把下面的 match 编译为跳表 / 二分。
     // 每个 builtin 变体在此统一注册到领域 handler；handler 未认领（`None`）
     // 时落入 `fail_dispatch`（历史上不可达的 IR builtin）。

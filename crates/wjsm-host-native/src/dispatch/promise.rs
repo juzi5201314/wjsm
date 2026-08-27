@@ -1441,6 +1441,13 @@ fn run_async_resume(
         .invoke_callable_with_environment(ctx, entry.function, continuation, resume_value, &[])
         .unwrap_or_else(|| fail_dispatch(ctx));
     if value::is_exception(result) {
+        // async generator 续延没有单一 outer promise：机器返回的异常按
+        // AsyncGeneratorBody 抛出语义拒绝活动请求并完成 generator，异常已
+        // 被消费，不得再漏回微任务循环成为顶层错误。
+        if super::async_generator::reject_active_for_continuation(ctx, state, continuation, result)
+        {
+            return value::encode_undefined();
+        }
         settle_promise(
             state,
             value::decode_handle(entry.outer_promise),

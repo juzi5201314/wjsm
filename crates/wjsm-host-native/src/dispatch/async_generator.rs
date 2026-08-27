@@ -312,8 +312,20 @@ fn request_or_return(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     };
     let supplied = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     if is_internal(state, generator) {
+        // 机器角色：async generator 体内不插表达式级异常分叉，`return <expr>`
+        // 的操作数求值异常以 TAG_EXCEPTION 流入。按 AsyncGeneratorBody 抛出
+        // 语义拒绝当前请求并完成 generator，不得把哨兵包成 iterator result。
+        if value::is_exception(supplied) {
+            reject_active(ctx, state, generator, supplied);
+            return value::encode_undefined();
+        }
         complete(ctx, state, generator, supplied, false)
     } else {
+        // 用户角色：`.return(arg)` 实参求值异常先于方法语义传播（ES
+        // ArgumentListEvaluation 的 `? GetValue`），原样透传给调用点检查。
+        if value::is_exception(supplied) {
+            return supplied;
+        }
         enqueue(
             ctx,
             state,
@@ -334,8 +346,15 @@ fn request_or_throw(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     };
     let supplied = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     if is_internal(state, generator) {
+        // 机器角色：completion 载荷可能是 TAG_EXCEPTION（`throw <expr>` 的
+        // 操作数在 async generator 体内未分叉），settle_promise 会解包哨兵
+        // 后按 rejection 结算，这里直接走 complete。
         complete(ctx, state, generator, supplied, true)
     } else {
+        // 用户角色：`.throw(arg)` 实参求值异常先于方法语义传播，原样透传。
+        if value::is_exception(supplied) {
+            return supplied;
+        }
         enqueue(
             ctx,
             state,
@@ -541,6 +560,27 @@ fn complete(
     generator_state.resume_promise = None;
     drain_completed(ctx, state, generator);
     value::encode_undefined()
+}
+
+/// resume 微任务驱动的状态机返回异常哨兵时，把它路由给对应 async generator
+/// 的活动请求（与首启驱动 `process_start` 的 is_exception 分支一致），避免
+/// 异常漏到微任务循环成为顶层错误。返回是否找到了该续延对应的 generator。
+pub(super) fn reject_active_for_continuation(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    continuation: i64,
+    reason: i64,
+) -> bool {
+    let Some(generator) = state
+        .async_generators
+        .iter()
+        .find(|(_, record)| record.continuation == continuation)
+        .map(|(generator, _)| *generator)
+    else {
+        return false;
+    };
+    reject_active(ctx, state, generator, reason);
+    true
 }
 
 fn reject_active(
