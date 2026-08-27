@@ -353,7 +353,8 @@ impl Lowerer {
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 // 步骤 4：RHS 求值异常传播，不得被吞掉返回 false。
                 if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
-                    current_block = self.lower_value_exception_branch(current_block, constructor)?;
+                    current_block =
+                        self.lower_value_exception_branch(current_block, constructor)?;
                 }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(

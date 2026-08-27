@@ -22,6 +22,9 @@ instRhsRan: false
 inst-arrow TypeError | Function has non-object prototype 'undefined' in instanceof check
 inst-bad-proto TypeError | Function has non-object prototype '5' in instanceof check
 inst-re-proto ok: false
+inst-bound-neg ok: false
+inst-bound-pos ok: true
+inst-bound-bound ok: true
 in-proxy-trap-throw RangeError | trap-boom
 inst-hasinstance-throw RangeError | hi-boom
 in-ok ok: true

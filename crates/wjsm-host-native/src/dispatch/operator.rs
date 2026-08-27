@@ -16,7 +16,7 @@ use super::runtime::{
     abstract_equal, fail_dispatch, get_property, has_property, is_truthy, reference_error,
     render_value, strict_equal, to_number, to_primitive, type_error,
 };
-use crate::NativeAgentState;
+use crate::{NativeAgentState, NativeCallableKind};
 
 pub(super) fn dispatch_operator(
     ctx: &mut NativeVmContext,
@@ -183,7 +183,9 @@ fn op_in(ctx: &mut NativeVmContext, state: &mut NativeAgentState, object: i64, k
         return type_error(
             ctx,
             state,
-            &format!("Cannot use 'in' operator to search for '{rendered_key}' in {rendered_object}"),
+            &format!(
+                "Cannot use 'in' operator to search for '{rendered_key}' in {rendered_object}"
+            ),
         );
     }
     if value::is_proxy(object) {
@@ -206,7 +208,11 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         return *constructor;
     }
     if !(value::is_js_object(*constructor) || value::is_regexp(*constructor)) {
-        return type_error(ctx, state, "Right-hand side of 'instanceof' is not an object");
+        return type_error(
+            ctx,
+            state,
+            "Right-hand side of 'instanceof' is not an object",
+        );
     }
     let has_instance_key = value::encode_handle(value::TAG_SYMBOL, wk_symbol::HAS_INSTANCE);
     let method = match get_property(ctx, state, *constructor, has_instance_key) {
@@ -230,7 +236,26 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         return value::encode_bool(is_truthy(state, result));
     }
     if !state.is_callable_value(*constructor) {
-        return type_error(ctx, state, "Right-hand side of 'instanceof' is not callable");
+        return type_error(
+            ctx,
+            state,
+            "Right-hand side of 'instanceof' is not callable",
+        );
+    }
+    // OrdinaryHasInstance 步骤 2：bound function（Function.prototype.bind 产物，
+    // 表示为 NativeCallableKind::Bound）委托 [[BoundTargetFunction]] 重新走
+    // InstanceofOperator（含目标自身的 @@hasInstance 查找），而不是读 bound
+    // 包装（无 prototype 属性）误抛 TypeError。
+    if let Some(NativeCallableKind::Bound(index)) = state.native_callable_kind(*constructor) {
+        let Some(target) = state
+            .bound_functions
+            .get(index as usize)
+            .and_then(|bound| bound.as_ref())
+            .map(|bound| bound.target)
+        else {
+            return fail_dispatch(ctx);
+        };
+        return instance_of(ctx, state, &[*object, target]);
     }
     let Some(prototype_key) = state.intern_text("prototype".into(), value::TAG_STRING) else {
         return fail_dispatch(ctx);
