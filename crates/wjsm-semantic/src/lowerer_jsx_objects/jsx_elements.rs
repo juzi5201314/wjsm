@@ -14,8 +14,8 @@ impl Lowerer {
         let mut current = block;
         let props_val = self.lower_jsx_attrs(&jsx_el.opening.attrs, &mut current)?;
 
-        // 降低 children（作为数组）
-        let children_val = self.lower_jsx_children(&jsx_el.children, current)?;
+        // 降低 children（作为数组）；嵌套子元素同样可能分叉推进 block
+        let children_val = self.lower_jsx_children(&jsx_el.children, &mut current)?;
 
         // 调用 jsx_create_element(tag, props, children)
         let dest = self.alloc_value();
@@ -61,19 +61,23 @@ impl Lowerer {
             },
         );
 
-        // 收集 children
-        let children_val = self.lower_jsx_children(&jsx_frag.children, block)?;
+        // 收集 children；嵌套子元素的异常分叉可能推进 block
+        let mut current = block;
+        let children_val = self.lower_jsx_children(&jsx_frag.children, &mut current)?;
 
         // 调用 jsx_create_element(tag, null, children)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin: Builtin::JsxCreateElement,
                 args: vec![tag_val, props_val, children_val],
             },
         );
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
         Ok(dest)
     }
 
@@ -304,14 +308,14 @@ impl Lowerer {
     pub(crate) fn lower_jsx_children(
         &mut self,
         children: &[swc_ast::JSXElementChild],
-        block: BasicBlockId,
+        block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         if children.is_empty() {
             // 无 children → null
             let null_const = self.module.add_constant(Constant::Null);
             let null_val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::Const {
                     dest: null_val,
                     constant: null_const,
@@ -323,13 +327,14 @@ impl Lowerer {
         // 创建 children 数组
         let arr = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            *block,
             Instruction::NewArray {
                 dest: arr,
                 capacity: children.len() as u32,
             },
         );
 
+        // 子表达式/嵌套元素求值可能分叉推进 block，push 必须落在推进后的块上
         for child in children {
             let child_val = match child {
                 swc_ast::JSXElementChild::JSXText(text) => {
@@ -342,7 +347,7 @@ impl Lowerer {
                         .add_constant(Constant::String(trimmed.to_string()));
                     let val = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        *block,
                         Instruction::Const {
                             dest: val,
                             constant: str_const,
@@ -352,18 +357,26 @@ impl Lowerer {
                 }
                 swc_ast::JSXElementChild::JSXExprContainer(expr_container) => {
                     match &expr_container.expr {
-                        swc_ast::JSXExpr::Expr(expr) => self.lower_expr(expr, block)?,
+                        swc_ast::JSXExpr::Expr(expr) => {
+                            self.lower_expr_then_continue(expr, block)?
+                        }
                         swc_ast::JSXExpr::JSXEmptyExpr(_) => continue,
                     }
                 }
-                swc_ast::JSXElementChild::JSXElement(el) => self.lower_jsx_element(el, block)?,
+                swc_ast::JSXElementChild::JSXElement(el) => {
+                    let val = self.lower_jsx_element(el, *block)?;
+                    *block = self.resolve_store_block(*block);
+                    val
+                }
                 swc_ast::JSXElementChild::JSXFragment(frag) => {
-                    self.lower_jsx_fragment(frag, block)?
+                    let val = self.lower_jsx_fragment(frag, *block)?;
+                    *block = self.resolve_store_block(*block);
+                    val
                 }
                 _ => continue,
             };
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::CallBuiltin {
                     dest: None,
                     builtin: Builtin::ArrayPush,
