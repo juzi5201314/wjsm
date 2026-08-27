@@ -283,6 +283,47 @@ impl Lowerer {
         self.rest_args_source_override = Some(rest_from_cont);
     }
 
+    /// 在 async 函数族 body/wrapper 的函数上下文内应用方法 super 绑定：
+    /// 方法体内 super 合法；类方法额外继承静态 home object，使嵌套箭头函数
+    /// 沿词法链取得同一 [[HomeObject]]。
+    pub(crate) fn apply_method_super_binding(&mut self, binding: MethodSuperBinding) {
+        match binding {
+            MethodSuperBinding::None => {}
+            MethodSuperBinding::Static(home) => {
+                self.super_allowed = true;
+                self.lexical_home_object = Some(home);
+            }
+            MethodSuperBinding::ClosureEnv => {
+                self.super_allowed = true;
+            }
+        }
+    }
+
+    /// wrapper 侧：把方法闭包 env 上的 `home` 绑定转存为续体对象的自有属性。
+    /// body 的 activation env 是续体对象，运行时 GetSuperBase 的回退路径按
+    /// activation env 的自有 `home` 属性解析 super base。
+    pub(crate) fn emit_wrapper_home_transfer(&mut self, block: BasicBlockId, cont_val: ValueId) {
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: env_val,
+                name: "$env".to_string(),
+            },
+        );
+        let home_key = self.emit_string_const(block, "home");
+        let home_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest: home_val,
+                object: env_val,
+                key: home_key,
+            },
+        );
+        self.emit_set_prop(block, cont_val, home_key, home_val);
+    }
+
     /// wrapper 侧：把调用时的原始 `this` 保存到续体固定槽位。
     /// async 函数族 body 的 `$this` 形参被 resume 值复用，原始 `this` 必须经槽位传递。
     pub(crate) fn emit_wrapper_this_slot_save(

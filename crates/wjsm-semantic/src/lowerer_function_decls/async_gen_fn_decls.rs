@@ -6,7 +6,8 @@ impl Lowerer {
         fn_decl: &swc_ast::FnDecl,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let (wrapper_fn_id, captured) = self.lower_async_gen_function(fn_decl)?;
+        let (wrapper_fn_id, captured) =
+            self.lower_async_gen_function(fn_decl, MethodSuperBinding::None)?;
         self.store_wrapper_in_outer_scope(
             flow,
             fn_decl.ident.sym.as_ref(),
@@ -18,9 +19,11 @@ impl Lowerer {
 
     /// 构建 async generator 的 body + wrapper 两个 IR 函数，返回 wrapper 的
     /// FunctionId 与捕获集合；由声明 / 表达式 / 方法路径共享。
+    /// `method_super` 描述方法形态下 body 内 super 的绑定来源（见类型注释）。
     pub(crate) fn lower_async_gen_function(
         &mut self,
         fn_decl: &swc_ast::FnDecl,
+        method_super: MethodSuperBinding,
     ) -> Result<(FunctionId, Vec<CapturedBinding>), LoweringError> {
         let name = fn_decl.ident.sym.to_string();
         let async_gen_name = format!("{name}$asyncgen");
@@ -31,6 +34,7 @@ impl Lowerer {
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
+        self.apply_method_super_binding(method_super);
 
         let (
             env_scope_id,
@@ -342,6 +346,10 @@ impl Lowerer {
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        // 类方法：body 经续体 resume 调用，activation home 只能来自函数元数据。
+        if let MethodSuperBinding::Static(home) = method_super {
+            ir_function.home_object = Some(home);
+        }
         for (ir_name, fn_id) in known_callees {
             ir_function.record_known_callee(ir_name, fn_id);
         }
@@ -354,6 +362,8 @@ impl Lowerer {
 
         // ── 构建 wrapper 函数 ──
         self.push_function_context(&name, BasicBlockId(0));
+        // wrapper 即方法本体：形参默认值等 wrapper 侧代码里的 super 同样合法。
+        self.apply_method_super_binding(method_super);
 
         let wrapper_env_scope_id = self
             .scopes
@@ -448,6 +458,10 @@ impl Lowerer {
                 args: vec![callee_val, undef_val, count_val],
             },
         );
+        // 对象字面量方法：把闭包 env 上的 home 转存为续体自有属性供 body 解析 super。
+        if matches!(method_super, MethodSuperBinding::ClosureEnv) {
+            self.emit_wrapper_home_transfer(wrapper_after_inits, cont_val);
+        }
 
         // 启动异步生成器
         let gen_val = self.alloc_value();
@@ -572,6 +586,9 @@ impl Lowerer {
         }
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
+        if let MethodSuperBinding::Static(home) = method_super {
+            wrapper_ir_function.home_object = Some(home);
+        }
         for b in blocks {
             wrapper_ir_function.push_block(b);
         }

@@ -17,6 +17,25 @@ pub(crate) struct IterationEnvFrame {
     pub(crate) parent_ir_name: String,
 }
 
+/// async / async generator 方法族的 super 绑定来源。
+///
+/// async 函数族的 body 是独立 IR 函数，经续体 resume 调用，activation env 是
+/// 续体对象而非方法闭包 env，故 body 内 `super` 需要显式接线：
+/// - 类方法的 home object 静态可知，直接烙进 body/wrapper 函数元数据
+///   （运行时 `prepare_call` 按元数据填充 activation home，与箭头函数同径）；
+/// - 对象字面量方法的 home 是运行时值，存于方法闭包 env 的 `home` 属性，
+///   wrapper 把它转存为续体对象的自有属性，body 的 GetSuperBase 经
+///   activation-env 回退路径解析。
+#[derive(Clone, Copy)]
+pub(crate) enum MethodSuperBinding {
+    /// 非方法：body 内 super 非法。
+    None,
+    /// 类方法：home object 静态可知。
+    Static(HomeObject),
+    /// 对象字面量方法：home 经方法闭包 env → 续体自有属性传递。
+    ClosureEnv,
+}
+
 pub(crate) struct Lowerer {
     pub(crate) module: Module,
     pub(crate) next_value: u32,

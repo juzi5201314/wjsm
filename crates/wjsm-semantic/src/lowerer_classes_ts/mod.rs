@@ -279,7 +279,7 @@ impl Lowerer {
             })
     }
 
-    fn emit_string_const(&mut self, block: BasicBlockId, value: &str) -> ValueId {
+    pub(crate) fn emit_string_const(&mut self, block: BasicBlockId, value: &str) -> ValueId {
         let constant = self
             .module
             .add_constant(Constant::String(value.to_string()));

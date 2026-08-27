@@ -322,7 +322,7 @@ impl Lowerer {
         home_object: Option<ValueId>,
     ) -> Result<LoweredMethodFunction, LoweringError> {
         self.object_method_deferred_body_depth += 1;
-        let result = self.lower_method_prop_to_fn(key, function, home_object);
+        let result = self.lower_method_prop_to_fn(key, function, home_object, None);
         self.object_method_deferred_body_depth -= 1;
         result
     }
@@ -423,12 +423,21 @@ impl Lowerer {
         })
     }
 
+    /// `static_home`：类方法传静态 [[HomeObject]]（构造器 id 已知）；对象字面量
+    /// 方法传 None，home 经运行时闭包 env 的 `home` 属性解析。
     pub(crate) fn lower_method_prop_to_fn(
         &mut self,
         key: &swc_ast::PropName,
         function: &swc_ast::Function,
         home_object: Option<ValueId>,
+        static_home: Option<HomeObject>,
     ) -> Result<LoweredMethodFunction, LoweringError> {
+        // async 函数族 body 是独立 IR 函数，super 绑定需要显式接线。
+        let method_super = match (static_home, home_object) {
+            (Some(home), _) => MethodSuperBinding::Static(home),
+            (None, Some(_)) => MethodSuperBinding::ClosureEnv,
+            (None, None) => MethodSuperBinding::None,
+        };
         if function.is_generator {
             let method_name = match key {
                 swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
@@ -446,7 +455,7 @@ impl Lowerer {
             };
             // async generator 方法与同步 generator 方法各自复用对应的声明路径。
             let (function_id, captured) = if function.is_async {
-                self.lower_async_gen_function(&declaration)?
+                self.lower_async_gen_function(&declaration, method_super)?
             } else {
                 self.lower_gen_function(&declaration)?
             };
@@ -468,7 +477,7 @@ impl Lowerer {
                 function: Box::new(function.clone()),
             };
             let (function_id, captured) =
-                self.lower_async_function_parts(&method_name, &fake_expr)?;
+                self.lower_async_function_parts(&method_name, &fake_expr, method_super)?;
             return Ok(LoweredMethodFunction {
                 function_id,
                 captured,
