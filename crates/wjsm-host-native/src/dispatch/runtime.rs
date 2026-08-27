@@ -9,6 +9,7 @@ use wjsm_native_abi::{
     COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
 };
 
+use super::callable_chain::{self, CallableChainHit};
 use crate::PropertyKey;
 use crate::specialization::ValidatedFeedbackSlot;
 use crate::{
@@ -559,16 +560,14 @@ pub(super) fn dispatch_runtime(
                 return fail_dispatch(ctx);
             };
             if value::is_callable(*object) {
-                if let Some((_, setter)) = callable_accessor_on_chain(state, *object, key) {
-                    if value::is_callable(setter) {
-                        let result = state.invoke_callable(ctx, setter, *object, &[*stored]);
-                        return result
-                            .map(|_| *stored)
-                            .unwrap_or_else(|| fail_dispatch(ctx));
-                    }
-                    return *stored;
-                }
-                return set_callable_data_property(state, *object, key, *stored);
+                // callable 接收者的完整 [[Set]]：链上 setter / 可写性拒绝 /
+                // 自有属性写入。写失败静默返回（与其余接收者的现行口径一致）。
+                return match callable_chain::set_with_receiver(
+                    ctx, state, *object, key, *stored, *object,
+                ) {
+                    Ok(_) => *stored,
+                    Err(exception) => exception,
+                };
             }
             if value::is_array(*object) {
                 let handle = value::decode_handle(*object);
@@ -1032,14 +1031,12 @@ fn set_property_impl(
         return stored;
     }
     if value::is_callable(object) {
-        if let Some((_, setter)) = callable_accessor_on_chain(state, object, key) {
-            if value::is_callable(setter) {
-                let result = state.invoke_callable(ctx, setter, object, &[stored]);
-                return result.map_or_else(|| fail_dispatch(ctx), |_| stored);
-            }
-            return stored;
-        }
-        return set_callable_data_property(state, object, key, stored);
+        // callable 接收者的完整 [[Set]]：链上 setter / 可写性拒绝 / 自有属性
+        // 写入。写失败静默返回（与其余接收者的现行口径一致）。
+        return match callable_chain::set_with_receiver(ctx, state, object, key, stored, object) {
+            Ok(_) => stored,
+            Err(exception) => exception,
+        };
     }
     let receiver = object;
     match ordinary_set(
@@ -1293,7 +1290,10 @@ fn super_constructor(state: &mut NativeAgentState) -> Option<i64> {
             state.materialize_function(function.0)?
         }
     };
-    state.callable_prototypes.get(&constructor).copied()
+    state
+        .callable_prototypes
+        .get(&value::strip_gc_color(constructor))
+        .copied()
 }
 
 fn super_base(state: &mut NativeAgentState) -> Option<i64> {
@@ -1319,7 +1319,10 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
         }
     };
     match home_object {
-        wjsm_ir::HomeObject::Constructor(_) => state.callable_prototypes.get(&constructor).copied(),
+        wjsm_ir::HomeObject::Constructor(_) => state
+            .callable_prototypes
+            .get(&value::strip_gc_color(constructor))
+            .copied(),
         wjsm_ir::HomeObject::Prototype(_) => {
             let prototype_key = state.intern_property_string("prototype".into())?;
             let home = state.callable_property(constructor, prototype_key)?;
@@ -1387,7 +1390,7 @@ pub(super) fn ordinary_set(
     ordinary_set_key(ctx, state, target, key, stored, receiver)
 }
 
-fn ordinary_set_key(
+pub(super) fn ordinary_set_key(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     target: i64,
@@ -1395,6 +1398,11 @@ fn ordinary_set_key(
     stored: i64,
     receiver: i64,
 ) -> Result<bool, i64> {
+    // callable 目标（如 Reflect.set 直接传函数、或对象链上出现 callable
+    // 原型）：自有属性在宿主侧表，链行走走 callable 语义。
+    if value::is_callable(target) {
+        return callable_chain::set_with_receiver(ctx, state, target, key, stored, receiver);
+    }
     let target_handle = object_handle(target).ok_or_else(|| fail_dispatch(ctx))?;
     let own = state
         .gc
@@ -1452,39 +1460,7 @@ fn ordinary_set_key(
             return Ok(false);
         }
     }
-    if value::is_proxy(receiver) {
-        return super::proxy::set_receiver_value(
-            ctx,
-            state,
-            receiver,
-            encoded_property_key(key),
-            stored,
-        );
-    }
-    // OrdinarySetWithOwnDescriptor 步骤 3.d.iv：Receiver 为基元（如
-    // Reflect.set 显式传入基元 receiver）时数据属性写入返回 false。
-    // callable receiver 是对象、规范上应在其上建属性，当前 callable 属性
-    // 存于宿主侧表且此处不可达完整语义，保持显式失败而非静默错误结果。
-    if is_primitive_value(receiver) {
-        return Ok(false);
-    }
-    let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
-    if let Some(receiver_descriptor) = state
-        .gc
-        .heap()
-        .get_property_slot(receiver_handle, key)
-        .map_err(|_| fail_dispatch(ctx))?
-    {
-        if receiver_descriptor.flags & constants::FLAG_IS_ACCESSOR as u32 != 0
-            || receiver_descriptor.flags & constants::FLAG_WRITABLE as u32 == 0
-        {
-            return Ok(false);
-        }
-    } else if state.non_extensible_objects.contains(&receiver_handle) {
-        return Ok(false);
-    }
-    set_property_or_out_of_memory(ctx, state, receiver_handle, key, stored as u64)?;
-    Ok(true)
+    assign_data_property_to_receiver(ctx, state, receiver, key, stored)
 }
 
 /// GetPropIc 的 miss 回填：按「自有数据 → 原型链数据 → accessor」优先级回填
@@ -1833,17 +1809,26 @@ pub(super) fn get_property_with_receiver(
     let encoded_key = key;
     let key = property_key(state, key).ok_or(())?;
     if value::is_callable(object) {
-        if let Some((getter, _)) = callable_accessor_on_chain(state, object, key) {
-            return if value::is_callable(getter) {
-                state.invoke_callable(ctx, getter, receiver, &[]).ok_or(())
-            } else {
-                Ok(value::encode_undefined())
-            };
-        }
-        return Ok(state
-            .callable_property(object, key)
-            .or_else(|| state.primitive_property(object, encoded_key))
-            .unwrap_or_else(value::encode_undefined));
+        // OrdinaryGet：沿 callable 原型链逐层查自有访问器/数据属性（含子类
+        // 构造器继承基类静态属性）；非 callable 原型递归对象路径，显式 null
+        // 终止，链尾隐式 Function.prototype 由 primitive_property 合成内建。
+        return match callable_chain::resolve(state, object, key) {
+            CallableChainHit::Accessor { getter, .. } => {
+                if value::is_callable(getter) {
+                    state.invoke_callable(ctx, getter, receiver, &[]).ok_or(())
+                } else {
+                    Ok(value::encode_undefined())
+                }
+            }
+            CallableChainHit::Data { stored, .. } => Ok(stored),
+            CallableChainHit::Object { prototype } => {
+                get_property_with_receiver(ctx, state, prototype, encoded_key, receiver)
+            }
+            CallableChainHit::Null => Ok(value::encode_undefined()),
+            CallableChainHit::Implicit { tail } => Ok(state
+                .primitive_property(tail, encoded_key)
+                .unwrap_or_else(value::encode_undefined)),
+        };
     }
     let handle = object_handle(object).ok_or(())?;
     let lookup = state
@@ -1874,45 +1859,79 @@ pub(super) fn get_property_with_receiver(
     }
 }
 
-fn set_callable_data_property(
+/// OrdinarySetWithOwnDescriptor 步骤 2.b-2.e / 3.d.iv 的 receiver 侧终局：
+/// 链上命中可写数据属性（或未命中按缺省数据属性）后，在 receiver 上更新或
+/// 创建自有数据属性；receiver 自有访问器或不可写数据属性拒绝写入。
+pub(super) fn assign_data_property_to_receiver(
+    ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
-    object: i64,
+    receiver: i64,
     key: PropertyKey,
     stored: i64,
-) -> i64 {
-    let object = value::strip_gc_color(object);
-    if state
-        .callable_property_flags
-        .get(&(object, key))
-        .is_some_and(|flags| flags & constants::FLAG_WRITABLE as u32 == 0)
-    {
-        return stored;
+) -> Result<bool, i64> {
+    if value::is_proxy(receiver) {
+        return super::proxy::set_receiver_value(
+            ctx,
+            state,
+            receiver,
+            encoded_property_key(key),
+            stored,
+        );
     }
-    state.callable_properties.insert((object, key), stored);
-    state
-        .callable_property_flags
-        .entry((object, key))
-        .or_insert(ASSIGNED_PROPERTY_FLAGS);
-    stored
+    if value::is_callable(receiver) {
+        return Ok(assign_to_callable_receiver(state, receiver, key, stored));
+    }
+    // OrdinarySetWithOwnDescriptor 步骤 3.d.iv：Receiver 为基元（如
+    // Reflect.set 显式传入基元 receiver）时数据属性写入返回 false。
+    if is_primitive_value(receiver) {
+        return Ok(false);
+    }
+    let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
+    if let Some(receiver_descriptor) = state
+        .gc
+        .heap()
+        .get_property_slot(receiver_handle, key)
+        .map_err(|_| fail_dispatch(ctx))?
+    {
+        if receiver_descriptor.flags & constants::FLAG_IS_ACCESSOR as u32 != 0
+            || receiver_descriptor.flags & constants::FLAG_WRITABLE as u32 == 0
+        {
+            return Ok(false);
+        }
+    } else if state.non_extensible_objects.contains(&receiver_handle) {
+        return Ok(false);
+    }
+    set_property_or_out_of_memory(ctx, state, receiver_handle, key, stored as u64)?;
+    Ok(true)
 }
 
-fn callable_accessor_on_chain(
-    state: &NativeAgentState,
-    callable: i64,
+/// callable receiver 上的自有数据属性写入：自有访问器或不可写自有数据属性
+/// 拒绝；更新既有属性保留原特性，新建属性取缺省可写/可枚举/可配置。写前
+/// 先触发 name / length / prototype 的惰性物化，使其不可写特性对赋值可见。
+fn assign_to_callable_receiver(
+    state: &mut NativeAgentState,
+    receiver: i64,
     key: PropertyKey,
-) -> Option<(i64, i64)> {
-    let mut current = Some(value::strip_gc_color(callable));
-    while let Some(candidate) = current {
-        if let Some(accessor) = state.callable_accessors.get(&(candidate, key)).copied() {
-            return Some(accessor);
-        }
-        current = state
-            .callable_prototypes
-            .get(&candidate)
-            .copied()
-            .filter(|prototype| value::is_callable(*prototype));
+    stored: i64,
+) -> bool {
+    let receiver = value::strip_gc_color(receiver);
+    if state.callable_accessors.contains_key(&(receiver, key)) {
+        return false;
     }
-    None
+    let _ = state.callable_property(receiver, key);
+    if state
+        .callable_property_flags
+        .get(&(receiver, key))
+        .is_some_and(|flags| flags & constants::FLAG_WRITABLE as u32 == 0)
+    {
+        return false;
+    }
+    state.callable_properties.insert((receiver, key), stored);
+    state
+        .callable_property_flags
+        .entry((receiver, key))
+        .or_insert(ASSIGNED_PROPERTY_FLAGS);
+    true
 }
 
 pub(super) fn delete_property(
@@ -1923,6 +1942,8 @@ pub(super) fn delete_property(
     let key = property_key(state, encoded_key).ok_or(())?;
     let configurable = constants::FLAG_CONFIGURABLE as u32;
     if value::is_callable(object) {
+        // callable 侧表键统一为去色规范形，与写入/查找路径一致。
+        let object = value::strip_gc_color(object);
         if state
             .callable_property_flags
             .get(&(object, key))
@@ -2004,9 +2025,16 @@ pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_ke
         return false;
     };
     if value::is_callable(object) {
-        return state.callable_accessors.contains_key(&(object, key))
-            || state.callable_property(object, key).is_some()
-            || state.primitive_property(object, encoded_key).is_some();
+        // HasProperty 与 [[Get]] 同链：逐层自有属性 → 非 callable 原型递归
+        // 对象路径 → 显式 null 缺失 → 链尾隐式 Function.prototype 内建。
+        return match callable_chain::resolve(state, object, key) {
+            CallableChainHit::Accessor { .. } | CallableChainHit::Data { .. } => true,
+            CallableChainHit::Object { prototype } => has_property(state, prototype, encoded_key),
+            CallableChainHit::Null => false,
+            CallableChainHit::Implicit { tail } => {
+                state.primitive_property(tail, encoded_key).is_some()
+            }
+        };
     }
     let Some(handle) = object_handle(object) else {
         return false;

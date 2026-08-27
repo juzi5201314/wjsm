@@ -7,6 +7,7 @@ pub(crate) mod async_generator;
 pub(crate) mod atomics;
 mod bigint;
 pub(crate) mod buffers;
+mod callable_chain;
 pub(crate) mod collections;
 mod console;
 pub(crate) mod date;
