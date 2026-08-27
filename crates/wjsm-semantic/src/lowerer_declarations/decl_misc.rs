@@ -301,7 +301,6 @@ impl Lowerer {
     pub(crate) fn emit_field_init(
         &mut self,
         block: BasicBlockId,
-        this_scope_id: usize,
         field_name: &str,
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
@@ -317,7 +316,7 @@ impl Lowerer {
                 constant: key_const,
             },
         );
-        self.emit_field_init_common(block, this_scope_id, key_dest, init_value, is_private)
+        self.emit_field_init_common(block, key_dest, init_value, is_private)
     }
 
     /// 公有实例字段（静态属性名）。计算键不走此路径：其键在类定义期求值一次
@@ -326,12 +325,11 @@ impl Lowerer {
     pub(crate) fn emit_field_init_with_key(
         &mut self,
         block: BasicBlockId,
-        this_scope_id: usize,
         key: &swc_ast::PropName,
         init_value: Option<&swc_ast::Expr>,
     ) -> Result<BasicBlockId, LoweringError> {
         let key_dest = self.lower_prop_name(key, block)?;
-        self.emit_field_init_common(block, this_scope_id, key_dest, init_value, false)
+        self.emit_field_init_common(block, key_dest, init_value, false)
     }
 
     /// DefineField（ES §7.3.33）：初始化器求值异常先传播，随后
@@ -340,21 +338,14 @@ impl Lowerer {
     pub(crate) fn emit_field_init_common(
         &mut self,
         block: BasicBlockId,
-        this_scope_id: usize,
         key_dest: ValueId,
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
     ) -> Result<BasicBlockId, LoweringError> {
         let mut block = block;
         let init_val = self.lower_field_init_value(&mut block, init_value)?;
-        let this_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::LoadVar {
-                dest: this_val,
-                name: format!("${this_scope_id}.$this"),
-            },
-        );
+        // 字段定义目标是当前绑定的 this：super() 返回对象重绑后即该对象。
+        let this_val = self.emit_read_ctor_this(block);
         if is_private {
             self.current_function.append_instruction(
                 block,
@@ -403,7 +394,6 @@ impl Lowerer {
     pub(crate) fn emit_param_prop_fields(
         &mut self,
         mut block: BasicBlockId,
-        this_scope_id: usize,
         fields: &[(String, String)],
     ) -> BasicBlockId {
         for (ir_name, field_name) in fields {
@@ -415,14 +405,7 @@ impl Lowerer {
                     name: ir_name.clone(),
                 },
             );
-            let this_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::LoadVar {
-                    dest: this_val,
-                    name: format!("${this_scope_id}.$this"),
-                },
-            );
+            let this_val = self.emit_read_ctor_this(block);
             let key_const = self
                 .module
                 .add_constant(Constant::String(field_name.clone()));

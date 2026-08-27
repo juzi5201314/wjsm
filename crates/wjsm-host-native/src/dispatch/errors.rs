@@ -13,21 +13,29 @@ pub(super) fn dispatch_error(
     builtin: Builtin,
     args: &[i64],
 ) -> Option<i64> {
+    // CallBuiltin 是普通函数调用（ES §20.5.1.1：NewTarget 为 undefined，
+    // 原型落回内在 %NativeError.prototype%）。此路径不压新激活帧，绝不能
+    // 读取外层函数激活帧的 new.target——否则构造器体内 `TypeError("x")`
+    // 会误继承外层类的 prototype。
     Some(error_constructor(
         ctx,
         state,
         builtin,
+        value::encode_undefined(),
         value::encode_undefined(),
         args,
     ))
 }
 
 /// Error 及其子类构造器的公共实现（dispatch 与 `NativeCallableKind::Builtin` 构造路径共用）。
+/// `new_target` 由调用方按其调用形态显式传入：构造路径传激活帧的
+/// new.target，普通调用路径传 undefined。
 pub(crate) fn error_constructor(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     builtin: Builtin,
     this_value: i64,
+    new_target: i64,
     args: &[i64],
 ) -> i64 {
     let name = match builtin {
@@ -51,11 +59,6 @@ pub(crate) fn error_constructor(
     let Some(intrinsic_prototype) = state.ensure_error_prototype(name) else {
         return fail_dispatch(ctx);
     };
-    let new_target = state
-        .activations
-        .last()
-        .map(|activation| activation.new_target)
-        .unwrap_or_else(value::encode_undefined);
     let error = if !value::is_undefined(new_target) && value::is_js_object(this_value) {
         modules::initialize_error_object(state, this_value, name, message)
     } else {

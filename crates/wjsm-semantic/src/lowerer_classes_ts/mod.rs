@@ -62,16 +62,71 @@ pub(super) fn first_pre_super_this_or_super_span(body: &swc_ast::BlockStmt) -> O
     body.visit_with(&mut visitor);
     visitor.invalid_span
 }
-pub(super) fn stmt_is_direct_super_call(stmt: &swc_ast::Stmt) -> bool {
-    matches!(
-        stmt,
-        swc_ast::Stmt::Expr(expr_stmt)
-            if matches!(
-                expr_stmt.expr.as_ref(),
-                swc_ast::Expr::Call(call)
-                    if matches!(call.callee, swc_ast::Callee::Super(_))
-            )
-    )
+
+/// 扫描派生构造器（形参默认值 + 函数体）内是否存在**箭头函数中的**
+/// super() 调用。命中时构造器 this 的规范存储改为共享 env（见
+/// `ctor_this_via_env`），使箭头帧的 BindThisValue 重绑对构造器帧可见。
+/// 普通函数与嵌套类是 super 语境边界，不参与扫描。
+#[derive(Default)]
+struct ArrowSuperCallScan {
+    arrow_depth: u32,
+    found: bool,
+}
+
+impl Visit for ArrowSuperCallScan {
+    fn visit_call_expr(&mut self, call: &swc_ast::CallExpr) {
+        if self.found {
+            return;
+        }
+        if self.arrow_depth > 0 && matches!(call.callee, swc_ast::Callee::Super(_)) {
+            self.found = true;
+            return;
+        }
+        call.visit_children_with(self);
+    }
+
+    fn visit_arrow_expr(&mut self, arrow: &swc_ast::ArrowExpr) {
+        if self.found {
+            return;
+        }
+        self.arrow_depth += 1;
+        arrow.visit_children_with(self);
+        self.arrow_depth -= 1;
+    }
+
+    fn visit_function(&mut self, _: &swc_ast::Function) {}
+
+    fn visit_class(&mut self, _: &swc_ast::Class) {}
+}
+
+fn ctor_has_arrow_super(ctor: &swc_ast::Constructor) -> bool {
+    let mut scan = ArrowSuperCallScan::default();
+    for param in &ctor.params {
+        param.visit_with(&mut scan);
+    }
+    if let Some(body) = &ctor.body {
+        body.visit_with(&mut scan);
+    }
+    scan.found
+}
+
+/// 派生类显式构造器的实例初始化上下文。
+///
+/// ECMAScript SuperCall（§13.3.7.1）步骤 8–11：BindThisValue 之后立即
+/// InitializeInstanceElements——字段初始化属于 super() **求值本身**，与
+/// super() 出现在哪个语句/表达式位置无关。构造器 lowering 前把所需数据
+/// 存入本上下文，`Callee::Super` 站点消费；箭头/嵌套函数帧在
+/// push_function_context 时清空，不会误发射。
+pub(crate) struct DerivedCtorInitCtx {
+    /// TS 参数属性 (形参 IR 名, 字段名)，先于字段初始化器生效。
+    pub(crate) param_prop_fields: Vec<(String, String)>,
+    /// 类体成员克隆（保留原始下标，供计算键实例字段映射使用）。
+    pub(crate) members: Vec<swc_ast::ClassMember>,
+    pub(crate) private_members: Vec<PrivateMemberMeta>,
+    pub(crate) computed_instance_keys: std::collections::HashMap<usize, String>,
+    /// 是否存在需要发射的初始化工作；为 false 时 super() 站点不加异常
+    /// 分叉，保持与语句级异常检查一致的最小 IR。
+    pub(crate) has_init_work: bool,
 }
 
 /// 私有名静态校验（早错误）：
@@ -218,12 +273,14 @@ pub(super) fn class_member_kind(member: &swc_ast::ClassMember) -> &'static str {
 }
 
 /// 类私有方法 / 访问器在 lowering 阶段的绑定描述。
-struct PrivateMemberMeta {
+#[derive(Clone)]
+pub(crate) struct PrivateMemberMeta {
     field_name: String,
     is_static: bool,
     kind: PrivateMemberKind,
 }
 
+#[derive(Clone)]
 enum PrivateMemberKind {
     Method(PrivateFunctionMeta),
     Accessor {
@@ -232,6 +289,7 @@ enum PrivateMemberKind {
     },
 }
 
+#[derive(Clone)]
 struct PrivateFunctionMeta {
     lowered_function: LoweredClassFunction,
     instance_binding: Option<CapturedBinding>,
@@ -532,7 +590,6 @@ impl Lowerer {
     fn emit_instance_initializers(
         &mut self,
         mut block: BasicBlockId,
-        this_scope_id: usize,
         members: &[swc_ast::ClassMember],
         private_members: &[PrivateMemberMeta],
         computed_instance_keys: &std::collections::HashMap<usize, String>,
@@ -543,13 +600,8 @@ impl Lowerer {
                     self.check_field_initializer_arguments(prop.value.as_deref())?;
                     let field_name =
                         self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
-                    block = self.emit_field_init(
-                        block,
-                        this_scope_id,
-                        &field_name,
-                        prop.value.as_deref(),
-                        true,
-                    )?;
+                    block =
+                        self.emit_field_init(block, &field_name, prop.value.as_deref(), true)?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
                     self.check_field_initializer_arguments(prop.value.as_deref())?;
@@ -568,20 +620,9 @@ impl Lowerer {
                                 key: name_const,
                             },
                         );
-                        self.emit_field_init_common(
-                            block,
-                            this_scope_id,
-                            key_dest,
-                            prop.value.as_deref(),
-                            false,
-                        )?
+                        self.emit_field_init_common(block, key_dest, prop.value.as_deref(), false)?
                     } else {
-                        self.emit_field_init_with_key(
-                            block,
-                            this_scope_id,
-                            &prop.key,
-                            prop.value.as_deref(),
-                        )?
+                        self.emit_field_init_with_key(block, &prop.key, prop.value.as_deref())?
                     };
                 }
                 swc_ast::ClassMember::Constructor(_)
@@ -606,14 +647,7 @@ impl Lowerer {
             if member.is_static {
                 continue;
             }
-            let this_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::LoadVar {
-                    dest: this_val,
-                    name: format!("${this_scope_id}.$this"),
-                },
-            );
+            let this_val = self.emit_read_ctor_this(block);
             match &member.kind {
                 PrivateMemberKind::Method(function) => {
                     let (continuation, function_value) =
@@ -655,6 +689,34 @@ impl Lowerer {
             block = self.resolve_store_block(block);
         }
 
+        Ok(block)
+    }
+
+    /// 在 super() 站点发射 InitializeInstanceElements（ES SuperCall 步骤 11）：
+    /// Construct 异常先分叉传播（初始化器不得执行），随后在重绑后的 this 上
+    /// 依序发射参数属性字段与实例字段/私有成员初始化。非构造器帧（上下文为
+    /// None）或无初始化工作时原样返回，保持既有语句级异常检查路径的最小 IR。
+    pub(crate) fn emit_super_site_instance_inits(
+        &mut self,
+        block: BasicBlockId,
+        super_result: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let Some(ctx) = self.derived_ctor_init_ctx.take() else {
+            return Ok(block);
+        };
+        if !ctx.has_init_work {
+            self.derived_ctor_init_ctx = Some(ctx);
+            return Ok(block);
+        }
+        let mut block = self.lower_value_exception_branch(block, super_result)?;
+        block = self.emit_param_prop_fields(block, &ctx.param_prop_fields);
+        block = self.emit_instance_initializers(
+            block,
+            &ctx.members,
+            &ctx.private_members,
+            &ctx.computed_instance_keys,
+        )?;
+        self.derived_ctor_init_ctx = Some(ctx);
         Ok(block)
     }
 

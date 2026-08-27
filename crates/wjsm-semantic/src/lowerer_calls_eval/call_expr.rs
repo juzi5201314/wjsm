@@ -903,13 +903,18 @@ impl Lowerer {
                         },
                     );
                 }
-                // 实参异常分叉与 select_construct_result 都会引入控制流并终结
+                // 实参异常分叉与 select_super_call_result 都会引入控制流并终结
                 // 入口块；必须把 merge 块经 expr_merge_block 上报，否则外层
                 // （语句级异常检查、后续表达式）的启发式解析穿不过分叉链，
                 // 会误写已终结块并覆盖其终结器。
                 let (result, merge_block) =
-                    self.select_construct_result(call_block, ctor_result, this_val);
-                self.expr_merge_block = Some(merge_block);
+                    self.select_super_call_result(call_block, ctor_result, this_val);
+                // InitializeInstanceElements（ES SuperCall 步骤 11）：字段
+                // 初始化属于 super() 求值本身——BindThisValue 之后、表达式
+                // 返回之前发射，任何位置（语句、赋值右值、if 分支）都成立。
+                // 仅构造器帧发射；Construct 异常须先分叉传播，不得触达初始化器。
+                let continuation = self.emit_super_site_instance_inits(merge_block, result)?;
+                self.expr_merge_block = Some(continuation);
                 return Ok(result);
             }
         }
