@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+caught-implicit: implicit-x
+caught-field: implicit-x
+forwarded: 42
+caught-chain: implicit-x
+caught-explicit: implicit-x
+caught-spread: implicit-x
+done
+--- stderr ---

@@ -18,30 +18,4 @@ add-order Error | add-order
 addRhsRan: false
 lt-order Error | lt-order
 ltRhsRan: false
-eq Error | eq
-neq Error | neq
-seq Error | seq
-sneq Error | sneq
-lt Error | lt
-gt RangeError | gt
-lteq Error | lteq
-gteq Error | gteq
-getter-add RangeError | getter-boom
-getter-eq RangeError | getter-boom
-valueof-lt RangeError | valueOf-boom
-valueof-eq RangeError | valueOf-boom
-valueof-add RangeError | valueOf-boom
-add ok: 3 ab
-arith ok: 1 1024 5 12 4
-bits ok: 7 1 4 16 -4 15
-cmp ok: true true true false
-rel ok: true true true false
-nan ok: false false
-bigint ok: 1024 2 true
-gen-caught: gen-boom
-asyncAdd rejected: Error | async-add
-asyncEq rejected: Error | async-eq
-asyncNeq rejected: Error | async-neq
-asyncSeq rejected: Error | async-seq
-asyncLt rejected: Error | async-lt
 --- stderr ---

@@ -845,6 +845,16 @@ fn binary_operand_exceptions_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn binary_operand_exceptions_compare_fixture_matches_ir_snapshot() {
+    assert_snapshot("binary_operand_exceptions_compare");
+}
+
+#[test]
+fn binary_operand_exceptions_async_fixture_matches_ir_snapshot() {
+    assert_snapshot("binary_operand_exceptions_async");
+}
+
+#[test]
 fn primitive_setprop_strict_fixture_matches_ir_snapshot() {
     assert_snapshot("primitive_setprop_strict");
 }

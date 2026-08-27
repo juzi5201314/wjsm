@@ -139,17 +139,21 @@ impl Lowerer {
                     name: format!("${this_scope_id}.$this"),
                 },
             );
+            let super_result = self.alloc_value();
             self.current_function.append_instruction(
                 field_block,
                 Instruction::SuperCall {
-                    dest: None,
+                    dest: Some(super_result),
                     callee,
                     this_val,
                     args: Vec::new(),
                     forward_args: true,
                 },
             );
-            field_block = self.resolve_store_block(field_block);
+            // 派生类缺省构造器等价 `constructor(...args) { super(...args); }`，
+            // 其 `? Construct(func, args, NewTarget)` 抛出的异常必须终止本构造
+            // 器并向 `new` 调用点传播，不得被丢弃后继续执行字段初始化器。
+            field_block = self.lower_value_exception_branch(field_block, super_result)?;
         }
         let defer_instance_initializers = constructor.is_some() && class.super_class.is_some();
         if !defer_instance_initializers {
