@@ -190,9 +190,7 @@ fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
         Instruction::Suspend { promise, .. } => *promise == target,
         Instruction::GeneratorSuspend { result, .. } => *result == target,
         Instruction::GuardSameFunction { callee, .. } => *callee == target,
-        Instruction::ObjectSpread { object, source, .. } => {
-            *object == target || *source == target
-        }
+        Instruction::ObjectSpread { object, source, .. } => *object == target || *source == target,
         Instruction::StoreVar { value, .. } => *value == target,
         Instruction::Phi { sources, .. } => sources.iter().any(|source| source.value == target),
         Instruction::Const { .. }
