@@ -42,6 +42,16 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         } => vec![*object, *key, *value],
         SetProto { object, value } => vec![*object, *value],
         GetElem { object, index, .. } => vec![*object, *index],
+        ElemShapeGuard { array, .. } => vec![*array],
+        GetElemGuarded {
+            object,
+            index,
+            guard,
+            ..
+        } => vec![*object, *index, *guard],
+        GetPropGuarded {
+            object, key, guard, ..
+        } => vec![*object, *key, *guard],
         SetElem {
             object,
             index,
@@ -167,6 +177,9 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | SetElem { dest, .. }
         | OptionalGetProp { dest, .. }
         | OptionalGetElem { dest, .. }
+        | ElemShapeGuard { dest, .. }
+        | GetElemGuarded { dest, .. }
+        | GetPropGuarded { dest, .. }
         | OptionalCall { dest, .. }
         | GetSuperBase { dest }
         | GetSuperConstructor { dest }

@@ -211,6 +211,15 @@ pub(super) fn dispatch_runtime(
             init_object_literal_or_fail(ctx, state, template_index, &args[1..])
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
+        NativeRuntimeOp::ElemShapeGuard => {
+            let [array, template_index] = args else {
+                return fail_dispatch(ctx);
+            };
+            let Ok(template_index) = u32::try_from(*template_index) else {
+                return fail_dispatch(ctx);
+            };
+            value::encode_bool(elem_shape_guard_holds(state, *array, template_index))
+        }
         NativeRuntimeOp::GetProp => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
@@ -2253,6 +2262,68 @@ pub(super) fn range_error(
     message: &str,
 ) -> i64 {
     named_error(ctx, state, "RangeError", message)
+}
+
+/// licm elem-guard 的 pre-header 一次性校验（只读、不分配、不执行用户代码）：
+///
+/// `array` 当前必须是 PACKED 普通数组，全部元素为 shape 等于模板烘焙 shape 的
+/// 普通对象，且每个元素的所有值槽均非对象（含 regexp）。三个条件合起来保证：
+/// 循环体内 `GetPropGuarded` 可以跳过逐迭代 shape 检查直读模板槽偏移，且读出
+/// 的值参与协变运算（ToPrimitive）时不可能回调用户代码。任一条件不满足时返回
+/// false，同循环的 Guarded 指令全部退回通用路径，语义不变。
+fn elem_shape_guard_holds(state: &NativeAgentState, array: i64, template_index: u32) -> bool {
+    if !value::is_array(array) {
+        return false;
+    }
+    let Some(entry_start) = usize::try_from(template_index)
+        .ok()
+        .and_then(|index: usize| index.checked_mul(constants::OBJECT_TEMPLATE_META_WORDS as usize))
+    else {
+        return false;
+    };
+    let entry_end = entry_start + constants::OBJECT_TEMPLATE_META_WORDS as usize;
+    let Some(meta) = state.object_template_meta.get(entry_start..entry_end) else {
+        return false;
+    };
+    let baked_shape = meta[0];
+    let slot_count = meta[1];
+    let handle = value::decode_array_handle(array);
+    let heap = state.gc.heap();
+    if !matches!(heap.array_kind(handle), Ok(constants::ARRAY_KIND_PACKED)) {
+        return false;
+    }
+    let Ok(length) = heap.array_length(handle) else {
+        return false;
+    };
+    (0..length).all(|index| elem_conforms(heap, handle, index, baked_shape, slot_count))
+}
+
+/// 单个数组元素的守卫条件：非洞、TAG_OBJECT、shape 命中烘焙模板、值槽全部非对象。
+fn elem_conforms(
+    heap: &wjsm_gc::HeapAccessV2<wjsm_gc::NativeHeapMemory>,
+    array_handle: u32,
+    index: u32,
+    baked_shape: u32,
+    slot_count: u32,
+) -> bool {
+    let Ok(Some(element)) = heap.get_element(array_handle, index) else {
+        return false;
+    };
+    let element = element as i64;
+    if !value::is_object(element) {
+        return false;
+    }
+    let element_handle = value::decode_object_handle(element);
+    if !matches!(heap.shape_id(element_handle), Ok(shape) if shape == baked_shape) {
+        return false;
+    }
+    (0..slot_count).all(|slot| match heap.value_slot(element_handle, slot) {
+        Ok(stored) => {
+            let stored = stored as i64;
+            !value::is_js_object(stored) && !value::is_regexp(stored)
+        }
+        Err(_) => false,
+    })
 }
 
 fn init_object_literal_or_fail(

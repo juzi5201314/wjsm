@@ -420,8 +420,11 @@ pub(crate) fn root_frame_capacity(
             | Instruction::OptionalCall { .. } => 1,
             // IC accessor 命中时会把刚 load 出的 getter 作为临时 root 发布后再
             // 调用宿主 invoke_callable；保守起见所有 GetProp/OptionalGetProp 都
-            // 预留一个临时槽（多预留不影响正确性）。
-            Instruction::GetProp { .. } | Instruction::OptionalGetProp { .. } => 1,
+            // 预留一个临时槽（多预留不影响正确性）。GetPropGuarded 的慢路径
+            // 复用同一 IC 核心，同样预留。
+            Instruction::GetProp { .. }
+            | Instruction::OptionalGetProp { .. }
+            | Instruction::GetPropGuarded { .. } => 1,
             _ => 0,
         })
         .max()
@@ -2446,6 +2449,239 @@ fn lower_get_template_prop_inline(
     Ok(())
 }
 
+/// licm elem-guard 的 pre-header 守卫：宿主一次性校验数组与元素 shape，
+/// 产出编码布尔（只读、不分配、不执行用户代码，多执行一次不可观察）。
+fn lower_elem_shape_guard(
+    cx: &mut LoweringCx<'_, '_>,
+    constants: &[Constant],
+    dest: ValueId,
+    array: ValueId,
+    template: ConstantId,
+) -> Result<()> {
+    let Some(meta_index) = object_template_meta_index(constants, template) else {
+        bail!("elem_shape_guard template constant is invalid");
+    };
+    let array = use_value_boxed(cx.builder, cx.variables, array)?;
+    let meta_index = cx.builder.ins().iconst(types::I64, i64::from(meta_index));
+    let result = cx.call(
+        NativeRuntimeOp::ElemShapeGuard.id(),
+        &[array, meta_index],
+        None,
+    )?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)
+}
+
+/// `GetPropGuarded` 的操作数组。
+struct GuardedPropAccess {
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    guard: ValueId,
+    template: ConstantId,
+}
+
+/// 守卫属性读：守卫为真时 receiver 已被 pre-header 的 `ElemShapeGuard` 证明
+/// 持有模板烘焙 shape，跳过逐迭代 tag/shape/proto 检查，解句柄后按模板槽
+/// 偏移单指令直读；其余情况先把守卫值置 false（单向闩锁，宿主回退可能执行
+/// 用户代码），再走与普通 `GetProp` 完全一致的 IC / 宿主路径。
+fn lower_get_prop_guarded(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &InstructionTables<'_>,
+    access: GuardedPropAccess,
+    roots: &[ValueId],
+) -> Result<()> {
+    let GuardedPropAccess {
+        dest,
+        object,
+        key,
+        guard,
+        template,
+    } = access;
+    let prop_index =
+        template_property_index_for_key(tables.constants, tables.constant_defs, template, key)
+            .context("get_prop_guarded key must be a template own key")?;
+    let offset = template_value_slot_offset(prop_index)?;
+
+    let fast_block = cx.builder.create_block();
+    let slow_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+    let guard_value = use_value_boxed(cx.builder, cx.variables, guard)?;
+    let guard_on = cx.builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        guard_value,
+        value::encode_bool(true),
+    );
+    cx.builder
+        .ins()
+        .brif(guard_on, fast_block, &[], slow_block, &[]);
+
+    cx.builder.switch_to_block(fast_block);
+    cx.builder.seal_block(fast_block);
+    emit_guarded_slot_read(
+        cx,
+        tables.barrier_thunks,
+        dest,
+        object,
+        offset,
+        merge_block,
+        slow_block,
+    )?;
+
+    // 慢路径入口：先熄灭守卫再走通用路径（IC / 宿主可能执行用户代码）。
+    cx.builder.switch_to_block(slow_block);
+    cx.builder.seal_block(slow_block);
+    let disabled = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_bool(false));
+    define_value_boxed(cx.builder, cx.variables, guard, disabled)?;
+    if let Some(slot) = tables.ic_slots.get(&dest).copied() {
+        lower_get_prop_ic_non_nullish(
+            cx,
+            tables.barrier_thunks,
+            prop_access(tables, dest, object, key, slot),
+            roots,
+            merge_block,
+        )?;
+    } else {
+        lower_value_operation(cx, NativeRuntimeOp::GetProp, &[object, key], Some(dest))?;
+        cx.builder.ins().jump(merge_block, &[]);
+    }
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+    Ok(())
+}
+
+/// 守卫为真时的模板槽直读：不做 tag/shape 检查（pre-header 已一次性证明
+/// receiver 是烘焙 shape 的普通对象），只保留句柄稳定态 / access epoch
+/// 协议——GC 可能在循环回边 safepoint 重定位对象，句柄解析不是循环不变量。
+/// 句柄表 entry 的 trusted load 必须留在守卫分支之后的独立块内，防止
+/// Cranelift 把它投机提前到守卫为假（object 可能非对象）的路径上。
+fn emit_guarded_slot_read(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    object: ValueId,
+    offset: i32,
+    merge_block: ir::Block,
+    slow_block: ir::Block,
+) -> Result<()> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let obj = use_value_boxed(cx.builder, cx.variables, object)?;
+    let ht_base = cx.ht_base;
+    let barrier_state = cx.barrier_state;
+
+    let legacy_block = cx.builder.create_block();
+    let zgc_block = cx.builder.create_block();
+    let zgc_fast_block = cx.builder.create_block();
+    let assist_block = cx.builder.create_block();
+    let hit_block = cx.builder.create_block();
+    cx.builder.append_block_param(hit_block, types::I64);
+
+    let handle_idx = cx.builder.ins().band_imm_u(obj, i64::from(u32::MAX));
+    let handle_i32 = cx.builder.ins().ireduce(types::I32, handle_idx);
+    let entry_offset = cx.builder.ins().ishl_imm_u(handle_idx, 3);
+    let entry_addr = cx.builder.ins().iadd(ht_base, entry_offset);
+    let entry = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), entry_addr, 0);
+    let entry_state = cx.builder.ins().band_imm_u(entry, 0xFFFF);
+    let stable = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+        entry_state,
+        i64::from(constants::HANDLE_STATE_STABLE_MIN),
+    );
+    let logical_addr = cx.builder.ins().ushr_imm_u(entry, 16);
+    let heap_delta = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, heap_object_delta))?,
+    );
+    let barrier_disabled =
+        cx.builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, barrier_state, 0);
+    cx.builder
+        .ins()
+        .brif(barrier_disabled, legacy_block, &[], zgc_block, &[]);
+
+    cx.builder.switch_to_block(legacy_block);
+    cx.builder.seal_block(legacy_block);
+    cx.builder.ins().brif(
+        stable,
+        hit_block,
+        &[ir::BlockArg::Value(logical_addr)],
+        slow_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(zgc_block);
+    cx.builder.seal_block(zgc_block);
+    let epoch_addr = cx.builder.ins().iadd_imm_s(
+        barrier_state,
+        i64::try_from(offset_of!(NativeBarrierState, access_epoch))
+            .expect("access epoch offset fits i64"),
+    );
+    let access_epoch =
+        cx.builder
+            .ins()
+            .atomic_load(types::I64, MemFlagsData::trusted(), epoch_addr);
+    let epoch_bit = cx.builder.ins().band_imm_u(access_epoch, 1);
+    let epoch_even = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, epoch_bit, 0);
+    let direct = cx.builder.ins().band(stable, epoch_even);
+    cx.builder
+        .ins()
+        .brif(direct, zgc_fast_block, &[], assist_block, &[]);
+
+    cx.builder.switch_to_block(zgc_fast_block);
+    cx.builder.seal_block(zgc_fast_block);
+    increment_barrier_counter(
+        cx.builder,
+        barrier_state,
+        offset_of!(NativeBarrierState, load_fast_events),
+    );
+    cx.builder
+        .ins()
+        .jump(hit_block, &[ir::BlockArg::Value(logical_addr)]);
+
+    cx.builder.switch_to_block(assist_block);
+    cx.builder.seal_block(assist_block);
+    let call = cx
+        .builder
+        .ins()
+        .call(barrier_thunks.load, &[cx.ctx, handle_i32]);
+    let assisted = cx.builder.inst_results(call)[0];
+    let assisted_ok = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
+    cx.builder.ins().brif(
+        assisted_ok,
+        hit_block,
+        &[ir::BlockArg::Value(assisted)],
+        slow_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(hit_block);
+    cx.builder.seal_block(hit_block);
+    let logical_addr = cx.builder.block_params(hit_block)[0];
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    let loaded = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, offset);
+    define_value_boxed(cx.builder, cx.variables, dest, loaded)?;
+    cx.builder.ins().jump(merge_block, &[]);
+    Ok(())
+}
+
 /// 模板对象自有数据属性写：shape 命中后 `store [obj+imm]`，失配回落 fallback。
 fn lower_set_template_prop_inline(
     cx: &mut LoweringCx<'_, '_>,
@@ -3597,7 +3833,43 @@ fn lower_instruction(
             dest,
             object,
             index,
-        } => lower_string_element(cx, tables.barrier_thunks, *dest, *object, *index),
+        } => lower_string_element(cx, tables.barrier_thunks, *dest, *object, *index, None),
+        Instruction::ElemShapeGuard {
+            dest,
+            array,
+            template,
+        } => lower_elem_shape_guard(cx, tables.constants, *dest, *array, *template),
+        Instruction::GetElemGuarded {
+            dest,
+            object,
+            index,
+            guard,
+        } => lower_string_element(
+            cx,
+            tables.barrier_thunks,
+            *dest,
+            *object,
+            *index,
+            Some(*guard),
+        ),
+        Instruction::GetPropGuarded {
+            dest,
+            object,
+            key,
+            guard,
+            template,
+        } => lower_get_prop_guarded(
+            cx,
+            tables,
+            GuardedPropAccess {
+                dest: *dest,
+                object: *object,
+                key: *key,
+                guard: *guard,
+                template: *template,
+            },
+            roots,
+        ),
         Instruction::SetElem {
             dest,
             object,
@@ -5098,12 +5370,18 @@ fn emit_mixed_string_equal(
     cx.builder.seal_block(loop_block);
 }
 
+/// `GetElem` / `GetElemGuarded` 共用的元素读取 lowering。`guard` 给定时
+/// （Guarded 变体），miss 路径进入宿主前先把守卫值置 false——宿主完整
+/// `[[Get]]` 可能执行用户代码（原型链上的索引 accessor 等），单向闩锁保证
+/// 同循环所有 `GetPropGuarded` 快路径随之失效；快路径（packed 数组直读 /
+/// 字符串码元）不经过宿主，无需触碰守卫。
 fn lower_string_element(
     cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
     dest: ValueId,
     object: ValueId,
     index: ValueId,
+    guard: Option<ValueId>,
 ) -> Result<()> {
     let object = use_value_boxed(cx.builder, cx.variables, object)?;
     let encoded_index = use_value_boxed(cx.builder, cx.variables, index)?;
@@ -5299,6 +5577,13 @@ fn lower_string_element(
 
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
+    if let Some(guard) = guard {
+        let disabled = cx
+            .builder
+            .ins()
+            .iconst(types::I64, value::encode_bool(false));
+        define_value_boxed(cx.builder, cx.variables, guard, disabled)?;
+    }
     let result = cx.call(
         NativeRuntimeOp::GetElem.id(),
         &[object, encoded_index],

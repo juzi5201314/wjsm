@@ -197,6 +197,9 @@ fn instruction_destination(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::SetElem { dest, .. }
         | Instruction::OptionalGetProp { dest, .. }
         | Instruction::OptionalGetElem { dest, .. }
+        | Instruction::ElemShapeGuard { dest, .. }
+        | Instruction::GetElemGuarded { dest, .. }
+        | Instruction::GetPropGuarded { dest, .. }
         | Instruction::OptionalCall { dest, .. }
         | Instruction::GetSuperBase { dest }
         | Instruction::GetSuperConstructor { dest }

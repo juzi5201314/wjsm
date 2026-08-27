@@ -652,6 +652,41 @@ fn encode_instruction(
             encoder.u32(template.0);
             value_ids(encoder, values)?;
         }
+        Instruction::ElemShapeGuard {
+            dest,
+            array,
+            template,
+        } => {
+            encoder.u16(40);
+            two_values(encoder, *dest, *array);
+            encoder.u32(template.0);
+        }
+        Instruction::GetElemGuarded {
+            dest,
+            object,
+            index,
+            guard,
+        } => {
+            encoder.u16(41);
+            value_id(encoder, *dest);
+            value_id(encoder, *object);
+            value_id(encoder, *index);
+            value_id(encoder, *guard);
+        }
+        Instruction::GetPropGuarded {
+            dest,
+            object,
+            key,
+            guard,
+            template,
+        } => {
+            encoder.u16(42);
+            value_id(encoder, *dest);
+            value_id(encoder, *object);
+            value_id(encoder, *key);
+            value_id(encoder, *guard);
+            encoder.u32(template.0);
+        }
     }
     Ok(())
 }
@@ -888,6 +923,27 @@ fn decode_instruction(
                 values,
             })
         }
+        40 => {
+            let (dest, array) = decode_two(decoder)?;
+            Ok(Instruction::ElemShapeGuard {
+                dest,
+                array,
+                template: ConstantId(decoder.u32()?),
+            })
+        }
+        41 => Ok(Instruction::GetElemGuarded {
+            dest: next_value(decoder)?,
+            object: next_value(decoder)?,
+            index: next_value(decoder)?,
+            guard: next_value(decoder)?,
+        }),
+        42 => Ok(Instruction::GetPropGuarded {
+            dest: next_value(decoder)?,
+            object: next_value(decoder)?,
+            key: next_value(decoder)?,
+            guard: next_value(decoder)?,
+            template: ConstantId(decoder.u32()?),
+        }),
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),
     }
 }

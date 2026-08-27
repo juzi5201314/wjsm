@@ -458,6 +458,26 @@ fn verify_instruction_uses(
             verify_value_use(function, definitions, *object, site, dominance)?;
             verify_value_use(function, definitions, *key, site, dominance)?;
         }
+        Instruction::ElemShapeGuard { array, .. } => {
+            verify_value_use(function, definitions, *array, site, dominance)?;
+        }
+        Instruction::GetElemGuarded {
+            object,
+            index,
+            guard,
+            ..
+        } => {
+            verify_value_use(function, definitions, *object, site, dominance)?;
+            verify_value_use(function, definitions, *index, site, dominance)?;
+            verify_value_use(function, definitions, *guard, site, dominance)?;
+        }
+        Instruction::GetPropGuarded {
+            object, key, guard, ..
+        } => {
+            verify_value_use(function, definitions, *object, site, dominance)?;
+            verify_value_use(function, definitions, *key, site, dominance)?;
+            verify_value_use(function, definitions, *guard, site, dominance)?;
+        }
         Instruction::SetProp {
             object, key, value, ..
         }
@@ -733,6 +753,9 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::SetElem { dest, .. }
         | Instruction::OptionalGetProp { dest, .. }
         | Instruction::OptionalGetElem { dest, .. }
+        | Instruction::ElemShapeGuard { dest, .. }
+        | Instruction::GetElemGuarded { dest, .. }
+        | Instruction::GetPropGuarded { dest, .. }
         | Instruction::OptionalCall { dest, .. }
         | Instruction::GetSuperBase { dest }
         | Instruction::GetSuperConstructor { dest }

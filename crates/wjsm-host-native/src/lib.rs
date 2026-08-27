@@ -1170,10 +1170,7 @@ impl NativeAgentState {
     fn new(config: NativeRuntimeConfig) -> Result<Self, NativeRuntimeError> {
         // 把 ICU4X compiled_data 留在 rustc 链接的 stub 里，避免 DCE 在 Intl API 落地前删掉。
         wjsm_intl_data::keep_compiled_data();
-        let gc = gc::NativeGc::new(
-            config.max_heap_size,
-            config.allocation_diagnostics_enabled,
-        )?;
+        let gc = gc::NativeGc::new(config.max_heap_size, config.allocation_diagnostics_enabled)?;
         let compiler = NativeCompiler::new()?;
         let repository = if config.isolate_native_images {
             NativeImageRepository::new_exclusive(compiler.clone(), config.cache_dir.clone())
@@ -6477,8 +6474,7 @@ mod tests {
                 console.log(total);
             "#,
         );
-        let config = NativeRuntimeConfig::default()
-            .with_allocation_diagnostics_enabled(true);
+        let config = NativeRuntimeConfig::default().with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("runtime should initialize");
         let execution = runtime
@@ -6509,8 +6505,7 @@ mod tests {
                 console.log(total);
             "#,
         );
-        let config = NativeRuntimeConfig::default()
-            .with_allocation_diagnostics_enabled(true);
+        let config = NativeRuntimeConfig::default().with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("runtime should initialize");
         let execution = runtime
@@ -6539,8 +6534,7 @@ mod tests {
                 console.log(sink);
             "#,
         );
-        let config = NativeRuntimeConfig::default()
-            .with_allocation_diagnostics_enabled(true);
+        let config = NativeRuntimeConfig::default().with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("runtime should initialize");
         let execution = runtime.execute(
@@ -6687,9 +6681,7 @@ second true RangeError JavaScript heap out of memory true\n";
                 std::path::Path::new("."),
                 std::path::Path::new("."),
             )
-            .unwrap_or_else(|error| {
-                panic!("should rebuild the OOM error after reset: {error:?}")
-            });
+            .unwrap_or_else(|error| panic!("should rebuild the OOM error after reset: {error:?}"));
         assert_eq!(
             lifecycle_execution.stdout, b"true RangeError JavaScript heap out of memory\n",
             "reset lifecycle",

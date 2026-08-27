@@ -34,10 +34,7 @@ impl NativeAgentState {
         &mut self,
         bytes: &[u8],
     ) -> Result<(), NativeRuntimeError> {
-        let restored = restore(
-            bytes,
-            self.runtime_config.max_heap_size,
-        )?;
+        let restored = restore(bytes, self.runtime_config.max_heap_size)?;
         self.gc.reset_native_tlab();
         self.gc.reset_nlab();
         self.gc.reset_heap(restored.heap)?;
@@ -70,10 +67,7 @@ impl NativeAgentState {
     }
 }
 
-fn restore(
-    bytes: &[u8],
-    max_heap_size: u64,
-) -> Result<RestoredBootstrap, NativeRuntimeError> {
+fn restore(bytes: &[u8], max_heap_size: u64) -> Result<RestoredBootstrap, NativeRuntimeError> {
     let heap = gc::NativeGc::fresh_heap(max_heap_size)?;
     let expected = SnapshotExpectations {
         bootstrap_hash: BOOTSTRAP_HASH,
