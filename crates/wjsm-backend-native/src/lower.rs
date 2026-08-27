@@ -654,6 +654,7 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
     pub root_bitmaps: &'a [DeclaredData],
     pub f64_values: &'a HashSet<ValueId>,
+    pub int32_values: &'a HashSet<ValueId>,
     pub variable_slots: &'a HashMap<String, u32>,
     pub root_plan: &'a RootPlan,
     pub root_capacity: usize,
@@ -677,6 +678,10 @@ struct LoweringCx<'a, 'f> {
     string_add: ir::FuncRef,
     string_builder_finish: ir::FuncRef,
     ctx: ir::Value,
+    env: ir::Value,
+    this_value: ir::Value,
+    function_index: u32,
+    current_block: BasicBlockId,
     target_config: cranelift_codegen::isa::TargetFrontendConfig,
     /// 入口块缓存的 handle / IC / barrier 基址，函数内 IC 命中路径复用。
     ht_base: ir::Value,
@@ -720,6 +725,8 @@ struct InstructionTables<'a> {
     function_index: u32,
     barrier_thunks: &'a BarrierThunks,
     f64_values: &'a HashSet<ValueId>,
+    int32_values: &'a HashSet<ValueId>,
+    speculative: bool,
     constant_defs: &'a HashMap<ValueId, ConstantId>,
     math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
     hoisted_constants: &'a HashMap<ConstantId, ir::Value>,
@@ -958,6 +965,7 @@ fn compile_program_inner(
                 template_origins: &template_origins[index],
                 feedback_slots: feedback_plan.function_slots(index),
                 specialized_tags: None,
+                int32_values: &HashSet::new(),
                 function_decls: &function_decls,
                 direct_callable_functions: &direct_callable_functions,
                 collect_diagnostics,
@@ -1321,6 +1329,7 @@ pub(crate) fn lower_function(
     let string_builder_finish = input.string_builder_finish;
     let math_thunks = input.math_thunks;
     let f64_values = input.f64_values;
+    let int32_values = input.int32_values;
     let variable_slots = input.variable_slots;
     let root_plan = input.root_plan;
     let root_capacity = input.root_capacity;
@@ -1359,6 +1368,8 @@ pub(crate) fn lower_function(
     let barrier_thunks = input.barrier_thunks.import(builder.func);
     let slow_call_signature = builder.import_signature(slow_call_signature);
     let ctx_value = builder.block_params(entry)[0];
+    let env_param = builder.block_params(entry)[1];
+    let this_param = builder.block_params(entry)[2];
     let constants = program.constants();
     let boolean_values = infer_boolean_values(ir_function, constants);
     let constant_defs = ir_function
@@ -1411,6 +1422,10 @@ pub(crate) fn lower_function(
             string_add: string_add_ref,
             string_builder_finish: string_builder_finish_ref,
             ctx: ctx_value,
+            env: env_param,
+            this_value: this_param,
+            function_index,
+            current_block: ir_function.entry(),
             target_config,
             ht_base,
             ic_base,
@@ -1465,6 +1480,8 @@ pub(crate) fn lower_function(
             function_index,
             barrier_thunks: &barrier_thunks,
             f64_values,
+            int32_values,
+            speculative: input.specialized_tags.is_some(),
             constant_defs: &constant_defs,
             math_thunks,
             hoisted_constants: &hoisted_constants,
@@ -1480,9 +1497,15 @@ pub(crate) fn lower_function(
             direct_callable_functions: input.direct_callable_functions,
         };
 
+        let headers = wjsm_ir::typed_cfg::loop_headers(ir_function);
+        let entry_body = cx.builder.create_block();
+        emit_resume_dispatch(&mut cx, ir_function, &blocks, &headers, entry_body)?;
+        blocks.insert(ir_function.entry(), entry_body);
+
         for block in ir_function.blocks() {
             let clif_block = blocks[&block.id()];
             cx.builder.switch_to_block(clif_block);
+            cx.current_block = block.id();
             cx.root_frame.enter_block();
             let has_suspend = block.instructions().iter().any(|instruction| {
                 matches!(
@@ -1490,9 +1513,23 @@ pub(crate) fn lower_function(
                     Instruction::Suspend { .. } | Instruction::GeneratorSuspend { .. }
                 )
             });
+            let first_non_phi = block
+                .instructions()
+                .iter()
+                .position(|instruction| !matches!(instruction, Instruction::Phi { .. }))
+                .unwrap_or(block.instructions().len());
+            let is_header = headers.contains(&block.id());
             for (instruction_index, instruction) in block.instructions().iter().enumerate() {
                 if matches!(instruction, Instruction::Phi { .. }) {
                     continue;
+                }
+                if is_header && instruction_index == first_non_phi {
+                    let lives = wjsm_ir::typed_cfg::loop_header_live_phis(ir_function, block.id());
+                    if input.specialized_tags.is_some() {
+                        emit_overlay_header_guards(&mut cx, &tables, block.id(), &lives)?;
+                    } else {
+                        emit_osr_poll(&mut cx, &tables, block.id(), &lives)?;
+                    }
                 }
                 let roots = root_plan.before_instruction(block.id(), instruction_index);
                 cx.stage(roots);
@@ -2777,6 +2814,16 @@ fn lower_instruction(
             define_value(cx.builder, cx.variables, *dest, native)
         }
         Instruction::Binary { dest, op, lhs, rhs }
+            if tables.speculative
+                && tables.int32_values.contains(dest)
+                && matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
+        {
+            let lhs_val = use_value(cx.builder, cx.variables, *lhs)?;
+            let rhs_val = use_value(cx.builder, cx.variables, *rhs)?;
+            let result = emit_i32_arithmetic(cx, *op, lhs_val, rhs_val)?;
+            define_value(cx.builder, cx.variables, *dest, result)
+        }
+        Instruction::Binary { dest, op, lhs, rhs }
             if tables.f64_values.contains(dest)
                 && matches!(
                     op,
@@ -2824,6 +2871,37 @@ fn lower_instruction(
                 let operation = DYNAMIC_UNARY_BASE + u32::from(unary_tag(*op));
                 let input = use_value(cx.builder, cx.variables, *value)?;
                 let result = cx.call(operation, &[input], feedback_ptr)?;
+                define_value(cx.builder, cx.variables, *dest, result)
+            }
+        }
+        Instruction::Compare { dest, op, lhs, rhs } if op.is_relational() => {
+            let lhs_val = use_value(cx.builder, cx.variables, *lhs)?;
+            let rhs_val = use_value(cx.builder, cx.variables, *rhs)?;
+            if tables.speculative
+                && tables.int32_values.contains(lhs)
+                && tables.int32_values.contains(rhs)
+            {
+                let result = emit_i32_relational(cx.builder, lhs_val, rhs_val, *op)?;
+                define_value(cx.builder, cx.variables, *dest, result)
+            } else if tables.f64_values.contains(lhs) && tables.f64_values.contains(rhs) {
+                let result = emit_f64_relational(cx.builder, lhs_val, rhs_val, *op);
+                define_value(cx.builder, cx.variables, *dest, result)
+            } else {
+                let reverse = matches!(*op, CompareOp::Gt | CompareOp::LtEq);
+                let invert = matches!(*op, CompareOp::LtEq | CompareOp::GtEq);
+                let reverse_v = cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_bool(reverse));
+                let invert_v = cx
+                    .builder
+                    .ins()
+                    .iconst(types::I64, value::encode_bool(invert));
+                let result = cx.call(
+                    u32::from(Builtin::AbstractCompare.wire_id()),
+                    &[lhs_val, rhs_val, reverse_v, invert_v],
+                    feedback_ptr,
+                )?;
                 define_value(cx.builder, cx.variables, *dest, result)
             }
         }
@@ -3759,6 +3837,328 @@ fn emit_f64_abstract_compare(
     let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
     builder.ins().select(condition, true_value, false_value)
 }
+
+fn emit_f64_relational(
+    builder: &mut FunctionBuilder<'_>,
+    lhs: ir::Value,
+    rhs: ir::Value,
+    op: CompareOp,
+) -> ir::Value {
+    let lhs = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
+    let rhs = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+    let cc = match op {
+        CompareOp::Lt => ir::condcodes::FloatCC::LessThan,
+        CompareOp::Gt => ir::condcodes::FloatCC::GreaterThan,
+        CompareOp::LtEq => ir::condcodes::FloatCC::LessThanOrEqual,
+        CompareOp::GtEq => ir::condcodes::FloatCC::GreaterThanOrEqual,
+        _ => ir::condcodes::FloatCC::LessThan,
+    };
+    let condition = builder.ins().fcmp(cc, lhs, rhs);
+    let true_value = builder.ins().iconst(types::I64, value::encode_bool(true));
+    let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
+    builder.ins().select(condition, true_value, false_value)
+}
+
+fn f64_bits_to_i32(builder: &mut FunctionBuilder<'_>, bits: ir::Value) -> (ir::Value, ir::Value) {
+    let float = builder
+        .ins()
+        .bitcast(types::F64, ir::MemFlagsData::new(), bits);
+    let sat = builder.ins().fcvt_to_sint_sat(types::I32, float);
+    let back = builder.ins().fcvt_from_sint(types::F64, sat);
+    let ordered = builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::Equal, float, back);
+    (sat, ordered)
+}
+
+fn emit_i32_relational(
+    builder: &mut FunctionBuilder<'_>,
+    lhs: ir::Value,
+    rhs: ir::Value,
+    op: CompareOp,
+) -> Result<ir::Value> {
+    let (lhs_i, lhs_ok) = f64_bits_to_i32(builder, lhs);
+    let (rhs_i, rhs_ok) = f64_bits_to_i32(builder, rhs);
+    let both = builder.ins().band(lhs_ok, rhs_ok);
+    let cc = match op {
+        CompareOp::Lt => ir::condcodes::IntCC::SignedLessThan,
+        CompareOp::Gt => ir::condcodes::IntCC::SignedGreaterThan,
+        CompareOp::LtEq => ir::condcodes::IntCC::SignedLessThanOrEqual,
+        CompareOp::GtEq => ir::condcodes::IntCC::SignedGreaterThanOrEqual,
+        _ => ir::condcodes::IntCC::SignedLessThan,
+    };
+    let cmp = builder.ins().icmp(cc, lhs_i, rhs_i);
+    let cmp = builder.ins().band(cmp, both);
+    let true_value = builder.ins().iconst(types::I64, value::encode_bool(true));
+    let false_value = builder.ins().iconst(types::I64, value::encode_bool(false));
+    Ok(builder.ins().select(cmp, true_value, false_value))
+}
+
+fn emit_i32_arithmetic(
+    cx: &mut LoweringCx<'_, '_>,
+    op: BinaryOp,
+    lhs: ir::Value,
+    rhs: ir::Value,
+) -> Result<ir::Value> {
+    let (lhs_i, lhs_ok) = f64_bits_to_i32(cx.builder, lhs);
+    let (rhs_i, rhs_ok) = f64_bits_to_i32(cx.builder, rhs);
+    let both = cx.builder.ins().band(lhs_ok, rhs_ok);
+    let (sum, overflow) = match op {
+        BinaryOp::Add => cx.builder.ins().sadd_overflow(lhs_i, rhs_i),
+        BinaryOp::Sub => cx.builder.ins().ssub_overflow(lhs_i, rhs_i),
+        BinaryOp::Mul => cx.builder.ins().smul_overflow(lhs_i, rhs_i),
+        _ => unreachable!("guard restricts int32 arithmetic"),
+    };
+    let overflow_i64 = cx.builder.ins().uextend(types::I64, overflow);
+    let fail_ov = cx
+        .builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::NotEqual, overflow_i64, 0);
+    let not_ok = cx.builder.ins().bnot(both);
+    let fail = cx.builder.ins().bor(fail_ov, not_ok);
+    let deopt_block = cx.builder.create_block();
+    let cont = cx.builder.create_block();
+    cx.builder.ins().brif(fail, deopt_block, &[], cont, &[]);
+    cx.builder.switch_to_block(deopt_block);
+    emit_deopt_to_generic(cx, cx.current_block, &[])?;
+    cx.builder.switch_to_block(cont);
+    cx.builder.seal_block(cont);
+    let widened = cx.builder.ins().sextend(types::I64, sum);
+    let as_f = cx.builder.ins().fcvt_from_sint(types::F64, widened);
+    Ok(cx
+        .builder
+        .ins()
+        .bitcast(types::I64, ir::MemFlagsData::new(), as_f))
+}
+
+fn emit_deopt_to_generic(
+    cx: &mut LoweringCx<'_, '_>,
+    block: BasicBlockId,
+    lives: &[ValueId],
+) -> Result<()> {
+    store_resume_lives(cx, lives)?;
+    let function = cx
+        .builder
+        .ins()
+        .iconst(types::I64, i64::from(cx.function_index));
+    let block_id = cx.builder.ins().iconst(types::I64, i64::from(block.0));
+    let count = cx
+        .builder
+        .ins()
+        .iconst(types::I64, i64::try_from(lives.len()).unwrap_or(0));
+    let env = cx.env;
+    let this_value = cx.this_value;
+    let result = cx.call(
+        NativeRuntimeOp::DeoptToGeneric.id(),
+        &[function, block_id, env, this_value, count],
+        None,
+    )?;
+    cx.root_frame.unlink(cx.builder, cx.ctx)?;
+    cx.builder.ins().return_(&[result]);
+    Ok(())
+}
+
+fn store_resume_lives(cx: &mut LoweringCx<'_, '_>, lives: &[ValueId]) -> Result<()> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let slots = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_live_slots))?,
+    );
+    for (index, live) in lives.iter().enumerate() {
+        let value = use_value(cx.builder, cx.variables, *live)?;
+        let offset = i32::try_from(index * 8).context("resume live offset")?;
+        cx.builder
+            .ins()
+            .store(MemFlagsData::trusted(), value, slots, offset);
+    }
+    let count = cx
+        .builder
+        .ins()
+        .iconst(types::I32, i64::try_from(lives.len()).unwrap_or(0));
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        count,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_live_count))?,
+    );
+    Ok(())
+}
+
+fn emit_resume_dispatch(
+    cx: &mut LoweringCx<'_, '_>,
+    function: &wjsm_ir::Function,
+    blocks: &HashMap<BasicBlockId, ir::Block>,
+    headers: &[BasicBlockId],
+    entry_body: ir::Block,
+) -> Result<()> {
+    let resume = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_block_plus_one))?,
+    );
+    let has_resume = cx
+        .builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::NotEqual, resume, 0);
+    let dispatch = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(has_resume, dispatch, &[], entry_body, &[]);
+    cx.builder.switch_to_block(dispatch);
+    let func = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_function_id))?,
+    );
+    let mine = cx.builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::Equal,
+        func,
+        i64::from(cx.function_index),
+    );
+    let take = cx.builder.create_block();
+    cx.builder.ins().brif(mine, take, &[], entry_body, &[]);
+    cx.builder.switch_to_block(take);
+    let zero = cx.builder.ins().iconst(types::I32, 0);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        zero,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_block_plus_one))?,
+    );
+    let wanted = cx.builder.ins().iadd_imm_s(resume, -1);
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let slots = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_live_slots))?,
+    );
+    for header in headers {
+        let hit =
+            cx.builder
+                .ins()
+                .icmp_imm_s(ir::condcodes::IntCC::Equal, wanted, i64::from(header.0));
+        let restore = cx.builder.create_block();
+        let skip = cx.builder.create_block();
+        cx.builder.ins().brif(hit, restore, &[], skip, &[]);
+        cx.builder.switch_to_block(restore);
+        let lives = wjsm_ir::typed_cfg::loop_header_live_phis(function, *header);
+        for (index, live) in lives.iter().enumerate() {
+            let offset = i32::try_from(index * 8).context("resume live offset")?;
+            let value = cx
+                .builder
+                .ins()
+                .load(types::I64, MemFlagsData::trusted(), slots, offset);
+            define_value(cx.builder, cx.variables, *live, value)?;
+        }
+        let target = if *header == function.entry() {
+            entry_body
+        } else {
+            blocks[header]
+        };
+        cx.builder.ins().jump(target, &[]);
+        cx.builder.switch_to_block(skip);
+    }
+    cx.builder.ins().jump(entry_body, &[]);
+    Ok(())
+}
+
+fn emit_osr_poll(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &InstructionTables<'_>,
+    header: BasicBlockId,
+    lives: &[ValueId],
+) -> Result<()> {
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let table = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, function_table))?,
+    );
+    let stride = i64::try_from(std::mem::size_of::<wjsm_native_abi::NativeFunctionEntry>())
+        .context("function entry size")?;
+    let offset = i64::from(cx.function_index) * stride;
+    let entry = cx.builder.ins().iadd_imm_s(table, offset);
+    let osr = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        entry,
+        i32::try_from(offset_of!(wjsm_native_abi::NativeFunctionEntry, osr_entry))
+            .context("osr_entry offset")?,
+    );
+    let has = cx
+        .builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::NotEqual, osr, 0);
+    let take = cx.builder.create_block();
+    let cont = cx.builder.create_block();
+    cx.builder.ins().brif(has, take, &[], cont, &[]);
+    cx.builder.switch_to_block(take);
+    store_resume_lives(cx, lives)?;
+    let plus = cx.builder.ins().iconst(types::I32, i64::from(header.0) + 1);
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        plus,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_block_plus_one))?,
+    );
+    let func = cx
+        .builder
+        .ins()
+        .iconst(types::I32, i64::from(cx.function_index));
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        func,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, resume_function_id))?,
+    );
+    let args_base = cx.builder.ins().iconst(types::I32, 0);
+    let args_count = cx.builder.ins().iconst(types::I32, 0);
+    let inst = cx.builder.ins().call_indirect(
+        tables.slow_call_signature,
+        osr,
+        &[cx.ctx, cx.env, cx.this_value, args_base, args_count],
+    );
+    let result = cx.builder.inst_results(inst)[0];
+    cx.root_frame.unlink(cx.builder, cx.ctx)?;
+    cx.builder.ins().return_(&[result]);
+    cx.builder.switch_to_block(cont);
+    cx.builder.seal_block(cont);
+    Ok(())
+}
+
+fn emit_overlay_header_guards(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &InstructionTables<'_>,
+    header: BasicBlockId,
+    lives: &[ValueId],
+) -> Result<()> {
+    for live in lives {
+        if !tables.f64_values.contains(live) && !tables.int32_values.contains(live) {
+            continue;
+        }
+        let encoded = use_value(cx.builder, cx.variables, *live)?;
+        let ok = emit_is_number(cx.builder, encoded);
+        let deopt = cx.builder.create_block();
+        let cont = cx.builder.create_block();
+        cx.builder.ins().brif(ok, cont, &[], deopt, &[]);
+        cx.builder.switch_to_block(deopt);
+        emit_deopt_to_generic(cx, header, lives)?;
+        cx.builder.switch_to_block(cont);
+        cx.builder.seal_block(cont);
+    }
+    Ok(())
+}
+
 fn emit_inline_string_predicate(
     builder: &mut FunctionBuilder<'_>,
     encoded: ir::Value,
@@ -8137,6 +8537,10 @@ fn compare_tag(op: CompareOp) -> u16 {
     match op {
         CompareOp::StrictEq => 0,
         CompareOp::StrictNotEq => 1,
+        CompareOp::Lt => 2,
+        CompareOp::Gt => 3,
+        CompareOp::LtEq => 4,
+        CompareOp::GtEq => 5,
     }
 }
 

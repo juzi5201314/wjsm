@@ -674,9 +674,7 @@ impl Lowerer {
         block: BasicBlockId,
         keys: Vec<u64>,
     ) -> Result<ValueId, LoweringError> {
-        let template = self
-            .module
-            .add_constant(Constant::ObjectTemplate { keys });
+        let template = self.module.add_constant(Constant::ObjectTemplate { keys });
         let original_block = block;
         let mut block = block;
         let mut values = Vec::with_capacity(obj_expr.props.len());

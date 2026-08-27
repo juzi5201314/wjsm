@@ -255,14 +255,12 @@ module {
       %86 = const c40
       %87 = const c41
       %88 = add %86, %87
-      %89 = is_exception %88
-      branch %89, bb46, bb45
+      jump bb45
     bb45:
       %91 = stricteq %85, %88
       branch %91, bb42, bb43
     bb46:
-      %90 = call builtin.exception_value(%88)
-      throw %90
+      unreachable
     bb47:
       jump bb41
     bb48:

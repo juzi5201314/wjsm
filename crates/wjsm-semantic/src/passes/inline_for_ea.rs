@@ -16,11 +16,11 @@
 //! - 配合 cfg_fold pass（IsException/IsJsObject 折叠、常量分支折叠、死块中和、
 //!   phi 塌缩、DCE）迭代至不动点。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use wjsm_ir::{
     BasicBlock, BasicBlockId, Builtin, Constant, ConstantId, FunctionId, Instruction, Module,
-    Terminator, ValueId,
+    Terminator, ValueId, is_host_shared_variable,
 };
 
 use super::cfg_fold::{self, terminator_successors};
@@ -533,6 +533,38 @@ fn is_env_name(name: &str) -> bool {
     name == "$env" || name.ends_with(".$env")
 }
 
+/// 内联后 callee 栈帧消失：把仍留在 host 槽表上的函数局部写成 undefined，
+/// 避免 IIFE 里的 WeakMap key / FinalizationRegistry target 被调用者一直钉住。
+fn callee_dead_slot_names(callee: &wjsm_ir::Function) -> Vec<String> {
+    let captured: HashSet<&str> = callee.captured_names().iter().map(String::as_str).collect();
+    let mut names = BTreeSet::new();
+    for block in callee.blocks() {
+        for instruction in block.instructions() {
+            let name = match instruction {
+                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
+                _ => continue,
+            };
+            if is_host_shared_variable(name) || is_this_name(name) || is_env_name(name) {
+                continue;
+            }
+            if captured.contains(name.as_str()) {
+                continue;
+            }
+            names.insert(name.clone());
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn store_dead_slots(block: &mut BasicBlock, names: &[String], undefined: ValueId) {
+    for name in names {
+        block.push_instruction(Instruction::StoreVar {
+            name: name.clone(),
+            value: undefined,
+        });
+    }
+}
+
 /// 函数体内是否含无法用简单替换内联的指令（super/rest/async 等）。
 fn contains_excluded_instruction(function: &wjsm_ir::Function) -> bool {
     function.blocks().iter().any(|block| {
@@ -933,6 +965,7 @@ fn inline_static_candidate(
     // 读的是 store 后的值而非形参初始值——全部保留指令，并在克隆入口注入
     // `StoreVar { name, value: 实参 }` 提供初始值。
     let callee_params = callee_func.params().to_vec();
+    let dead_slots = callee_dead_slot_names(&callee_func);
     let stored_names: HashSet<&str> = callee_func
         .blocks()
         .iter()
@@ -1005,18 +1038,6 @@ fn inline_static_candidate(
     } else {
         None
     };
-    let mut callee_local_vars: Vec<String> = callee_func
-        .blocks()
-        .iter()
-        .flat_map(|b| b.instructions())
-        .filter_map(|ins| match ins {
-            Instruction::StoreVar { name, .. } => Some(name.clone()),
-            _ => None,
-        })
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    callee_local_vars.sort();
     let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     let mut construct_return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     for (original, clone) in callee_func.blocks().iter().zip(cloned_blocks.iter_mut()) {
@@ -1034,15 +1055,11 @@ fn inline_static_candidate(
                     let mapped = value.unwrap_or(undefined_dest);
                     return_records.push((clone.id(), mapped));
                 }
-                for var_name in &callee_local_vars {
-                    clone.push_instruction(Instruction::StoreVar {
-                        name: var_name.clone(),
-                        value: undefined_dest,
-                    });
-                }
+                store_dead_slots(clone, &dead_slots, undefined_dest);
                 clone.set_terminator(Terminator::Jump { target: b_post_id });
             }
             Terminator::Throw { value } => {
+                store_dead_slots(clone, &dead_slots, undefined_dest);
                 if let Some((tmp_name, catch_target)) = &exception_path {
                     clone.push_instruction(Instruction::StoreVar {
                         name: tmp_name.clone(),
@@ -1670,6 +1687,7 @@ fn inline_speculative_candidate(
     // 参数 LoadVar 是纯参数读取，克隆时跳过并记录 use 替换（同阶段 A，见
     // inline_static_candidate——保留后替换 dest 会破坏 SSA）。
     let callee_params = target_func.params().to_vec();
+    let dead_slots = callee_dead_slot_names(&target_func);
     let stored_names: HashSet<&str> = target_func
         .blocks()
         .iter()
@@ -1679,9 +1697,6 @@ fn inline_speculative_candidate(
             _ => None,
         })
         .collect();
-    let mut callee_local_vars: Vec<String> =
-        stored_names.iter().map(|s| (*s).to_string()).collect();
-    callee_local_vars.sort();
     let mut param_subst: Vec<(ValueId, ValueId)> = Vec::new();
     let mut inject_subst: Vec<(String, ValueId)> = Vec::new();
     let mut callee_clones: Vec<BasicBlock> = Vec::with_capacity(target_func.blocks().len());
@@ -1733,17 +1748,13 @@ fn inline_speculative_candidate(
                 // Return → Jump(区域入口)；记录返回值（None → undefined）。
                 let mapped = value.unwrap_or(undefined_dest);
                 return_records.push((clone.id(), mapped));
-                for var_name in &callee_local_vars {
-                    clone.push_instruction(Instruction::StoreVar {
-                        name: var_name.clone(),
-                        value: undefined_dest,
-                    });
-                }
+                store_dead_slots(&mut clone, &dead_slots, undefined_dest);
                 clone.set_terminator(Terminator::Jump {
                     target: region_entry,
                 });
             }
             Terminator::Throw { value } => {
+                store_dead_slots(&mut clone, &dead_slots, undefined_dest);
                 if let Some((tmp_name, catch_target)) = &exception_path {
                     clone.push_instruction(Instruction::StoreVar {
                         name: tmp_name.clone(),

@@ -1086,12 +1086,20 @@ fn compare_tag(op: CompareOp) -> u16 {
     match op {
         CompareOp::StrictEq => 0,
         CompareOp::StrictNotEq => 1,
+        CompareOp::Lt => 2,
+        CompareOp::Gt => 3,
+        CompareOp::LtEq => 4,
+        CompareOp::GtEq => 5,
     }
 }
 fn decode_compare(tag: u16) -> Result<CompareOp, ArtifactFormatError> {
     match tag {
         0 => Ok(CompareOp::StrictEq),
         1 => Ok(CompareOp::StrictNotEq),
+        2 => Ok(CompareOp::Lt),
+        3 => Ok(CompareOp::Gt),
+        4 => Ok(CompareOp::LtEq),
+        5 => Ok(CompareOp::GtEq),
         _ => Err(ArtifactFormatError::UnknownTag("compare op", tag.into())),
     }
 }

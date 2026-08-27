@@ -171,8 +171,18 @@ pub(crate) fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId
     }
 }
 
-/// 运行 cfg_fold pass。
+/// 运行 cfg_fold pass。`fold_proven_numbers` 仅在逃逸分析之后打开，避免过早
+/// 折叠 Number `is_exception` 改变 EA 可见 CFG。
 pub(crate) fn run(module: &mut Module) {
+    run_inner(module, false);
+}
+
+/// 终轮：消费值类证明，折叠 Number 算术后的 `is_exception`。
+pub(crate) fn run_after_value_class(module: &mut Module) {
+    run_inner(module, true);
+}
+
+fn run_inner(module: &mut Module, fold_proven_numbers: bool) {
     let mut round = 0;
     let mut any_change = true;
     while any_change && round < 8 {
@@ -185,6 +195,16 @@ pub(crate) fn run(module: &mut Module) {
             // ── 只读快照：def 表与常量 ID ──
             // （后续持有 function 可变借用时不能再查 module，先全部快照。）
             let constants_snapshot: Vec<Constant> = module.constants().to_vec();
+            let classes = fold_proven_numbers.then(|| {
+                let function = &module.functions()[fid];
+                let locals = module.frame_local_variable_names(function);
+                wjsm_ir::value_class::infer_function(
+                    module,
+                    function,
+                    &locals,
+                    &wjsm_ir::value_class::FunctionSeeds::default(),
+                )
+            });
             let (defs, var_stores) = {
                 let function = &module.functions()[fid];
                 let mut defs = HashMap::new();
@@ -218,7 +238,10 @@ pub(crate) fn run(module: &mut Module) {
                 for (idx, instr) in block.instructions().iter().enumerate() {
                     // 规则 1：is_exception(可证明非异常值) → false。
                     if let Instruction::IsException { dest, value } = instr {
-                        let foldable = is_provably_non_exception(&defs, *value);
+                        let foldable = classes
+                            .as_ref()
+                            .is_some_and(|classes| classes.cannot_throw(*value))
+                            || is_provably_non_exception(&defs, *value);
                         if foldable {
                             replace_sites.push((
                                 idx,
@@ -410,11 +433,10 @@ pub(crate) fn run(module: &mut Module) {
                     phi_folded = true;
                 }
                 for (idx, dest, live_sources) in prunes {
-                    function.blocks_mut()[block_idx].instructions_mut()[idx] =
-                        Instruction::Phi {
-                            dest,
-                            sources: live_sources,
-                        };
+                    function.blocks_mut()[block_idx].instructions_mut()[idx] = Instruction::Phi {
+                        dest,
+                        sources: live_sources,
+                    };
                     phi_folded = true;
                 }
                 // 删除塌缩的 Phi（按索引降序，避免偏移）。
@@ -591,13 +613,13 @@ mod tests {
         let rhs = ValueId(1);
         let bin = ValueId(2);
         let ex = ValueId(3);
-        let c2 = number_id(&mut module, 2.0);
+        let c_big = const_id_or_add(&mut module, Constant::BigInt("7".to_string()));
         let c3 = number_id(&mut module, 3.0);
         let b0 = block(0);
         let mut b1 = block(1);
         b1.push_instruction(Instruction::Const {
             dest: lhs,
-            constant: c2,
+            constant: c_big,
         });
         b1.push_instruction(Instruction::Const {
             dest: rhs,
@@ -605,7 +627,7 @@ mod tests {
         });
         b1.push_instruction(Instruction::Binary {
             dest: bin,
-            op: wjsm_ir::BinaryOp::Mul,
+            op: wjsm_ir::BinaryOp::Add,
             lhs,
             rhs,
         });

@@ -1274,3 +1274,68 @@ fn eval_in_body_keeps_arguments_object() {
         "direct eval in body must conservatively keep the arguments object:\n{text}"
     );
 }
+
+#[test]
+fn proven_number_loop_drops_is_exception_and_abstract_compare() {
+    let text = dump(
+        "let sum = 0;\nfor (let i = 1; i <= 3; i = i + 1) {\n  sum = sum + i;\n}\nconsole.log(sum);\n",
+    );
+    assert!(
+        !text.contains("abstract_compare"),
+        "Number relational compare should be IR Compare:\n{text}"
+    );
+    assert!(
+        text.contains(" = lteq ") || text.contains(" = lt ") || text.contains(" = gteq "),
+        "expected relational Compare:\n{text}"
+    );
+    for line in text.lines() {
+        if line.contains("is_exception") && !line.contains("console") {
+            let value = line.split_whitespace().last().unwrap_or("");
+            let produced_by_add = text.lines().any(|def| {
+                def.contains(&format!("{value} = add"))
+                    || def.contains(&format!("{value} = sub"))
+                    || def.contains(&format!("{value} = mul"))
+            });
+            assert!(
+                !produced_by_add,
+                "Number arithmetic must not keep is_exception:\n{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn captured_sroa_slots_are_not_frame_local() {
+    let source =
+        std::fs::read_to_string(workspace_root().join("fixtures/happy/timer_zero_delay_chain.js"))
+            .expect("timer fixture");
+    let lowered = lower_module(parse_module(&source).expect("parse"), false).expect("lower");
+    for function in lowered.functions() {
+        let locals = lowered.frame_local_variable_names(function);
+        let leaked: Vec<_> = locals
+            .iter()
+            .copied()
+            .filter(|name| name.starts_with("$sroa."))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "{} must not promote shared $sroa slots: {leaked:?}",
+            function.name()
+        );
+    }
+}
+
+#[test]
+fn inlined_iife_clears_dead_object_slots() {
+    let source = std::fs::read_to_string(
+        workspace_root().join("fixtures/happy/finalization_registry_cleanup.js"),
+    )
+    .expect("finalization fixture");
+    let text = dump(&source);
+    let main = text.split("fn @$module_main").nth(1).expect("module main");
+    let stores = main.matches("store var $2.target").count();
+    assert!(
+        stores >= 3,
+        "inlined IIFE must write back undefined to $2.target on return so gc() can collect:\n{main}"
+    );
+}

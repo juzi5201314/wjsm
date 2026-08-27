@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 
 use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeObject};
-use wjsm_ir::{FunctionId, Program, constants};
+use wjsm_ir::{FunctionId, Program, ValueId, constants};
 use wjsm_native_abi::{NativeFeedbackSlot, NativeFeedbackTag};
 
 const REQUEST_QUEUE_CAPACITY: usize = 8;
@@ -66,6 +66,7 @@ pub(crate) struct CompilationRequest {
     pub(crate) program: Arc<Program>,
     pub(crate) variable_slots: Arc<HashMap<String, u32>>,
     pub(crate) argument_tags: Box<[NativeFeedbackTag]>,
+    pub(crate) extra_numbers: HashSet<ValueId>,
     pub(crate) ic_epoch: u64,
     pub(crate) proto_generation: u64,
 }
@@ -100,6 +101,7 @@ pub(crate) struct SpecializationCoordinator {
     active_bytes: usize,
     tick: u64,
     next_overlay_image_id: u64,
+    invalidated_osr: Vec<(u64, u32)>,
 }
 
 impl SpecializationCoordinator {
@@ -116,6 +118,7 @@ impl SpecializationCoordinator {
             active_bytes: 0,
             tick: 0,
             next_overlay_image_id: u64::MAX,
+            invalidated_osr: Vec::new(),
         }
     }
 
@@ -136,6 +139,7 @@ impl SpecializationCoordinator {
                                 &request.variable_slots,
                                 FunctionId(request.key.target_function),
                                 &request.argument_tags,
+                                &request.extra_numbers,
                                 false,
                             )
                             .ok()
@@ -310,7 +314,26 @@ impl SpecializationCoordinator {
     fn remove(&mut self, key: VariantKey) {
         if let Some(overlay) = self.overlays.remove(&key) {
             self.active_bytes = self.active_bytes.saturating_sub(overlay.byte_size);
+            self.invalidated_osr
+                .push((key.target_image_id, key.target_function));
         }
+    }
+
+    pub(crate) fn disable_target_function(&mut self, function: u32) {
+        let keys: Vec<VariantKey> = self
+            .overlays
+            .keys()
+            .copied()
+            .filter(|key| key.target_function == function)
+            .collect();
+        for key in keys {
+            self.disabled.insert(key);
+            self.remove(key);
+        }
+    }
+
+    pub(crate) fn take_osr_invalidations(&mut self) -> Vec<(u64, u32)> {
+        std::mem::take(&mut self.invalidated_osr)
     }
 }
 

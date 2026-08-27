@@ -1026,9 +1026,7 @@ module {
     bb97:
       %355 = load var $25.i
       %356 = const c157
-      %358 = const c158
-      %359 = const c159
-      %357 = call builtin.abstract_compare(%355, %356, %358, %359)
+      %357 = lt %355, %356
       branch %357, bb98, bb100
     bb98:
       %360 = load var $0.nonLoopReads

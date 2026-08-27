@@ -70,7 +70,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 `NATIVE_ABI_HASH` 覆盖 generated code 可见的 vmctx/CallArgs/frame layout、host/runtime operation signatures 与 value constants。任何布局或协议变化都必须改变 hash，并使旧 native cache miss。
 
-`NativeCompiler::compile_specialized_function` 只接受已验证 `Program`、目标函数、变量槽快照和实际参数 tag profile。wrapper 保持 `NativeSlowEntry` ABI，入口 tag 不符时读取 base function table 的 slow entry 回落；命中时 number 参数直接从 call arena 进入 seeded f64 lowering。typed body 继续复用 generic dispatcher、Shape IC、`RootPlan`、W^X 与 unwind 路径，局部 guard miss 不回滚副作用。
+`NativeCompiler::compile_specialized_function` 只接受已验证 `Program`、目标函数、变量槽快照和实际参数 tag profile。wrapper 保持 `NativeSlowEntry` ABI，入口 tag 不符时读取 base function table 的 slow entry 回落；编译前克隆 `Program`，用与 AOT 相同的值类 / `typed_cfg` 按种子重建 CFG。命中时 number 参数从 call arena 进入重建后的 typed body。循环头类型 miss 调用 `DeoptToGeneric` 恢复 generic 循环头 live；generic 循环头在 `osr_entry` 非零时 OSR 进入 overlay body。typed body 继续复用 generic dispatcher、Shape IC、`RootPlan`、W^X 与 unwind 路径。
 
 ## 3. Native image 与 cache
 

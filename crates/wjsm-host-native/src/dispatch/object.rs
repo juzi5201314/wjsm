@@ -507,7 +507,8 @@ pub(crate) fn own_keys(
         }
     }
     index_keys.sort_by_key(|(index, _, _)| *index);
-    let mut properties = Vec::with_capacity(index_keys.len() + string_keys.len() + symbol_keys.len());
+    let mut properties =
+        Vec::with_capacity(index_keys.len() + string_keys.len() + symbol_keys.len());
     for (_, key, _flags) in index_keys {
         let property = state
             .gc

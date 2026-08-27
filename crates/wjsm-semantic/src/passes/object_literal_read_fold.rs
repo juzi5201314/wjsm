@@ -94,16 +94,15 @@ fn instruction_may_mutate_tracked_object(
         | Instruction::SuperCall { this_val, args, .. }
         | Instruction::ConstructCall { this_val, args, .. } => {
             is_tracked_object(*this_val, aliases, sites).is_some()
-                || args.iter().any(|arg| is_tracked_object(*arg, aliases, sites).is_some())
+                || args
+                    .iter()
+                    .any(|arg| is_tracked_object(*arg, aliases, sites).is_some())
         }
         _ => false,
     }
 }
 
-fn fold_function(
-    function: &mut wjsm_ir::Function,
-    constants: &[Constant],
-) -> bool {
+fn fold_function(function: &mut wjsm_ir::Function, constants: &[Constant]) -> bool {
     let mut const_defs = HashMap::new();
     for block in function.blocks() {
         for instruction in block.instructions() {
@@ -136,12 +135,7 @@ fn fold_function(
                     | Instruction::SuperCall { this_val, args, .. }
                     | Instruction::ConstructCall { this_val, args, .. } => {
                         if let Some(canonical) = is_tracked_object(*this_val, &aliases, &sites) {
-                            invalidate_object(
-                                canonical,
-                                &aliases,
-                                &mut sites,
-                                &mut var_bindings,
-                            );
+                            invalidate_object(canonical, &aliases, &mut sites, &mut var_bindings);
                         }
                         for arg in args {
                             if let Some(canonical) = is_tracked_object(*arg, &aliases, &sites) {
@@ -382,7 +376,10 @@ mod tests {
                 }
             )
         });
-        assert!(add_uses_value_ssa, "expected add chain to use literal SSA values");
+        assert!(
+            add_uses_value_ssa,
+            "expected add chain to use literal SSA values"
+        );
     }
 
     #[test]

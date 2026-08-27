@@ -10,7 +10,7 @@
 
 use super::cfg_fold::terminator_successors;
 use super::direct_call::{collect_uses, instr_uses, instruction_dest, terminator_uses};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use wjsm_ir::{
     BasicBlockId, Builtin, Constant, ConstantId, FunctionId, Instruction, Module, Terminator,
     ValueId, is_host_shared_variable,
@@ -438,7 +438,7 @@ pub(super) fn resolve_property_replacements(
     let predecessors = function_predecessors(function);
     let mut replacements = HashMap::new();
     let mut phis = Vec::new();
-    let keys: HashSet<String> = analysis
+    let keys: BTreeSet<String> = analysis
         .writes
         .iter()
         .map(|write| write.key.clone())

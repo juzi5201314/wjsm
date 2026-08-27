@@ -1241,8 +1241,10 @@ impl Lowerer {
         crate::passes::object_literal_read_fold::run(&mut self.module);
         // escape_scalar pass：逃逸分析 + 标量替换，消除局部 NewObject / ArrayTemplate / 字符串切片等分配。
         crate::passes::escape_scalar::run(&mut self.module);
+        // 值类重建：证明 Number 的算术不再保留 is_exception，关系比较改为 Compare。
+        wjsm_ir::typed_cfg::rewrite_program(&mut self.module, &std::collections::HashMap::new());
         // 终轮 cfg_fold：折叠 EA 消除后新生成的常量表达式、清理死块与 Phi。
-        crate::passes::cfg_fold::run(&mut self.module);
+        crate::passes::cfg_fold::run_after_value_class(&mut self.module);
         Ok(self.module)
     }
 }

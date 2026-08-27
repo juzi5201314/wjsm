@@ -52,7 +52,7 @@ IR 的运算符是有限枚举，后端对每个变体给出确定的指令序�
 
 - `BinaryOp`：`Add`、`Sub`、`Mul`、`Div`、`Mod`、`Exp`，以及位运算 `BitAnd`、`BitOr`、`BitXor`、`Shl`、`Shr`、`UShr`。
 - `UnaryOp`：`Not`、`Neg`、`Pos`、`BitNot`、`Void`、`IsNullish`、`Delete`。
-- `CompareOp`：只有 `StrictEq` 和 `StrictNotEq`。抽象相等和关系比较不在这里，它们走 `CallBuiltin`，因为需要完整的类型转换语义。
+- `CompareOp`：`StrictEq` / `StrictNotEq`，以及证明两侧为 Number 之后的关系比较 `Lt` / `Gt` / `LtEq` / `GtEq`（NaN → false）。未证明的关系比较仍走 `CallBuiltin(AbstractCompare)`。
 
 `IsNullish` 是为 `??` 和 `?.` 服务的合成运算符，没有对应的 JS 语法运算符。
 
@@ -66,7 +66,7 @@ IR 的运算符是有限枚举，后端对每个变体给出确定的指令序�
 - `needs_prototype`：普通函数为 `true`，箭头函数、方法、类构造器为 `false`。
 - `home_object`：方法的 `[[HomeObject]]`，`super` 属性访问依赖它。
 
-IR 不携带 JS 值的静态类型。后端自己在 `analysis_value_ty.rs` 里做值类型推断，用于省掉部分 NaN-box 解包。
+IR 指令本身不标注每个 SSA 值的 JS 类型。`wjsm-ir` 的值类 fixpoint（`value_class`）在 lowering 之后证明 Number / Int32 / 可抛性，供 `typed_cfg` 折叠虚假 `is_exception` 并把 Number 关系比较改写成 `Compare`。后端 `f64_analysis` 消费这些证明做 unbox / `fadd` / `fcmp`；overlay 用反馈种子在克隆 IR 上跑同一套分析。
 
 ## 深入了解
 

@@ -89,16 +89,14 @@ module {
       %23 = const c21
       %24 = mod %22, %23
       store var $0.x, %24
-      %25 = is_exception %24
-      branch %25, bb2, bb1
+      jump bb1
     bb1:
       %27 = load var $0.x
       %28 = call builtin.console.log(%27)
       %29 = is_exception %28
       branch %29, bb4, bb3
     bb2:
-      %26 = call builtin.exception_value(%24)
-      throw %26
+      unreachable
     bb3:
       %31 = const c22
       store var $0.y, %31
@@ -106,8 +104,7 @@ module {
       %33 = const c23
       %34 = exp %32, %33
       store var $0.y, %34
-      %35 = is_exception %34
-      branch %35, bb6, bb5
+      jump bb5
     bb4:
       %30 = call builtin.exception_value(%28)
       throw %30
@@ -117,8 +114,7 @@ module {
       %39 = is_exception %38
       branch %39, bb8, bb7
     bb6:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      unreachable
     bb7:
       %41 = const c24
       store var $0.z, %41
@@ -126,8 +122,7 @@ module {
       %43 = const c25
       %44 = shr %42, %43
       store var $0.z, %44
-      %45 = is_exception %44
-      branch %45, bb10, bb9
+      jump bb9
     bb8:
       %40 = call builtin.exception_value(%38)
       throw %40
@@ -137,8 +132,7 @@ module {
       %49 = is_exception %48
       branch %49, bb12, bb11
     bb10:
-      %46 = call builtin.exception_value(%44)
-      throw %46
+      unreachable
     bb11:
       %51 = const c26
       store var $0.w, %51
@@ -146,8 +140,7 @@ module {
       %53 = const c27
       %54 = shl %52, %53
       store var $0.w, %54
-      %55 = is_exception %54
-      branch %55, bb14, bb13
+      jump bb13
     bb12:
       %50 = call builtin.exception_value(%48)
       throw %50
@@ -157,8 +150,7 @@ module {
       %59 = is_exception %58
       branch %59, bb16, bb15
     bb14:
-      %56 = call builtin.exception_value(%54)
-      throw %56
+      unreachable
     bb15:
       %61 = const c28
       %62 = neg %61
@@ -167,8 +159,7 @@ module {
       %64 = const c29
       %65 = ushr %63, %64
       store var $0.u, %65
-      %66 = is_exception %65
-      branch %66, bb18, bb17
+      jump bb17
     bb16:
       %60 = call builtin.exception_value(%58)
       throw %60
@@ -178,8 +169,7 @@ module {
       %70 = is_exception %69
       branch %70, bb20, bb19
     bb18:
-      %67 = call builtin.exception_value(%65)
-      throw %67
+      unreachable
     bb19:
       %72 = const c30
       store var $0.v, %72
@@ -187,8 +177,7 @@ module {
       %74 = const c31
       %75 = bitor %73, %74
       store var $0.v, %75
-      %76 = is_exception %75
-      branch %76, bb22, bb21
+      jump bb21
     bb20:
       %71 = call builtin.exception_value(%69)
       throw %71
@@ -198,8 +187,7 @@ module {
       %80 = is_exception %79
       branch %80, bb24, bb23
     bb22:
-      %77 = call builtin.exception_value(%75)
-      throw %77
+      unreachable
     bb23:
       %82 = const c32
       store var $0.a, %82
@@ -207,8 +195,7 @@ module {
       %84 = const c33
       %85 = bitand %83, %84
       store var $0.a, %85
-      %86 = is_exception %85
-      branch %86, bb26, bb25
+      jump bb25
     bb24:
       %81 = call builtin.exception_value(%79)
       throw %81
@@ -218,8 +205,7 @@ module {
       %90 = is_exception %89
       branch %90, bb28, bb27
     bb26:
-      %87 = call builtin.exception_value(%85)
-      throw %87
+      unreachable
     bb27:
       %92 = const c34
       store var $0.b, %92
@@ -227,8 +213,7 @@ module {
       %94 = const c35
       %95 = bitxor %93, %94
       store var $0.b, %95
-      %96 = is_exception %95
-      branch %96, bb30, bb29
+      jump bb29
     bb28:
       %91 = call builtin.exception_value(%89)
       throw %91
@@ -238,8 +223,7 @@ module {
       %100 = is_exception %99
       branch %100, bb32, bb31
     bb30:
-      %97 = call builtin.exception_value(%95)
-      throw %97
+      unreachable
     bb31:
       return
     bb32:

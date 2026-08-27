@@ -154,7 +154,10 @@ fn encode_inline_latin1_wide(length: usize, wide: u64) -> i64 {
     payload |= (length as u64) << INLINE_STRING_LENGTH_SHIFT;
     payload |= wide & INLINE_STRING_PAYLOAD_MASK;
     let encoded = (BOX_BASE | payload) as i64;
-    debug_assert!(is_inline_latin1(encoded), "encode_inline_latin1 必须产出规范 SSO 值");
+    debug_assert!(
+        is_inline_latin1(encoded),
+        "encode_inline_latin1 必须产出规范 SSO 值"
+    );
     encoded
 }
 
@@ -169,7 +172,10 @@ pub fn encode_inline_ascii(bytes: &[u8]) -> Option<i64> {
         payload |= u64::from(byte) << (index * 7);
     }
     let encoded = (BOX_BASE | payload) as i64;
-    debug_assert!(is_inline_ascii(encoded), "encode_inline_ascii 必须产出规范 SSO 值");
+    debug_assert!(
+        is_inline_ascii(encoded),
+        "encode_inline_ascii 必须产出规范 SSO 值"
+    );
     Some(encoded)
 }
 

@@ -725,8 +725,7 @@ mod tests {
         let artifact = PortableArtifact::from_input(&input).expect("artifact should encode");
         let decoded = PortableArtifact::decode(artifact.bytes.clone(), &ArtifactLimits::default())
             .expect("artifact should decode");
-        let Constant::ObjectTemplate { keys } =
-            &decoded.program().constants()[template.0 as usize]
+        let Constant::ObjectTemplate { keys } = &decoded.program().constants()[template.0 as usize]
         else {
             panic!("expected object template constant");
         };

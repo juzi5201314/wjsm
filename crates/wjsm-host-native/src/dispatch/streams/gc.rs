@@ -125,7 +125,10 @@ fn extend_writable_edges(
     add: &mut impl FnMut(i64, i64),
 ) {
     let owner = writable.object;
-    if let Some(controller) = streams.writable_controllers.get(writable.controller as usize) {
+    if let Some(controller) = streams
+        .writable_controllers
+        .get(writable.controller as usize)
+    {
         add_value(add, owner, controller.object);
     }
     if let Some(transform) = writable.transform {

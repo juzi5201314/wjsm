@@ -117,6 +117,21 @@ impl fmt::Display for UnaryOp {
 pub enum CompareOp {
     StrictEq,
     StrictNotEq,
+    /// Number `<`：任一侧 NaN 则为 false。
+    Lt,
+    /// Number `>`：任一侧 NaN 则为 false。
+    Gt,
+    /// Number `<=`：任一侧 NaN 则为 false。
+    LtEq,
+    /// Number `>=`：任一侧 NaN 则为 false。
+    GtEq,
+}
+
+impl CompareOp {
+    /// 关系比较（不含严格相等）。
+    pub const fn is_relational(self) -> bool {
+        matches!(self, Self::Lt | Self::Gt | Self::LtEq | Self::GtEq)
+    }
 }
 
 impl fmt::Display for CompareOp {
@@ -124,6 +139,10 @@ impl fmt::Display for CompareOp {
         formatter.write_str(match self {
             Self::StrictEq => "stricteq",
             Self::StrictNotEq => "strictneq",
+            Self::Lt => "lt",
+            Self::Gt => "gt",
+            Self::LtEq => "lteq",
+            Self::GtEq => "gteq",
         })
     }
 }

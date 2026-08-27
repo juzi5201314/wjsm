@@ -41,13 +41,15 @@ JS/TS source
 
 `NativeImageRepository` 以 artifact digest、native ABI hash、native codegen source hash、target、Cranelift 版本和 codegen settings 组成 key。repository 只持有 `Weak<CompiledImage>`，由 runtime 的 `Arc` 决定 base image 生命周期；磁盘 cache 只保存当前宿主派生对象。校验失败的 cache 被 invalidated 后重编译，不能执行损坏字节。当合并 Program 含 `$builtin_main` 时，runtime 派生两份 image（builtin 段按 frontier IR digest，用户段按用户函数子 Program digest）。
 
-热调用点的反馈达到稳定阈值后，后台 worker 仍通过 `NativeCompiler` 从同一 verified `Program` 编译 typed wrapper/body；owner thread 只在 dispatcher 边界用 `CompiledImage::load_single_entry` 完成 relocation、RW→RX 与 unwind 注册后发布。overlay 不进入 artifact digest、`.wjsm`、repository 或磁盘 cache；每调用点最多两个版本，全 agent 同时受 64 个 overlay 与 16 MiB code+rodata 上限约束。LRU 淘汰只移除选择表中的 `Arc`，正在执行的 activation 继续 pin mapping；`CompiledImage` drop 必须先注销 unwind 再释放 mapping。
+热调用点或函数内 binary 反馈达到稳定阈值后，后台 worker 仍通过 `NativeCompiler` 从同一 verified `Program` 的**克隆**编译 typed wrapper/body（先跑与 AOT 相同的值类 / CFG 重建，再 Cranelift）；owner thread 只在 dispatcher 边界用 `CompiledImage::load_single_entry` 完成 relocation、RW→RX 与 unwind 注册后发布。overlay 不进入 artifact digest、`.wjsm`、repository 或磁盘 cache；每调用点最多两个版本，全 agent 同时受 64 个 overlay 与 16 MiB code+rodata 上限约束。LRU 淘汰只移除选择表中的 `Arc`，正在执行的 activation 继续 pin mapping；`CompiledImage` drop 必须先注销 unwind 再释放 mapping。
+
+投机 typed 区的类型 miss 必须 **deopt 回 generic native**（IR 循环头 + live boxed 值），generic 热循环可 **OSR 进入 overlay**。这不是解释器，也不是第二执行后端。合同见 [ADR 0022](0022-speculative-typed-regions.md)。
 
 ### 4. `NativeRuntime` 是唯一运行时 owner
 
 每个 agent 拥有独立的 pinned `NativeVmContext`、ManagedHeap、handle table、collector、scheduler、module/Promise/object side tables、反馈槽和 `SpecializationCoordinator`。后台 worker 不接触 runtime/GC/raw pointer；编译结果、失效与 RX overlay 发布只由 owner thread 处理。跨 agent 只允许 structured clone、SAB/Atomics 和显式 IPC 协议，不共享 GC handle 或 mutable runtime owner。
 
-GC 可在 Mark-Sweep、G1、ZGC 中启动时选择；root frame、host roots、weak/ephemeron closure、allocation-pressure safepoint 与 telemetry 由同一 native owner 接合。Shape/IC epoch 或 prototype generation 变化会使对应 overlay 退出选择表，当前调用继续 generic；`WJSM_DISABLE_SPECIALIZATION=1` 只关闭反馈与 overlay，不改变 generic AOT、IC 或语义路径。
+GC 可在 Mark-Sweep、G1、ZGC 中启动时选择；root frame、host roots、weak/ephemeron closure、allocation-pressure safepoint 与 telemetry 由同一 native owner 接合。Shape/IC epoch 或 prototype generation 变化会使对应 overlay 退出选择表并清空对应 `osr_entry`，当前调用继续 generic；`WJSM_DISABLE_SPECIALIZATION=1` 只关闭反馈、overlay、deopt/OSR 发布，不改变 generic AOT、IC 或语义路径。
 
 `NewObject`、`NewArray` 与 `new Array(length)` 的 native object allocation 在 root frame 已发布时按堆水位主动收集；遇到 `HeapExhausted` 时完整收集并重试一次。runtime 在执行开始前预建并显式钉扎冻结的 `RangeError` 对象及专用 exception side-table entry；仍不可恢复时直接返回该 entry，因此三种 collector 都抛出可捕获的 `RangeError("JavaScript heap out of memory")`，不会在满堆上再次分配错误对象或增长 exception 表。该保证只覆盖这些 native object allocation 路径，不表示 array growth、`allocate_array_values`、rest 参数或字符串 intern 已迁移到同一入口。
 
@@ -90,4 +92,5 @@ Direct native code 不具备 Wasm memory/control-flow sandbox。artifact verifie
 - ADR 0012 — Host builtins 后端解耦（历史）
 - ADR 0013 — 多后端完全支撑契约（历史）
 - ADR 0016 — 同宿主 native executable 为 stub + overlay
+- ADR 0022 — 投机 typed 区、deopt 与 OSR
 - `docs/backend-implementation-guide.md`

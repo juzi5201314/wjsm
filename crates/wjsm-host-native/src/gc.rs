@@ -403,7 +403,10 @@ impl NativeGc {
     /// 这里用 debug_assert 钉死单调性与 reservation 边界，便于 debug 构建捕获误用。
     pub(super) fn commit_native_tlab_cursor(&self, context: &NativeVmContext) {
         if let Some(window) = self.native_tlab.borrow_mut().as_mut() {
-            debug_assert!(context.bump_ptr >= window.top, "bump_ptr must not go backwards");
+            debug_assert!(
+                context.bump_ptr >= window.top,
+                "bump_ptr must not go backwards"
+            );
             debug_assert!(
                 context.bump_ptr <= window.reservation.object_limit(),
                 "bump_ptr must stay within reservation"

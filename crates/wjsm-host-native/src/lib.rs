@@ -15,7 +15,7 @@ use wjsm_artifact_format::{
 };
 use wjsm_backend_native::cache::{NativeCacheError, NativeImageRepository};
 use wjsm_backend_native::image::CompiledImage;
-use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver};
+use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver, extra_numbers_at_feedback_site};
 use wjsm_gc::backoff::Backoff;
 use wjsm_gc::heap_access::{object_payload_bytes, string_payload_bytes};
 use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey, StrView};
@@ -150,8 +150,12 @@ fn function_slots_for_program(
                     if shared_module_slots.contains(name.as_str()) {
                         continue;
                     }
-                    if !name.starts_with("$0.")
-                        && !captured_names.contains(name.as_str())
+                    // `$0.*` / `$sroa.*` 是跨函数同一存储：进入/退出时不得按
+                    // 本函数入口快照还原，否则闭包里的字段写在返回后丢失。
+                    if wjsm_ir::is_host_shared_variable(name) {
+                        continue;
+                    }
+                    if !captured_names.contains(name.as_str())
                         && let Some(slot) = variable_slots.get(name.as_str()).copied()
                     {
                         slots.push(usize::try_from(slot).expect("槽号在 usize 内"));
@@ -998,6 +1002,7 @@ struct NativeAgentState {
     output: RefCell<Vec<u8>>,
     stderr: RefCell<Vec<u8>>,
     call_arena: Box<[i64]>,
+    resume_live: Box<[i64]>,
     gc: gc::NativeGc,
     runtime_config: NativeRuntimeConfig,
     variables: Vec<i64>,
@@ -1209,6 +1214,7 @@ impl NativeAgentState {
             stderr: RefCell::new(Vec::new()),
             call_arena: vec![value::encode_undefined(); DEFAULT_CALL_ARENA_SLOTS]
                 .into_boxed_slice(),
+            resume_live: vec![0; 64].into_boxed_slice(),
             runtime_config: config.clone(),
             gc,
             variables: Vec::new(),
@@ -3232,6 +3238,80 @@ impl NativeAgentState {
         slot.operation = operation;
         slot.state = wjsm_ir::constants::FEEDBACK_STATE_RECORDING;
         Self::store_feedback_slot(feedback, slot);
+        if slot.consecutive_count >= wjsm_ir::constants::FEEDBACK_STABLE_THRESHOLD {
+            self.enqueue_binary_specialization(feedback, operation, arguments);
+        }
+    }
+
+    fn enqueue_binary_specialization(
+        &mut self,
+        feedback: ValidatedFeedbackSlot,
+        operation: u32,
+        arguments: &[i64],
+    ) {
+        if arguments.len() < 2 {
+            return;
+        }
+        if NativeFeedbackTag::of(arguments[0]) != NativeFeedbackTag::Number
+            || NativeFeedbackTag::of(arguments[1]) != NativeFeedbackTag::Number
+        {
+            return;
+        }
+        let Some(signature) = Self::feedback_tag_signature(&arguments[..2]) else {
+            return;
+        };
+        let Some(caller_function) = self
+            .activations
+            .last()
+            .and_then(|activation| activation.function)
+        else {
+            return;
+        };
+        let key = VariantKey {
+            caller_image_id: feedback.caller_image_id,
+            site_index: feedback.site_index,
+            target_image_id: caller_function.image_id,
+            target_function: caller_function.function_index,
+            tag_signature: signature,
+        };
+        let Some(program) = self
+            .program_snapshots
+            .get(&caller_function.image_id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(variable_slots) = self
+            .variable_slot_snapshots
+            .get(&caller_function.image_id)
+            .cloned()
+        else {
+            return;
+        };
+        let ic_epoch = self
+            .ic_epochs
+            .get(&caller_function.image_id)
+            .copied()
+            .unwrap_or(0);
+        let proto_generation = u64::from(self.gc.heap().shapes().proto_generation());
+        let extra_numbers = extra_numbers_at_feedback_site(
+            program.as_ref(),
+            wjsm_ir::FunctionId(caller_function.function_index),
+            feedback.site_index,
+        );
+        let Some(coordinator) = self.specialization.as_mut() else {
+            return;
+        };
+        coordinator.enqueue(CompilationRequest {
+            key,
+            program,
+            variable_slots,
+            argument_tags: Box::new([]),
+            extra_numbers,
+            ic_epoch,
+            proto_generation,
+        });
+        let _ = operation;
     }
 
     fn drain_specialization_results(&mut self) {
@@ -3246,6 +3326,7 @@ impl NativeAgentState {
         let Some(mut coordinator) = self.specialization.take() else {
             return;
         };
+        self.apply_osr_invalidations(&mut coordinator);
         for result in coordinator.drain_results() {
             let request = result.request;
             let Some(object) = result.object else {
@@ -3287,12 +3368,56 @@ impl NativeAgentState {
             };
             coordinator.publish(
                 request.key,
-                image,
+                Arc::clone(&image),
                 request.ic_epoch,
                 request.proto_generation,
             );
+            self.install_osr_entry(
+                request.key.target_image_id,
+                request.key.target_function,
+                &image,
+            );
         }
+        self.apply_osr_invalidations(&mut coordinator);
         self.specialization = Some(coordinator);
+    }
+
+    fn apply_osr_invalidations(&mut self, coordinator: &mut SpecializationCoordinator) {
+        for (image_id, function) in coordinator.take_osr_invalidations() {
+            if let Some(base) = self.images.get(&image_id)
+                && let Some(entry) = base.entries().get(function as usize)
+            {
+                entry
+                    .osr_entry
+                    .store(0, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+
+    pub(crate) fn evict_overlays_for_function(&mut self, function: u32) {
+        let Some(mut coordinator) = self.specialization.take() else {
+            return;
+        };
+        coordinator.disable_target_function(function);
+        self.apply_osr_invalidations(&mut coordinator);
+        self.specialization = Some(coordinator);
+    }
+
+    fn install_osr_entry(&self, image_id: u64, function: u32, overlay: &CompiledImage) {
+        let Some(wrapper) = overlay.entries().first() else {
+            return;
+        };
+        let osr = wrapper.osr_entry.load(std::sync::atomic::Ordering::Acquire);
+        if osr == 0 {
+            return;
+        }
+        if let Some(base) = self.images.get(&image_id)
+            && let Some(entry) = base.entries().get(function as usize)
+        {
+            entry
+                .osr_entry
+                .store(osr, std::sync::atomic::Ordering::Release);
+        }
     }
 
     fn select_specialized_entry(
@@ -3342,11 +3467,22 @@ impl NativeAgentState {
 
         let ic_epoch = self.ic_epochs.get(&function.image_id).copied().unwrap_or(0);
         let proto_generation = u64::from(self.gc.heap().shapes().proto_generation());
-        if let Some(image) = self
-            .specialization
-            .as_mut()
-            .and_then(|coordinator| coordinator.select(key, ic_epoch, proto_generation))
-        {
+        let (selected, invalidations) = {
+            let coordinator = self.specialization.as_mut()?;
+            let selected = coordinator.select(key, ic_epoch, proto_generation);
+            let invalidations = coordinator.take_osr_invalidations();
+            (selected, invalidations)
+        };
+        for (image_id, target) in invalidations {
+            if let Some(base) = self.images.get(&image_id)
+                && let Some(entry) = base.entries().get(target as usize)
+            {
+                entry
+                    .osr_entry
+                    .store(0, std::sync::atomic::Ordering::Release);
+            }
+        }
+        if let Some(image) = selected {
             let entry = image.entries().first()?;
             self.activations.last_mut()?.specialized_image = Some(Arc::clone(&image));
             return i64::try_from(entry.slow_entry as usize).ok();
@@ -3364,6 +3500,7 @@ impl NativeAgentState {
                     .copied()
                     .map(NativeFeedbackTag::of)
                     .collect(),
+                extra_numbers: HashSet::new(),
                 ic_epoch,
                 proto_generation,
             });
@@ -4297,8 +4434,7 @@ impl NativeAgentState {
             *byte = unit as u8;
         }
         let slice = &bytes[..units.len()];
-        value::encode_inline_ascii(slice)
-            .or_else(|| value::encode_inline_latin1(slice))
+        value::encode_inline_ascii(slice).or_else(|| value::encode_inline_latin1(slice))
     }
 
     fn intern_text(&mut self, text: String, tag: u64) -> Option<i64> {
@@ -5553,6 +5689,8 @@ impl NativeRuntime {
         let context = Pin::as_mut(&mut vmctx).get_mut();
         context.heap_state = std::ptr::from_mut(state.as_mut()).cast();
         context.call_arena_slots = state.call_arena.as_mut_ptr();
+        context.resume_live_slots = state.resume_live.as_mut_ptr();
+        context.resume_live_capacity = u32::try_from(state.resume_live.len()).unwrap_or(0);
         // 反馈开关位：生成代码的守卫快路径据此决定是否内联更新反馈槽。
         context.flags = if state.runtime_config.specialization_enabled {
             wjsm_native_abi::NATIVE_FLAGS_FEEDBACK_ENABLED
@@ -6406,10 +6544,7 @@ mod tests {
             .expect("array literal workload should execute");
         assert_eq!(execution.stdout, b"416\n");
         let diagnostics = runtime.allocation_diagnostics();
-        assert!(
-            diagnostics.tlab_fast_allocations >= 32,
-            "{diagnostics:?}"
-        );
+        assert!(diagnostics.tlab_fast_allocations >= 32, "{diagnostics:?}");
         assert!(
             diagnostics.tlab_flushes <= 2,
             "packed array push should not flush TLAB per element: {diagnostics:?}"
@@ -6442,10 +6577,7 @@ mod tests {
             .expect("tlab object template workload should execute");
         assert_eq!(execution.stdout, b"8128\n");
         let diagnostics = runtime.allocation_diagnostics();
-        assert!(
-            diagnostics.tlab_fast_allocations >= 64,
-            "{diagnostics:?}"
-        );
+        assert!(diagnostics.tlab_fast_allocations >= 64, "{diagnostics:?}");
     }
 
     #[test]

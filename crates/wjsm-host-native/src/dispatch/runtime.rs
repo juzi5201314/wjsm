@@ -59,6 +59,30 @@ pub(super) fn dispatch_runtime(
             crate::inspector::debug_check(ctx, state, function, line, column);
             value::encode_undefined()
         }
+        NativeRuntimeOp::DeoptToGeneric => {
+            let [function_id, block_id, env, this_value, _live_count] = args else {
+                return fail_dispatch(ctx);
+            };
+            let Ok(function_id) = u32::try_from(*function_id) else {
+                return fail_dispatch(ctx);
+            };
+            let Ok(block_id) = u32::try_from(*block_id) else {
+                return fail_dispatch(ctx);
+            };
+            ctx.resume_function_id = function_id;
+            ctx.resume_block_plus_one = block_id.saturating_add(1);
+            if ctx.function_table.is_null() || function_id >= ctx.function_table_len {
+                return fail_dispatch(ctx);
+            }
+            // SAFETY: function_table 由当前 base image 钉扎，owner thread 同步调用。
+            let entry = unsafe { &*ctx.function_table.add(function_id as usize) };
+            // 类型 miss 后禁止立刻 OSR 回同一 overlay，避免 generic 头 ↔ overlay 死循环。
+            entry
+                .osr_entry
+                .store(0, std::sync::atomic::Ordering::Release);
+            state.evict_overlays_for_function(function_id);
+            unsafe { (entry.slow_entry)(ctx, *env, *this_value, 0, 0) }
+        }
         NativeRuntimeOp::StoreVar => {
             let [slot, stored] = args else {
                 return fail_dispatch(ctx);

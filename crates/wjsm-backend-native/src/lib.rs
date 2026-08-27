@@ -9,6 +9,7 @@ pub(crate) mod specialize;
 pub(crate) mod unwind;
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, LazyLock};
 
 use cranelift_codegen::settings::{self, Configurable};
@@ -246,11 +247,13 @@ impl NativeCompiler {
         variable_slots: &HashMap<String, u32>,
         function: wjsm_ir::FunctionId,
         argument_tags: &[wjsm_native_abi::NativeFeedbackTag],
+        extra_numbers: &HashSet<wjsm_ir::ValueId>,
         collect_diagnostics: bool,
     ) -> Result<NativeCompilationDiagnostics, specialize::SpecializationError> {
         let profile = specialize::SpecializationProfile {
             function,
             argument_tags: argument_tags.into(),
+            extra_numbers: extra_numbers.clone(),
         };
         specialize::compile_specialized(
             Arc::clone(&self.isa),
@@ -269,8 +272,24 @@ impl NativeCompiler {
         function: wjsm_ir::FunctionId,
         argument_tags: &[wjsm_native_abi::NativeFeedbackTag],
     ) -> Result<NativeCompilationDiagnostics, specialize::SpecializationError> {
-        self.compile_specialized_function(program, variable_slots, function, argument_tags, true)
+        self.compile_specialized_function(
+            program,
+            variable_slots,
+            function,
+            argument_tags,
+            &HashSet::new(),
+            true,
+        )
     }
+}
+
+/// 反馈槽对应的 Binary/Compare/Unary SSA，用作 overlay 值类种子。
+pub fn extra_numbers_at_feedback_site(
+    program: &wjsm_ir::Program,
+    function: wjsm_ir::FunctionId,
+    site_index: u32,
+) -> HashSet<wjsm_ir::ValueId> {
+    specialize::extra_numbers_at_site(program, function, site_index)
 }
 
 fn set_flag(
@@ -806,8 +825,11 @@ mod tests {
             "wrapper should fall back to the base slow entry"
         );
         assert!(
-            diagnostics.clif.contains("fadd"),
-            "typed body should use native fadd"
+            diagnostics.clif.contains("fadd")
+                || diagnostics.clif.contains("sadd_overflow")
+                || diagnostics.clif.contains("iadd"),
+            "typed body should use native number add, got:\n{}",
+            diagnostics.clif
         );
         assert!(
             diagnostics.clif.contains("specialized wrapper"),

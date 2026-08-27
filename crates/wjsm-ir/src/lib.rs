@@ -2,8 +2,10 @@ pub mod builtin;
 pub mod cfg;
 pub mod constants;
 pub mod string_hash;
+pub mod typed_cfg;
 pub mod types;
 pub mod value;
+pub mod value_class;
 pub mod variable_ssa;
 mod verify;
 
@@ -19,7 +21,9 @@ pub const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
 
 /// 必须走共享 host 槽表的变量：模块级、跨函数协议槽、eval 桥。
 pub fn is_host_shared_variable(name: &str) -> bool {
-    matches!(name, "$this" | "$env" | EVAL_SCOPE_ENV_PARAM) || name.starts_with("$0.")
+    matches!(name, "$this" | "$env" | EVAL_SCOPE_ENV_PARAM)
+        || name.starts_with("$0.")
+        || name.starts_with("$sroa.")
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -259,7 +263,8 @@ impl Module {
     ///
     /// 跨函数只读/只写的共享槽（例如 builtin 写入、用户读取的 `$1.answer`）
     /// 必须留在 host 槽表。因内联而在多个函数里各自 StoreVar 的同名局部
-    /// 可以分别提升，互不影响。
+    /// 可以分别提升，互不影响。`$sroa.*` 是标量替换留下的跨函数字段槽，
+    /// 多名使用者必须共享同一 host 槽，不能按函数各提升一份。
     ///
     /// `$builtin_main` 的 StoreVar 是段接口：builtin image 按 Program digest
     /// 缓存、与用户段分开编译，用户 import 的 live binding 只会 LoadVar
@@ -303,6 +308,8 @@ impl Module {
                     .into_iter()
                     .filter(|name| {
                         !published.contains(name)
+                            && !(name.starts_with("$sroa.")
+                                && readers.get(name).is_some_and(|users| users.len() > 1))
                             && readers.get(name).is_none_or(|users| {
                                 users.iter().all(|user| {
                                     *user == index

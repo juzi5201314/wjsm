@@ -96,17 +96,14 @@ module {
     bb5:
       %27 = load var $0.i
       %28 = const c24
-      %30 = const c25
-      %31 = const c26
-      %29 = call builtin.abstract_compare(%27, %28, %30, %31)
+      %29 = lt %27, %28
       branch %29, bb6, bb7
     bb6:
       %32 = load var $0.i
       %33 = const c27
       %34 = add %32, %33
       store var $0.i, %34
-      %35 = is_exception %34
-      branch %35, bb9, bb8
+      jump bb8
     bb7:
       %37 = load var $0.i
       %38 = call builtin.console.log(%37)
@@ -115,8 +112,7 @@ module {
     bb8:
       jump bb5
     bb9:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      unreachable
     bb10:
       jump bb1
     bb11:

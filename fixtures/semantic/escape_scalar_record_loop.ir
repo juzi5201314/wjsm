@@ -69,9 +69,7 @@ module {
       %67 = phi [(bb0, %64), (bb3, %17)]
       %2 = load var $2.i
       %3 = const c26
-      %5 = const c27
-      %6 = const c28
-      %4 = call builtin.abstract_compare(%2, %3, %5, %6)
+      %4 = lt %2, %3
       branch %4, bb2, bb4
     bb2:
       %16 = const c33
@@ -219,15 +217,12 @@ module {
       %181 = phi [(bb6, %185), (bb9, %63)]
       %48 = load var $2.i
       %49 = const c26
-      %51 = const c27
-      %52 = const c28
-      %50 = call builtin.abstract_compare(%48, %49, %51, %52)
+      %50 = lt %48, %49
       branch %50, bb8, bb10
     bb8:
       %62 = const c33
       %63 = add %181, %62
-      %65 = is_exception %63
-      branch %65, bb12, bb11
+      jump bb11
     bb9:
       %106 = load var $2.i
       %107 = const c46
@@ -241,36 +236,22 @@ module {
       jump bb5
     bb11:
       %81 = add %63, %23
-      %83 = is_exception %81
-      branch %83, bb14, bb13
+      jump bb13
     bb12:
-      %66 = call builtin.exception_value(%63)
-      store var $sroa.$0.RECORD.name, %181
-      store var $sroa.$0.RECORD.value, %194
-      store var $sroa.$0.RECORD.length, %23
-      throw %66
+      unreachable
     bb13:
       %85 = load var $1.total
       %91 = add %85, %63
       %97 = add %91, %81
       %103 = add %97, %23
       store var $1.total, %103
-      %104 = is_exception %103
-      branch %104, bb16, bb15
+      jump bb15
     bb14:
-      %84 = call builtin.exception_value(%81)
-      store var $sroa.$0.RECORD.name, %181
-      store var $sroa.$0.RECORD.value, %194
-      store var $sroa.$0.RECORD.length, %23
-      throw %84
+      unreachable
     bb15:
       jump bb9
     bb16:
-      %105 = call builtin.exception_value(%103)
-      store var $sroa.$0.RECORD.name, %181
-      store var $sroa.$0.RECORD.value, %194
-      store var $sroa.$0.RECORD.length, %23
-      throw %105
+      unreachable
     bb17:
       %36 = call builtin.console.log(%174)
       %37 = is_exception %36
@@ -286,15 +267,12 @@ module {
       %185 = phi [(bb18, %21), (bb21, %128)]
       %113 = load var $2.i
       %114 = const c26
-      %116 = const c27
-      %117 = const c28
-      %115 = call builtin.abstract_compare(%113, %114, %116, %117)
+      %115 = lt %113, %114
       branch %115, bb20, bb22
     bb20:
       %127 = const c33
       %128 = add %185, %127
-      %130 = is_exception %128
-      branch %130, bb24, bb23
+      jump bb23
     bb21:
       %171 = load var $2.i
       %172 = const c46
@@ -308,34 +286,20 @@ module {
       jump bb17
     bb23:
       %146 = add %128, %23
-      %148 = is_exception %146
-      branch %148, bb26, bb25
+      jump bb25
     bb24:
-      %131 = call builtin.exception_value(%128)
-      store var $sroa.$0.RECORD.name, %185
-      store var $sroa.$0.RECORD.value, %200
-      store var $sroa.$0.RECORD.length, %23
-      throw %131
+      unreachable
     bb25:
       %150 = load var $1.total
       %156 = add %150, %128
       %162 = add %156, %146
       %168 = add %162, %23
       store var $1.total, %168
-      %169 = is_exception %168
-      branch %169, bb28, bb27
+      jump bb27
     bb26:
-      %149 = call builtin.exception_value(%146)
-      store var $sroa.$0.RECORD.name, %185
-      store var $sroa.$0.RECORD.value, %200
-      store var $sroa.$0.RECORD.length, %23
-      throw %149
+      unreachable
     bb27:
       jump bb21
     bb28:
-      %170 = call builtin.exception_value(%168)
-      store var $sroa.$0.RECORD.name, %185
-      store var $sroa.$0.RECORD.value, %200
-      store var $sroa.$0.RECORD.length, %23
-      throw %170
+      unreachable
 }

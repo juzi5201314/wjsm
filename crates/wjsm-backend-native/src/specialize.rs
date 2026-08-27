@@ -17,7 +17,7 @@ use cranelift_control::ControlPlane;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module, ModuleReloc};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use wjsm_ir::{Builtin, FunctionId, Instruction, Program, constants};
+use wjsm_ir::{Builtin, Function, FunctionId, Instruction, Program, ValueId, constants};
 use wjsm_native_abi::{NativeFeedbackTag, NativeFunctionEntry, NativeVmContext};
 
 use crate::f64_analysis::{infer_f64_values, infer_f64_values_with_param_seeds};
@@ -42,6 +42,8 @@ use crate::{NativeCompilationDiagnostics, NativeCompileError, NativeObject};
 pub struct SpecializationProfile {
     pub function: FunctionId,
     pub argument_tags: Box<[NativeFeedbackTag]>,
+    /// 稳定 Number 二元/比较反馈对应的 SSA（dest 与操作数），供无参热函数重建。
+    pub extra_numbers: HashSet<ValueId>,
 }
 
 /// 特化编译的内部失败：`NoBenefit` 表示宿主应保持 generic，不是 JS 异常。
@@ -67,9 +69,7 @@ pub(crate) fn compile_specialized(
     let Some(ir_function) = program.functions().get(target_index) else {
         return Err(SpecializationError::NoBenefit("target function is missing"));
     };
-    if profile.argument_tags.is_empty()
-        || profile.argument_tags.len() > constants::FEEDBACK_MAX_TAGS as usize
-    {
+    if profile.argument_tags.len() > constants::FEEDBACK_MAX_TAGS as usize {
         return Err(SpecializationError::NoBenefit(
             "profile arity is out of range",
         ));
@@ -80,10 +80,9 @@ pub(crate) fn compile_specialized(
             "profile tags exceed the parameter count",
         ));
     }
-    // 种子分析目前只把 Number 参数提升为 f64 起点；没有 Number tag 的 profile
-    // 必然在下面的收益判定处被拒，提前短路以省下一次全程序分析。
-    // 放开这道门槛需要后端先支持字符串/shape 类型特化。
-    if !profile.argument_tags.contains(&NativeFeedbackTag::Number) {
+    if !profile.argument_tags.is_empty()
+        && !profile.argument_tags.contains(&NativeFeedbackTag::Number)
+    {
         return Err(SpecializationError::NoBenefit(
             "profile has no number argument",
         ));
@@ -117,19 +116,29 @@ pub(crate) fn compile_specialized(
         }
     }
 
-    // 种子分析：Number 参数在 wrapper 守卫背书下作为 f64 起点；与无种子结果
-    // 相比没有新增证明时，该 profile 无收益，宿主保持 generic。
-    let mut seeds: HashMap<FunctionId, Vec<bool>> = HashMap::new();
-    seeds.insert(
-        profile.function,
-        profile
+    // 克隆 IR 后按种子重建 CFG；分析与 lowering 都针对派生函数，反馈槽仍按原 Program 编号。
+    let mut derived = program.clone();
+    let class_seeds = wjsm_ir::value_class::FunctionSeeds {
+        param_is_number: profile
             .argument_tags
             .iter()
             .map(|tag| *tag == NativeFeedbackTag::Number)
             .collect(),
-    );
+        extra_numbers: profile.extra_numbers.clone(),
+    };
+    let rewritten =
+        wjsm_ir::typed_cfg::rewrite_function(&mut derived, profile.function, Some(&class_seeds));
+    let ir_function = derived
+        .functions()
+        .get(target_index)
+        .ok_or(SpecializationError::NoBenefit("cloned target is missing"))?;
+    let frame_locals: BTreeSet<&str> = derived.frame_local_variable_names(ir_function);
+    let classes =
+        wjsm_ir::value_class::infer_function(&derived, ir_function, &frame_locals, &class_seeds);
+    let mut seeds: HashMap<FunctionId, Vec<bool>> = HashMap::new();
+    seeds.insert(profile.function, class_seeds.param_is_number.clone());
     let unseeded = infer_f64_values(program);
-    let seeded = infer_f64_values_with_param_seeds(program, &seeds);
+    let mut seeded = infer_f64_values_with_param_seeds(&derived, &seeds);
     let target_function_id =
         FunctionId(u32::try_from(target_index).map_err(|_| {
             SpecializationError::NoBenefit("target function index does not fit u32")
@@ -138,8 +147,15 @@ pub(crate) fn compile_specialized(
         .get(&target_function_id)
         .cloned()
         .unwrap_or_default();
+    seeded
+        .entry(target_function_id)
+        .or_default()
+        .extend(classes.numbers.iter().copied());
     let seeded_values = seeded.get(&target_function_id).cloned().unwrap_or_default();
-    if seeded_values.len() <= unseeded_values.len() {
+    if profile.extra_numbers.is_empty()
+        && !rewritten
+        && seeded_values.len() <= unseeded_values.len()
+    {
         return Err(SpecializationError::NoBenefit(
             "seeded analysis proves no additional f64 values",
         ));
@@ -168,15 +184,11 @@ pub(crate) fn compile_specialized(
     let string_add = declare_string_add_thunk(&mut module)?;
     let string_builder_finish = declare_string_builder_finish_thunk(&mut module)?;
     let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
-    let math_thunks = declare_math_thunks(&mut module, program, &seeded)?;
+    let math_thunks = declare_math_thunks(&mut module, &derived, &seeded)?;
 
-    let frame_locals: BTreeSet<&str> = program
-        .frame_local_variable_names_by_function()
-        .get(target_index)
-        .cloned()
-        .unwrap_or_default();
     let boxed_frame_locals =
         boxed_frame_local_names(ir_function, &frame_locals, &seeded, target_index);
+    let int32_values = classes.int32s;
     let root_plan = RootPlan::build(ir_function, &seeded_values);
     let root_capacity = root_frame_capacity(ir_function, &root_plan, boxed_frame_locals.len());
     let root_bitmaps = declare_root_bitmaps(&mut module, root_capacity)?;
@@ -210,7 +222,7 @@ pub(crate) fn compile_specialized(
     let body = compile_one_function(&FunctionCompileInput {
         isa: &isa,
         target_config,
-        program,
+        program: &derived,
         ir_function,
         index: target_index,
         signature: &signature,
@@ -231,6 +243,7 @@ pub(crate) fn compile_specialized(
         template_origins: &template_origins[target_index],
         feedback_slots: feedback_plan.function_slots(target_index),
         specialized_tags: Some(profile.argument_tags.as_ref()),
+        int32_values: &int32_values,
         function_decls: &[],
         direct_callable_functions: &HashSet::new(),
         collect_diagnostics,
@@ -493,4 +506,62 @@ fn compile_wrapper(
         clif,
         disassembly,
     })
+}
+
+/// 按与 generic 相同的槽编号取出该站点的 SSA 操作数与 dest。
+pub(crate) fn extra_numbers_at_site(
+    program: &Program,
+    function_id: FunctionId,
+    site_index: u32,
+) -> HashSet<ValueId> {
+    let plan = allocate_feedback_slots(program);
+    let index = function_id.0 as usize;
+    let Some(function) = program.functions().get(index) else {
+        return HashSet::new();
+    };
+    let mut seeds = HashSet::new();
+    for ((block_id, instruction_index), slot) in plan.function_slots(index) {
+        if *slot != site_index {
+            continue;
+        }
+        let Some(block) = function
+            .blocks()
+            .iter()
+            .find(|block| block.id() == *block_id)
+        else {
+            continue;
+        };
+        let Some(instruction) = block.instructions().get(*instruction_index) else {
+            continue;
+        };
+        match instruction {
+            Instruction::Binary { lhs, rhs, .. } | Instruction::Compare { lhs, rhs, .. } => {
+                insert_seedable(&mut seeds, function, *lhs);
+                insert_seedable(&mut seeds, function, *rhs);
+            }
+            Instruction::Unary { value, .. } => {
+                insert_seedable(&mut seeds, function, *value);
+            }
+            _ => {}
+        }
+    }
+    seeds
+}
+
+fn insert_seedable(seeds: &mut HashSet<ValueId>, function: &Function, value: ValueId) {
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            match instruction {
+                Instruction::Const { dest, .. }
+                | Instruction::LoadVar { dest, .. }
+                | Instruction::Phi { dest, .. }
+                    if *dest == value =>
+                {
+                    seeds.insert(value);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
 }

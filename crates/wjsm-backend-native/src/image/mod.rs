@@ -250,11 +250,14 @@ impl CompiledImage {
             .frame_bytes()
             .first()
             .ok_or(ImageLoadError::AddressOverflow)?;
+        let osr_addr =
+            resolve_exported_symbol_address(&file, &loaded, "wjsm_specialized_body").unwrap_or(0);
         let entries = vec![NativeFunctionEntry {
             slow_entry,
             local_function_id,
             frame_bytes,
             image_id: 0,
+            osr_entry: std::sync::atomic::AtomicUsize::new(osr_addr),
         }]
         .into_boxed_slice();
         let unwind = Some(register_unwind(&loaded)?);
@@ -1208,9 +1211,34 @@ fn build_entries(
             local_function_id: u32::try_from(index).map_err(|_| ImageLoadError::AddressOverflow)?,
             frame_bytes: object.frame_bytes()[index],
             image_id,
+            osr_entry: std::sync::atomic::AtomicUsize::new(0),
         });
     }
     Ok(entries)
+}
+
+fn resolve_exported_symbol_address(
+    file: &object::File<'_>,
+    loaded: &LoadedImage,
+    name: &str,
+) -> Option<usize> {
+    let symbol = file.symbol_by_name(name)?;
+    let SymbolSection::Section(section) = symbol.section() else {
+        return None;
+    };
+    let position = loaded
+        .sections
+        .iter()
+        .enumerate()
+        .find_map(|(position, loaded_section)| {
+            loaded_section
+                .index
+                .filter(|index| *index == section)
+                .map(|_| position)
+        })?;
+    loaded.sections[position]
+        .address(&loaded.mapping, symbol.address())
+        .ok()
 }
 
 fn resolve_process_symbol(name: &str, resolver: &dyn NativeSymbolResolver) -> Option<usize> {

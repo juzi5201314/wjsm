@@ -7,13 +7,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, AtomicU64};
+use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize};
 
 use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 20;
+pub const NATIVE_ABI_VERSION: u32 = 21;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -139,6 +139,13 @@ pub struct NativeVmContext {
     /// 当前 image 的对象模板 install 期元数据（`OBJECT_TEMPLATE_META_WORDS` u32/条）。
     pub object_template_meta_base: *const u32,
     pub object_template_meta_count: u32,
+    /// 1 + 要恢复的 IR `block_id`；0 表示正常入口。
+    pub resume_block_plus_one: u32,
+    pub resume_function_id: u32,
+    pub resume_live_count: u32,
+    pub resume_live_capacity: u32,
+    /// 循环头 deopt/OSR 的 boxed live 槽；由宿主持有。
+    pub resume_live_slots: *mut i64,
 }
 impl Default for NativeVmContext {
     fn default() -> Self {
@@ -189,6 +196,11 @@ impl Default for NativeVmContext {
             array_prototype_handle: 0,
             object_template_meta_base: std::ptr::null(),
             object_template_meta_count: 0,
+            resume_block_plus_one: 0,
+            resume_function_id: 0,
+            resume_live_count: 0,
+            resume_live_capacity: 0,
+            resume_live_slots: std::ptr::null_mut(),
         }
     }
 }
@@ -303,13 +315,15 @@ pub struct NativeFeedbackSlot {
     pub reserved: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct NativeFunctionEntry {
     pub slow_entry: NativeSlowEntry,
     pub local_function_id: u32,
     pub frame_bytes: u32,
     pub image_id: u64,
+    /// overlay typed body 指针；0 表示尚无 OSR 目标。owner thread 原子更新。
+    pub osr_entry: AtomicUsize,
 }
 
 pub type NativeSlowEntry = unsafe extern "C" fn(
@@ -456,6 +470,8 @@ pub enum NativeRuntimeOp {
     ExceptionValue = 0x1_0701,
     CooperativePoll = 0x1_0702,
     DebugCheck = 0x1_0703,
+    /// overlay 类型 miss：args 为 function_id、block_id、env、this、live_count。
+    DeoptToGeneric = 0x1_0704,
 }
 
 impl NativeRuntimeOp {
@@ -525,6 +541,7 @@ impl NativeRuntimeOp {
             0x1_0701 => Some(Self::ExceptionValue),
             0x1_0702 => Some(Self::CooperativePoll),
             0x1_0703 => Some(Self::DebugCheck),
+            0x1_0704 => Some(Self::DeoptToGeneric),
             _ => None,
         }
     }
@@ -830,6 +847,9 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, array_prototype_handle),
             offset_of!(NativeVmContext, object_template_meta_base),
             offset_of!(NativeVmContext, object_template_meta_count),
+            offset_of!(NativeVmContext, resume_block_plus_one),
+            offset_of!(NativeVmContext, resume_live_slots),
+            offset_of!(NativeFunctionEntry, osr_entry),
         ] {
             hasher.update(
                 u64::try_from(offset)
@@ -955,6 +975,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::ExceptionValue,
             NativeRuntimeOp::CooperativePoll,
             NativeRuntimeOp::DebugCheck,
+            NativeRuntimeOp::DeoptToGeneric,
         ] {
             hasher.update(operation.id().to_le_bytes());
         }

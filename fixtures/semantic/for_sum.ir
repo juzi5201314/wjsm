@@ -80,17 +80,14 @@ module {
     bb1:
       %23 = load var $1.i
       %24 = const c22
-      %26 = const c23
-      %27 = const c24
-      %25 = call builtin.abstract_compare(%23, %24, %26, %27)
+      %25 = lteq %23, %24
       branch %25, bb2, bb4
     bb2:
       %28 = load var $0.sum
       %29 = load var $1.i
       %30 = add %28, %29
       store var $0.sum, %30
-      %31 = is_exception %30
-      branch %31, bb6, bb5
+      jump bb5
     bb3:
       %33 = load var $1.i
       %34 = const c25
@@ -105,8 +102,7 @@ module {
     bb5:
       jump bb3
     bb6:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      unreachable
     bb7:
       return
     bb8:

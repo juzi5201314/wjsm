@@ -465,7 +465,10 @@ pub(crate) fn init_allocated_promise(
     if state
         .gc
         .heap()
-        .set_prototype(value::decode_handle(object), value::decode_handle(prototype))
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
         .is_err()
     {
         return None;

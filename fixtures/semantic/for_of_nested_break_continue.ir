@@ -93,8 +93,7 @@ module {
       %32 = const c22
       %33 = add %31, %32
       store var $0.total, %33
-      %34 = is_exception %33
-      branch %34, bb10, bb9
+      jump bb9
     bb5:
       call builtin.iterator.next(%23)
       jump bb3
@@ -115,15 +114,11 @@ module {
       %41 = call builtin.strict_eq(%39, %40)
       branch %41, bb13, bb14
     bb10:
-      %35 = call builtin.exception_value(%33)
-      %36 = call builtin.iterator.close(%23, %35)
-      %37 = is_exception %36
-      branch %37, bb12, bb11
+      unreachable
     bb11:
-      throw %35
+      unreachable
     bb12:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      unreachable
     bb13:
       jump bb5
     bb14:
