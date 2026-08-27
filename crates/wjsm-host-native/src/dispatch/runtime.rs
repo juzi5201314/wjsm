@@ -888,6 +888,17 @@ fn set_property_impl(
 /// String.prototype 等的扩展在 [[Get]] 路径同样不可见，因此这里不存在可
 /// 命中的用户 accessor setter；若未来打通用户可扩展基元原型，Get/Set 两侧
 /// 需一并补上原型链 accessor 查找。
+/// 值是否为 ECMAScript 基元（含 null / undefined）。
+fn is_primitive_value(encoded: i64) -> bool {
+    value::is_null(encoded)
+        || value::is_undefined(encoded)
+        || value::is_string(encoded)
+        || value::is_f64(encoded)
+        || value::is_bool(encoded)
+        || value::is_symbol(encoded)
+        || value::is_bigint(encoded)
+}
+
 fn set_on_primitive_receiver(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -1255,11 +1266,14 @@ fn ordinary_set_key(
             stored,
         );
     }
-    // OrdinarySetWithOwnDescriptor 步骤 3.d.iv：Receiver 非对象（如
+    // OrdinarySetWithOwnDescriptor 步骤 3.d.iv：Receiver 为基元（如
     // Reflect.set 显式传入基元 receiver）时数据属性写入返回 false。
-    let Some(receiver_handle) = object_handle(receiver) else {
+    // callable receiver 是对象、规范上应在其上建属性，当前 callable 属性
+    // 存于宿主侧表且此处不可达完整语义，保持显式失败而非静默错误结果。
+    if is_primitive_value(receiver) {
         return Ok(false);
-    };
+    }
+    let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
     if let Some(receiver_descriptor) = state
         .gc
         .heap()
