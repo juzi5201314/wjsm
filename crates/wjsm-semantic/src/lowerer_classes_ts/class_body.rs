@@ -363,6 +363,7 @@ impl Lowerer {
                 {
                     let key_dest = self.lower_prop_name_checked(&prop.key, &mut block)?;
                     if prop.is_static {
+                        self.emit_static_prototype_key_guard(&mut block, key_dest)?;
                         static_computed_keys.insert(member_index, key_dest);
                     } else {
                         let key_name = computed_instance_keys
@@ -468,6 +469,9 @@ impl Lowerer {
         let is_static = method.is_static;
         let target = if is_static { ctor_dest } else { proto_dest };
         let (method_name, m_key_dest) = self.lower_class_member_key(&method.key, &mut block)?;
+        if is_static && matches!(method.key, swc_ast::PropName::Computed(_)) {
+            self.emit_static_prototype_key_guard(&mut block, m_key_dest)?;
+        }
 
         match method.kind {
             swc_ast::MethodKind::Method => {
@@ -840,6 +844,54 @@ impl Lowerer {
                 Ok(("<computed>".to_string(), key_dest))
             }
         }
+    }
+
+    /// 静态成员计算键的 `"prototype"` 守卫：MakeConstructor 使构造器的
+    /// `prototype` 不可写不可配置，静态成员定义必然失败；各引擎（V8 /
+    /// SpiderMonkey / JSC）一致在键求值（ToPropertyKey 后）立即抛 TypeError，
+    /// 初始化器与后续键不再求值。Symbol 键与 `"prototype"` 严格不等，自然放行。
+    fn emit_static_prototype_key_guard(
+        &mut self,
+        block: &mut BasicBlockId,
+        key_dest: ValueId,
+    ) -> Result<(), LoweringError> {
+        let proto_const = self.emit_string_const(*block, "prototype");
+        let is_proto = self.alloc_value();
+        self.current_function.append_instruction(
+            *block,
+            Instruction::Compare {
+                dest: is_proto,
+                op: CompareOp::StrictEq,
+                lhs: key_dest,
+                rhs: proto_const,
+            },
+        );
+        let throw_block = self.current_function.new_block();
+        let cont_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            *block,
+            Terminator::Branch {
+                condition: is_proto,
+                true_block: throw_block,
+                false_block: cont_block,
+            },
+        );
+        let msg_val = self.emit_string_const(
+            throw_block,
+            "Classes may not have a static property named 'prototype'",
+        );
+        let error_val = self.alloc_value();
+        self.current_function.append_instruction(
+            throw_block,
+            Instruction::CallBuiltin {
+                dest: Some(error_val),
+                builtin: Builtin::TypeErrorConstructor,
+                args: vec![msg_val],
+            },
+        );
+        self.emit_throw_value(throw_block, error_val)?;
+        *block = cont_block;
+        Ok(())
     }
 
     /// 收集计算键实例字段的 key env 属性名（`$class_key#id_idx`）。

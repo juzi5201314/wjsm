@@ -799,13 +799,14 @@ pub(super) fn binary_add(
     }
 }
 
-/// 完整 [[Set]] 语义：proxy / 数组 length / regexp lastIndex / 数组命名属性 /
-/// callable 命名属性 / 普通对象 `ordinary_set`。返回写入后的值或异常。
-/// CreateDataPropertyOrThrow（ES §7.3.7）：在 receiver 上定义自有数据属性，
-/// 原型链上的 setter 一律不触发（区别于 `set_property_impl` 的 [[Set]] 语义）。
-/// receiver 覆盖类字段初始化的全部形态：普通对象（实例 `this`）、callable
-/// （静态字段的类构造器）、array（`class C extends Array` 的实例）。
-/// `key_value` 已完成 ToPropertyKey。
+/// CreateDataPropertyOrThrow（ES §7.3.7）：在 receiver 上定义自有数据属性
+/// { value, writable/enumerable/configurable: true }。区别于 [[Set]]：原型链
+/// setter 一律不触发；自有访问器整体替换为数据属性（静态字段覆盖先前同名
+/// 静态访问器）；既有不可配置属性按 ValidateAndApplyPropertyDescriptor 拒绝
+/// （desc 恒要求 configurable: true）。receiver 覆盖类字段初始化全部形态：
+/// 普通对象（实例 `this`）、callable（静态字段的类构造器）、array
+/// （`class C extends Array` 实例）、Proxy（基类构造器返回 Proxy 时走
+/// [[DefineOwnProperty]] trap）。`key_value` 已完成 ToPropertyKey。
 fn create_data_property_impl(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -813,10 +814,13 @@ fn create_data_property_impl(
     key_value: i64,
     stored: i64,
 ) -> i64 {
+    let configurable = constants::FLAG_CONFIGURABLE as u32;
     if value::is_proxy(object) {
-        // Proxy receiver（派生构造可返回 Proxy 实例）：沿用 [[Set]] trap 路由，
-        // 与既有 SetProp 行为一致；defineProperty trap 直连属 proxy 层专项。
-        return super::proxy::set(ctx, state, object, key_value, stored, object);
+        let descriptor = super::object::full_data_descriptor(ctx, state, stored);
+        if value::is_exception(descriptor) {
+            return descriptor;
+        }
+        return super::proxy::define_property(ctx, state, object, key_value, descriptor);
     }
     if value::is_array(object) && state.text_matches(key_value, "length") {
         let Some(length) = array_length(state, stored) else {
@@ -834,33 +838,103 @@ fn create_data_property_impl(
     };
     if value::is_array(object) {
         let handle = value::decode_handle(object);
+        let frozen = state
+            .array_property_flags
+            .get(&(handle, key))
+            .is_some_and(|flags| flags & configurable == 0)
+            || state
+                .array_accessors
+                .get(&(handle, key))
+                .is_some_and(|(_, _, flags)| flags & configurable == 0);
+        if frozen {
+            return type_error(ctx, state, "Cannot redefine non-configurable property");
+        }
+        state.array_accessors.remove(&(handle, key));
         state.note_array_property(handle, key);
         state.array_properties.insert((handle, key), stored);
         state
             .array_property_flags
-            .entry((handle, key))
-            .or_insert(ASSIGNED_PROPERTY_FLAGS);
+            .insert((handle, key), ASSIGNED_PROPERTY_FLAGS);
         return object;
     }
     if value::is_callable(object) {
-        set_callable_data_property(state, object, key, stored);
+        let callable = value::strip_gc_color(object);
+        if state
+            .callable_property_flags
+            .get(&(callable, key))
+            .is_some_and(|flags| flags & configurable == 0)
+        {
+            return type_error(ctx, state, "Cannot redefine non-configurable property");
+        }
+        state.callable_accessors.remove(&(callable, key));
+        state.callable_properties.insert((callable, key), stored);
+        state
+            .callable_property_flags
+            .insert((callable, key), ASSIGNED_PROPERTY_FLAGS);
         return object;
     }
     if !value::is_object(object) {
         return fail_dispatch(ctx);
     }
-    match set_property_or_out_of_memory(
-        ctx,
-        state,
-        value::decode_object_handle(object),
-        key,
-        stored as u64,
-    ) {
+    let handle = value::decode_object_handle(object);
+    let current = match state.gc.heap().get_property_slot(handle, key) {
+        Ok(current) => current,
+        Err(_) => return fail_dispatch(ctx),
+    };
+    match current {
+        Some(current) if current.flags & configurable == 0 => {
+            return type_error(ctx, state, "Cannot redefine non-configurable property");
+        }
+        None if state.non_extensible_objects.contains(&handle) => {
+            return type_error(
+                ctx,
+                state,
+                "Cannot define property on a non-extensible object",
+            );
+        }
+        _ => {}
+    }
+    match define_data_property_or_out_of_memory(ctx, state, handle, key, stored as u64) {
         Ok(()) => object,
         Err(exception) => exception,
     }
 }
 
+/// `define_data_property` 的 TLAB / OOM 重试包装：语义同
+/// `set_property_or_out_of_memory`，但按 OrdinaryDefineOwnProperty 整槽重定义
+/// （清除 ACCESSOR 位并写入完整数据属性特性），而非沿用既有槽位特性。
+fn define_data_property_or_out_of_memory(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    handle: u32,
+    key: PropertyKey,
+    stored: u64,
+) -> Result<(), i64> {
+    let define = |state: &mut NativeAgentState| {
+        state
+            .gc
+            .heap()
+            .define_data_property(handle, key, stored, ASSIGNED_PROPERTY_FLAGS)
+    };
+    match define(state) {
+        Ok(()) => Ok(()),
+        Err(HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+            state
+                .gc
+                .flush_native_tlab(ctx)
+                .map_err(|_| fail_dispatch(ctx))?;
+            define(state).map_err(|_| fail_dispatch(ctx))
+        }
+        Err(HeapAccessV2Error::HeapExhausted { .. }) => {
+            state.collect_garbage(ctx).map_err(|_| fail_dispatch(ctx))?;
+            define(state).map_err(|_| fail_dispatch(ctx))
+        }
+        Err(_) => Err(fail_dispatch(ctx)),
+    }
+}
+
+/// 完整 [[Set]] 语义：proxy / 数组 length / regexp lastIndex / 数组命名属性 /
+/// callable 命名属性 / 普通对象 `ordinary_set`。返回写入后的值或异常。
 fn set_property_impl(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
