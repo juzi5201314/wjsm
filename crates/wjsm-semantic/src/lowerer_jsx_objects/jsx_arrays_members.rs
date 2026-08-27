@@ -35,21 +35,24 @@ impl Lowerer {
                 continue;
             };
 
-            let val = self.lower_expr(&elem.expr, current)?;
-            current = self.resolve_store_block(current);
-            let builtin = if elem.spread.is_some() {
-                Builtin::ArrayPushSpread
+            let val = self.lower_expr_then_continue(&elem.expr, &mut current)?;
+            // ArrayAccumulation：元素求值抛异常必须传播——既不能把 TAG_EXCEPTION
+            // 存入数组，也不能继续求值后续元素或让 spread 静默展开为空。
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(&elem.expr) {
+                current = self.lower_value_exception_branch(current, val)?;
+            }
+            if elem.spread.is_some() {
+                current = self.emit_array_push_spread_checked(current, arr_dest, val)?;
             } else {
-                Builtin::ArrayPush
-            };
-            self.current_function.append_instruction(
-                current,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin,
-                    args: vec![arr_dest, val],
-                },
-            );
+                self.current_function.append_instruction(
+                    current,
+                    Instruction::CallBuiltin {
+                        dest: None,
+                        builtin: Builtin::ArrayPush,
+                        args: vec![arr_dest, val],
+                    },
+                );
+            }
         }
 
         self.expr_merge_block = Some(current);

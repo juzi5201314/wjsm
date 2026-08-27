@@ -179,22 +179,34 @@ module {
       %23 = const c21
       %24 = const c22
       %25 = call builtin.promise.resolve_static(%23, %24)
-      call builtin.array.push(%22, %25)
-      %26 = const c23
-      %27 = const c24
-      %28 = call builtin.promise.reject_static(%26, %27)
-      call builtin.array.push(%22, %28)
-      %29 = const c25
-      call builtin.array.push(%22, %29)
-      %30 = call builtin.promise.all_settled(%21, %22)
-      %31 = const c39
-      %32 = const c40
-      %33 = call builtin.promise.then(%30, %31, %32)
-      %34 = is_exception %33
-      branch %34, bb2, bb1
+      %26 = is_exception %25
+      branch %26, bb2, bb1
     bb1:
-      return
+      call builtin.array.push(%22, %25)
+      %28 = const c23
+      %29 = const c24
+      %30 = call builtin.promise.reject_static(%28, %29)
+      %31 = is_exception %30
+      branch %31, bb4, bb3
     bb2:
-      %35 = call builtin.exception_value(%33)
-      throw %35
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb3:
+      call builtin.array.push(%22, %30)
+      %33 = const c25
+      call builtin.array.push(%22, %33)
+      %34 = call builtin.promise.all_settled(%21, %22)
+      %35 = const c39
+      %36 = const c40
+      %37 = call builtin.promise.then(%34, %35, %36)
+      %38 = is_exception %37
+      branch %38, bb6, bb5
+    bb4:
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb5:
+      return
+    bb6:
+      %39 = call builtin.exception_value(%37)
+      throw %39
 }
