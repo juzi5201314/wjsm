@@ -233,9 +233,7 @@ impl Lowerer {
         value: ValueId,
         name: &str,
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
-        let name_const = self
-            .module
-            .add_constant(Constant::String(name.to_string()));
+        let name_const = self.module.add_constant(Constant::String(name.to_string()));
         let name_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -603,13 +601,17 @@ impl Lowerer {
         });
     }
 
+    /// 只回填 `from_index` 起（本类 lowering 期间新建）的函数：嵌套类先完成并
+    /// 回填自身区间，外层类 collect 阶段以 PENDING 入模的函数（私有 async
+    /// body/wrapper、构造器内箭头函数等）不得被内层类误改。
     pub(crate) fn patch_pending_ctor_home_object_references(
         &mut self,
         ctor_function_id: FunctionId,
+        from_index: usize,
     ) {
         let pending = Self::PENDING_CTOR_FUNCTION_ID;
         let count = self.module.functions().len();
-        for idx in 0..count {
+        for idx in from_index..count {
             let id = FunctionId(idx as u32);
             let Some(function) = self.module.function_mut(id) else {
                 continue;

@@ -51,6 +51,26 @@ class Task extends Base {
     return this.#viaSuper();
   }
 
+  // 字段初始化器中的嵌套类：其 PENDING ctor 回填只作用于自身区间，
+  // 不得误改外层类 collect 阶段入模的私有 async body/wrapper 的 home。
+  nested = (() => {
+    class Probe {
+      tag() {
+        return "probe";
+      }
+    }
+    return new Probe().tag();
+  })();
+
+  #arrowSuper() {
+    const read = () => super.greet();
+    return read();
+  }
+
+  arrowSuper() {
+    return this.#arrowSuper();
+  }
+
   async #mutate() {
     await Promise.resolve();
     this.#step += 1;
@@ -111,6 +131,7 @@ class Task extends Base {
 const task = new Task();
 console.log("plain-is-promise", task.plainIsPromise());
 console.log("brand", Task.tryCall(task), Task.tryCall({}));
+console.log("nested-probe", task.nested, task.arrowSuper());
 task
   .run(5)
   .then((value) => {
