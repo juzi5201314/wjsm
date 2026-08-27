@@ -6306,6 +6306,41 @@ mod tests {
     }
 
     #[test]
+    fn zgc_set_prop_ic_numeric_slots_survive_promotion() {
+        let artifact = artifact(
+            r#"
+                const record = { name: 0, value: 1, length: 2 };
+                for (let i = 0; i < 64; i++) {
+                    record.name = record.name + 1;
+                    record.value = record.name + record.length;
+                }
+                gc();
+                for (let i = 0; i < 64; i++) {
+                    record.name = record.name + 1;
+                    record.value = record.name + record.length;
+                }
+                console.log(record.name, record.value, record.length);
+            "#,
+        );
+        let config = NativeRuntimeConfig::default().with_gc_algorithm(GcAlgorithmKind::Zgc);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("ZGC runtime should initialize");
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "ZGC numeric SetProp IC should execute: {error:?}; stderr={:?}",
+                    runtime.take_stderr()
+                )
+            });
+        assert_eq!(execution.stdout, b"128 130 2\n");
+    }
+
+    #[test]
     fn inline_ascii_operations_stay_inline_under_zgc() {
         let artifact = artifact(
             r#"

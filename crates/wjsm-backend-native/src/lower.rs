@@ -3550,6 +3550,21 @@ fn emit_inline_string_predicate(
     builder.ins().band(boxed, kind_ok)
 }
 
+/// 判定 NaN-box 之外的标量（热路径上几乎都是 number）。
+///
+/// 无 `BOX_BASE` 的值不是 handle-backed reference：着色是空操作，SATB / Mark /
+/// remset 都不触发，IC 命中且 access epoch 为偶时可以跳过 store barrier thunk。
+fn emit_unboxed_nanbox_predicate(
+    builder: &mut FunctionBuilder<'_>,
+    encoded: ir::Value,
+) -> ir::Value {
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let boxed_bits = builder.ins().band_imm_s(encoded, box_base);
+    builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::NotEqual, boxed_bits, box_base)
+}
+
 /// 把运行时字符串句柄解析为当前读取作用域内稳定的堆地址。
 ///
 /// 每次调用都生成独立控制流；地址不跨块记忆，避免 ZGC epoch 变化后复用旧地址。
@@ -6813,6 +6828,7 @@ fn lower_set_prop_ic(
     let zgc_store_mode_block = cx.builder.create_block();
     let legacy_store_block = cx.builder.create_block();
     let zgc_direct_store_block = cx.builder.create_block();
+    let scalar_elide_block = cx.builder.create_block();
     let barrier_store_block = cx.builder.create_block();
     let store_done_block = cx.builder.create_block();
     let miss_block = cx.builder.create_block();
@@ -6915,6 +6931,9 @@ fn lower_set_prop_ic(
         &[],
     );
 
+    // IC 命中且 access epoch 为偶：对象地址稳定，可尝试跳过 store barrier thunk。
+    // 引用写入仍受 SATB / remset / 着色约束，因此这里只预计算「young + 未标记」
+    // 直写；number 等非 box 槽在命中后再与旧 word 一起判定。
     cx.builder.switch_to_block(zgc_fast_block);
     cx.builder.seal_block(zgc_fast_block);
     let phase_addr = cx.builder.ins().iadd_imm_s(
@@ -7009,6 +7028,25 @@ fn lower_set_prop_ic(
     cx.builder.seal_block(zgc_store_mode_block);
     cx.builder.ins().brif(
         direct_store,
+        zgc_direct_store_block,
+        &[],
+        scalar_elide_block,
+        &[],
+    );
+
+    // 偶数 epoch 下的标量直写：新旧 word 都不是 NaN-box 时 SATB/Mark/remset
+    // 均为空操作，晋升后的长寿对象（property-key 的 RECORD）也能跳过 thunk。
+    cx.builder.switch_to_block(scalar_elide_block);
+    cx.builder.seal_block(scalar_elide_block);
+    let stored_unboxed = emit_unboxed_nanbox_predicate(cx.builder, stored);
+    let old = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
+    let old_unboxed = emit_unboxed_nanbox_predicate(cx.builder, old);
+    let scalar_direct = cx.builder.ins().band(stored_unboxed, old_unboxed);
+    cx.builder.ins().brif(
+        scalar_direct,
         zgc_direct_store_block,
         &[],
         barrier_store_block,
