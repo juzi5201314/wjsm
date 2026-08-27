@@ -851,7 +851,8 @@ impl Lowerer {
                     );
                     // callee 表达式（如 `(f())()`）抛出时必须在调用前中止并传播。
                     let mut callee_eval_block = block;
-                    callee_val = self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
+                    callee_val =
+                        self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
                     callee_block = callee_eval_block;
                 }
             }
@@ -887,7 +888,9 @@ impl Lowerer {
                 } else {
                     let mut args = Vec::with_capacity(call.args.len());
                     for arg in &call.args {
-                        args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
+                        args.push(
+                            self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?,
+                        );
                     }
                     self.current_function.append_instruction(
                         call_block,

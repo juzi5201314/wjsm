@@ -1,0 +1,21 @@
+exit_code: 0
+--- stdout ---
+plain arg: boom
+nested arg: boom
+order: 1,caught
+method arg: boom
+receiver: receiver
+optional call arg: boom
+new arg: boom
+super arg: boom
+console arg: boom
+stringify arg: boom
+math order: 1,caught
+slice arg: boom
+template arg: boom
+tagged template: boom
+logical arg: boom
+cond arg: boom
+ok: 7 42 t1 [2,3]
+done
+--- stderr ---
