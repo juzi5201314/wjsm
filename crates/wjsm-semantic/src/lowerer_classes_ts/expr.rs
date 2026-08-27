@@ -31,7 +31,8 @@ impl Lowerer {
 
         let decorator_name = class_expr.ident.as_ref().map(|id| id.sym.as_ref());
 
-        let (block, ctor_dest, ctor_function_id) = self.lower_class_body(
+        let entry_block = block;
+        let (mut block, ctor_dest, ctor_function_id) = self.lower_class_body(
             &class_name,
             &class_expr.class,
             class_expr.span(),
@@ -51,8 +52,15 @@ impl Lowerer {
                 self.current_function
                     .record_known_callee(class_binding.var_ir_name(), function_id);
             }
-            self.store_binding_value(block, &class_binding, ctor_dest, class_expr.span(), true)?;
+            block =
+                self.store_binding_value(block, &class_binding, ctor_dest, class_expr.span(), true)?;
             self.scopes.pop_scope();
+        }
+
+        // 类求值（计算键异常分叉、装饰器等）可能推进 block：把延续块发布给
+        // 表达式调用方，否则后续指令会落回已终止的入口块。
+        if block != entry_block {
+            self.expr_merge_block = Some(block);
         }
 
         Ok(ctor_dest)

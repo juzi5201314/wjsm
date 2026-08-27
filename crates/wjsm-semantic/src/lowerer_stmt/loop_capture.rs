@@ -157,6 +157,13 @@ impl Visit for NestedFunctionReferenceScan {
         }
     }
 
+    fn visit_class(&mut self, class: &swc_ast::Class) {
+        // 类的延迟执行部位（构造器体、实例字段初始化器、方法体）在迭代结束后
+        // 仍会运行，等同嵌套函数捕获。计算键 / 静态初始化器在类定义期立即求值，
+        // 一并按边界处理只会多标记共享绑定，读到的仍是当前迭代值（见顶部注释）。
+        self.visit_function_boundary(std::iter::empty(), |scan| class.visit_children_with(scan));
+    }
+
     fn visit_binding_ident(&mut self, _: &swc_ast::BindingIdent) {}
 
     fn visit_member_expr(&mut self, member: &swc_ast::MemberExpr) {

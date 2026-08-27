@@ -311,27 +311,12 @@ pub(super) fn dispatch_runtime(
             let [object, key, stored] = args else {
                 return fail_dispatch(ctx);
             };
-            if !value::is_object(*object) {
-                return fail_dispatch(ctx);
-            }
             // CreateDataPropertyOrThrow 接收属性键：对象键先 ToPropertyKey 再入。
             let key = match to_property_key_value(ctx, state, *key) {
                 Ok(key) => key,
                 Err(exception) => return exception,
             };
-            let Some(key) = property_key(state, key) else {
-                return fail_dispatch(ctx);
-            };
-            match set_property_or_out_of_memory(
-                ctx,
-                state,
-                value::decode_object_handle(*object),
-                key,
-                *stored as u64,
-            ) {
-                Ok(()) => *object,
-                Err(exception) => exception,
-            }
+            create_data_property_impl(ctx, state, *object, key, *stored)
         }
         NativeRuntimeOp::SetPropIc => {
             let [object, key, stored, ic_slot_ptr] = args else {
@@ -816,6 +801,66 @@ pub(super) fn binary_add(
 
 /// 完整 [[Set]] 语义：proxy / 数组 length / regexp lastIndex / 数组命名属性 /
 /// callable 命名属性 / 普通对象 `ordinary_set`。返回写入后的值或异常。
+/// CreateDataPropertyOrThrow（ES §7.3.7）：在 receiver 上定义自有数据属性，
+/// 原型链上的 setter 一律不触发（区别于 `set_property_impl` 的 [[Set]] 语义）。
+/// receiver 覆盖类字段初始化的全部形态：普通对象（实例 `this`）、callable
+/// （静态字段的类构造器）、array（`class C extends Array` 的实例）。
+/// `key_value` 已完成 ToPropertyKey。
+fn create_data_property_impl(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key_value: i64,
+    stored: i64,
+) -> i64 {
+    if value::is_proxy(object) {
+        // Proxy receiver（派生构造可返回 Proxy 实例）：沿用 [[Set]] trap 路由，
+        // 与既有 SetProp 行为一致；defineProperty trap 直连属 proxy 层专项。
+        return super::proxy::set(ctx, state, object, key_value, stored, object);
+    }
+    if value::is_array(object) && state.text_matches(key_value, "length") {
+        let Some(length) = array_length(state, stored) else {
+            return range_error(ctx, state, "Invalid array length");
+        };
+        return state
+            .gc
+            .heap()
+            .set_array_length(value::decode_handle(object), length)
+            .map(|()| object)
+            .unwrap_or_else(|_| fail_dispatch(ctx));
+    }
+    let Some(key) = property_key(state, key_value) else {
+        return fail_dispatch(ctx);
+    };
+    if value::is_array(object) {
+        let handle = value::decode_handle(object);
+        state.note_array_property(handle, key);
+        state.array_properties.insert((handle, key), stored);
+        state
+            .array_property_flags
+            .entry((handle, key))
+            .or_insert(ASSIGNED_PROPERTY_FLAGS);
+        return object;
+    }
+    if value::is_callable(object) {
+        set_callable_data_property(state, object, key, stored);
+        return object;
+    }
+    if !value::is_object(object) {
+        return fail_dispatch(ctx);
+    }
+    match set_property_or_out_of_memory(
+        ctx,
+        state,
+        value::decode_object_handle(object),
+        key,
+        stored as u64,
+    ) {
+        Ok(()) => object,
+        Err(exception) => exception,
+    }
+}
+
 fn set_property_impl(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,

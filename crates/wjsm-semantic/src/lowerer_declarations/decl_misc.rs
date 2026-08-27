@@ -320,7 +320,9 @@ impl Lowerer {
         self.emit_field_init_common(block, this_scope_id, key_dest, init_value, is_private)
     }
 
-    /// 公有实例字段（含计算属性名 `[expr]`）。
+    /// 公有实例字段（静态属性名）。计算键不走此路径：其键在类定义期求值一次
+    /// 并经合成词法绑定传入构造器（见 `emit_instance_initializers`），此处
+    /// `lower_prop_name` 只会发射 Const，不产生控制流。
     pub(crate) fn emit_field_init_with_key(
         &mut self,
         block: BasicBlockId,
@@ -332,7 +334,10 @@ impl Lowerer {
         self.emit_field_init_common(block, this_scope_id, key_dest, init_value, false)
     }
 
-    fn emit_field_init_common(
+    /// DefineField（ES §7.3.33）：初始化器求值异常先传播，随后
+    /// CreateDataPropertyOrThrow 定义自有数据属性（原型链 setter 不触发）。
+    /// 初始化器可含调用/控制流，块须线程化推进。
+    pub(crate) fn emit_field_init_common(
         &mut self,
         block: BasicBlockId,
         this_scope_id: usize,
@@ -340,6 +345,8 @@ impl Lowerer {
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
     ) -> Result<BasicBlockId, LoweringError> {
+        let mut block = block;
+        let init_val = self.lower_field_init_value(&mut block, init_value)?;
         let this_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -348,20 +355,6 @@ impl Lowerer {
                 name: format!("${this_scope_id}.$this"),
             },
         );
-        let init_val = if let Some(value) = init_value {
-            self.lower_expr(value, block)?
-        } else {
-            let ud_const = self.module.add_constant(Constant::Undefined);
-            let ud_dest = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest: ud_dest,
-                    constant: ud_const,
-                },
-            );
-            ud_dest
-        };
         if is_private {
             self.current_function.append_instruction(
                 block,
@@ -371,11 +364,36 @@ impl Lowerer {
                     args: vec![this_val, key_dest, init_val],
                 },
             );
-        } else {
-            let result = self.emit_set_prop(block, this_val, key_dest, init_val);
-            return self.lower_value_exception_branch(block, result);
+            return Ok(self.resolve_store_block(block));
         }
-        Ok(self.resolve_store_block(block))
+        let result = self.emit_create_data_property(block, this_val, key_dest, init_val);
+        self.lower_value_exception_branch(block, result)
+    }
+
+    /// 字段初始化器求值：无初始化器时按规范取 undefined；有初始化器时求值并
+    /// 推进 block，其异常在字段定义之前传播。
+    fn lower_field_init_value(
+        &mut self,
+        block: &mut BasicBlockId,
+        init_value: Option<&swc_ast::Expr>,
+    ) -> Result<ValueId, LoweringError> {
+        let Some(value) = init_value else {
+            let ud_const = self.module.add_constant(Constant::Undefined);
+            let ud_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                *block,
+                Instruction::Const {
+                    dest: ud_dest,
+                    constant: ud_const,
+                },
+            );
+            return Ok(ud_dest);
+        };
+        let value_dest = self.lower_expr_then_continue(value, block)?;
+        if self.expr_exception_fork_allowed() && self.expr_can_throw(value) {
+            *block = self.lower_value_exception_branch(*block, value_dest)?;
+        }
+        Ok(value_dest)
     }
 
     /// TypeScript 参数属性 `constructor(private x)`：把形参值写入 `this.<name>`。
@@ -429,7 +447,7 @@ impl Lowerer {
         field_name: &str,
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
-    ) -> Result<(), LoweringError> {
+    ) -> Result<BasicBlockId, LoweringError> {
         let key_const = self
             .module
             .add_constant(Constant::String(field_name.to_string()));
@@ -444,40 +462,18 @@ impl Lowerer {
         self.emit_static_field_init_common(block, ctor_dest, key_dest, init_value, is_private)
     }
 
-    /// 公有静态字段（含计算属性名 `[expr]`）。
-    pub(crate) fn emit_static_field_init_with_key(
-        &mut self,
-        block: BasicBlockId,
-        ctor_dest: ValueId,
-        key: &swc_ast::PropName,
-        init_value: Option<&swc_ast::Expr>,
-    ) -> Result<(), LoweringError> {
-        let key_dest = self.lower_prop_name(key, block)?;
-        self.emit_static_field_init_common(block, ctor_dest, key_dest, init_value, false)
-    }
-
-    fn emit_static_field_init_common(
+    /// 静态字段 DefineField：键已求值（计算键在类定义期第一遍完成 ToPropertyKey），
+    /// 此处求初始化器并 CreateDataPropertyOrThrow，异常按规范传播。
+    pub(crate) fn emit_static_field_init_common(
         &mut self,
         block: BasicBlockId,
         ctor_dest: ValueId,
         key_dest: ValueId,
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
-    ) -> Result<(), LoweringError> {
-        let init_val = if let Some(value) = init_value {
-            self.lower_expr(value, block)?
-        } else {
-            let ud_const = self.module.add_constant(Constant::Undefined);
-            let ud_dest = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest: ud_dest,
-                    constant: ud_const,
-                },
-            );
-            ud_dest
-        };
+    ) -> Result<BasicBlockId, LoweringError> {
+        let mut block = block;
+        let init_val = self.lower_field_init_value(&mut block, init_value)?;
         if is_private {
             self.current_function.append_instruction(
                 block,
@@ -487,10 +483,10 @@ impl Lowerer {
                     args: vec![ctor_dest, key_dest, init_val],
                 },
             );
-        } else {
-            self.emit_set_prop(block, ctor_dest, key_dest, init_val);
+            return Ok(self.resolve_store_block(block));
         }
-        Ok(())
+        let result = self.emit_create_data_property(block, ctor_dest, key_dest, init_val);
+        self.lower_value_exception_branch(block, result)
     }
 
     pub(crate) fn emit_private_method_bind(
