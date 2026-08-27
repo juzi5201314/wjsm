@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: 'arguments' is not allowed in class field initializer or static initialization block
+ --> errors/class_field_arguments_early_error.js:5:23
+5 |     static x = (() => arguments.length)();
+  |                       ^^^^^^^^^
+

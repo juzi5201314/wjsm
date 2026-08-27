@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+42
+true
+6
+14
+9
+4.5
+field-a,block,field-b
+a b
+10
+function
+6 10
+undefined
+ok
+--- stderr ---
