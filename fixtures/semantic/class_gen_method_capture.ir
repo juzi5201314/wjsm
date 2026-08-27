@@ -1,0 +1,868 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = number(2.718281828459045)
+    c5 = number(2.302585092994046)
+    c6 = number(0.6931471805599453)
+    c7 = number(0.4342944819032518)
+    c8 = number(1.4426950408889634)
+    c9 = number(3.141592653589793)
+    c10 = number(0.7071067811865476)
+    c11 = number(1.4142135623730951)
+    c12 = number(0.0000000000000002220446049250313)
+    c13 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c14 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c15 = number(9007199254740991)
+    c16 = number(-9007199254740991)
+    c17 = number(NaN)
+    c18 = number(-inf)
+    c19 = number(inf)
+    c20 = undefined
+    c21 = number(0)
+    c22 = number(0)
+    c23 = functionref(@0)
+    c24 = string("constructor")
+    c25 = string("bump")
+    c26 = number(0)
+    c27 = number(1)
+    c28 = number(2)
+    c29 = number(3)
+    c30 = number(4)
+    c31 = number(5)
+    c32 = undefined
+    c33 = string("$0.vCount")
+    c34 = string("$0.vCount")
+    c35 = number(1)
+    c36 = string("$0.vCount")
+    c37 = number(1)
+    c38 = number(2)
+    c39 = string("$0.vCount")
+    c40 = number(10)
+    c41 = string("$0.vCount")
+    c42 = undefined
+    c43 = number(0)
+    c44 = number(1)
+    c45 = number(0)
+    c46 = functionref(@2)
+    c47 = functionref(@1)
+    c48 = number(7)
+    c49 = undefined
+    c50 = number(2)
+    c51 = number(3)
+    c52 = number(4)
+    c53 = number(5)
+    c54 = functionref(@2)
+    c55 = undefined
+    c56 = string("$0.vCount")
+    c57 = string("staticBump")
+    c58 = number(0)
+    c59 = number(1)
+    c60 = number(2)
+    c61 = number(3)
+    c62 = number(4)
+    c63 = number(5)
+    c64 = undefined
+    c65 = string("$0.lCount")
+    c66 = string("$0.lCount")
+    c67 = number(1)
+    c68 = string("$0.lCount")
+    c69 = number(1)
+    c70 = number(2)
+    c71 = undefined
+    c72 = number(0)
+    c73 = number(1)
+    c74 = number(0)
+    c75 = functionref(@4)
+    c76 = functionref(@3)
+    c77 = number(7)
+    c78 = undefined
+    c79 = number(2)
+    c80 = number(3)
+    c81 = number(4)
+    c82 = number(5)
+    c83 = functionref(@4)
+    c84 = string("$0.lCount")
+    c85 = string("prototype")
+    c86 = string("bump")
+    c87 = string("instance-var")
+    c88 = string("next")
+    c89 = string("value")
+    c90 = undefined
+    c91 = string("$0.vCount")
+    c92 = string("next")
+    c93 = string("instance-var-compound")
+    c94 = undefined
+    c95 = string("$0.vCount")
+    c96 = string("staticBump")
+    c97 = string("next")
+    c98 = string("static-let")
+    c99 = undefined
+    c100 = string("$0.lCount")
+    c101 = string("$0.vCount")
+    c102 = number(100)
+    c103 = string("bump")
+    c104 = string("reuse")
+    c105 = string("next")
+    c106 = string("value")
+    c107 = undefined
+    c108 = string("$0.vCount")
+    c109 = functionref(@5)
+    c110 = string("constructor")
+    c111 = string("tick")
+    c112 = number(0)
+    c113 = number(1)
+    c114 = number(6)
+    c115 = number(2)
+    c116 = number(3)
+    c117 = number(4)
+    c118 = undefined
+    c119 = string("$0.lCount")
+    c120 = number(100)
+    c121 = string("$0.lCount")
+    c122 = string("$0.lCount")
+    c123 = number(1)
+    c124 = number(2)
+    c125 = undefined
+    c126 = number(0)
+    c127 = number(1)
+    c128 = number(0)
+    c129 = functionref(@7)
+    c130 = functionref(@6)
+    c131 = number(7)
+    c132 = undefined
+    c133 = number(2)
+    c134 = number(3)
+    c135 = number(4)
+    c136 = number(6)
+    c137 = functionref(@7)
+    c138 = string("prototype")
+    c139 = string("tick")
+    c140 = string("next")
+    c141 = string("async-gen")
+    c142 = string("value")
+    c143 = string("$0.lCount")
+    c144 = functionref(@8)
+    c145 = undefined
+    c146 = string("sync-tail")
+    c147 = undefined
+    c148 = string("$0.lCount")
+    c149 = bool(true)
+    c150 = bool(false)
+
+  fn @Counter.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
+    bb0:
+      return
+
+  fn @bump$gen [captures: $0.vCount] [params: $3.$env, $3.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c26
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $3.$state, %2
+      %3 = const c27
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $3.$is_rejected, %4
+      %5 = const c28
+      %6 = call builtin.continuation.load_var(%0, %5)
+      store var $3.$generator, %6
+      %7 = const c29
+      %8 = call builtin.continuation.load_var(%0, %7)
+      store var $3.$closure_env, %8
+      %9 = load var $3.$this
+      store var $3.$resume_val, %9
+      %10 = const c30
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $3.$this, %11
+      %12 = const c31
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $3.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c32
+      store var $3.$shared_env, %14
+      %57 = load var $3.$state
+      switch %57 [case c43 -> bb2, case c44 -> bb5], default bb12, exit bb13
+    bb2:
+      %15 = load var $3.$closure_env
+      %16 = const c33
+      %17 = load var $3.$closure_env
+      %18 = const c34
+      %19 = get_prop %17, %18
+      %20 = const c35
+      %21 = add %19, %20
+      %22 = set_prop %15, %16, %21
+      %23 = is_exception %22
+      branch %23, bb4, bb3
+    bb3:
+      %27 = load var $3.$closure_env
+      %28 = const c36
+      %29 = get_prop %27, %28
+      %30 = load var $3.$generator
+      %31 = call builtin.generator.next(%30, %29)
+      generator_suspend %31, state=1
+      jump bb7
+    bb4:
+      %24 = call builtin.exception_value(%22)
+      %25 = load var $3.$generator
+      %26 = call builtin.generator.throw(%25, %24)
+      return %26
+    bb5:
+      %32 = load var $3.$resume_val
+      %33 = load var $3.$is_rejected
+      %34 = const c37
+      %35 = stricteq %33, %34
+      branch %35, bb6, bb9
+    bb6:
+      %38 = load var $3.$generator
+      %39 = call builtin.generator.throw(%38, %32)
+      return %39
+    bb7:
+      %43 = load var $3.$closure_env
+      %44 = const c39
+      %45 = get_prop %43, %44
+      %46 = const c40
+      %47 = add %45, %46
+      %48 = const c41
+      %49 = set_prop %43, %48, %47
+      %50 = is_exception %49
+      branch %50, bb11, bb10
+    bb8:
+      %40 = load var $3.$generator
+      %41 = call builtin.generator.return(%40, %32)
+      return %41
+    bb9:
+      %36 = const c38
+      %37 = stricteq %33, %36
+      branch %37, bb8, bb7
+    bb10:
+      %54 = load var $3.$generator
+      %55 = const c42
+      %56 = call builtin.generator.return(%54, %55)
+      return %56
+    bb11:
+      %51 = call builtin.exception_value(%49)
+      %52 = load var $3.$generator
+      %53 = call builtin.generator.throw(%52, %51)
+      return %53
+    bb12:
+      return
+    bb13:
+      unreachable
+
+  fn @bump [needs_prototype] [captures: $0.vCount] [params: $4.$env, $4.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c45
+      %3 = const c46
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      store var $4.arguments, %2
+      %4 = const c47
+      %5 = load var $env
+      %6 = call builtin.create_closure(%4, %5)
+      %7 = const c48
+      %8 = const c49
+      %9 = call builtin.continuation.create(%6, %8, %7)
+      %10 = call builtin.generator.start(%9)
+      %11 = load var $4.$this
+      %12 = const c50
+      call builtin.continuation.save_var(%9, %12, %10)
+      %13 = const c51
+      call builtin.continuation.save_var(%9, %13, %5)
+      %14 = const c52
+      call builtin.continuation.save_var(%9, %14, %11)
+      %15 = load var $4.arguments
+      %16 = const c53
+      call builtin.continuation.save_var(%9, %16, %15)
+      return %10
+
+  fn @staticBump$gen [captures: $0.lCount] [params: $5.$env, $5.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c58
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $5.$state, %2
+      %3 = const c59
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $5.$is_rejected, %4
+      %5 = const c60
+      %6 = call builtin.continuation.load_var(%0, %5)
+      store var $5.$generator, %6
+      %7 = const c61
+      %8 = call builtin.continuation.load_var(%0, %7)
+      store var $5.$closure_env, %8
+      %9 = load var $5.$this
+      store var $5.$resume_val, %9
+      %10 = const c62
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $5.$this, %11
+      %12 = const c63
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $5.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c64
+      store var $5.$shared_env, %14
+      %46 = load var $5.$state
+      switch %46 [case c72 -> bb2, case c73 -> bb5], default bb10, exit bb11
+    bb2:
+      %15 = load var $5.$closure_env
+      %16 = const c65
+      %17 = load var $5.$closure_env
+      %18 = const c66
+      %19 = get_prop %17, %18
+      %20 = const c67
+      %21 = add %19, %20
+      %22 = set_prop %15, %16, %21
+      %23 = is_exception %22
+      branch %23, bb4, bb3
+    bb3:
+      %27 = load var $5.$closure_env
+      %28 = const c68
+      %29 = get_prop %27, %28
+      %30 = load var $5.$generator
+      %31 = call builtin.generator.next(%30, %29)
+      generator_suspend %31, state=1
+      jump bb7
+    bb4:
+      %24 = call builtin.exception_value(%22)
+      %25 = load var $5.$generator
+      %26 = call builtin.generator.throw(%25, %24)
+      return %26
+    bb5:
+      %32 = load var $5.$resume_val
+      %33 = load var $5.$is_rejected
+      %34 = const c69
+      %35 = stricteq %33, %34
+      branch %35, bb6, bb9
+    bb6:
+      %38 = load var $5.$generator
+      %39 = call builtin.generator.throw(%38, %32)
+      return %39
+    bb7:
+      %43 = load var $5.$generator
+      %44 = const c71
+      %45 = call builtin.generator.return(%43, %44)
+      return %45
+    bb8:
+      %40 = load var $5.$generator
+      %41 = call builtin.generator.return(%40, %32)
+      return %41
+    bb9:
+      %36 = const c70
+      %37 = stricteq %33, %36
+      branch %37, bb8, bb7
+    bb10:
+      return
+    bb11:
+      unreachable
+
+  fn @staticBump [needs_prototype] [captures: $0.lCount] [params: $6.$env, $6.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c74
+      %3 = const c75
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      store var $6.arguments, %2
+      %4 = const c76
+      %5 = load var $env
+      %6 = call builtin.create_closure(%4, %5)
+      %7 = const c77
+      %8 = const c78
+      %9 = call builtin.continuation.create(%6, %8, %7)
+      %10 = call builtin.generator.start(%9)
+      %11 = load var $6.$this
+      %12 = const c79
+      call builtin.continuation.save_var(%9, %12, %10)
+      %13 = const c80
+      call builtin.continuation.save_var(%9, %13, %5)
+      %14 = const c81
+      call builtin.continuation.save_var(%9, %14, %11)
+      %15 = load var $6.arguments
+      %16 = const c82
+      call builtin.continuation.save_var(%9, %16, %15)
+      return %10
+
+  fn @AsyncCounter.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [params: $8.$env, $8.$this] [entry=bb0]:
+    bb0:
+      return
+
+  fn @tick$asyncgen [captures: $0.lCount] [params: $9.$env, $9.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $9.$env
+      %1 = const c112
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $9.$state, %2
+      %3 = const c113
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $9.$is_rejected, %4
+      %5 = load var $9.$this
+      store var $9.$resume_val, %5
+      %6 = const c114
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $9.$this, %7
+      %8 = const c115
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $9.$generator, %9
+      %10 = const c116
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $9.$closure_env, %11
+      %12 = const c117
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $9.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c118
+      store var $9.$shared_env, %14
+      %38 = load var $9.$state
+      switch %38 [case c126 -> bb2, case c127 -> bb3], default bb8, exit bb9
+    bb2:
+      %15 = load var $9.$closure_env
+      %16 = const c119
+      %17 = get_prop %15, %16
+      %18 = const c120
+      %19 = add %17, %18
+      %20 = const c121
+      %21 = set_prop %15, %20, %19
+      %22 = load var $9.$closure_env
+      %23 = const c122
+      %24 = get_prop %22, %23
+      %25 = load var $9.$generator
+      %26 = call builtin.async_generator.next(%25, %24)
+      suspend %26, state=1
+      jump bb5
+    bb3:
+      %27 = load var $9.$resume_val
+      %28 = load var $9.$is_rejected
+      %29 = const c123
+      %30 = stricteq %28, %29
+      branch %30, bb4, bb7
+    bb4:
+      %33 = load var $9.$generator
+      call builtin.async_generator.throw(%33, %27)
+      return
+    bb5:
+      %36 = load var $9.$generator
+      %37 = const c125
+      call builtin.async_generator.return(%36, %37)
+      return
+    bb6:
+      %34 = load var $9.$generator
+      call builtin.async_generator.return(%34, %27)
+      return
+    bb7:
+      %31 = const c124
+      %32 = stricteq %28, %31
+      branch %32, bb6, bb5
+    bb8:
+      return
+    bb9:
+      unreachable
+
+  fn @tick [needs_prototype] [captures: $0.lCount] [params: $10.$env, $10.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c128
+      %3 = const c129
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      store var $10.arguments, %2
+      %4 = const c130
+      %5 = load var $env
+      %6 = call builtin.create_closure(%4, %5)
+      %7 = const c131
+      %8 = const c132
+      %9 = call builtin.continuation.create(%6, %8, %7)
+      %10 = call builtin.async_generator.start(%9)
+      %11 = const c133
+      call builtin.continuation.save_var(%9, %11, %10)
+      %12 = const c134
+      call builtin.continuation.save_var(%9, %12, %5)
+      %13 = load var $10.arguments
+      %14 = const c135
+      call builtin.continuation.save_var(%9, %14, %13)
+      %15 = load var $10.$this
+      %16 = const c136
+      call builtin.continuation.save_var(%9, %16, %15)
+      return %10
+
+  fn @arrow_8 [captures: $0.lCount] [params: $11.$env, $11.$this, $11.r] [entry=bb0]:
+    bb0:
+      %0 = const c141
+      %1 = load var $11.r
+      %2 = const c142
+      %3 = get_prop %1, %2
+      %4 = load var $env
+      %5 = const c143
+      %6 = get_prop %4, %5
+      %7 = call builtin.console.log(%0, %3, %6)
+      %8 = is_exception %7
+      branch %8, bb2, bb1
+    bb1:
+      return
+    bb2:
+      %9 = call builtin.exception_value(%7)
+      throw %9
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.vCount, %0
+      %1 = const c1
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      store var $0.Math.E, %4
+      %5 = const c5
+      store var $0.Math.LN10, %5
+      %6 = const c6
+      store var $0.Math.LN2, %6
+      %7 = const c7
+      store var $0.Math.LOG10E, %7
+      %8 = const c8
+      store var $0.Math.LOG2E, %8
+      %9 = const c9
+      store var $0.Math.PI, %9
+      %10 = const c10
+      store var $0.Math.SQRT1_2, %10
+      %11 = const c11
+      store var $0.Math.SQRT2, %11
+      %12 = const c12
+      store var $0.Number.EPSILON, %12
+      %13 = const c13
+      store var $0.Number.MAX_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MIN_VALUE, %14
+      %15 = const c15
+      store var $0.Number.MAX_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.MIN_SAFE_INTEGER, %16
+      %17 = const c17
+      store var $0.Number.NaN, %17
+      %18 = const c18
+      store var $0.Number.NEGATIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.Number.POSITIVE_INFINITY, %19
+      %20 = call builtin.create_global_object()
+      store var $0.$global, %20
+      %21 = const c20
+      store var $this, %21
+      %22 = const c21
+      store var $0.vCount, %22
+      %23 = const c22
+      store var $0.lCount, %23
+      %24 = const c23
+      %25 = new_object(capacity=4)
+      %26 = const c24
+      %27 = set_prop %25, %26, %24
+      %28 = const c25
+      %29 = const c54
+      %30 = const c55
+      store var $0.$shared_env, %30
+      %31 = new_object(capacity=1)
+      %32 = load var $env
+      set_proto %31, %32
+      store var $0.$shared_env, %31
+      %33 = load var $0.vCount
+      %34 = const c56
+      %35 = set_prop %31, %34, %33
+      %36 = call builtin.create_closure(%29, %31)
+      %37 = set_prop %25, %28, %36
+      %38 = const c57
+      %39 = const c83
+      %40 = load var $0.lCount
+      %41 = const c84
+      %42 = set_prop %31, %41, %40
+      %43 = call builtin.create_closure(%39, %31)
+      %44 = set_prop %24, %38, %43
+      %45 = const c85
+      %46 = set_prop %24, %45, %25
+      store var $1.Counter, %24
+      store var $0.Counter, %24
+      %47 = const c23
+      %48 = new_object(capacity=4)
+      %49 = call builtin.get_prototype_from_constructor(%47)
+      set_proto %48, %49
+      jump bb69
+    bb1:
+      unreachable
+    bb2:
+      jump bb3
+    bb3:
+      jump bb5
+    bb4:
+      unreachable
+    bb5:
+      jump bb6
+    bb6:
+      %56 = const c86
+      %57 = get_prop %48, %56
+      %58 = call %57, this=%48
+      %59 = is_exception %58
+      branch %59, bb9, bb8
+    bb7:
+      unreachable
+    bb8:
+      store var $0.it, %58
+      %61 = const c87
+      %62 = load var $0.it
+      %63 = const c88
+      %64 = get_prop %62, %63
+      %65 = call %64, this=%62
+      %66 = const c89
+      %67 = get_prop %65, %66
+      %68 = load var $0.$shared_env
+      %69 = const c90
+      %70 = stricteq %68, %69
+      %71 = const c91
+      branch %70, bb10, bb11
+    bb9:
+      %60 = call builtin.exception_value(%58)
+      throw %60
+    bb10:
+      %73 = load var $0.vCount
+      jump bb13
+    bb11:
+      %72 = call builtin.object.has_own(%68, %71)
+      branch %72, bb12, bb10
+    bb12:
+      %74 = get_prop %68, %71
+      jump bb13
+    bb13:
+      %75 = phi [(bb10, %73), (bb12, %74)]
+      %76 = call builtin.console.log(%61, %67, %75)
+      %77 = is_exception %76
+      branch %77, bb15, bb14
+    bb14:
+      %79 = load var $0.it
+      %80 = const c92
+      %81 = get_prop %79, %80
+      %82 = call %81, this=%79
+      %83 = is_exception %82
+      branch %83, bb17, bb16
+    bb15:
+      %78 = call builtin.exception_value(%76)
+      throw %78
+    bb16:
+      %85 = const c93
+      %86 = load var $0.$shared_env
+      %87 = const c94
+      %88 = stricteq %86, %87
+      %89 = const c95
+      branch %88, bb18, bb19
+    bb17:
+      %84 = call builtin.exception_value(%82)
+      throw %84
+    bb18:
+      %91 = load var $0.vCount
+      jump bb21
+    bb19:
+      %90 = call builtin.object.has_own(%86, %89)
+      branch %90, bb20, bb18
+    bb20:
+      %92 = get_prop %86, %89
+      jump bb21
+    bb21:
+      %93 = phi [(bb18, %91), (bb20, %92)]
+      %94 = call builtin.console.log(%85, %93)
+      %95 = is_exception %94
+      branch %95, bb23, bb22
+    bb22:
+      %97 = const c23
+      %98 = const c96
+      %99 = get_prop %97, %98
+      %100 = call %99, this=%97
+      %101 = const c97
+      %102 = get_prop %100, %101
+      %103 = call %102, this=%100
+      %104 = is_exception %103
+      branch %104, bb25, bb24
+    bb23:
+      %96 = call builtin.exception_value(%94)
+      throw %96
+    bb24:
+      %106 = const c98
+      %107 = load var $0.$shared_env
+      %108 = const c99
+      %109 = stricteq %107, %108
+      %110 = const c100
+      branch %109, bb26, bb27
+    bb25:
+      %105 = call builtin.exception_value(%103)
+      throw %105
+    bb26:
+      %112 = load var $0.lCount
+      jump bb29
+    bb27:
+      %111 = call builtin.object.has_own(%107, %110)
+      branch %111, bb28, bb26
+    bb28:
+      %113 = get_prop %107, %110
+      jump bb29
+    bb29:
+      %114 = phi [(bb26, %112), (bb28, %113)]
+      %115 = call builtin.console.log(%106, %114)
+      %116 = is_exception %115
+      branch %116, bb31, bb30
+    bb30:
+      %118 = load var $0.$shared_env
+      %119 = const c101
+      %120 = const c102
+      %121 = set_prop %118, %119, %120
+      %122 = is_exception %121
+      branch %122, bb33, bb32
+    bb31:
+      %117 = call builtin.exception_value(%115)
+      throw %117
+    bb32:
+      %124 = const c23
+      %125 = new_object(capacity=4)
+      %126 = call builtin.get_prototype_from_constructor(%124)
+      set_proto %125, %126
+      jump bb67
+    bb33:
+      %123 = call builtin.exception_value(%121)
+      throw %123
+    bb34:
+      unreachable
+    bb35:
+      jump bb36
+    bb36:
+      jump bb38
+    bb37:
+      unreachable
+    bb38:
+      jump bb39
+    bb39:
+      %133 = const c103
+      %134 = get_prop %125, %133
+      %135 = call %134, this=%125
+      %136 = is_exception %135
+      branch %136, bb42, bb41
+    bb40:
+      unreachable
+    bb41:
+      store var $0.it2, %135
+      %138 = const c104
+      %139 = load var $0.it2
+      %140 = const c105
+      %141 = get_prop %139, %140
+      %142 = call %141, this=%139
+      %143 = const c106
+      %144 = get_prop %142, %143
+      %145 = load var $0.$shared_env
+      %146 = const c107
+      %147 = stricteq %145, %146
+      %148 = const c108
+      branch %147, bb43, bb44
+    bb42:
+      %137 = call builtin.exception_value(%135)
+      throw %137
+    bb43:
+      %150 = load var $0.vCount
+      jump bb46
+    bb44:
+      %149 = call builtin.object.has_own(%145, %148)
+      branch %149, bb45, bb43
+    bb45:
+      %151 = get_prop %145, %148
+      jump bb46
+    bb46:
+      %152 = phi [(bb43, %150), (bb45, %151)]
+      %153 = call builtin.console.log(%138, %144, %152)
+      %154 = is_exception %153
+      branch %154, bb48, bb47
+    bb47:
+      %156 = const c109
+      %157 = new_object(capacity=4)
+      %158 = const c110
+      %159 = set_prop %157, %158, %156
+      %160 = const c111
+      %161 = const c137
+      %162 = load var $0.$shared_env
+      %163 = call builtin.create_closure(%161, %162)
+      %164 = set_prop %157, %160, %163
+      %165 = const c138
+      %166 = set_prop %156, %165, %157
+      store var $7.AsyncCounter, %156
+      store var $0.AsyncCounter, %156
+      %167 = const c109
+      %168 = new_object(capacity=4)
+      %169 = call builtin.get_prototype_from_constructor(%167)
+      set_proto %168, %169
+      jump bb65
+    bb48:
+      %155 = call builtin.exception_value(%153)
+      throw %155
+    bb49:
+      unreachable
+    bb50:
+      jump bb51
+    bb51:
+      jump bb53
+    bb52:
+      unreachable
+    bb53:
+      jump bb54
+    bb54:
+      %176 = const c139
+      %177 = get_prop %168, %176
+      %178 = call %177, this=%168
+      %179 = const c140
+      %180 = get_prop %178, %179
+      %181 = call %180, this=%178
+      %182 = const c144
+      %183 = load var $0.$shared_env
+      %184 = call builtin.create_closure(%182, %183)
+      %185 = const c145
+      %186 = call builtin.promise.then(%181, %184, %185)
+      %187 = is_exception %186
+      branch %187, bb57, bb56
+    bb55:
+      unreachable
+    bb56:
+      %189 = const c146
+      %190 = load var $0.$shared_env
+      %191 = const c147
+      %192 = stricteq %190, %191
+      %193 = const c148
+      branch %192, bb58, bb59
+    bb57:
+      %188 = call builtin.exception_value(%186)
+      throw %188
+    bb58:
+      %195 = load var $0.lCount
+      jump bb61
+    bb59:
+      %194 = call builtin.object.has_own(%190, %193)
+      branch %194, bb60, bb58
+    bb60:
+      %196 = get_prop %190, %193
+      jump bb61
+    bb61:
+      %197 = phi [(bb58, %195), (bb60, %196)]
+      %198 = call builtin.console.log(%189, %197)
+      %199 = is_exception %198
+      branch %199, bb63, bb62
+    bb62:
+      return
+    bb63:
+      %200 = call builtin.exception_value(%198)
+      throw %200
+    bb64:
+      jump bb50
+    bb65:
+      jump bb64
+    bb66:
+      jump bb35
+    bb67:
+      jump bb66
+    bb68:
+      jump bb2
+    bb69:
+      jump bb68
+}
