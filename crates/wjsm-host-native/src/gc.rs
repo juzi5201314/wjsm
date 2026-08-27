@@ -117,8 +117,11 @@ impl NativeGc {
         allocation_diagnostics_enabled: bool,
     ) -> Result<Self, NativeGcError> {
         let heap = Self::fresh_heap(max_heap_size)?;
-        let collector =
-            GenerationalZgc::new(Arc::clone(&heap), worker_count(), ZGC_PACKET_CAPACITY)?;
+        let collector = GenerationalZgc::new(
+            Arc::clone(&heap),
+            worker_count(),
+            ZGC_PACKET_CAPACITY,
+        )?;
         let control = GcRuntimeV2::new();
         let mutator = control.register_mutator();
         Ok(Self {

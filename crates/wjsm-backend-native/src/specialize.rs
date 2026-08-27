@@ -192,12 +192,10 @@ pub(crate) fn compile_specialized(
     let int32_values = classes.int32s;
     let root_plan = RootPlan::build(ir_function, &seeded_values);
     let root_capacity = root_frame_capacity(ir_function, &root_plan, boxed_frame_locals.len());
-    let safepoint_free =
-        infer_safepoint_free_functions(&derived, variable_slots).contains(&FunctionId(
-            u32::try_from(target_index).map_err(|_| {
-                NativeCompileError::Capacity("specialized function index exceeds u32")
-            })?,
-        ));
+    let safepoint_free = infer_safepoint_free_functions(&derived, variable_slots)
+        .contains(&FunctionId(u32::try_from(target_index).map_err(|_| {
+            NativeCompileError::Capacity("specialized function index exceeds u32")
+        })?));
     let root_capacity = if safepoint_free { 0 } else { root_capacity };
     let root_bitmaps = declare_root_bitmaps(&mut module, root_capacity)?;
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
