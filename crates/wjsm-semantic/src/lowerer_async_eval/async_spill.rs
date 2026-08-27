@@ -235,9 +235,9 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
             replace(object);
             replace(value);
         }
-        // ObjectSpread 的 dest 是被写入的既有对象，属于 use 而非 def。
-        ObjectSpread { dest, source } => {
-            replace(dest);
+        // ObjectSpread 的 use 是被写入对象与 spread 源；dest 是结果定义。
+        ObjectSpread { object, source, .. } => {
+            replace(object);
             replace(source);
         }
         PromiseResolve { promise, value }

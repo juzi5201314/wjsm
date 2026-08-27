@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+plain-is-promise true
+brand callable TypeError
+nested-probe probe base
+instance 15 2
+static static-ok
+params 1,2,2,4
+super base+base
+chain 11:12
+recover caught:kaboom
+reject rejected:kaboom
+--- stderr ---

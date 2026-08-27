@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+jsx spread source: jsx-boom
+jsx getter: jsx-getter
+jsx nested child: jsx-boom
+ok: div {"id":"main","a":1,"b":2} 2
+--- stderr ---

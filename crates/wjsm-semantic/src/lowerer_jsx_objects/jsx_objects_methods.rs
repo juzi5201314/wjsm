@@ -32,6 +32,11 @@ impl Lowerer {
                 swc_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
                     swc_ast::Prop::KeyValue(kv) => {
                         let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+                        // PropertyDefinitionEvaluation：属性值求值抛异常必须传播，
+                        // 不得把 TAG_EXCEPTION 存为属性值后继续求值后续属性。
+                        if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
+                            block = self.lower_value_exception_branch(block, val_dest)?;
+                        }
                         self.lower_object_prop(obj_dest, &kv.key, val_dest, &mut block)?;
                     }
                     swc_ast::Prop::Shorthand(ident) => {
@@ -153,13 +158,12 @@ impl Lowerer {
                 },
                 swc_ast::PropOrSpread::Spread(spread) => {
                     let source = self.lower_expr_then_continue(&spread.expr, &mut block)?;
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::ObjectSpread {
-                            dest: obj_dest,
-                            source,
-                        },
-                    );
+                    // CopyDataProperties：spread 源求值抛异常必须传播，
+                    // 不得让 TAG_EXCEPTION 流入 ObjectSpread 被静默吞掉。
+                    if self.expr_exception_fork_allowed() && self.expr_can_throw(&spread.expr) {
+                        block = self.lower_value_exception_branch(block, source)?;
+                    }
+                    block = self.emit_object_spread_checked(block, obj_dest, source)?;
                 }
             }
         }
@@ -695,6 +699,11 @@ impl Lowerer {
                 unreachable!("collect_sso_object_literal_keys 仅接受 KeyValue");
             };
             let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+            // 与通用路径一致：属性值求值抛异常必须传播，
+            // 不得把 TAG_EXCEPTION 烘焙进 InitObjectLiteral 的值列表。
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
+                block = self.lower_value_exception_branch(block, val_dest)?;
+            }
             values.push(val_dest);
         }
         let obj_dest = self.alloc_value();
