@@ -420,15 +420,34 @@ impl Lowerer {
                             .set_initialised(sid, class_name, true)
                             .map_err(|msg| self.error(method.span, msg))?;
                     }
-                    let function =
-                        self.lower_method_prop_to_fn(&method.key, &method.function, Some(target))?;
+                    // 类方法的 [[HomeObject]] 静态可知，async 函数族 body 的 super
+                    // 经静态元数据接线，不依赖 env 上的 `home`。generator（含 async
+                    // generator）wrapper 因此无需包 home env——包装反而使 body 深度 0
+                    // 的捕获写落在包装对象上遮蔽共享 env；async 非 generator 方法
+                    // 保留 home wrapper（eval meta 等仍消费 env home）。
+                    let method_home = if method.function.is_generator {
+                        None
+                    } else {
+                        Some(target)
+                    };
+                    let static_home = if is_static {
+                        HomeObject::Constructor(ctor_function_id)
+                    } else {
+                        HomeObject::Prototype(ctor_function_id)
+                    };
+                    let function = self.lower_method_prop_to_fn(
+                        &method.key,
+                        &method.function,
+                        method_home,
+                        Some(static_home),
+                    )?;
                     if let Some(sid) = class_scope_id {
                         let _ = self.scopes.set_initialised(sid, class_name, false);
                     }
                     let (continuation, mut method_value) = self.materialize_method_function_value(
                         block,
                         &function,
-                        Some(target),
+                        method_home,
                         method.function.span,
                     )?;
                     block = continuation;

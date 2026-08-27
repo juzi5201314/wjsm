@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+instance-var 1 1
+instance-var-compound 11
+static-let 1
+reuse 101 101
+sync-tail 101
+async-gen 101 101
+--- stderr ---
