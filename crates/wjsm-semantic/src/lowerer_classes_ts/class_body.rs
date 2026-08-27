@@ -100,10 +100,16 @@ impl Lowerer {
         let ctor_param_pats: Vec<&swc_ast::Pat> = ctor_param_pats_owned.iter().collect();
         let param_ir_names =
             self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id)?;
-        // 形参 IR 名此时才确定，回填成 (形参 IR 名, 字段名)。
-        let param_prop_fields: Vec<(String, String)> = param_prop_slots
+        // 形参 IR 名此时才确定，回填成 (形参绑定, 字段名)；绑定携带作用域
+        // id，箭头 super() 站点可经捕获链读取外层构造器帧的形参。
+        let param_prop_fields: Vec<(CapturedBinding, String)> = param_prop_slots
             .into_iter()
-            .map(|(slot, field)| (param_ir_names[slot].clone(), field))
+            .map(|(slot, field)| {
+                (
+                    crate::lowerer_modules::parse_ir_name_to_binding(&param_ir_names[slot]),
+                    field,
+                )
+            })
             .collect();
         if let Some(ctor) = constructor {
             if class.super_class.is_some()
@@ -205,7 +211,7 @@ impl Lowerer {
         if !(constructor.is_some() && is_derived) {
             // 基类构造器 this 从入口即存在；派生缺省构造器已在上方完成
             // super() 与重绑。参数属性字段先于字段初始化器生效（TS 语义）。
-            field_block = self.emit_param_prop_fields(field_block, &param_prop_fields);
+            field_block = self.emit_param_prop_fields(field_block, &param_prop_fields)?;
             field_block = self.emit_instance_initializers(
                 field_block,
                 &class.body,

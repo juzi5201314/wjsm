@@ -539,6 +539,7 @@ module {
       %4 = call builtin.is_js_object(%2)
       branch %4, bb3, bb4
     bb3:
+      store var $8.$this, %2
       jump bb5
     bb4:
       jump bb5
@@ -557,7 +558,8 @@ module {
       %7 = call builtin.exception_value(%5)
       throw %7
     bb8:
-      return
+      %14 = load var $8.$this
+      return %14
     bb9:
       %13 = call builtin.exception_value(%11)
       throw %13
@@ -1001,7 +1003,7 @@ module {
       %17 = load var $19.$closure_env
       set_proto %16, %17
       store var $19.$shared_env, %16
-      %18 = load var $this
+      %18 = load var $19.$this
       %19 = const c204
       %20 = set_prop %16, %19, %18
       %21 = call builtin.create_closure(%15, %16)

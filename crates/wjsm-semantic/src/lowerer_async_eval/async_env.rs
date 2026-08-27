@@ -757,12 +757,19 @@ impl Lowerer {
     }
 
     pub(crate) fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
-        // 箭头函数的 this 是词法捕获的，通过 env 对象读取
-        let is_arrow = self.is_arrow_fn_stack.last().copied().unwrap_or(false);
-        if is_arrow {
+        Ok(self.emit_read_ctor_this(block))
+    }
+
+    /// 读取当前帧可见的 this 绑定，三条路径都不引入控制流：
+    /// - 箭头帧：this 是词法捕获，沿 env 原型链读取并向外登记捕获；
+    /// - 派生构造器体内存在箭头 super() 时（`ctor_this_via_env`），this 的
+    ///   规范存储是共享 env——箭头帧的 BindThisValue 重绑写 env，本帧必须
+    ///   同样经 env 读取才能观察到重绑后的 this；
+    /// - 其余非箭头帧：读本地 scoped `$this` 槽。
+    pub(crate) fn emit_read_ctor_this(&mut self, block: BasicBlockId) -> ValueId {
+        if self.is_arrow {
             let binding = CapturedBinding::lexical_this();
             self.record_capture(binding.clone());
-            // 通过 env 对象读取 this
             let env_val = self.load_env_object(block);
             let key_val = self.append_env_key_const(block, &binding);
             let dest = self.alloc_value();
@@ -774,18 +781,8 @@ impl Lowerer {
                     key: key_val,
                 },
             );
-            Ok(dest)
-        } else {
-            // 派生构造器体内存在箭头 super() 时，this 的规范存储是共享 env
-            // （见 lower_class_body 的入口登记）：箭头帧的 BindThisValue 重绑
-            // 写 env，构造器帧必须同样经 env 读取才能观察到重绑后的 this。
-            Ok(self.emit_read_ctor_this(block))
+            return dest;
         }
-    }
-
-    /// 读取当前非箭头帧的 this：`ctor_this_via_env` 时经共享 env 读取，
-    /// 否则读本地 scoped `$this` 槽。两条路径都是直线指令，不引入控制流。
-    pub(crate) fn emit_read_ctor_this(&mut self, block: BasicBlockId) -> ValueId {
         if self.ctor_this_via_env {
             let env_val = self.alloc_value();
             self.current_function.append_instruction(

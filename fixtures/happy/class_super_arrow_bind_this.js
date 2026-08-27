@@ -73,3 +73,43 @@ class ArrowAfterSuper extends ObjectBase {
   }
 }
 new ArrowAfterSuper();
+
+// 箭头 super() 站点同样发射 InitializeInstanceElements（SuperCall 步骤 11）：
+// 字段初始化在箭头帧、重绑后的 this 上执行。
+class ArrowSuperFields extends ObjectBase {
+  #secret = 10;
+  field = 5;
+  read = () => this.marker;
+  constructor() {
+    (() => super())();
+    console.log(
+      "arrow-fields:",
+      this.field,
+      this.marker,
+      this.#secret,
+      this.read()
+    );
+  }
+}
+new ArrowSuperFields();
+
+// 嵌套箭头 super()：初始化上下文逐层克隆进入。
+class NestedArrowSuper extends ObjectBase {
+  n = 4;
+  constructor() {
+    (() => (() => super())())();
+    console.log("nested-arrow-super:", this.n, this.marker);
+  }
+}
+new NestedArrowSuper();
+
+// 字段初始化器引用外层绑定：箭头帧发射时沿捕获链解析。
+const outerBinding = 6;
+class ArrowSuperOuterRef extends ObjectBase {
+  o = outerBinding;
+  constructor() {
+    (() => super())();
+    console.log("arrow-outer-ref:", this.o, this.marker);
+  }
+}
+new ArrowSuperOuterRef();

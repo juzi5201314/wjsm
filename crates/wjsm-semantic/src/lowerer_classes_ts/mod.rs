@@ -115,11 +115,15 @@ fn ctor_has_arrow_super(ctor: &swc_ast::Constructor) -> bool {
 /// ECMAScript SuperCall（§13.3.7.1）步骤 8–11：BindThisValue 之后立即
 /// InitializeInstanceElements——字段初始化属于 super() **求值本身**，与
 /// super() 出现在哪个语句/表达式位置无关。构造器 lowering 前把所需数据
-/// 存入本上下文，`Callee::Super` 站点消费；箭头/嵌套函数帧在
-/// push_function_context 时清空，不会误发射。
+/// 存入本上下文，`Callee::Super` 站点消费。箭头帧继承外层 super 能力，
+/// 上下文随之克隆进入（箭头体内的 super() 同样要发射初始化）；普通嵌套
+/// 函数帧在 push_function_context 时清空，不会误发射。
+#[derive(Clone)]
 pub(crate) struct DerivedCtorInitCtx {
-    /// TS 参数属性 (形参 IR 名, 字段名)，先于字段初始化器生效。
-    pub(crate) param_prop_fields: Vec<(String, String)>,
+    /// TS 参数属性（构造器形参绑定, 字段名），先于字段初始化器生效。
+    /// 存作用域绑定而非裸 IR 名：箭头帧发射时形参属于外层构造器帧，
+    /// 须经捕获链读取。
+    pub(crate) param_prop_fields: Vec<(CapturedBinding, String)>,
     /// 类体成员克隆（保留原始下标，供计算键实例字段映射使用）。
     pub(crate) members: Vec<swc_ast::ClassMember>,
     pub(crate) private_members: Vec<PrivateMemberMeta>,
@@ -709,7 +713,7 @@ impl Lowerer {
             return Ok(block);
         }
         let mut block = self.lower_value_exception_branch(block, super_result)?;
-        block = self.emit_param_prop_fields(block, &ctx.param_prop_fields);
+        block = self.emit_param_prop_fields(block, &ctx.param_prop_fields)?;
         block = self.emit_instance_initializers(
             block,
             &ctx.members,
