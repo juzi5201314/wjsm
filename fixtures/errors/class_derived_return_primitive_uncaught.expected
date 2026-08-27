@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+before-return
+--- stderr ---
+Runtime error: TypeError: Derived constructors may only return object or undefined

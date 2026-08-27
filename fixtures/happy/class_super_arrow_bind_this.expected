@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+mixed: 42 42
+nested: 5
+function: 3
+arrow-plain: 2
+arrow-object: 7
+arrow-object result: 7
+arrow-after: 7
+--- stderr ---
