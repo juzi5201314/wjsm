@@ -27,13 +27,13 @@ use std::collections::{HashMap, HashSet};
 
 use wjsm_ir::cfg::ControlFlowGraph;
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, Builtin, Constant, Function, FunctionId, Instruction, Module,
-    PhiSource, Terminator, UnaryOp, ValueId, is_builtin_entry_ir_function,
-    is_module_entry_ir_function,
+    BasicBlockId, Builtin, Constant, Function, FunctionId, Instruction, Module, UnaryOp, ValueId,
+    is_builtin_entry_ir_function, is_module_entry_ir_function,
 };
 
 use super::direct_call::instruction_dest;
 use super::inline_for_ea::max_value_id_in_function;
+use super::licm_apply::{Plan, apply_plan};
 use super::licm_facts::{ModuleFacts, collect_const_strings, is_protocol_or_env_name};
 
 /// 单函数外提轮数上限（每轮最多变换一个循环；正常在候选耗尽时提前收敛）。
@@ -122,14 +122,6 @@ fn natural_loops(function: &Function, cfg: &ControlFlowGraph) -> Vec<NaturalLoop
 }
 
 // ── 候选收集 ────────────────────────────────────────────────────────────
-
-/// 一轮变换计划：对 `header` 的循环建 pre-header，把 `moves` 移入。
-struct Plan {
-    header: BasicBlockId,
-    body: HashSet<BasicBlockId>,
-    /// 待移动指令位置（块 id + 块内下标），已去重。
-    moves: Vec<(BasicBlockId, usize)>,
-}
 
 /// 循环级上下文（对单个循环的只读快照分析）。
 struct LoopView<'a> {
@@ -494,94 +486,4 @@ fn pure_call_moves(
         }
     }
     Some(deps)
-}
-
-// ── 变换：建 pre-header、修 phi、重定向外部前驱、移动指令 ────────────────
-
-fn apply_plan(function: &mut Function, plan: &Plan, next_value: &mut u32) {
-    let preheader_id = BasicBlockId(function.blocks().len() as u32);
-
-    // 1. 取出被移动指令。无操作数的 Const/LoadVar 在前，消费它们的
-    //    GetProp/Call 在后（依赖深度 ≤ 1，组内保持原程序序）。
-    let mut extracted: Vec<(BasicBlockId, usize, Instruction)> = Vec::new();
-    let mut by_block: HashMap<BasicBlockId, Vec<usize>> = HashMap::new();
-    for (block, index) in &plan.moves {
-        by_block.entry(*block).or_default().push(*index);
-    }
-    for (block_id, mut indices) in by_block {
-        indices.sort_unstable_by(|left, right| right.cmp(left));
-        let Some(block) = function.block_by_id_mut(block_id) else {
-            continue;
-        };
-        for index in indices {
-            let instruction = block.instructions_mut().remove(index);
-            extracted.push((block_id, index, instruction));
-        }
-    }
-    extracted.sort_by_key(|(block, index, instruction)| {
-        let leaf = matches!(
-            instruction,
-            Instruction::Const { .. } | Instruction::LoadVar { .. }
-        );
-        (!leaf, block.0, *index)
-    });
-
-    // 2. header phi 修正：外部来源合并到 pre-header。
-    let mut preheader_phis: Vec<Instruction> = Vec::new();
-    if let Some(header) = function.block_by_id_mut(plan.header) {
-        for instruction in header.instructions_mut() {
-            let Instruction::Phi { sources, .. } = instruction else {
-                continue;
-            };
-            let (internal, external): (Vec<PhiSource>, Vec<PhiSource>) = sources
-                .drain(..)
-                .partition(|source| plan.body.contains(&source.predecessor));
-            debug_assert!(!external.is_empty(), "可达循环头必有外部前驱");
-            if external.len() == 1 {
-                let mut merged = external;
-                merged[0].predecessor = preheader_id;
-                merged.extend(internal);
-                *sources = merged;
-            } else {
-                let merged_value = ValueId(*next_value);
-                *next_value += 1;
-                preheader_phis.push(Instruction::Phi {
-                    dest: merged_value,
-                    sources: external,
-                });
-                let mut merged = vec![PhiSource {
-                    predecessor: preheader_id,
-                    value: merged_value,
-                }];
-                merged.extend(internal);
-                *sources = merged;
-            }
-        }
-    }
-
-    // 3. 外部前驱重定向到 pre-header（回边在循环体内，保持指向 header）。
-    let header = plan.header;
-    for block in function.blocks_mut() {
-        if plan.body.contains(&block.id()) {
-            continue;
-        }
-        block.terminator_mut().remap_blocks(&mut |target| {
-            if target == header {
-                preheader_id
-            } else {
-                target
-            }
-        });
-    }
-
-    // 4. 追加 pre-header：合并 phi 在前，被移动指令随后。
-    let mut preheader =
-        BasicBlock::new_with_terminator(preheader_id, Terminator::Jump { target: header });
-    for phi in preheader_phis {
-        preheader.push_instruction(phi);
-    }
-    for (_, _, instruction) in extracted {
-        preheader.push_instruction(instruction);
-    }
-    function.push_block(preheader);
 }
