@@ -460,6 +460,7 @@ mod tests {
             object: ValueId(1),
             key: ValueId(2),
             value: ValueId(3),
+            strict: false,
         });
         block.push_instruction(Instruction::GetProp {
             dest: ValueId(5),

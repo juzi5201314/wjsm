@@ -395,6 +395,8 @@ impl Lowerer {
         value: ValueId,
     ) -> ValueId {
         let dest = self.alloc_value();
+        // strict 位跟随当前 lowering 单元的严格模式：内部合成写入（类布局、
+        // 模块命名空间等）的接收者恒为对象，strict 位对其不产生可观察差异。
         self.current_function.append_instruction(
             block,
             Instruction::SetProp {
@@ -402,6 +404,7 @@ impl Lowerer {
                 object,
                 key,
                 value,
+                strict: self.strict_mode,
             },
         );
         dest
@@ -441,6 +444,7 @@ impl Lowerer {
                 object,
                 index,
                 value,
+                strict: self.strict_mode,
             },
         );
         dest

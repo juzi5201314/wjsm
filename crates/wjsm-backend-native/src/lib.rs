@@ -646,6 +646,7 @@ mod tests {
             object: ValueId(2),
             key: ValueId(0),
             value: ValueId(1),
+            strict: false,
         });
         block.push_instruction(Instruction::GetProp {
             dest: ValueId(4),
@@ -728,6 +729,7 @@ mod tests {
             object: ValueId(3),
             key: ValueId(10),
             value: ValueId(0),
+            strict: false,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(4)),
@@ -830,6 +832,7 @@ mod tests {
             object: ValueId(0),
             key: ValueId(1),
             value: ValueId(2),
+            strict: false,
         });
         work_block.set_terminator(Terminator::Return {
             value: Some(ValueId(2)),
