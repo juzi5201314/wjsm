@@ -1364,8 +1364,20 @@ module {
       %3 = call builtin.private_get(%1, %2)
       %4 = load var $17.step
       %5 = call %3, this=%1, args=[%4]
-      call builtin.array.push_spread(%0, %5)
+      %6 = is_exception %5
+      branch %6, bb2, bb1
+    bb1:
+      %8 = call builtin.array.push_spread(%0, %5)
+      %9 = is_exception %8
+      branch %9, bb4, bb3
+    bb2:
+      %7 = call builtin.exception_value(%5)
+      throw %7
+    bb3:
       return %0
+    bb4:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @Seq.collectStatic [home_object=@14] [captures: $1.Seq] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
@@ -1376,8 +1388,20 @@ module {
       %4 = const c256
       %5 = call builtin.private_get(%3, %4)
       %6 = call %5, this=%3
-      call builtin.array.push_spread(%0, %6)
+      %7 = is_exception %6
+      branch %7, bb2, bb1
+    bb1:
+      %9 = call builtin.array.push_spread(%0, %6)
+      %10 = is_exception %9
+      branch %10, bb4, bb3
+    bb2:
+      %8 = call builtin.exception_value(%6)
+      throw %8
+    bb3:
       return %0
+    bb4:
+      %11 = call builtin.exception_value(%9)
+      throw %11
 
   fn @Seq.delegated [home_object=@14.prototype] [direct_callable] [params: $19.$env, $19.$this] [entry=bb0]:
     bb0:
@@ -1386,8 +1410,20 @@ module {
       %2 = const c261
       %3 = call builtin.private_get(%1, %2)
       %4 = call %3, this=%1
-      call builtin.array.push_spread(%0, %4)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
+    bb1:
+      %7 = call builtin.array.push_spread(%0, %4)
+      %8 = is_exception %7
+      branch %8, bb4, bb3
+    bb2:
+      %6 = call builtin.exception_value(%4)
+      throw %6
+    bb3:
       return %0
+    bb4:
+      %9 = call builtin.exception_value(%7)
+      throw %9
 
   fn @Seq.argInfo [home_object=@14.prototype] [direct_callable] [params: $20.$env, $20.$this] [entry=bb0]:
     bb0:
@@ -1399,8 +1435,20 @@ module {
       %5 = const c266
       %6 = const c267
       %7 = call %3, this=%1, args=[%4, %5, %6]
-      call builtin.array.push_spread(%0, %7)
+      %8 = is_exception %7
+      branch %8, bb2, bb1
+    bb1:
+      %10 = call builtin.array.push_spread(%0, %7)
+      %11 = is_exception %10
+      branch %11, bb4, bb3
+    bb2:
+      %9 = call builtin.exception_value(%7)
+      throw %9
+    bb3:
       return %0
+    bb4:
+      %12 = call builtin.exception_value(%10)
+      throw %12
 
   fn @sum$async [home_object=@14.prototype] [params: $21.$env, $21.$this] [entry=bb0]:
     bb0:

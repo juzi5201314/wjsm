@@ -18,6 +18,10 @@ impl Lowerer {
             _ => None,
         });
 
+        // 本类 lowering 新建函数的起始下标：PENDING ctor 占位回填只作用于该区间，
+        // 避免嵌套类误改外层类已入模的 PENDING 引用。
+        let class_function_start = self.module.functions().len();
+
         self.push_class_private_name_scope(&class.body);
         let mut private_members = self.collect_class_private_members(class_name, &class.body)?;
 
@@ -250,7 +254,7 @@ impl Lowerer {
         if let Some(function) = self.module.function_mut(ctor_function_id) {
             function.home_object = Some(HomeObject::Prototype(ctor_function_id));
         }
-        self.patch_pending_ctor_home_object_references(ctor_function_id);
+        self.patch_pending_ctor_home_object_references(ctor_function_id, class_function_start);
         self.patch_private_member_home_objects(ctor_function_id, &private_members);
         self.pop_function_context();
         if let Some(sid) = class_scope_id {

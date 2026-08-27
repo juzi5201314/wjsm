@@ -22,20 +22,21 @@ impl Lowerer {
 
         let mut current = block;
         for arg in args {
+            // ArgumentListEvaluation：实参求值抛异常必须传播，不得把
+            // TAG_EXCEPTION 存入实参数组或让 spread 静默展开为空。
             let value = self.lower_call_operand_then_continue(&arg.expr, &mut current)?;
-            let builtin = if arg.spread.is_some() {
-                Builtin::ArrayPushSpread
+            if arg.spread.is_some() {
+                current = self.emit_array_push_spread_checked(current, array, value)?;
             } else {
-                Builtin::ArrayPush
-            };
-            self.current_function.append_instruction(
-                current,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin,
-                    args: vec![array, value],
-                },
-            );
+                self.current_function.append_instruction(
+                    current,
+                    Instruction::CallBuiltin {
+                        dest: None,
+                        builtin: Builtin::ArrayPush,
+                        args: vec![array, value],
+                    },
+                );
+            }
         }
         Ok((array, current))
     }
@@ -899,8 +900,10 @@ impl Lowerer {
                         },
                     );
                 }
-                // 实参分叉/结果选择都会引入控制流，必须把 merge 块上报为表达式
-                // 延续块；否则语句层 resolve_store_block 会退回已终结的入口块。
+                // 实参异常分叉与 select_construct_result 都会引入控制流并终结
+                // 入口块；必须把 merge 块经 expr_merge_block 上报，否则外层
+                // （语句级异常检查、后续表达式）的启发式解析穿不过分叉链，
+                // 会误写已终结块并覆盖其终结器。
                 let (result, merge_block) =
                     self.select_construct_result(call_block, ctor_result, this_val);
                 self.expr_merge_block = Some(merge_block);

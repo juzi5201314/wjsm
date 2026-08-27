@@ -46,14 +46,8 @@ module {
       %8 = const c27
       %9 = get_elem %7, %8
       %10 = add %6, %9
-      %11 = is_exception %10
-      branch %11, bb2, bb1
-    bb1:
-      %13 = call builtin.console.log(%10)
-      return %13
-    bb2:
-      %12 = call builtin.exception_value(%10)
-      throw %12
+      %11 = call builtin.console.log(%10)
+      return %11
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -106,21 +100,21 @@ module {
       %24 = const c22
       %25 = const c23
       %26 = call builtin.promise.resolve_static(%24, %25)
-      call builtin.array.push(%22, %26)
-      %27 = const c24
-      call builtin.array.push(%22, %27)
-      %28 = call builtin.promise.all(%21, %22)
-      %29 = is_exception %28
-      branch %29, bb2, bb1
+      %27 = is_exception %26
+      branch %27, bb2, bb1
     bb1:
+      call builtin.array.push(%22, %26)
+      %29 = const c24
+      call builtin.array.push(%22, %29)
+      %30 = call builtin.promise.all(%21, %22)
       %31 = const c28
       %32 = const c29
-      %33 = call builtin.promise.then(%28, %31, %32)
+      %33 = call builtin.promise.then(%30, %31, %32)
       %34 = is_exception %33
       branch %34, bb4, bb3
     bb2:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      %28 = call builtin.exception_value(%26)
+      throw %28
     bb3:
       return
     bb4:
