@@ -102,69 +102,87 @@ module {
       %27 = load var $0.obj
       %28 = const c22
       %29 = get_prop %27, %28
-      %30 = call builtin.typeof(%29)
-      %31 = call builtin.console.log(%30)
-      %32 = is_exception %31
-      branch %32, bb4, bb3
+      %30 = is_exception %29
+      branch %30, bb4, bb3
     bb2:
       %26 = call builtin.exception_value(%24)
       throw %26
     bb3:
-      %34 = load var $0.obj
-      %35 = const c23
-      %36 = get_prop %34, %35
-      %37 = call builtin.typeof(%36)
-      %38 = call builtin.console.log(%37)
-      %39 = is_exception %38
-      branch %39, bb6, bb5
+      %32 = call builtin.typeof(%29)
+      %33 = call builtin.console.log(%32)
+      %34 = is_exception %33
+      branch %34, bb6, bb5
     bb4:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      %31 = call builtin.exception_value(%29)
+      throw %31
     bb5:
-      %41 = load var $0.obj
-      %42 = const c24
-      %43 = get_prop %41, %42
-      %44 = call builtin.typeof(%43)
-      %45 = call builtin.console.log(%44)
-      %46 = is_exception %45
-      branch %46, bb8, bb7
+      %36 = load var $0.obj
+      %37 = const c23
+      %38 = get_prop %36, %37
+      %39 = is_exception %38
+      branch %39, bb8, bb7
     bb6:
+      %35 = call builtin.exception_value(%33)
+      throw %35
+    bb7:
+      %41 = call builtin.typeof(%38)
+      %42 = call builtin.console.log(%41)
+      %43 = is_exception %42
+      branch %43, bb10, bb9
+    bb8:
       %40 = call builtin.exception_value(%38)
       throw %40
-    bb7:
-      %48 = load var $0.obj
-      %49 = const c25
-      %50 = get_prop %48, %49
-      %51 = const c26
-      %52 = call %50, this=%48, args=[%51]
-      %53 = is_exception %52
-      branch %53, bb10, bb9
-    bb8:
-      %47 = call builtin.exception_value(%45)
-      throw %47
     bb9:
-      %55 = load var $0.obj
-      %56 = const c27
-      %57 = get_prop %55, %56
-      %58 = is_exception %57
-      branch %58, bb12, bb11
+      %45 = load var $0.obj
+      %46 = const c24
+      %47 = get_prop %45, %46
+      %48 = is_exception %47
+      branch %48, bb12, bb11
     bb10:
-      %54 = call builtin.exception_value(%52)
-      throw %54
+      %44 = call builtin.exception_value(%42)
+      throw %44
     bb11:
-      %60 = const c28
-      %61 = const c29
-      %62 = call builtin.create_closure(%60, %61)
-      %63 = const c30
-      %64 = call builtin.promise.then(%57, %62, %63)
-      %65 = is_exception %64
-      branch %65, bb14, bb13
+      %50 = call builtin.typeof(%47)
+      %51 = call builtin.console.log(%50)
+      %52 = is_exception %51
+      branch %52, bb14, bb13
     bb12:
-      %59 = call builtin.exception_value(%57)
-      throw %59
+      %49 = call builtin.exception_value(%47)
+      throw %49
     bb13:
-      return
+      %54 = load var $0.obj
+      %55 = const c25
+      %56 = get_prop %54, %55
+      %57 = const c26
+      %58 = call %56, this=%54, args=[%57]
+      %59 = is_exception %58
+      branch %59, bb16, bb15
     bb14:
-      %66 = call builtin.exception_value(%64)
-      throw %66
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb15:
+      %61 = load var $0.obj
+      %62 = const c27
+      %63 = get_prop %61, %62
+      %64 = is_exception %63
+      branch %64, bb18, bb17
+    bb16:
+      %60 = call builtin.exception_value(%58)
+      throw %60
+    bb17:
+      %66 = const c28
+      %67 = const c29
+      %68 = call builtin.create_closure(%66, %67)
+      %69 = const c30
+      %70 = call builtin.promise.then(%63, %68, %69)
+      %71 = is_exception %70
+      branch %71, bb20, bb19
+    bb18:
+      %65 = call builtin.exception_value(%63)
+      throw %65
+    bb19:
+      return
+    bb20:
+      %72 = call builtin.exception_value(%70)
+      throw %72
 }

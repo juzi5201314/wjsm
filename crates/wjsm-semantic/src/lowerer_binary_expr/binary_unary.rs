@@ -44,6 +44,17 @@ impl Lowerer {
             // 模板字面量：插值表达式可抛，且任意插值对象的 ToString 可能调用用户
             // toString 抛出（StringConcatVa 会把异常哨兵透传为结果），保守判定。
             swc_ast::Expr::Tpl(tpl) => !tpl.exprs.is_empty(),
+            // -/+/~ 经 ToNumeric 可调用用户 valueOf/toString 抛出（Symbol/BigInt
+            // 混用也抛 TypeError）；delete 成员可抛（严格模式不可配置属性、Proxy
+            // trap）。!/void/typeof 自身不产出异常哨兵（ToBoolean/常量/typeof 表
+            // 全定义），其操作数异常已在 lower_unary 内经操作数分叉传播。
+            swc_ast::Expr::Unary(unary) => match unary.op {
+                swc_ast::UnaryOp::Minus | swc_ast::UnaryOp::Plus | swc_ast::UnaryOp::Tilde => true,
+                swc_ast::UnaryOp::Delete => {
+                    matches!(unary.arg.as_ref(), swc_ast::Expr::Member(_))
+                }
+                _ => false,
+            },
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
             swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),
@@ -521,7 +532,8 @@ impl Lowerer {
         match unary.op {
             Bang => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -536,7 +548,8 @@ impl Lowerer {
             }
             Minus => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -551,7 +564,8 @@ impl Lowerer {
             }
             Plus => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -566,7 +580,8 @@ impl Lowerer {
             }
             Tilde => {
                 let mut current_block = block;
-                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let value =
+                    self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -581,7 +596,7 @@ impl Lowerer {
             }
             Void => {
                 let mut current_block = block;
-                let _ = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let _ = self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 // void returns undefined
                 let undef = self.module.add_constant(Constant::Undefined);
                 let dest = self.alloc_value();
@@ -629,7 +644,7 @@ impl Lowerer {
                 }
 
                 let mut current_block = block;
-                let arg = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
+                let arg = self.lower_call_operand_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -648,8 +663,9 @@ impl Lowerer {
                     // delete obj.prop → DeleteProp 指令
                     swc_ast::Expr::Member(member) => {
                         let mut current_block = block;
+                        // 对象/计算键求值抛出必须在 DeleteProp 前中止并传播。
                         let object =
-                            self.lower_expr_then_continue(&member.obj, &mut current_block)?;
+                            self.lower_call_operand_then_continue(&member.obj, &mut current_block)?;
                         let key = match &member.prop {
                             swc_ast::MemberProp::Ident(ident) => {
                                 let key_str = ident.sym.to_string();
@@ -664,9 +680,11 @@ impl Lowerer {
                                 );
                                 key_val
                             }
-                            swc_ast::MemberProp::Computed(computed) => {
-                                self.lower_expr_then_continue(&computed.expr, &mut current_block)?
-                            }
+                            swc_ast::MemberProp::Computed(computed) => self
+                                .lower_call_operand_then_continue(
+                                    &computed.expr,
+                                    &mut current_block,
+                                )?,
                             _ => {
                                 return Err(self.error(
                                     member.span(),
@@ -711,7 +729,7 @@ impl Lowerer {
         update: &swc_ast::UpdateExpr,
         mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        use swc_ast::UpdateOp;
+        let entry_block = block;
 
         // ── Step 1: 确定存储目标类型并加载当前值 ──
         enum Target {
@@ -786,7 +804,8 @@ impl Lowerer {
             }
             swc_ast::Expr::Member(member) => {
                 let mut current_block = block;
-                let obj = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
+                // 对象/计算键求值抛出必须在属性读取前中止并传播。
+                let obj = self.lower_call_operand_then_continue(&member.obj, &mut current_block)?;
                 let key = match &member.prop {
                     swc_ast::MemberProp::Ident(ident) => {
                         let key_const = self
@@ -803,7 +822,7 @@ impl Lowerer {
                         key_dest
                     }
                     swc_ast::MemberProp::Computed(computed) => {
-                        self.lower_expr_then_continue(&computed.expr, &mut current_block)?
+                        self.lower_call_operand_then_continue(&computed.expr, &mut current_block)?
                     }
                     _ => {
                         return Err(self.error(
@@ -854,6 +873,10 @@ impl Lowerer {
                         key: *key,
                     },
                 );
+                // 成员读取可触发用户 getter 抛出，必须在 ToNumeric 前中止传播。
+                if self.expr_exception_fork_allowed() {
+                    block = self.lower_value_exception_branch(block, old_val)?;
+                }
             }
         }
         if let Some(name) = &tdz_checked_name {
@@ -862,43 +885,9 @@ impl Lowerer {
             block = continue_block;
         }
 
-        // 2. 转换为 Number (ToNumber)
-        let num_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Unary {
-                dest: num_val,
-                op: UnaryOp::Pos,
-                value: old_val,
-            },
-        );
-
-        // 3. 常量 1.0
-        let one = self.module.add_constant(Constant::Number(1.0));
-        let one_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: one_val,
-                constant: one,
-            },
-        );
-
-        // 4. 执行加法或减法
-        let new_val = self.alloc_value();
-        let op = match update.op {
-            UpdateOp::PlusPlus => BinaryOp::Add,
-            UpdateOp::MinusMinus => BinaryOp::Sub,
-        };
-        self.current_function.append_instruction(
-            block,
-            Instruction::Binary {
-                dest: new_val,
-                op,
-                lhs: num_val,
-                rhs: one_val,
-            },
-        );
+        // 2–4. ToNumeric（抛出即中止、不得写回）后执行 ±1。
+        let (num_val, new_val, math_block) = self.append_update_math(block, old_val, update.op)?;
+        block = math_block;
 
         // 5. 写回 (StoreVar / SetProp / SetProp for captured)
         match target {
@@ -914,11 +903,11 @@ impl Lowerer {
                         value: new_val,
                     },
                 );
+                // owner 解析 / TDZ / ToNumeric 异常分叉都可能推进块；最终延续块
+                // 必须上报，否则后续语句会误写已终结的入口块。
                 let after_write_block =
                     self.append_eval_var_leak_if_needed(&name, kind, new_val, block)?;
-                if after_write_block != block {
-                    self.expr_merge_block = Some(after_write_block);
-                }
+                self.publish_expr_continuation(entry_block, after_write_block);
             }
             Target::Captured(env_val, key_val) => {
                 let write_result = self.emit_set_prop(block, env_val, key_val, new_val);
@@ -936,12 +925,16 @@ impl Lowerer {
         Ok(if update.prefix { new_val } else { num_val })
     }
 
+    /// 发射 update 表达式的 ToNumeric 与 ±1，返回 (旧数值, 新数值, 延续块)。
+    /// ToNumeric（UnaryOp::Pos）对对象操作数可调用用户 valueOf/toString 抛出，
+    /// 必须在写回前检查并传播；证明为 Number 的热路径（循环计数器等）由
+    /// typed_cfg 按值类分析折叠该分叉，不产生运行时代价。
     pub(crate) fn append_update_math(
         &mut self,
         block: BasicBlockId,
         old_val: ValueId,
         update_op: swc_ast::UpdateOp,
-    ) -> (ValueId, ValueId) {
+    ) -> Result<(ValueId, ValueId, BasicBlockId), LoweringError> {
         let num_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -951,6 +944,11 @@ impl Lowerer {
                 value: old_val,
             },
         );
+        let block = if self.expr_exception_fork_allowed() {
+            self.lower_value_exception_branch(block, num_val)?
+        } else {
+            block
+        };
 
         let one = self.module.add_constant(Constant::Number(1.0));
         let one_val = self.alloc_value();
@@ -977,7 +975,7 @@ impl Lowerer {
             },
         );
 
-        (num_val, new_val)
+        Ok((num_val, new_val, block))
     }
 
     fn lower_update_shared_local(
@@ -1048,9 +1046,10 @@ impl Lowerer {
                 name: ir_name.clone(),
             },
         );
-        let (local_num, local_new) = self.append_update_math(local_block, local_old, update.op);
+        let (local_num, local_new, local_continue) =
+            self.append_update_math(local_block, local_old, update.op)?;
         self.current_function.append_instruction(
-            local_block,
+            local_continue,
             Instruction::StoreVar {
                 name: ir_name.clone(),
                 value: local_new,
@@ -1058,7 +1057,7 @@ impl Lowerer {
         );
         let local_result = if update.prefix { local_new } else { local_num };
         self.current_function
-            .set_terminator(local_block, Terminator::Jump { target: merge });
+            .set_terminator(local_continue, Terminator::Jump { target: merge });
 
         let key_val = self.append_env_key_const(env_block, binding);
         let env_old = self.alloc_value();
@@ -1070,9 +1069,10 @@ impl Lowerer {
                 key: key_val,
             },
         );
-        let (env_num, env_new) = self.append_update_math(env_block, env_old, update.op);
-        let write_result = self.emit_set_prop(env_block, env_val, key_val, env_new);
-        let env_continue = self.lower_value_exception_branch(env_block, write_result)?;
+        let (env_num, env_new, env_math_continue) =
+            self.append_update_math(env_block, env_old, update.op)?;
+        let write_result = self.emit_set_prop(env_math_continue, env_val, key_val, env_new);
+        let env_continue = self.lower_value_exception_branch(env_math_continue, write_result)?;
         self.current_function.append_instruction(
             env_continue,
             Instruction::StoreVar {
@@ -1091,7 +1091,7 @@ impl Lowerer {
                 dest: result,
                 sources: vec![
                     PhiSource {
-                        predecessor: local_block,
+                        predecessor: local_continue,
                         value: local_result,
                     },
                     PhiSource {

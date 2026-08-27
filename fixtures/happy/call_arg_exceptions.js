@@ -167,9 +167,93 @@ try {
   console.log("cond arg:", e.message);
 }
 
+// 一元运算实参：ToNumeric 抛错（valueOf）与操作数抛错都必须传播
+const evil = {
+  valueOf() {
+    throw new Error("valueOf");
+  },
+};
+try {
+  id(-evil);
+  console.log("FAIL unary minus arg");
+} catch (e) {
+  console.log("unary minus arg:", e.message);
+}
+try {
+  id(!boom());
+  console.log("FAIL unary not arg");
+} catch (e) {
+  console.log("unary not arg:", e.message);
+}
+try {
+  id(typeof boom());
+  console.log("FAIL typeof arg");
+} catch (e) {
+  console.log("typeof arg:", e.message);
+}
+try {
+  id(void boom());
+  console.log("FAIL void arg");
+} catch (e) {
+  console.log("void arg:", e.message);
+}
+try {
+  console.log(~evil);
+  console.log("FAIL console bitnot");
+} catch (e) {
+  console.log("console bitnot:", e.message);
+}
+
+// update 表达式实参：ToNumeric 抛错必须传播且不得写回
+try {
+  let u = evil;
+  id(u++);
+  console.log("FAIL update arg");
+} catch (e) {
+  console.log("update arg:", e.message);
+}
+// 成员 update：getter 抛错必须在 ToNumeric 前传播
+const throwingGetter = {
+  get p() {
+    throw new Error("getter");
+  },
+};
+try {
+  throwingGetter.p++;
+  console.log("FAIL member update");
+} catch (e) {
+  console.log("member update:", e.message);
+}
+
+// delete 实参：对象求值抛错必须在 DeleteProp 前传播
+try {
+  id(delete boom().p);
+  console.log("FAIL delete arg");
+} catch (e) {
+  console.log("delete arg:", e.message);
+}
+
 // 正常调用不受影响
 function twice(x) {
   return x * 2;
 }
-console.log("ok:", id(7), twice(21), `t${id(1)}`, JSON.stringify([2, 3]));
+let counterVar = 5;
+counterVar++;
+++counterVar;
+const memberTarget = { v: 1 };
+memberTarget.v++;
+console.log(
+  "ok:",
+  id(7),
+  twice(21),
+  `t${id(1)}`,
+  JSON.stringify([2, 3]),
+  counterVar,
+  memberTarget.v,
+  -3,
+  +"7",
+  ~0,
+  !false,
+  typeof 1
+);
 console.log("done");

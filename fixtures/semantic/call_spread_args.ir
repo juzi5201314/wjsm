@@ -433,18 +433,24 @@ module {
       %14 = const c129
       %15 = get_prop %13, %14
       %16 = pos %15
-      %17 = const c130
-      %18 = add %16, %17
-      %19 = set_prop %13, %14, %18
-      %20 = is_exception %19
-      branch %20, bb4, bb3
+      %17 = is_exception %16
+      branch %17, bb4, bb3
     bb3:
-      %22 = const c131
-      %23 = init_object_literal(c128, values=[%16, %22])
-      return %23
+      %19 = const c130
+      %20 = add %16, %19
+      %21 = set_prop %13, %14, %20
+      %22 = is_exception %21
+      branch %22, bb6, bb5
     bb4:
-      %21 = call builtin.exception_value(%19)
-      throw %21
+      %18 = call builtin.exception_value(%16)
+      throw %18
+    bb5:
+      %24 = const c131
+      %25 = init_object_literal(c128, values=[%16, %24])
+      return %25
+    bb6:
+      %23 = call builtin.exception_value(%21)
+      throw %23
 
   fn @$0.anonymous [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:

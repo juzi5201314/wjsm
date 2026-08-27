@@ -16,6 +16,14 @@ template arg: boom
 tagged template: boom
 logical arg: boom
 cond arg: boom
-ok: 7 42 t1 [2,3]
+unary minus arg: valueOf
+unary not arg: boom
+typeof arg: boom
+void arg: boom
+console bitnot: valueOf
+update arg: valueOf
+member update: getter
+delete arg: boom
+ok: 7 42 t1 [2,3] 7 2 -3 7 -1 true number
 done
 --- stderr ---

@@ -1804,13 +1804,19 @@ module {
       %6 = load var $35.result
       %7 = const c399
       %8 = get_prop %6, %7
-      %9 = call builtin.typeof(%8)
-      %10 = const c400
-      %11 = call builtin.strict_eq(%9, %10)
-      return %11
+      %9 = is_exception %8
+      branch %9, bb4, bb3
     bb2:
       %5 = call builtin.exception_value(%3)
       throw %5
+    bb3:
+      %11 = call builtin.typeof(%8)
+      %12 = const c400
+      %13 = call builtin.strict_eq(%11, %12)
+      return %13
+    bb4:
+      %10 = call builtin.exception_value(%8)
+      throw %10
 
   fn @Task.params [home_object=@25.prototype] [captures: $0.undefined] [params: $36.$env, $36.$this] [entry=bb0]:
     bb0:
