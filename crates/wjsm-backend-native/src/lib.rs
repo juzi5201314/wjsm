@@ -1,7 +1,10 @@
 pub mod cache;
+pub(crate) mod call_graph;
 pub(crate) mod f64_analysis;
+pub(crate) mod fast_call;
 pub mod image;
 pub(crate) mod lower;
+pub(crate) mod safepoint_free;
 pub(crate) mod template_meta;
 pub use template_meta::{IcTemplateHint, ic_template_hints};
 pub(crate) mod root_plan;
@@ -737,6 +740,37 @@ mod tests {
     }
 
     #[test]
+    fn safepoint_free_numeric_main_omits_root_frame_link() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&arithmetic_artifact())
+            .expect("arithmetic diagnostics should compile");
+        assert!(
+            !diagnostics.clif.contains("root_frame_head"),
+            "safepoint-free main should not touch root_frame_head:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            !diagnostics.clif.contains("atomic_rmw"),
+            "safepoint-free main should not link/unlink root frames:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    #[test]
+    fn guarded_binary_still_links_root_frame() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&guarded_binary_artifact())
+            .expect("guarded binary diagnostics should compile");
+        assert!(
+            diagnostics.clif.contains("atomic_rmw"),
+            "may-GC function should still link/unlink NativeRootFrame:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    #[test]
     fn f64_add_skips_nan_canonicalization() {
         let compiler = NativeCompiler::new().expect("host ISA should be supported");
         let diagnostics = compiler
@@ -1011,5 +1045,140 @@ mod tests {
             "builtin 段必须按 Program digest 复用"
         );
         let _ = std::fs::remove_dir_all(cache_dir);
+    }
+
+    fn clif_section<'a>(clif: &'a str, marker: &str) -> &'a str {
+        let Some(start) = clif.find(marker) else {
+            return "";
+        };
+        let rest = &clif[start..];
+        let skip = marker.len();
+        let next = rest[skip..]
+            .find("\n;; function")
+            .or_else(|| rest[skip..].find("\n;; trampoline"));
+        match next {
+            Some(rel) => &rest[..skip + rel],
+            None => rest,
+        }
+    }
+
+    fn direct_call_artifact(js_params: usize, call_args: usize, callee: &str) -> PortableArtifact {
+        let mut program = Program::new();
+        let number = program.add_constant(Constant::Number(1.0));
+        let function_ref = program.add_constant(Constant::FunctionRef(FunctionId(1)));
+
+        let mut caller = Function::new("main", BasicBlockId(0));
+        let mut caller_block = BasicBlock::new(BasicBlockId(0));
+        caller_block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: number,
+        });
+        caller_block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: function_ref,
+        });
+        let mut args = Vec::new();
+        for index in 0..call_args {
+            let dest = ValueId(2 + u32::try_from(index).expect("arg index fits u32"));
+            caller_block.push_instruction(Instruction::Const {
+                dest,
+                constant: number,
+            });
+            args.push(dest);
+        }
+        let result = ValueId(2 + u32::try_from(call_args).expect("result id fits u32"));
+        caller_block.push_instruction(Instruction::Call {
+            dest: Some(result),
+            callee: ValueId(1),
+            this_val: ValueId(0),
+            args,
+        });
+        caller_block.set_terminator(Terminator::Return {
+            value: Some(result),
+        });
+        caller.push_block(caller_block);
+        program.push_function(caller);
+
+        let mut callee_fn = Function::new(callee, BasicBlockId(0));
+        let mut params = vec!["$env".into(), "$this".into()];
+        for index in 0..js_params {
+            params.push(format!("$1.p{index}"));
+        }
+        callee_fn.set_params(params);
+        callee_fn.set_direct_callable(true);
+        let mut callee_block = BasicBlock::new(BasicBlockId(0));
+        if js_params == 0 {
+            callee_block.push_instruction(Instruction::Const {
+                dest: ValueId(0),
+                constant: number,
+            });
+            callee_block.set_terminator(Terminator::Return {
+                value: Some(ValueId(0)),
+            });
+        } else {
+            callee_block.push_instruction(Instruction::LoadVar {
+                dest: ValueId(0),
+                name: "$1.p0".into(),
+            });
+            callee_block.set_terminator(Terminator::Return {
+                value: Some(ValueId(0)),
+            });
+        }
+        callee_fn.push_block(callee_block);
+        program.push_function(callee_fn);
+
+        PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("direct-call artifact should encode")
+    }
+
+    #[test]
+    fn fast_direct_call_uses_register_signature() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&direct_call_artifact(1, 1, "add"))
+            .expect("fast direct call should compile");
+        let body = clif_section(&diagnostics.clif, ";; function 1: add");
+        let sig_line = body
+            .lines()
+            .find(|line| line.contains("function u0:"))
+            .unwrap_or(body);
+        assert!(
+            sig_line.contains("(i64, i64, i64, i64) -> i64"),
+            "fast body should take ctx/env/this/arg0 as i64:\n{body}"
+        );
+        assert!(
+            !sig_line.contains("i32"),
+            "fast body signature must not use slow i32 arena indices:\n{sig_line}"
+        );
+        let trampoline = clif_section(&diagnostics.clif, ";; trampoline 1: add");
+        assert!(
+            trampoline.contains("i32, i32"),
+            "slow trampoline should keep NativeSlowEntry:\n{trampoline}"
+        );
+        let parsed = object::File::parse(diagnostics.object.bytes()).expect("object should parse");
+        assert!(parsed.symbol_by_name("wjsm_function_1").is_some());
+    }
+
+    #[test]
+    fn wide_direct_call_keeps_call_arena_signature() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&direct_call_artifact(5, 5, "wide"))
+            .expect("wide direct call should compile");
+        let body = clif_section(&diagnostics.clif, ";; function 1: wide");
+        assert!(
+            body.contains("i32, i32"),
+            "arity>4 must stay on NativeSlowEntry:\n{body}"
+        );
+        assert!(
+            !diagnostics.clif.contains(";; trampoline 1: wide"),
+            "arity>4 must not emit a fast trampoline:\n{}",
+            diagnostics.clif
+        );
     }
 }

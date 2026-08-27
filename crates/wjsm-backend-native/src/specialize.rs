@@ -29,6 +29,7 @@ use crate::lower::{
     gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
 };
 use crate::root_plan::RootPlan;
+use crate::safepoint_free::infer_safepoint_free_functions;
 use crate::template_meta::build_template_origin_maps;
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::{NativeCompilationDiagnostics, NativeCompileError, NativeObject};
@@ -191,6 +192,11 @@ pub(crate) fn compile_specialized(
     let int32_values = classes.int32s;
     let root_plan = RootPlan::build(ir_function, &seeded_values);
     let root_capacity = root_frame_capacity(ir_function, &root_plan, boxed_frame_locals.len());
+    let safepoint_free = infer_safepoint_free_functions(&derived)
+        .contains(&FunctionId(u32::try_from(target_index).map_err(|_| {
+            NativeCompileError::Capacity("specialized function index exceeds u32")
+        })?));
+    let root_capacity = if safepoint_free { 0 } else { root_capacity };
     let root_bitmaps = declare_root_bitmaps(&mut module, root_capacity)?;
     let dispatcher_decl = DeclaredFunction::snapshot(module.declarations(), host_dispatcher);
     let string_add_decl = DeclaredFunction::snapshot(module.declarations(), string_add);
@@ -246,6 +252,7 @@ pub(crate) fn compile_specialized(
         int32_values: &int32_values,
         function_decls: &[],
         direct_callable_functions: &HashSet::new(),
+        safepoint_free,
         collect_diagnostics,
     })?;
     let wrapper = compile_wrapper(

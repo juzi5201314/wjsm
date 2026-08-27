@@ -13,7 +13,7 @@ not (
   | test(/happy__(async_hooks_|async_resource_|atomics_agent_notify|gc_|node_builtin_perf_hooks_|r1_accessor_slots|r2_ic_proto_and_gc|runtime_string_gc_roots|streams_byob_gc_pending_view)/)
   | test(/modules__node_builtin_(cluster|perf_hooks|worker_threads)_/)
   | test(/(allocation_pressure_collects_with_each_runtime_algorithm|host_table_reclaim::|large_array_churn_collects_before_cooperative_poll|live_set_exhaustion_is_observable_range_error_|lower_bundle_cached_perf_hooks_layout_and_cache_hit|native_executable_worker_file_collection_contracts)/)
-)
+) or test(happy__gc_safepoint_free_fib)
 '''
 test-threads = "num-cpus"
 failure-output = "immediate-final"

@@ -135,10 +135,19 @@ impl RootPlan {
     }
 
     pub(crate) fn max_roots(&self) -> usize {
+        self.max_roots_excluding(&HashSet::new())
+    }
+
+    pub(crate) fn max_roots_excluding(&self, excluded: &HashSet<ValueId>) -> usize {
         self.instruction_roots
             .values()
             .chain(self.terminator_roots.values())
-            .map(Vec::len)
+            .map(|roots| {
+                roots
+                    .iter()
+                    .filter(|value| !excluded.contains(value))
+                    .count()
+            })
             .max()
             .unwrap_or(0)
     }
