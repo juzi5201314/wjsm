@@ -53,6 +53,7 @@ pub(crate) fn run_with_input(
     input: Vec<u8>,
     timeout: Duration,
 ) -> Result<ProcessOutcome, String> {
+    spawn_in_own_process_group(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to spawn wjsm: {error}"))?;
@@ -79,7 +80,7 @@ pub(crate) fn run_with_input(
     let timed_out = wait_result.is_none();
 
     if timed_out {
-        let _ = child.kill();
+        kill_child_process_tree(&mut child);
         let _ = child.wait();
     }
 
@@ -98,6 +99,37 @@ pub(crate) fn run_with_input(
         stdout,
         stderr,
     }))
+}
+
+/// 让子进程成为新进程组组长，超时时可整组回收。
+///
+/// 读线程要等 stdout/stderr 管道全部写端关闭才能返回；若被 kill 的直接子进程
+/// 又 fork 过持有管道写端的孙进程（例如某些 `sh -c` 实现不做隐式 exec 优化），
+/// 只杀直接子进程会让读线程阻塞到孙进程自然退出。
+#[cfg(unix)]
+fn spawn_in_own_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn spawn_in_own_process_group(_command: &mut Command) {}
+
+/// 超时后回收整棵子进程树。
+#[cfg(unix)]
+fn kill_child_process_tree(child: &mut Child) {
+    // 直接子进程即组长且尚未被 wait() 回收，pid 不会被复用，
+    // 负 pgid 只命中该进程组，不会误杀无关进程。
+    let pgid = child.id() as libc::pid_t;
+    // SAFETY: kill 是 async-signal-safe 系统调用；组不存在时返回 ESRCH，忽略即可。
+    unsafe {
+        libc::kill(-pgid, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_child_process_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn wait_child_timeout(child: &mut Child, timeout: Duration) -> io::Result<Option<ExitStatus>> {
@@ -194,6 +226,29 @@ mod tests {
         .expect("timeout outcome");
 
         assert!(matches!(outcome, ProcessOutcome::TimedOut { .. }));
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn run_with_input_timeout_reaps_grandchild_holding_pipes() {
+        // 回归：后台孙进程继承 stdout 写端。超时必须整组回收，
+        // 否则读线程会阻塞到孙进程自然退出，且捕获到超时后才产生的输出。
+        let start = Instant::now();
+        let outcome = run_with_input(
+            shell_command("(sleep 2; echo late) & sleep 2"),
+            Vec::new(),
+            Duration::from_millis(50),
+        )
+        .expect("timeout outcome");
+
+        let ProcessOutcome::TimedOut { stdout, .. } = outcome else {
+            panic!("process should time out");
+        };
+        assert!(
+            !stdout.text().contains("late"),
+            "grandchild must be killed before it writes: {:?}",
+            stdout.text()
+        );
         assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
