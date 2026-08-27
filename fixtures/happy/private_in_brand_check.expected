@@ -1,0 +1,36 @@
+exit_code: 0
+--- stdout ---
+instance: true true true true
+static-on-ctor: true true false
+static-on-instance: false false
+plain-objects: false false false
+exotic: false false false
+f => TypeError | Cannot use 'in' operator to search for '#f' in 1
+m => TypeError | Cannot use 'in' operator to search for 'P' in 1
+g => TypeError | Cannot use 'in' operator to search for 'P' in 1
+s => TypeError | Cannot use 'in' operator to search for 'P' in 1
+sm => TypeError | Cannot use 'in' operator to search for '#sm' in 1
+sf => TypeError | Cannot use 'in' operator to search for '#sf' in 1
+primitive => Cannot use 'in' operator to search for '#f' in null
+primitive => Cannot use 'in' operator to search for '#f' in undefined
+primitive => Cannot use 'in' operator to search for '#f' in text
+primitive => Cannot use 'in' operator to search for '#f' in true
+primitive => Cannot use 'in' operator to search for '#f' in 42.5
+primitive => Cannot use 'in' operator to search for '#f' in 123
+primitive => Cannot use 'in' operator to search for '#f' in NaN
+symbol => Cannot use 'in' operator to search for '#f' in Symbol(k)
+nested: true,false,false
+subclass: true true false
+order: true rhs
+rhs-throw: caught:rhs throw
+chain: true false
+in-method: true local:Cannot use 'in' operator to search for '#q' in 0
+anon-expr: Cannot use 'in' operator to search for 'anonymous' in 1
+named-expr: Cannot use 'in' operator to search for 'Y' in 1
+static-block: true
+gen: true false
+async: true false
+viaThrow rejected: rhs-async
+viaPrimitive rejected: TypeError | Cannot use 'in' operator to search for '#v' in 1
+await-rhs: true false
+--- stderr ---
