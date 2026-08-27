@@ -151,6 +151,7 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             object,
             key,
             value,
+            ..
         } => {
             add(dest);
             add(object);
@@ -230,6 +231,7 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             object,
             index,
             value,
+            ..
         } => {
             add(dest);
             add(object);
@@ -410,6 +412,7 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             object,
             key,
             value,
+            ..
         } => {
             rep(dest);
             rep(object);
@@ -485,6 +488,7 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             object,
             index,
             value,
+            ..
         } => {
             rep(dest);
             rep(object);

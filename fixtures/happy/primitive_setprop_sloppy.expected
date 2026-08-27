@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+str-prop undefined
+str-elem h hello
+str-length 5
+str-oob undefined
+num-prop undefined
+bool-prop undefined
+sym-prop undefined
+bigint-prop undefined
+compound undefined
+update undefined
+assign-value 42
+null-prop TypeError | Cannot set properties of null (setting 'x')
+undef-prop TypeError | Cannot set properties of undefined (setting 'x')
+undef-elem TypeError | Cannot set properties of undefined (setting '3')
+reflect-prim-receiver false
+object-control 2 3 9
+--- stderr ---

@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+str-prop TypeError | Cannot create property 'x' on string 'hello'
+str-elem TypeError | Cannot assign to read only property '0' of string 'hello'
+str-length TypeError | Cannot assign to read only property 'length' of string 'hello'
+str-oob TypeError | Cannot create property '99' on string 'hello'
+num-prop TypeError | Cannot create property 'x' on number '5'
+bool-prop TypeError | Cannot create property 'x' on boolean 'true'
+sym-prop TypeError | Cannot create property 'x' on symbol 'Symbol(k)'
+bigint-prop TypeError | Cannot create property 'x' on bigint '7'
+heap-elem TypeError | Cannot assign to read only property '2' of string 'this is a long heap string beyond sso limit for sure'
+null-prop TypeError | Cannot set properties of null (setting 'x')
+unchanged hello 5 true symbol 7
+--- stderr ---
