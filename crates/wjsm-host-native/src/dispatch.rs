@@ -440,6 +440,10 @@ pub(super) unsafe extern "C" fn native_rejected_construct(
 /// - `PromiseResolveStatic`：await 机器用它包装被等待值，resolve_into 把
 ///   哨兵转为 rejected promise，resume 后路由到状态机本地 catch——透传会
 ///   跳过该转换、把本地可捕获的异常降级成外层 rejection。
+/// - `PromiseInstanceResolve` / `PromiseInstanceReject`：async 状态机的
+///   promise_resolve / promise_reject 结算指令，completion 载荷（含哨兵）
+///   由 resolve_into / settle_promise 解包并按 rejection 结算——透传会让
+///   状态机的 promise 永不结算。
 /// - `GetPrototypeFromConstructor`：new 协议机器，结果直接喂给 set_proto，
 ///   消费方无法处理哨兵（维持非对象回落 null 的现状）。
 /// - `ArrayPush`：spread 调用实参收集机器，透传会丢元素破坏位置完整性
@@ -456,6 +460,8 @@ fn builtin_accepts_exception_arguments(builtin: Builtin) -> bool {
             | Builtin::AsyncGeneratorThrow
             | Builtin::In
             | Builtin::PromiseResolveStatic
+            | Builtin::PromiseInstanceResolve
+            | Builtin::PromiseInstanceReject
             | Builtin::GetPrototypeFromConstructor
             | Builtin::ArrayPush
             | Builtin::EvalGetBinding
