@@ -223,7 +223,8 @@ impl Lowerer {
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
         );
-        let (wrapper_fn_id, captured) = self.lower_async_function_parts(&name, fn_expr)?;
+        let (wrapper_fn_id, captured) =
+            self.lower_async_function_parts(&name, fn_expr, MethodSuperBinding::None)?;
 
         let wrapper_ref_const = self
             .module
@@ -259,10 +260,12 @@ impl Lowerer {
 
     /// 构建 async 函数的 body + wrapper 两个 IR 函数，返回 wrapper 的 FunctionId
     /// 与捕获集合；由表达式与对象/类方法路径共享（声明路径在 async_fn_decls.rs）。
+    /// `method_super` 描述方法形态下 body 内 super 的绑定来源（见类型注释）。
     pub(crate) fn lower_async_function_parts(
         &mut self,
         name: &str,
         fn_expr: &swc_ast::FnExpr,
+        method_super: MethodSuperBinding,
     ) -> Result<(FunctionId, Vec<CapturedBinding>), LoweringError> {
         let async_name = format!("{name}$async");
 
@@ -271,6 +274,7 @@ impl Lowerer {
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
+        self.apply_method_super_binding(method_super);
 
         let env_scope_id = self
             .scopes
@@ -642,6 +646,10 @@ impl Lowerer {
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        // 类方法：body 经续体 resume 调用，activation home 只能来自函数元数据。
+        if let MethodSuperBinding::Static(home) = method_super {
+            ir_function.home_object = Some(home);
+        }
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -650,6 +658,8 @@ impl Lowerer {
         self.pop_function_context();
 
         self.push_function_context(name, BasicBlockId(0));
+        // wrapper 即方法本体：形参默认值等 wrapper 侧代码里的 super 同样合法。
+        self.apply_method_super_binding(method_super);
 
         let wrapper_env_scope_id = self
             .scopes
@@ -749,6 +759,10 @@ impl Lowerer {
                 args: vec![callee_val, promise_val, count_val],
             },
         );
+        // 对象字面量方法：把闭包 env 上的 home 转存为续体自有属性供 body 解析 super。
+        if matches!(method_super, MethodSuperBinding::ClosureEnv) {
+            self.emit_wrapper_home_transfer(wrapper_after_inits, cont_val);
+        }
         // slot 0: 初始状态为入口状态 0
         let initial_state_slot_const = self.module.add_constant(Constant::Number(0.0));
         let initial_state_slot = self.alloc_value();
@@ -960,6 +974,9 @@ impl Lowerer {
         }
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
+        if let MethodSuperBinding::Static(home) = method_super {
+            wrapper_ir_function.home_object = Some(home);
+        }
         for b in blocks {
             wrapper_ir_function.push_block(b);
         }
