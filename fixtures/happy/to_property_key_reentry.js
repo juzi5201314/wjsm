@@ -122,7 +122,26 @@ const log = [];
   console.log(o["/re/"], o["boxed"]);
 }
 
-// ── 12. proxy trap 接收已转换的属性键 ──
+// ── 12. super 成员读写与 Reflect.get/set 均先 ToPropertyKey ──
+{
+  log.length = 0;
+  class B {}
+  class A extends B {
+    m(k) { super[k] = 5; return super[k]; }
+  }
+  const k = { toString() { log.push("sup"); return "S"; } };
+  const a = new A();
+  log.push(String(a.m(k)));
+  log.push(String(a.S));
+  const t = {};
+  const rk = { toString() { log.push("r"); return "R"; } };
+  Reflect.set(t, rk, 1);
+  log.push(Object.keys(t).join("|"));
+  log.push(String(Reflect.get(t, rk)));
+  console.log(log.join(","));
+}
+
+// ── 13. proxy trap 接收已转换的属性键 ──
 {
   log.length = 0;
   const target = {};

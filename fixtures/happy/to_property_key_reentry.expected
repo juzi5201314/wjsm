@@ -11,5 +11,6 @@ c,c,2,c,c,3
 d,undefined,undefined,d,undefined
 x,destructured,idx,b
 regexp wrapper
+sup,sup,undefined,5,r,R,r,1
 set:P,get:P,1,del:P,undefined
 --- stderr ---
