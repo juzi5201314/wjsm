@@ -21,6 +21,7 @@ artifacts/
 .atomcode.md
 
 # Editor local config
+.cursor/
 .opencode/
 .claude/
 .trae/
