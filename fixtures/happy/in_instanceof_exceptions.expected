@@ -1,0 +1,37 @@
+exit_code: 0
+--- stdout ---
+in-null TypeError | Cannot use 'in' operator to search for 'x' in null
+in-undef TypeError | Cannot use 'in' operator to search for 'x' in undefined
+in-num TypeError | Cannot use 'in' operator to search for 'x' in 5
+in-str TypeError | Cannot use 'in' operator to search for 'x' in str
+in-bool TypeError | Cannot use 'in' operator to search for 'x' in true
+in-sym-key TypeError | Cannot use 'in' operator to search for 'Symbol(k)' in null
+in-num-key TypeError | Cannot use 'in' operator to search for '1' in null
+in-rhs-throw RangeError | rhs-boom
+in-lhs-throw Error | lhs-first
+rhsRan: false
+inst-null TypeError | Right-hand side of 'instanceof' is not an object
+inst-undef TypeError | Right-hand side of 'instanceof' is not an object
+inst-num TypeError | Right-hand side of 'instanceof' is not an object
+inst-str TypeError | Right-hand side of 'instanceof' is not an object
+inst-plain TypeError | Right-hand side of 'instanceof' is not callable
+inst-regexp-rhs TypeError | Right-hand side of 'instanceof' is not callable
+inst-rhs-throw Error | rhs-inst
+inst-lhs-throw Error | inst-lhs-first
+instRhsRan: false
+inst-arrow TypeError | Function has non-object prototype 'undefined' in instanceof check
+inst-bad-proto TypeError | Function has non-object prototype '5' in instanceof check
+inst-re-proto ok: false
+in-proxy-trap-throw RangeError | trap-boom
+inst-hasinstance-throw RangeError | hi-boom
+in-ok ok: true
+in-arr ok: true
+in-proto ok: true
+inst-ok ok: true
+inst-neg ok: false
+inst-null-lhs ok: false
+gen-caught: Cannot use 'in' operator to search for 'x' in null
+asyncIn rejected: TypeError | Cannot use 'in' operator to search for 'x' in null
+asyncInstanceof rejected: TypeError | Right-hand side of 'instanceof' is not an object
+asyncRhsThrow rejected: RangeError | async-rhs
+--- stderr ---

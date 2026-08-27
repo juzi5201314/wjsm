@@ -309,8 +309,18 @@ impl Lowerer {
                 }
                 let mut current_block = block;
                 let prop = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                // ES §13.10.1 步骤 2 `? GetValue(lref)`：LHS 求值异常必须先传播并
+                // 短路 RHS 求值，不得作为普通键值流入 HasProperty。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, prop)?;
+                }
                 let object =
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                // 步骤 4 `? GetValue(rref)`：RHS 求值异常传播，不得被吞掉返回 false
+                //（抑制上下文的延迟分叉由 lower_expr_then_continue 处理）。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, object)?;
+                }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -320,7 +330,13 @@ impl Lowerer {
                         args: vec![object, prop],
                     },
                 );
-                if current_block != block {
+                // 步骤 5：RHS 非对象的 TypeError 与 Proxy has trap 异常须在本函数内
+                // 分叉抛出，try/catch 才能本地捕获；抑制上下文由延迟分叉兜底
+                //（expr_can_throw 含 In），async 状态机内由宿主端透传异常值。
+                if self.expr_exception_fork_allowed() {
+                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                    self.expr_merge_block = Some(continue_block);
+                } else if current_block != block {
                     self.expr_merge_block = Some(current_block);
                 }
                 Ok(dest)
@@ -329,8 +345,16 @@ impl Lowerer {
             InstanceOf => {
                 let mut current_block = block;
                 let value = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                // ES §13.10.1 步骤 2：LHS 求值异常先传播并短路 RHS 求值。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, value)?;
+                }
                 let constructor =
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                // 步骤 4：RHS 求值异常传播，不得被吞掉返回 false。
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
+                    current_block = self.lower_value_exception_branch(current_block, constructor)?;
+                }
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     current_block,
@@ -340,7 +364,12 @@ impl Lowerer {
                         args: vec![value, constructor],
                     },
                 );
-                if current_block != block {
+                // InstanceofOperator 自身的 TypeError（RHS 非对象/非可调用、非对象
+                // prototype）与 @@hasInstance 用户码异常须分叉传播；三态处理同 In。
+                if self.expr_exception_fork_allowed() {
+                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                    self.expr_merge_block = Some(continue_block);
+                } else if current_block != block {
                     self.expr_merge_block = Some(current_block);
                 }
                 Ok(dest)
