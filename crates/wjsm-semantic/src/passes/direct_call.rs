@@ -22,7 +22,7 @@ use wjsm_ir::{
 };
 
 /// 是否为 env 变量 IR 名（`$env` 或 `${scope}.$env`）。
-fn is_env_name(name: &str) -> bool {
+pub(crate) fn is_env_name(name: &str) -> bool {
     name == "$env" || name.ends_with(".$env")
 }
 

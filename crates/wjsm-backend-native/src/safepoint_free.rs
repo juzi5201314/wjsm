@@ -1,8 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use wjsm_ir::{
-    Constant, EVAL_SCOPE_ENV_PARAM, Function, FunctionId, Instruction, Program, Terminator,
-    UnaryOp, ValueId,
+    Constant, EVAL_SCOPE_ENV_PARAM, FunctionId, Instruction, Program, Terminator, UnaryOp, ValueId,
 };
 use wjsm_native_abi::NativeHostSymbol;
 

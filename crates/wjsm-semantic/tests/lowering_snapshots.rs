@@ -820,6 +820,11 @@ fn escape_scalar_record_loop_fixture_matches_ir_snapshot() {
     assert_snapshot("escape_scalar_record_loop");
 }
 
+#[test]
+fn tco_countdown_fixture_matches_ir_snapshot() {
+    assert_snapshot("tco_countdown");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

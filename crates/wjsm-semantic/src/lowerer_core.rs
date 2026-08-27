@@ -1224,6 +1224,9 @@ impl Lowerer {
         }
         // direct_call pass：标记可直接调用的函数并替换绑定读取为 FunctionRef。
         crate::passes::direct_call::run(&mut self.module);
+        // tail_self_loop pass：自递归尾调用改写为跳回函数入口的循环，
+        // 消除 proper tail call 位置上的栈帧增长。依赖 direct_call 已解析的 callee。
+        crate::passes::tail_self_loop::run(&mut self.module);
         // string_fold pass：常量 receiver 的字符串运算在编译期求值，
         // 折叠结果直接参与随后的拼接链融合。
         crate::passes::string_fold::run(&mut self.module);

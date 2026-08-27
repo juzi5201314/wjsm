@@ -1,5 +1,5 @@
 function recurse(n) {
-  return recurse(n + 1);
+  return recurse(n + 1) + 1;
 }
 try {
   recurse(0);
