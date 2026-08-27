@@ -757,6 +757,11 @@ impl Lowerer {
             }
             TypeOf => {
                 if let swc_ast::Expr::Ident(ident) = unary.arg.as_ref() {
+                    // 解析穿越 with 作用域：typeof 须按对象环境记录动态分派。
+                    let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+                    if !crossed.is_empty() {
+                        return self.lower_with_typeof(ident, &crossed, block);
+                    }
                     let name = ident.sym.to_string();
                     let has_module_alias = self.current_module_id.is_some_and(|module_id| {
                         self.static_namespace_import_objects
@@ -846,7 +851,12 @@ impl Lowerer {
                         Ok(dest)
                     }
                     // delete x 对变量总是返回 true（不能删除变量）
-                    swc_ast::Expr::Ident(_) => {
+                    swc_ast::Expr::Ident(ident) => {
+                        // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。
+                        let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+                        if !crossed.is_empty() {
+                            return self.lower_with_delete(ident, &crossed, block);
+                        }
                         let true_const = self.module.add_constant(Constant::Bool(true));
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
@@ -894,6 +904,11 @@ impl Lowerer {
         let mut tdz_checked_name: Option<String> = None;
         let target = match update.arg.as_ref() {
             swc_ast::Expr::Ident(ident) => {
+                // 解析穿越 with 作用域：读改写整链按对象环境记录动态分派。
+                let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+                if !crossed.is_empty() {
+                    return self.lower_with_update(update, ident, &crossed, block);
+                }
                 let name = ident.sym.to_string();
                 let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
                     Ok(found) => found,

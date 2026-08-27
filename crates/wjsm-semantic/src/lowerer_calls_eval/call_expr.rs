@@ -402,6 +402,17 @@ impl Lowerer {
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // 裸标识符 callee 解析穿越 with 作用域：callee/this 按对象环境记录
+        // 动态分派（含 `eval` 名字被 with 对象遮蔽时退化为普通调用）。
+        if let swc_ast::Callee::Expr(expr) = &call.callee
+            && let swc_ast::Expr::Ident(ident) = expr.as_ref()
+        {
+            let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+            if !crossed.is_empty() {
+                return self.lower_with_ident_call(call, ident, &crossed, block);
+            }
+        }
+
         let callee_val: ValueId;
         let this_val: ValueId;
         let mut callee_block = block;
@@ -431,12 +442,14 @@ impl Lowerer {
                     }
 
                     // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
+                    // 对象名解析穿越 with 作用域时禁用（with 对象可能提供同名属性）。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(builtin) =
                             builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
                         && (self.scopes.lookup(&obj_ident.sym).is_err()
                             || self.eval_scope_bridge_active())
+                        && self.with_scopes_for_ident(obj_ident.sym.as_ref()).is_empty()
                     {
                         // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
                         if matches!(
@@ -968,6 +981,7 @@ impl Lowerer {
             && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
             && let Some(builtin) = builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
             && self.scopes.lookup(&obj_ident.sym).is_err()
+            && self.with_scopes_for_ident(obj_ident.sym.as_ref()).is_empty()
         {
             // 静态方法在引擎中恒存在；可选链只是语法糖，语义等于直接 CallBuiltin。
             return self.lower_host_builtin_call_expr(call, block, builtin);
@@ -986,6 +1000,17 @@ impl Lowerer {
                     if let Some(mb) = self.expr_merge_block.take() {
                         callee_block = mb;
                     }
+                } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
+                    && !self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()
+                {
+                    // 裸标识符可选调用穿越 with 作用域：callee/this 动态分派，
+                    // 命中 with 对象时 this 绑定为该对象（§9.1.1.2.10）。
+                    let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+                    let (callee, this, post) =
+                        self.lower_with_callee_resolution(ident, &crossed, block)?;
+                    callee_val = callee;
+                    this_val = this;
+                    callee_block = post;
                 } else {
                     this_val = self.alloc_value();
                     let undef = self.module.add_constant(Constant::Undefined);

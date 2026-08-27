@@ -251,6 +251,15 @@ impl Lowerer {
                     eval_string_bindings,
                 )?;
             }
+            swc_ast::Stmt::With(with_stmt) => {
+                // with 体内的 `var` 提升到函数作用域（对象环境记录不承载 var）；
+                // 词法声明属于 body 块自身作用域，此处按 Exclude 跳过。
+                self.predeclare_stmt_with_mode_and_eval_strings(
+                    &with_stmt.body,
+                    LexicalMode::Exclude,
+                    eval_string_bindings,
+                )?;
+            }
             swc_ast::Stmt::Expr(expr_stmt) => {
                 if !self.strict_mode
                     && let Some(code) =

@@ -5,6 +5,10 @@ pub(crate) enum ScopeKind {
     Block,
     Function,
     Module,
+    /// with 语句的对象环境记录：解析穿越该作用域的标识符须先按对象属性
+    /// 动态分派（见 `lowerer_with`）。variables 仅存放持有 with 对象的
+    /// 合成绑定，不会含用户标识符。
+    With,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,24 +228,79 @@ impl ScopeTree {
 
     /// Return all lexically visible bindings, including uninitialized (TDZ) ones.
     /// Returns (scope_id, name, kind, is_initialised).
+    /// with 作用域的合成对象绑定不属于用户可见词法绑定，跳过（eval 桥接经
+    /// `ScopeRecordAddWithLayer` 单独传递 with 链）。
     pub(crate) fn visible_bindings_all(&self) -> Vec<(usize, String, VarKind, bool)> {
         let mut result = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut cursor = Some(self.current);
         while let Some(scope_id) = cursor {
             let scope = &self.arenas[scope_id];
-            let mut names: Vec<_> = scope.variables.keys().cloned().collect();
-            names.sort();
-            for name in names {
-                if seen.insert(name.clone())
-                    && let Some(info) = scope.variables.get(&name)
-                {
-                    result.push((scope.id, name.clone(), info.kind, info.initialised));
+            if !matches!(scope.kind, ScopeKind::With) {
+                let mut names: Vec<_> = scope.variables.keys().cloned().collect();
+                names.sort();
+                for name in names {
+                    if seen.insert(name.clone())
+                        && let Some(info) = scope.variables.get(&name)
+                    {
+                        result.push((scope.id, name.clone(), info.kind, info.initialised));
+                    }
                 }
             }
             cursor = scope.parent;
         }
         result
+    }
+
+    /// 解析标识符时统计穿越的 with 作用域。
+    ///
+    /// 返回 `(命中绑定的 (scope_id, kind)（未命中为 None）, 命中前穿越的
+    /// With 作用域 id 列表（由内到外）)`。命中绑定处于 TDZ 时仍视为命中——
+    /// with 分派只关心词法遮蔽结构，TDZ 诊断由静态回退路径自行处理。
+    pub(crate) fn with_scopes_crossed(&self, name: &str) -> (Option<(usize, VarKind)>, Vec<usize>) {
+        let mut crossed = Vec::new();
+        let mut cursor = self.current;
+        loop {
+            let scope = &self.arenas[cursor];
+            if let Some(info) = scope.variables.get(name) {
+                return (Some((scope.id, info.kind)), crossed);
+            }
+            if matches!(scope.kind, ScopeKind::With) {
+                crossed.push(scope.id);
+            }
+            match scope.parent {
+                Some(parent) => cursor = parent,
+                None => return (None, crossed),
+            }
+        }
+    }
+
+    /// 收集严格位于 `scope_id` 之上（祖先方向）的 With 作用域 id（由内到外）。
+    /// 供 eval 顶层 `var`/函数声明的「不遮蔽 with 链」规则使用（sloppy direct
+    /// eval 的 var 环境在 with 对象环境之外）。
+    pub(crate) fn with_scopes_above(&self, scope_id: usize) -> Vec<usize> {
+        let mut result = Vec::new();
+        let mut cursor = self.arenas[scope_id].parent;
+        while let Some(id) = cursor {
+            let scope = &self.arenas[id];
+            if matches!(scope.kind, ScopeKind::With) {
+                result.push(scope.id);
+            }
+            cursor = scope.parent;
+        }
+        result
+    }
+
+    /// 判断 `ancestor` 是否为 `descendant` 的祖先（不含自身相等）。
+    pub(crate) fn is_strict_ancestor(&self, ancestor: usize, descendant: usize) -> bool {
+        let mut cursor = self.arenas[descendant].parent;
+        while let Some(id) = cursor {
+            if id == ancestor {
+                return true;
+            }
+            cursor = self.arenas[id].parent;
+        }
+        false
     }
 
     /// Resolve a variable's scope id without checking TDZ.

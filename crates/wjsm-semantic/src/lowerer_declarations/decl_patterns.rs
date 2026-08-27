@@ -115,6 +115,14 @@ impl Lowerer {
         match pat {
             swc_ast::Pat::Ident(binding) => {
                 let name = binding.id.sym.to_string();
+                // 解析穿越 with 作用域（`var` 提升越过 with 体、赋值型解构）：
+                // 写入按对象环境记录动态分派；声明型 let/const 绑定声明于
+                // with 体内侧作用域，不会走到这里。
+                let crossed = self.with_scopes_for_ident(&name);
+                if !crossed.is_empty() {
+                    let _ = self.scopes.mark_initialised(&name);
+                    return self.lower_with_bare_write(&name, pat.span(), src_val, &crossed, block);
+                }
                 let scope_id = self
                     .scopes
                     .resolve_scope_id(&name)

@@ -244,6 +244,9 @@ pub(crate) struct Lowerer {
     pub(crate) map_bindings: std::collections::HashSet<(usize, String)>,
     /// 追踪当前作用域中已推断为 Set 的绑定（scope_id, name）。
     pub(crate) set_bindings: std::collections::HashSet<(usize, String)>,
+    /// 已降级的 with 语句计数：为 0 时标识符解析零成本跳过 with 分派
+    /// （绝大多数程序不含 with，不应为其付出作用域链遍历代价）。
+    pub(crate) with_scope_count: u32,
 }
 
 /// 追踪当前作用域中的 using 变量，用于在作用域退出时自动 dispose。
