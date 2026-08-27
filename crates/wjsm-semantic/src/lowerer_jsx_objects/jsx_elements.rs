@@ -355,14 +355,12 @@ impl Lowerer {
                     );
                     val
                 }
-                swc_ast::JSXElementChild::JSXExprContainer(expr_container) => {
-                    match &expr_container.expr {
-                        swc_ast::JSXExpr::Expr(expr) => {
-                            self.lower_expr_then_continue(expr, block)?
-                        }
-                        swc_ast::JSXExpr::JSXEmptyExpr(_) => continue,
-                    }
-                }
+                swc_ast::JSXElementChild::JSXExprContainer(expr_container) => match &expr_container
+                    .expr
+                {
+                    swc_ast::JSXExpr::Expr(expr) => self.lower_expr_then_continue(expr, block)?,
+                    swc_ast::JSXExpr::JSXEmptyExpr(_) => continue,
+                },
                 swc_ast::JSXElementChild::JSXElement(el) => {
                     let val = self.lower_jsx_element(el, *block)?;
                     *block = self.resolve_store_block(*block);
