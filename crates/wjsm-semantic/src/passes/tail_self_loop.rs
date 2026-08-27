@@ -78,6 +78,7 @@ pub fn run(module: &mut Module) {
     for (function_id, sites) in plans {
         if let Some(function) = module.function_mut(function_id) {
             rewrite_tail_sites(function, &sites);
+            drop_dead_env_reads(function);
         }
     }
 }
@@ -274,6 +275,15 @@ fn call_result_escapes(function: &Function, tail_block: BasicBlockId, dest: Valu
     })
 }
 
+/// `value` 在函数内是否还有使用者（含 Phi source 与终止器）。
+fn value_is_used(function: &Function, value: ValueId) -> bool {
+    !collect_uses(function, value).is_empty()
+        || function
+            .blocks()
+            .iter()
+            .any(|block| terminator_uses(block.terminator()).contains(&value))
+}
+
 /// 就地改写：删除 `Call`，按形参顺序回写实参，终止器换成跳回入口的回边。
 fn rewrite_tail_sites(function: &mut Function, sites: &[TailSite]) {
     let entry = function.entry();
@@ -295,6 +305,49 @@ fn rewrite_tail_sites(function: &mut Function, sites: &[TailSite]) {
             );
         }
         block.set_terminator(Terminator::Jump { target: entry });
+    }
+}
+
+/// 删除改写后零 use 的 `GetProp(env, ...)`。
+///
+/// 被改写的自递归调用点上，callee 往往是 `GetProp(env, "$N.name")`——env 对象是编译器
+/// 生成的内部记录，没有 getter，读取无副作用，删除安全。留着它会让每轮回边都多走一次
+/// 属性读取，正好抵消掉 loopification 的收益。剩下的 `LoadVar $env` 与键常量由
+/// cfg_fold 的通用 DCE 白名单回收。
+fn drop_dead_env_reads(function: &mut Function) {
+    let env_values: HashSet<ValueId> = function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::LoadVar { dest, name } if is_env_name(name) => Some(*dest),
+            _ => None,
+        })
+        .collect();
+
+    let dead: Vec<(BasicBlockId, usize)> = function
+        .blocks()
+        .iter()
+        .flat_map(|block| {
+            block
+                .instructions()
+                .iter()
+                .enumerate()
+                .filter(|(_, instruction)| match instruction {
+                    Instruction::GetProp { dest, object, .. } => {
+                        env_values.contains(object) && !value_is_used(function, *dest)
+                    }
+                    _ => false,
+                })
+                .map(|(index, _)| (block.id(), index))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    for (block_id, index) in dead.into_iter().rev() {
+        if let Some(block) = function.block_by_id_mut(block_id) {
+            block.instructions_mut().remove(index);
+        }
     }
 }
 
@@ -504,6 +557,13 @@ mod tests {
 
         run(&mut module);
         assert_rewritten(&module, 0, &[ValueId(4)]);
+        assert!(
+            !module.functions()[0].blocks()[0]
+                .instructions()
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::GetProp { .. })),
+            "改写后 callee 的 env 读取应一并删除，避免每轮回边多一次属性读"
+        );
     }
 
     /// pass 不改写时，`Call` 与 `Return` 都应原样保留。

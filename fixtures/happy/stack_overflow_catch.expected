@@ -4,6 +4,6 @@ true
 RangeError
 Maximum call stack size exceeded
 RangeError: Maximum call stack size exceeded
- at recurse (happy/stack_overflow_catch.js:1:1) (repeated)
+ at recurse (happy/stack_overflow_catch.js:3:1) (repeated)
 continued
 --- stderr ---

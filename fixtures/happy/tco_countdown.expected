@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+liftoff
+liftoff
+liftoff
+55
+720
+--- stderr ---
