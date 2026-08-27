@@ -40,19 +40,23 @@ impl Lowerer {
         let mut current = block;
         for arg in args {
             let value = self.lower_expr_then_continue(&arg.expr, &mut current)?;
-            let builtin = if arg.spread.is_some() {
-                Builtin::ArrayPushSpread
+            // ArgumentListEvaluation：实参求值抛异常必须传播，不得把
+            // TAG_EXCEPTION 存入实参数组或让 spread 静默展开为空。
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(&arg.expr) {
+                current = self.lower_value_exception_branch(current, value)?;
+            }
+            if arg.spread.is_some() {
+                current = self.emit_array_push_spread_checked(current, array, value)?;
             } else {
-                Builtin::ArrayPush
-            };
-            self.current_function.append_instruction(
-                current,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin,
-                    args: vec![array, value],
-                },
-            );
+                self.current_function.append_instruction(
+                    current,
+                    Instruction::CallBuiltin {
+                        dest: None,
+                        builtin: Builtin::ArrayPush,
+                        args: vec![array, value],
+                    },
+                );
+            }
         }
         Ok((array, current))
     }
@@ -901,7 +905,13 @@ impl Lowerer {
                         },
                     );
                 }
-                let (result, _) = self.select_construct_result(call_block, ctor_result, this_val);
+                // select_construct_result 已终结 call_block 并汇合到 merge 块；
+                // 必须经 expr_merge_block 上报，否则外层（语句级异常检查、后续
+                // 表达式）会退回启发式解析。spread 实参的异常分叉终结了入口块，
+                // 启发式无法穿过分叉链，外层会误写已终结块并覆盖其终结器。
+                let (result, merge_block) =
+                    self.select_construct_result(call_block, ctor_result, this_val);
+                self.expr_merge_block = Some(merge_block);
                 return Ok(result);
             }
         }

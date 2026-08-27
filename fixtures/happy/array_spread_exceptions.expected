@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+array literal: boom
+non-iterable: TypeError
+non-iterable: TypeError
+non-iterable: TypeError
+non-iterable: TypeError
+plain object: TypeError
+order: 1,caught
+order2: 1,caught,4,element-caught
+next throw: next-throw
+iterator getter: getter-throw
+not callable: TypeError
+non-object iterator: TypeError
+call order: 1,caught
+Math.max spread: boom
+new spread: boom
+ok: 1,2,3,a,b 7,8 9,10 5 5 1
+--- stderr ---

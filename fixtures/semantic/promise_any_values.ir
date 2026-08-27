@@ -98,39 +98,63 @@ module {
       %23 = const c21
       %24 = const c22
       %25 = call builtin.promise.reject_static(%23, %24)
-      call builtin.array.push(%22, %25)
-      %26 = const c23
-      %27 = const c24
-      %28 = call builtin.promise.resolve_static(%26, %27)
-      call builtin.array.push(%22, %28)
-      %29 = call builtin.promise.any(%21, %22)
-      %30 = const c25
-      %31 = const c26
-      %32 = call builtin.promise.then(%29, %30, %31)
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %26 = is_exception %25
+      branch %26, bb2, bb1
     bb1:
-      %35 = const c27
-      %36 = new_array(capacity=4)
-      %37 = const c28
-      %38 = const c29
-      %39 = call builtin.promise.reject_static(%37, %38)
-      call builtin.array.push(%36, %39)
-      %40 = const c30
-      %41 = const c31
-      %42 = call builtin.promise.reject_static(%40, %41)
-      call builtin.array.push(%36, %42)
-      %43 = call builtin.promise.any(%35, %36)
-      %44 = const c33
-      %45 = call builtin.promise.catch(%43, %44)
-      %46 = is_exception %45
-      branch %46, bb4, bb3
+      call builtin.array.push(%22, %25)
+      %28 = const c23
+      %29 = const c24
+      %30 = call builtin.promise.resolve_static(%28, %29)
+      %31 = is_exception %30
+      branch %31, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %27 = call builtin.exception_value(%25)
+      throw %27
     bb3:
-      return
+      call builtin.array.push(%22, %30)
+      %33 = call builtin.promise.any(%21, %22)
+      %34 = const c25
+      %35 = const c26
+      %36 = call builtin.promise.then(%33, %34, %35)
+      %37 = is_exception %36
+      branch %37, bb6, bb5
     bb4:
-      %47 = call builtin.exception_value(%45)
-      throw %47
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb5:
+      %39 = const c27
+      %40 = new_array(capacity=4)
+      %41 = const c28
+      %42 = const c29
+      %43 = call builtin.promise.reject_static(%41, %42)
+      %44 = is_exception %43
+      branch %44, bb8, bb7
+    bb6:
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb7:
+      call builtin.array.push(%40, %43)
+      %46 = const c30
+      %47 = const c31
+      %48 = call builtin.promise.reject_static(%46, %47)
+      %49 = is_exception %48
+      branch %49, bb10, bb9
+    bb8:
+      %45 = call builtin.exception_value(%43)
+      throw %45
+    bb9:
+      call builtin.array.push(%40, %48)
+      %51 = call builtin.promise.any(%39, %40)
+      %52 = const c33
+      %53 = call builtin.promise.catch(%51, %52)
+      %54 = is_exception %53
+      branch %54, bb12, bb11
+    bb10:
+      %50 = call builtin.exception_value(%48)
+      throw %50
+    bb11:
+      return
+    bb12:
+      %55 = call builtin.exception_value(%53)
+      throw %55
 }
