@@ -58,28 +58,28 @@ fn compute_dominators(function: &wjsm_ir::Function) -> Vec<HashSet<BasicBlockId>
 }
 
 #[derive(Clone, Debug)]
-struct PropertyWrite {
-    key: String,
-    block: BasicBlockId,
-    index: usize,
-    value: ValueId,
+pub(super) struct PropertyWrite {
+    pub(super) key: String,
+    pub(super) block: BasicBlockId,
+    pub(super) index: usize,
+    pub(super) value: ValueId,
 }
 
 #[derive(Clone, Debug)]
-struct PropertyRead {
-    key: String,
-    block: BasicBlockId,
-    index: usize,
-    dest: ValueId,
+pub(super) struct PropertyRead {
+    pub(super) key: String,
+    pub(super) block: BasicBlockId,
+    pub(super) index: usize,
+    pub(super) dest: ValueId,
 }
 
 #[derive(Clone, Debug)]
-struct CandidateAnalysis {
-    writes: Vec<PropertyWrite>,
-    reads: Vec<PropertyRead>,
-    delete_targets: Vec<(BasicBlockId, usize)>,
-    result_replacements: Vec<(ValueId, ValueId)>,
-    escapes: bool,
+pub(super) struct CandidateAnalysis {
+    pub(super) writes: Vec<PropertyWrite>,
+    pub(super) reads: Vec<PropertyRead>,
+    pub(super) delete_targets: Vec<(BasicBlockId, usize)>,
+    pub(super) result_replacements: Vec<(ValueId, ValueId)>,
+    pub(super) escapes: bool,
 }
 
 fn is_new_object_value(function: &wjsm_ir::Function, value: ValueId) -> bool {
@@ -368,10 +368,11 @@ fn analyze_candidate(
     }
 }
 #[derive(Clone, Debug)]
-struct PropertyPhi {
-    block: BasicBlockId,
-    dest: ValueId,
-    sources: Vec<wjsm_ir::PhiSource>,
+pub(super) struct PropertyPhi {
+    pub(super) block: BasicBlockId,
+    pub(super) dest: ValueId,
+    pub(super) sources: Vec<wjsm_ir::PhiSource>,
+    pub(super) key: String,
 }
 
 fn function_predecessors(function: &wjsm_ir::Function) -> Vec<Vec<BasicBlockId>> {
@@ -406,7 +407,7 @@ fn state_before_read(
     state
 }
 
-fn next_value_id(function: &wjsm_ir::Function) -> u32 {
+pub(super) fn next_value_id(function: &wjsm_ir::Function) -> u32 {
     let mut next = 0_u32;
     for block in function.blocks() {
         for instruction in block.instructions() {
@@ -429,7 +430,7 @@ fn next_value_id(function: &wjsm_ir::Function) -> u32 {
     next
 }
 
-fn resolve_property_replacements(
+pub(super) fn resolve_property_replacements(
     function: &wjsm_ir::Function,
     analysis: &CandidateAnalysis,
     next_value: &mut u32,
@@ -520,6 +521,7 @@ fn resolve_property_replacements(
                 block,
                 dest,
                 sources,
+                key: key.clone(),
             });
         }
 
@@ -533,7 +535,7 @@ fn resolve_property_replacements(
     Some((replacements, phis))
 }
 
-fn close_replacements(replacements: &mut HashMap<ValueId, ValueId>) {
+pub(super) fn close_replacements(replacements: &mut HashMap<ValueId, ValueId>) {
     let keys: Vec<_> = replacements.keys().copied().collect();
     for key in keys {
         let mut value = replacements[&key];
@@ -602,6 +604,7 @@ pub(crate) fn run(module: &mut Module) {
 
     eliminate_array_templates(module);
     eliminate_dead_string_computations(module);
+    crate::passes::escape_scalar_record::run(module);
 
     let mut any_change = true;
     while any_change {
@@ -721,7 +724,7 @@ fn used_in_terminator(function: &wjsm_ir::Function, target: ValueId) -> bool {
 }
 
 /// 在函数的所有指令和终止器中替换 ValueId。
-fn apply_value_replacements(
+pub(super) fn apply_value_replacements(
     function: &mut wjsm_ir::Function,
     replacements: &HashMap<ValueId, ValueId>,
 ) -> bool {
@@ -1256,9 +1259,12 @@ fn resolve_array_index(
             match ins {
                 Instruction::Const { dest: d, constant } if *d == idx_val => {
                     if let Some(Constant::Number(n)) = constants.get(constant.0 as usize)
-                        && *n >= 0.0 && (*n as usize) < elem_len && n.fract() == 0.0 {
-                            return Some(*n as usize);
-                        }
+                        && *n >= 0.0
+                        && (*n as usize) < elem_len
+                        && n.fract() == 0.0
+                    {
+                        return Some(*n as usize);
+                    }
                 }
                 Instruction::Binary {
                     dest: d,
@@ -1606,9 +1612,10 @@ fn eliminate_dead_string_computations(module: &mut Module) -> bool {
                 for block in function.blocks() {
                     for (index, instruction) in block.instructions().iter().enumerate() {
                         if delete_targets.contains(&(block.id(), index))
-                            && let Some(dest) = instruction_dest(instruction) {
-                                deleted_values.insert(dest);
-                            }
+                            && let Some(dest) = instruction_dest(instruction)
+                        {
+                            deleted_values.insert(dest);
+                        }
                     }
                 }
 
@@ -1702,19 +1709,20 @@ fn find_part_length(
                 match constants.get(constant.0 as usize) {
                     Some(Constant::String(s)) => return Some(s.encode_utf16().count() as f64),
                     Some(Constant::Number(n))
-                        if (0.0..=1_000_000_000.0).contains(n) && n.fract() == 0.0 => {
-                            let val = *n as u64;
-                            if val == 0 {
-                                return Some(1.0);
-                            }
-                            let mut digits = 0.0;
-                            let mut temp = val;
-                            while temp > 0 {
-                                digits += 1.0;
-                                temp /= 10;
-                            }
-                            return Some(digits);
+                        if (0.0..=1_000_000_000.0).contains(n) && n.fract() == 0.0 =>
+                    {
+                        let val = *n as u64;
+                        if val == 0 {
+                            return Some(1.0);
                         }
+                        let mut digits = 0.0;
+                        let mut temp = val;
+                        while temp > 0 {
+                            digits += 1.0;
+                            temp /= 10;
+                        }
+                        return Some(digits);
+                    }
                     _ => {}
                 }
             }

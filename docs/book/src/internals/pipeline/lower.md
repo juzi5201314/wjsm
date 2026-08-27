@@ -47,7 +47,7 @@ lowering 按语法域拆成独立模块，避免单文件膨胀：
 
 1. **direct_call**：识别「不可变函数声明绑定 ∧ 函数体不依赖 env/this/new.target ∧ 无 eval」的函数，把 `LoadVar`/`GetProp` 绑定读取原地替换为 `Const(FunctionRef)`，并写回 `direct_callable` 标记。后端据此对调用点发射直接 `call`，省掉 callee 求值、类型分派与闭包解包。
 2. **inline_for_ea**：两阶段内联。阶段 A 把 direct_callable 函数的整个多块函数体展开到调用处（构造器内联保留 `new` 语义）；阶段 C 对 `GetProp` 常量键的方法调用发射 `GuardSameFunction` 守卫 + 快路径克隆，失配回退动态调用。内联与 cfg_fold 迭代至不动点。模块任一函数含 `eval` 时整个 pass 禁用。
-3. **escape_scalar**：逃逸分析 + 标量替换。函数内局部 `NewObject` 若所有使用都是常量键属性读写且不逃逸，则把属性读取替换为写入值并删除分配指令——消除整个对象分配。
+3. **escape_scalar**：逃逸分析 + 标量替换。函数内局部 `NewObject` 若所有使用都是常量键属性读写且不逃逸，则把属性读取替换为写入值并删除分配指令；不逃逸的模块级 `InitObjectLiteral`（如只读写固定键的 `RECORD`）同样降为字段 SSA，循环内不再走属性访问。
 4. **cfg_fold**：终轮清理。IsException/IsJsObject 常量折叠、常量分支折叠、死块中和、phi 化简、DCE，按序应用到不动点（上限 8 轮）。
 
 这四个 pass 都只变换不新增语义：替换前提（绑定不可变、对象不逃逸、callee 唯一）在 lowering 阶段已静态可判。pass 顺序有依赖——direct_call 先标 `direct_callable`，inline_for_ea 才有内联对象，escape_scalar 才能消除内联暴露的分配。

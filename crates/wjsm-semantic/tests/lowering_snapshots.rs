@@ -815,6 +815,11 @@ fn object_literal_static_keys_fixture_matches_ir_snapshot() {
     assert_snapshot("object_literal_static_keys");
 }
 
+#[test]
+fn escape_scalar_record_loop_fixture_matches_ir_snapshot() {
+    assert_snapshot("escape_scalar_record_loop");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));
