@@ -281,14 +281,20 @@ module {
       %24 = const c64
       %25 = const c65
       %26 = call %23, this=%22, args=[%24, %25]
-      %27 = const c66
-      %28 = const c67
-      %29 = call builtin.promise.then(%26, %27, %28)
-      %30 = is_exception %29
-      branch %30, bb2, bb1
+      %27 = is_exception %26
+      branch %27, bb2, bb1
     bb1:
-      return
+      %29 = const c66
+      %30 = const c67
+      %31 = call builtin.promise.then(%26, %29, %30)
+      %32 = is_exception %31
+      branch %32, bb4, bb3
     bb2:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb3:
+      return
+    bb4:
+      %33 = call builtin.exception_value(%31)
+      throw %33
 }

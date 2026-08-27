@@ -90,17 +90,29 @@ module {
       %21 = const c20
       %22 = const c21
       %23 = call builtin.promise.resolve_static(%21, %22)
-      %24 = const c23
-      %25 = const c24
-      %26 = call builtin.promise.then(%23, %24, %25)
-      %27 = const c25
-      %28 = const c26
-      %29 = call builtin.promise.then(%26, %27, %28)
-      %30 = is_exception %29
-      branch %30, bb2, bb1
+      %24 = is_exception %23
+      branch %24, bb2, bb1
     bb1:
-      return
+      %26 = const c23
+      %27 = const c24
+      %28 = call builtin.promise.then(%23, %26, %27)
+      %29 = is_exception %28
+      branch %29, bb4, bb3
     bb2:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      %25 = call builtin.exception_value(%23)
+      throw %25
+    bb3:
+      %31 = const c25
+      %32 = const c26
+      %33 = call builtin.promise.then(%28, %31, %32)
+      %34 = is_exception %33
+      branch %34, bb6, bb5
+    bb4:
+      %30 = call builtin.exception_value(%28)
+      throw %30
+    bb5:
+      return
+    bb6:
+      %35 = call builtin.exception_value(%33)
+      throw %35
 }

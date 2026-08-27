@@ -101,7 +101,7 @@ module {
       store var $0.sum, %31
       %32 = const c30
       store var $1.i, %32
-      jump bb11
+      jump bb13
     bb1:
       %33 = load var $1.i
       %35 = const c31
@@ -113,9 +113,9 @@ module {
     bb2:
       %40 = load var $0.sum
       %42 = load var $1.i
-      %43 = get_elem_guarded %41, %42, guard=%63
+      %43 = get_elem_guarded %41, %42, guard=%65
       %44 = const c34
-      %45 = get_prop_guarded %43, %44, guard=%63, template=c20
+      %45 = get_prop_guarded %43, %44, guard=%65, template=c20
       %46 = add %40, %45
       store var $0.sum, %46
       %47 = is_exception %46
@@ -141,22 +141,28 @@ module {
       %57 = load var $0.POINTS
       %58 = const c36
       %59 = get_prop %57, %58
-      %60 = call builtin.console.log(%59)
-      %61 = is_exception %60
-      branch %61, bb10, bb9
+      %60 = is_exception %59
+      branch %60, bb10, bb9
     bb8:
       %56 = call builtin.exception_value(%54)
       throw %56
     bb9:
-      return
+      %62 = call builtin.console.log(%59)
+      %63 = is_exception %62
+      branch %63, bb12, bb11
     bb10:
-      %62 = call builtin.exception_value(%60)
-      throw %62
+      %61 = call builtin.exception_value(%59)
+      throw %61
     bb11:
+      return
+    bb12:
+      %64 = call builtin.exception_value(%62)
+      throw %64
+    bb13:
       %34 = load var $0.POINTS
       %41 = load var $0.POINTS
-      jump bb12
-    bb12:
-      %63 = elem_shape_guard %41, c20
+      jump bb14
+    bb14:
+      %65 = elem_shape_guard %41, c20
       jump bb1
 }

@@ -129,40 +129,64 @@ module {
       %21 = const c20
       %22 = const c21
       %23 = call builtin.promise.resolve_static(%21, %22)
-      %24 = const c22
-      %25 = const c23
-      %26 = call builtin.create_closure(%24, %25)
-      %27 = call builtin.promise.finally(%23, %26)
-      %28 = const c24
-      %29 = const c25
-      %30 = call builtin.create_closure(%28, %29)
-      %31 = const c26
-      %32 = call builtin.promise.then(%27, %30, %31)
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %24 = is_exception %23
+      branch %24, bb2, bb1
     bb1:
-      %35 = const c27
-      %36 = const c28
-      %37 = call builtin.promise.reject_static(%35, %36)
-      %38 = const c29
-      %39 = const c30
-      %40 = call builtin.create_closure(%38, %39)
-      %41 = call builtin.promise.finally(%37, %40)
-      %42 = const c31
-      %43 = const c32
-      %44 = call builtin.create_closure(%42, %43)
-      %45 = const c33
-      %46 = const c34
-      %47 = call builtin.create_closure(%45, %46)
-      %48 = call builtin.promise.then(%41, %44, %47)
-      %49 = is_exception %48
-      branch %49, bb4, bb3
+      %26 = const c22
+      %27 = const c23
+      %28 = call builtin.create_closure(%26, %27)
+      %29 = call builtin.promise.finally(%23, %28)
+      %30 = is_exception %29
+      branch %30, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %25 = call builtin.exception_value(%23)
+      throw %25
     bb3:
-      return
+      %32 = const c24
+      %33 = const c25
+      %34 = call builtin.create_closure(%32, %33)
+      %35 = const c26
+      %36 = call builtin.promise.then(%29, %34, %35)
+      %37 = is_exception %36
+      branch %37, bb6, bb5
     bb4:
-      %50 = call builtin.exception_value(%48)
-      throw %50
+      %31 = call builtin.exception_value(%29)
+      throw %31
+    bb5:
+      %39 = const c27
+      %40 = const c28
+      %41 = call builtin.promise.reject_static(%39, %40)
+      %42 = is_exception %41
+      branch %42, bb8, bb7
+    bb6:
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb7:
+      %44 = const c29
+      %45 = const c30
+      %46 = call builtin.create_closure(%44, %45)
+      %47 = call builtin.promise.finally(%41, %46)
+      %48 = is_exception %47
+      branch %48, bb10, bb9
+    bb8:
+      %43 = call builtin.exception_value(%41)
+      throw %43
+    bb9:
+      %50 = const c31
+      %51 = const c32
+      %52 = call builtin.create_closure(%50, %51)
+      %53 = const c33
+      %54 = const c34
+      %55 = call builtin.create_closure(%53, %54)
+      %56 = call builtin.promise.then(%47, %52, %55)
+      %57 = is_exception %56
+      branch %57, bb12, bb11
+    bb10:
+      %49 = call builtin.exception_value(%47)
+      throw %49
+    bb11:
+      return
+    bb12:
+      %58 = call builtin.exception_value(%56)
+      throw %58
 }

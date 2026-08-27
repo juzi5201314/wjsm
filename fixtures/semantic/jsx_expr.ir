@@ -86,12 +86,18 @@ module {
       %28 = load var $0.el
       %29 = const c24
       %30 = get_prop %28, %29
-      %31 = call builtin.console.log(%30)
-      %32 = is_exception %31
-      branch %32, bb2, bb1
+      %31 = is_exception %30
+      branch %31, bb2, bb1
     bb1:
-      return
+      %33 = call builtin.console.log(%30)
+      %34 = is_exception %33
+      branch %34, bb4, bb3
     bb2:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb3:
+      return
+    bb4:
+      %35 = call builtin.exception_value(%33)
+      throw %35
 }

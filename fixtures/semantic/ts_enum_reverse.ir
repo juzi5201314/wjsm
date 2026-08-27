@@ -114,22 +114,34 @@ module {
       %46 = load var $0.Direction
       %47 = const c36
       %48 = get_prop %46, %47
-      %49 = call builtin.console.log(%48)
-      %50 = is_exception %49
-      branch %50, bb2, bb1
+      %49 = is_exception %48
+      branch %49, bb2, bb1
     bb1:
-      %52 = load var $0.Direction
-      %53 = const c37
-      %54 = get_elem %52, %53
-      %55 = call builtin.console.log(%54)
-      %56 = is_exception %55
-      branch %56, bb4, bb3
+      %51 = call builtin.console.log(%48)
+      %52 = is_exception %51
+      branch %52, bb4, bb3
     bb2:
-      %51 = call builtin.exception_value(%49)
-      throw %51
+      %50 = call builtin.exception_value(%48)
+      throw %50
     bb3:
-      return
+      %54 = load var $0.Direction
+      %55 = const c37
+      %56 = get_elem %54, %55
+      %57 = is_exception %56
+      branch %57, bb6, bb5
     bb4:
-      %57 = call builtin.exception_value(%55)
-      throw %57
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb5:
+      %59 = call builtin.console.log(%56)
+      %60 = is_exception %59
+      branch %60, bb8, bb7
+    bb6:
+      %58 = call builtin.exception_value(%56)
+      throw %58
+    bb7:
+      return
+    bb8:
+      %61 = call builtin.exception_value(%59)
+      throw %61
 }

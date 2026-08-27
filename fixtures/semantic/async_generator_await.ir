@@ -245,16 +245,28 @@ module {
       %0 = load var $3.result
       %1 = const c62
       %2 = get_prop %0, %1
-      %3 = call builtin.console.log(%2)
-      return %3
+      %3 = is_exception %2
+      branch %3, bb2, bb1
+    bb1:
+      %5 = call builtin.console.log(%2)
+      return %5
+    bb2:
+      %4 = call builtin.exception_value(%2)
+      throw %4
 
   fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
     bb0:
       %0 = load var $4.result
       %1 = const c66
       %2 = get_prop %0, %1
-      %3 = call builtin.console.log(%2)
-      return %3
+      %3 = is_exception %2
+      branch %3, bb2, bb1
+    bb1:
+      %5 = call builtin.console.log(%2)
+      return %5
+    bb2:
+      %4 = call builtin.exception_value(%2)
+      throw %4
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -314,30 +326,42 @@ module {
       %29 = const c61
       %30 = get_prop %28, %29
       %31 = call %30, this=%28
-      %32 = const c63
-      %33 = const c64
-      %34 = call builtin.promise.then(%31, %32, %33)
-      %35 = is_exception %34
-      branch %35, bb4, bb3
+      %32 = is_exception %31
+      branch %32, bb4, bb3
     bb2:
       %27 = call builtin.exception_value(%25)
       throw %27
     bb3:
-      %37 = load var $0.g
-      %38 = const c65
-      %39 = get_prop %37, %38
-      %40 = call %39, this=%37
-      %41 = const c67
-      %42 = const c68
-      %43 = call builtin.promise.then(%40, %41, %42)
-      %44 = is_exception %43
-      branch %44, bb6, bb5
+      %34 = const c63
+      %35 = const c64
+      %36 = call builtin.promise.then(%31, %34, %35)
+      %37 = is_exception %36
+      branch %37, bb6, bb5
     bb4:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %33 = call builtin.exception_value(%31)
+      throw %33
     bb5:
-      return
+      %39 = load var $0.g
+      %40 = const c65
+      %41 = get_prop %39, %40
+      %42 = call %41, this=%39
+      %43 = is_exception %42
+      branch %43, bb8, bb7
     bb6:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb7:
+      %45 = const c67
+      %46 = const c68
+      %47 = call builtin.promise.then(%42, %45, %46)
+      %48 = is_exception %47
+      branch %48, bb10, bb9
+    bb8:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb9:
+      return
+    bb10:
+      %49 = call builtin.exception_value(%47)
+      throw %49
 }

@@ -88,7 +88,7 @@ module {
       store var $0.sum, %24
       %25 = const c24
       store var $1.i, %25
-      jump bb15
+      jump bb17
     bb1:
       %26 = load var $1.i
       %27 = const c25
@@ -135,26 +135,32 @@ module {
       %56 = load var $0.P
       %57 = const c33
       %58 = get_prop %56, %57
-      %59 = call builtin.console.log(%58)
-      %60 = is_exception %59
-      branch %60, bb12, bb11
+      %59 = is_exception %58
+      branch %59, bb12, bb11
     bb10:
       %55 = call builtin.exception_value(%53)
       throw %55
     bb11:
-      %62 = load var $0.P
-      %63 = call builtin.console.log(%62)
-      %64 = is_exception %63
-      branch %64, bb14, bb13
+      %61 = call builtin.console.log(%58)
+      %62 = is_exception %61
+      branch %62, bb14, bb13
     bb12:
-      %61 = call builtin.exception_value(%59)
-      throw %61
+      %60 = call builtin.exception_value(%58)
+      throw %60
     bb13:
-      return
+      %64 = load var $0.P
+      %65 = call builtin.console.log(%64)
+      %66 = is_exception %65
+      branch %66, bb16, bb15
     bb14:
-      %65 = call builtin.exception_value(%63)
-      throw %65
+      %63 = call builtin.exception_value(%61)
+      throw %63
     bb15:
+      return
+    bb16:
+      %67 = call builtin.exception_value(%65)
+      throw %67
+    bb17:
       %32 = load var $0.P
       %38 = load var $0.P
       %40 = load var $0.P

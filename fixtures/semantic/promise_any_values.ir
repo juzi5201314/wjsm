@@ -104,33 +104,45 @@ module {
       %28 = call builtin.promise.resolve_static(%26, %27)
       call builtin.array.push(%22, %28)
       %29 = call builtin.promise.any(%21, %22)
-      %30 = const c25
-      %31 = const c26
-      %32 = call builtin.promise.then(%29, %30, %31)
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %30 = is_exception %29
+      branch %30, bb2, bb1
     bb1:
-      %35 = const c27
-      %36 = new_array(capacity=4)
-      %37 = const c28
-      %38 = const c29
-      %39 = call builtin.promise.reject_static(%37, %38)
-      call builtin.array.push(%36, %39)
-      %40 = const c30
-      %41 = const c31
-      %42 = call builtin.promise.reject_static(%40, %41)
-      call builtin.array.push(%36, %42)
-      %43 = call builtin.promise.any(%35, %36)
-      %44 = const c33
-      %45 = call builtin.promise.catch(%43, %44)
-      %46 = is_exception %45
-      branch %46, bb4, bb3
+      %32 = const c25
+      %33 = const c26
+      %34 = call builtin.promise.then(%29, %32, %33)
+      %35 = is_exception %34
+      branch %35, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %31 = call builtin.exception_value(%29)
+      throw %31
     bb3:
-      return
+      %37 = const c27
+      %38 = new_array(capacity=4)
+      %39 = const c28
+      %40 = const c29
+      %41 = call builtin.promise.reject_static(%39, %40)
+      call builtin.array.push(%38, %41)
+      %42 = const c30
+      %43 = const c31
+      %44 = call builtin.promise.reject_static(%42, %43)
+      call builtin.array.push(%38, %44)
+      %45 = call builtin.promise.any(%37, %38)
+      %46 = is_exception %45
+      branch %46, bb6, bb5
     bb4:
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb5:
+      %48 = const c33
+      %49 = call builtin.promise.catch(%45, %48)
+      %50 = is_exception %49
+      branch %50, bb8, bb7
+    bb6:
       %47 = call builtin.exception_value(%45)
       throw %47
+    bb7:
+      return
+    bb8:
+      %51 = call builtin.exception_value(%49)
+      throw %51
 }
