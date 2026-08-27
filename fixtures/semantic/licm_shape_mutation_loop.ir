@@ -1,0 +1,162 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = object_template([4613128577683030136, 4613128577683030137])
+    c21 = number(3)
+    c22 = number(4)
+    c23 = number(0)
+    c24 = number(0)
+    c25 = number(5)
+    c26 = bool(false)
+    c27 = bool(false)
+    c28 = string("x")
+    c29 = string("x")
+    c30 = string("x")
+    c31 = number(1)
+    c32 = number(1)
+    c33 = string("x")
+    c34 = bool(true)
+
+  fn @$module_main [direct_callable] [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = const c21
+      %22 = const c22
+      %23 = init_object_literal(c20, values=[%21, %22])
+      store var $0.P, %23
+      %24 = const c23
+      store var $0.sum, %24
+      %25 = const c24
+      store var $1.i, %25
+      jump bb15
+    bb1:
+      %26 = load var $1.i
+      %27 = const c25
+      %28 = lt %26, %27
+      branch %28, bb2, bb4
+    bb2:
+      %31 = load var $0.sum
+      %33 = const c28
+      %34 = get_prop %32, %33
+      %35 = add %31, %34
+      store var $0.sum, %35
+      %36 = is_exception %35
+      branch %36, bb6, bb5
+    bb3:
+      %48 = load var $1.i
+      %49 = pos %48
+      %50 = const c32
+      %51 = add %49, %50
+      store var $1.i, %51
+      jump bb1
+    bb4:
+      %52 = load var $0.sum
+      %53 = call builtin.console.log(%52)
+      %54 = is_exception %53
+      branch %54, bb10, bb9
+    bb5:
+      %39 = const c29
+      %41 = const c30
+      %42 = get_prop %40, %41
+      %43 = const c31
+      %44 = add %42, %43
+      %45 = set_prop %38, %39, %44
+      %46 = is_exception %45
+      branch %46, bb8, bb7
+    bb6:
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb7:
+      jump bb3
+    bb8:
+      %47 = call builtin.exception_value(%45)
+      throw %47
+    bb9:
+      %56 = load var $0.P
+      %57 = const c33
+      %58 = get_prop %56, %57
+      %59 = call builtin.console.log(%58)
+      %60 = is_exception %59
+      branch %60, bb12, bb11
+    bb10:
+      %55 = call builtin.exception_value(%53)
+      throw %55
+    bb11:
+      %62 = load var $0.P
+      %63 = call builtin.console.log(%62)
+      %64 = is_exception %63
+      branch %64, bb14, bb13
+    bb12:
+      %61 = call builtin.exception_value(%59)
+      throw %61
+    bb13:
+      return
+    bb14:
+      %65 = call builtin.exception_value(%63)
+      throw %65
+    bb15:
+      %32 = load var $0.P
+      %38 = load var $0.P
+      %40 = load var $0.P
+      jump bb1
+}

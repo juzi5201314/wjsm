@@ -289,6 +289,16 @@ fn for_sum_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn licm_shape_check_hoist_loop_fixture_matches_ir_snapshot() {
+    assert_snapshot("licm_shape_check_hoist_loop");
+}
+
+#[test]
+fn licm_shape_mutation_loop_fixture_matches_ir_snapshot() {
+    assert_snapshot("licm_shape_mutation_loop");
+}
+
+#[test]
 fn break_continue_fixture_matches_ir_snapshot() {
     assert_snapshot("break_continue");
 }

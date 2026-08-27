@@ -1,6 +1,6 @@
 # 运行时配置与环境变量索引
 
-这一章汇总当前 crate 真正读取的运行时配置。已废止、宿主不读：`WJSM_STARTUP_SNAPSHOT`、`WJSM_STARTUP_SNAPSHOT_DEBUG`、`WJSM_DISABLE_LICM`、`WJSM_COMPILER`、`WJSM_GC_LOG`、`WJSM_VM_MAX_REALMS`、`WJSM_WORKER_THREADS_MAX`。启动快照强制恢复，见 [ADR 0003](../../../../adr/0003-startup-snapshot-boundary.md)。
+这一章汇总当前 crate 真正读取的运行时配置。已废止、宿主不读：`WJSM_STARTUP_SNAPSHOT`、`WJSM_STARTUP_SNAPSHOT_DEBUG`、`WJSM_COMPILER`、`WJSM_GC_LOG`、`WJSM_VM_MAX_REALMS`、`WJSM_WORKER_THREADS_MAX`。启动快照强制恢复，见 [ADR 0003](../../../../adr/0003-startup-snapshot-boundary.md)。
 
 ## CLI 选项
 
@@ -23,6 +23,7 @@
 | `WJSM_OPT_LEVEL` | Cranelift 优化档：`none` / `speed` / `speed_and_size` | 未设置 = `speed` |
 | `WJSM_VERIFY_CLIF` | `0` / `false` / `FALSE` 关闭 CLIF verifier | 开启 |
 | `WJSM_DISABLE_SPECIALIZATION` | 设为 `1` 时关闭类型反馈与热函数特化 | 开启 |
+| `WJSM_DISABLE_LICM` | 非空且非 `0`/`false`/`off` 时跳过 IR 层 licm pass（循环不变量 / Shape 检查外提）；wjsm-bench 用它保持循环基准真实性能 | 开启 |
 
 ### 缓存
 

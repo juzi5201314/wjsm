@@ -1247,6 +1247,9 @@ impl Lowerer {
         wjsm_ir::typed_cfg::rewrite_program(&mut self.module, &std::collections::HashMap::new());
         // 终轮 cfg_fold：折叠 EA 消除后新生成的常量表达式、清理死块与 Phi。
         crate::passes::cfg_fold::run_after_value_class(&mut self.module);
+        // licm pass：循环不变 LoadVar / 稳定 record 常量键 GetProp（shape 检查
+        // 外提）/ 纯直接调用外提到新建 pre-header，循环体内退化为寄存器复用。
+        crate::passes::licm::run(&mut self.module);
         Ok(self.module)
     }
 }

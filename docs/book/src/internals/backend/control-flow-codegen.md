@@ -25,7 +25,7 @@ IR 的 `Phi { dest, sources }` 降级为 CLIF block parameters。每个前驱块
 
 IR 没有专门的循环结构。循环通过 `Jump` 回到前驱 block 表示。CLIF 不区分前向跳转和后向跳转，Cranelift 自行做循环分析和优化（LICM 等）。
 
-wjsm IR 层的 `inline_for_ea` pass 在 lowering 后做跨函数内联和逃逸分析，但循环不变量提升由 Cranelift 的 egraph/LICM 负责。
+wjsm IR 层的 `inline_for_ea` pass 在 lowering 后做跨函数内联和逃逸分析；纯算术节点的循环不变量提升由 Cranelift 的 egraph/LICM 负责，而 Cranelift 把 `call` 硬编码为有副作用、也看不见 JS 级的绑定/Shape 语义，因此循环不变 `LoadVar`、稳定 record 的常量键 `GetProp`（含其 Inline Cache 的 shape 检查与原型链 generation 验证）与 T1 纯直接调用的外提由语义层的 `licm` pass 在 IR 上完成（见 [lowering 文档](../pipeline/lower.md)）。
 
 ## 异常传播
 
