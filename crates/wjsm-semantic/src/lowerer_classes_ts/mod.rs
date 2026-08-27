@@ -630,6 +630,18 @@ impl Lowerer {
                 out.push(member);
                 continue;
             }
+            // 私有普通 async 方法：await 需要续体调度，复用 async 函数表达式的
+            // body + wrapper 双函数结构（与公有 async 方法的路由一致）。
+            if matches!(pm.kind, swc_ast::MethodKind::Method) && pm.function.is_async {
+                let member = self.lower_private_async_member(
+                    class_name,
+                    pm,
+                    field_name,
+                    &mut next_function_index,
+                )?;
+                out.push(member);
+                continue;
+            }
             let accessor = matches!(
                 pm.kind,
                 swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter
@@ -847,6 +859,66 @@ impl Lowerer {
                 value: None,
                 span: pm.span,
                 is_generator: true,
+            }),
+        })
+    }
+
+    /// 私有普通 async 方法：复用 async 函数表达式路径的 body + wrapper 双函数结构
+    /// （await 经续体槽调度），返回统一的私有成员元数据。
+    ///
+    /// [[HomeObject]] 静态可知，但构造器 id 在 collect 阶段未知：以 PENDING 占位
+    /// 接线 `MethodSuperBinding::Static`，类体收尾由
+    /// `patch_pending_ctor_home_object_references` 统一回填真实构造器 id。
+    fn lower_private_async_member(
+        &mut self,
+        class_name: &str,
+        pm: &swc_ast::PrivateMethod,
+        field_name: String,
+        next_function_index: &mut usize,
+    ) -> Result<PrivateMemberMeta, LoweringError> {
+        let is_static = pm.is_static;
+        let fn_name = if is_static {
+            format!("{}.static_#{}", class_name, pm.key.name)
+        } else {
+            format!("{}.#{}", class_name, pm.key.name)
+        };
+        // 方法体延迟到类求值完成后才执行，期间类名已初始化（方法体可引用类名）；
+        // 函数体 lowering 期间临时退出 TDZ，结束后恢复。
+        let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+        if let Some(sid) = class_scope_id {
+            self.scopes
+                .set_initialised(sid, class_name, true)
+                .map_err(|msg| self.error(pm.span, msg))?;
+        }
+        let fake_expr = swc_ast::FnExpr {
+            ident: None,
+            function: pm.function.clone(),
+        };
+        let home = if is_static {
+            HomeObject::Constructor(Self::PENDING_CTOR_FUNCTION_ID)
+        } else {
+            HomeObject::Prototype(Self::PENDING_CTOR_FUNCTION_ID)
+        };
+        let lowered =
+            self.lower_async_function_parts(&fn_name, &fake_expr, MethodSuperBinding::Static(home));
+        if let Some(sid) = class_scope_id {
+            let _ = self.scopes.set_initialised(sid, class_name, false);
+        }
+        let (function_id, captured) = lowered?;
+        let instance_binding =
+            self.declare_private_instance_binding(is_static, pm.span, next_function_index)?;
+        Ok(PrivateMemberMeta {
+            field_name,
+            is_static,
+            kind: PrivateMemberKind::Method(PrivateFunctionMeta {
+                lowered_function: LoweredClassFunction {
+                    function_id,
+                    captured,
+                },
+                instance_binding,
+                value: None,
+                span: pm.span,
+                is_generator: false,
             }),
         })
     }
