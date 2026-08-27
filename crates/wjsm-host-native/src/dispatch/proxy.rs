@@ -1,6 +1,7 @@
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
+use super::property_write::{SetCompletion, SetFailure, SetResult};
 use super::runtime::{
     delete_property, fail_dispatch, get_property, get_property_with_receiver, has_property,
     is_constructor_value, object_handle, ordinary_set, property_key,
@@ -692,6 +693,9 @@ pub(super) fn get(
     }
 }
 
+/// proxy 的 [[Set]]（§10.5.9）：trap 返回 falsish 记为规范失败（strict 抛
+/// TypeError 与否由赋值点决定，Reflect.set 返回 false）；无 trap 时委托
+/// target 的 [[Set]] 并原样传递其完成结果。
 pub(super) fn set(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -699,11 +703,8 @@ pub(super) fn set(
     key: i64,
     stored: i64,
     receiver: i64,
-) -> i64 {
-    let entry = match require_entry(ctx, state, proxy) {
-        Ok(entry) => entry,
-        Err(exception) => return exception,
-    };
+) -> SetResult {
+    let entry = require_entry(ctx, state, proxy)?;
     match trap(ctx, state, entry.handler, "set") {
         Ok(Some(trap)) => {
             let result = state
@@ -715,26 +716,18 @@ pub(super) fn set(
                 )
                 .unwrap_or_else(|| fail_dispatch(ctx));
             if value::is_exception(result) {
-                result
+                Err(result)
             } else if super::runtime::is_truthy(state, result) {
-                stored
+                Ok(SetCompletion::Written)
             } else {
-                fail_dispatch(ctx)
+                Ok(SetCompletion::Failed(SetFailure::ProxyFalsish))
             }
         }
         Ok(None) if value::is_object(entry.target) => {
-            match ordinary_set(ctx, state, entry.target, key, stored, receiver) {
-                Ok(true) => stored,
-                Ok(false) => super::runtime::type_error(
-                    ctx,
-                    state,
-                    "Proxy target property cannot be assigned",
-                ),
-                Err(exception) => exception,
-            }
+            ordinary_set(ctx, state, entry.target, key, stored, receiver)
         }
         Ok(None) => set_plain(ctx, state, entry.target, key, stored),
-        Err(exception) => exception,
+        Err(exception) => Err(exception),
     }
 }
 
@@ -744,12 +737,12 @@ fn set_plain(
     target: i64,
     key: i64,
     stored: i64,
-) -> i64 {
+) -> SetResult {
     if value::is_proxy(target) {
         return set(ctx, state, target, key, stored, target);
     }
     let Some(key_id) = property_key(state, key) else {
-        return fail_dispatch(ctx);
+        return Err(fail_dispatch(ctx));
     };
     if value::is_callable(target) {
         state.callable_properties.insert((target, key_id), stored);
@@ -757,23 +750,23 @@ fn set_plain(
             .callable_property_flags
             .entry((target, key_id))
             .or_insert(ASSIGNED_PROPERTY_FLAGS);
-        return stored;
+        return Ok(SetCompletion::Written);
     }
     if value::is_array(target) {
         let handle = value::decode_handle(target);
         state.note_array_property(handle, key_id);
         state.array_properties.insert((handle, key_id), stored);
-        return stored;
+        return Ok(SetCompletion::Written);
     }
     let Some(handle) = object_handle(target) else {
-        return fail_dispatch(ctx);
+        return Err(fail_dispatch(ctx));
     };
     state
         .gc
         .heap()
         .set_property(handle, key_id, stored as u64)
-        .map(|()| stored)
-        .unwrap_or_else(|_| fail_dispatch(ctx))
+        .map(|()| SetCompletion::Written)
+        .map_err(|_| fail_dispatch(ctx))
 }
 
 fn set_descriptor(state: &mut NativeAgentState, stored: i64, create: bool) -> Option<i64> {
@@ -796,13 +789,13 @@ fn set_descriptor(state: &mut NativeAgentState, stored: i64, create: bool) -> Op
     Some(descriptor)
 }
 
-pub(crate) fn set_receiver_value(
+pub(super) fn set_receiver_value(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     receiver: i64,
     key: i64,
     stored: i64,
-) -> Result<bool, i64> {
+) -> SetResult {
     let current = get_own_property_descriptor(ctx, state, receiver, key);
     if value::is_exception(current) {
         return Err(current);
@@ -811,12 +804,19 @@ pub(crate) fn set_receiver_value(
     if !create {
         let handle = object_handle(current).ok_or_else(|| fail_dispatch(ctx))?;
         let descriptor = super::object::read_descriptor(ctx, state, handle)?;
-        if descriptor.is_accessor() || descriptor.writable == Some(false) {
-            return Ok(false);
+        if descriptor.is_accessor() {
+            return Ok(SetCompletion::Failed(SetFailure::GetterOnly));
+        }
+        if descriptor.writable == Some(false) {
+            return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
         }
     }
     let descriptor = set_descriptor(state, stored, create).ok_or_else(|| fail_dispatch(ctx))?;
-    try_define_property(ctx, state, receiver, key, descriptor)
+    // defineProperty trap 返回 falsish 同属 proxy 写失败口径。
+    match try_define_property(ctx, state, receiver, key, descriptor)? {
+        true => Ok(SetCompletion::Written),
+        false => Ok(SetCompletion::Failed(SetFailure::ProxyFalsish)),
+    }
 }
 
 fn reflect_get(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -849,18 +849,14 @@ fn reflect_set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
         Err(exception) => return exception,
     };
     let receiver = rest.first().copied().unwrap_or(*target);
-    if value::is_proxy(*target) {
-        let result = set(ctx, state, *target, *key, *stored, receiver);
-        if value::is_exception(result) {
-            result
-        } else {
-            value::encode_bool(true)
-        }
+    let completion = if value::is_proxy(*target) {
+        set(ctx, state, *target, *key, *stored, receiver)
     } else {
-        match ordinary_set(ctx, state, *target, *key, *stored, receiver) {
-            Ok(success) => value::encode_bool(success),
-            Err(exception) => exception,
-        }
+        ordinary_set(ctx, state, *target, *key, *stored, receiver)
+    };
+    match completion {
+        Ok(completion) => value::encode_bool(completion.succeeded()),
+        Err(exception) => exception,
     }
 }
 

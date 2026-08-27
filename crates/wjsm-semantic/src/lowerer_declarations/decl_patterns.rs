@@ -152,8 +152,96 @@ impl Lowerer {
                 pat.span(),
                 "rest element must be used as a function parameter or inside array destructuring",
             )),
-            swc_ast::Pat::Expr(_) | swc_ast::Pat::Invalid(_) => Ok(block),
+            // 解构赋值的成员目标（`({ a: o.x } = ..)` / `[o.x] = ..`）：
+            // DestructuringAssignmentEvaluation 对 LeftHandSideExpression 目标
+            // 执行 PutValue，strict 失败语义与普通成员赋值一致。
+            swc_ast::Pat::Expr(expr) => self.lower_destructure_member_target(expr, src_val, block),
+            swc_ast::Pat::Invalid(_) => Ok(block),
         }
+    }
+
+    /// 解构赋值中的成员/super 目标：PutValue(memberRef, src_val)。标识符
+    /// 目标由 `Pat::Ident` 分支处理，此处只出现成员表达式类目标。
+    fn lower_destructure_member_target(
+        &mut self,
+        expr: &swc_ast::Expr,
+        src_val: ValueId,
+        block: BasicBlockId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        if let swc_ast::Expr::SuperProp(super_prop) = expr {
+            let mut current_block = block;
+            let access = self.lower_super_prop_access(super_prop, current_block)?;
+            self.emit_super_prop_set(current_block, &access, src_val);
+            current_block = self.resolve_store_block(current_block);
+            return Ok(current_block);
+        }
+        let swc_ast::Expr::Member(member_expr) = expr else {
+            return Err(self.error(
+                expr.span(),
+                "unsupported destructuring assignment target expression",
+            ));
+        };
+        let mut current_block = block;
+        let obj_val = self.lower_expr_then_continue(&member_expr.obj, &mut current_block)?;
+        let result = match &member_expr.prop {
+            swc_ast::MemberProp::Ident(ident) => {
+                let name = ident.sym.to_string();
+                // `__proto__` 目标与普通赋值同口径：走 setPrototypeOf 语义。
+                if name == "__proto__" {
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        current_block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::ObjectSetPrototypeOf,
+                            args: vec![obj_val, src_val],
+                        },
+                    );
+                    return self.lower_value_exception_branch(current_block, dest);
+                }
+                let key_const = self.module.add_constant(Constant::String(name));
+                let key_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::Const {
+                        dest: key_val,
+                        constant: key_const,
+                    },
+                );
+                self.emit_set_prop(current_block, obj_val, key_val, src_val)
+            }
+            swc_ast::MemberProp::Computed(computed) => {
+                let key_val = self.lower_expr_then_continue(&computed.expr, &mut current_block)?;
+                self.emit_set_elem(current_block, obj_val, key_val, src_val)
+            }
+            swc_ast::MemberProp::PrivateName(name) => {
+                let field_name = self.resolve_private_storage_name(name.name.as_ref(), name.span)?;
+                let key_const = self.module.add_constant(Constant::String(field_name));
+                let key_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::Const {
+                        dest: key_val,
+                        constant: key_const,
+                    },
+                );
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::PrivateSet,
+                        args: vec![obj_val, key_val, src_val],
+                    },
+                );
+                dest
+            }
+        };
+        // PutValue 失败（strict TypeError）或 setter 抛出须传播。
+        if self.expr_exception_fork_allowed() {
+            current_block = self.lower_value_exception_branch(current_block, result)?;
+        }
+        Ok(current_block)
     }
 
     /// 对象解构: `{ prop1, prop2: alias, ...rest }`
@@ -181,6 +269,10 @@ impl Lowerer {
                             key: key_val,
                         },
                     );
+                    // getter 可能抛出：异常须先于后续绑定/写入传播。
+                    if self.expr_exception_fork_allowed() {
+                        block = self.lower_value_exception_branch(block, dest)?;
+                    }
                     block = self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
                 }
                 swc_ast::ObjectPatProp::Assign(assign) => {
@@ -205,6 +297,10 @@ impl Lowerer {
                             key: key_val,
                         },
                     );
+                    // getter 可能抛出：异常须先于默认值判定/绑定传播。
+                    if self.expr_exception_fork_allowed() {
+                        block = self.lower_value_exception_branch(block, dest)?;
+                    }
 
                     // 如果有默认值 { key = default }
                     if let Some(default_expr) = &assign.value {

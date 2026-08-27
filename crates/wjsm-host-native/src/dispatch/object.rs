@@ -890,10 +890,14 @@ fn assign(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
             if value::is_exception(stored) {
                 return stored;
             }
+            // Set(to, key, value, true)：写失败按 throw=true 升级 TypeError，
+            // 消息与赋值点 strict 失败同口径。
             match ordinary_set(ctx, state, target, property, stored, target) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return type_error(ctx, state, "Object.assign target property is not writable");
+                Ok(super::property_write::SetCompletion::Written) => {}
+                Ok(super::property_write::SetCompletion::Failed(failure)) => {
+                    return super::property_write::strict_set_failure_error(
+                        ctx, state, target, property, failure,
+                    );
                 }
                 Err(exception) => return exception,
             }
@@ -1689,6 +1693,32 @@ pub(crate) fn define_property(
         } else if descriptor_field(state, descriptor, "value").is_some() {
             state.array_accessors.remove(&(handle, key));
             state.array_properties.insert((handle, key), data_value);
+            state.array_property_flags.insert((handle, key), flags);
+        } else if let Some(accessor) = state.array_accessors.get_mut(&(handle, key)) {
+            // 纯特性变更的访问器属性：保留 get/set，仅更新 flags。
+            accessor.2 = flags;
+        } else {
+            // 无 value/get/set 的纯特性变更：把现值（覆盖层 / 在范围元素 /
+            // undefined）迁入字典覆盖层，使 writable=false 等特性对 [[Set]]
+            // 与后续 defineProperty 可见。
+            let current = state
+                .array_properties
+                .get(&(handle, key))
+                .copied()
+                .or_else(|| {
+                    super::runtime::array_index(state, encoded_key).and_then(|index| {
+                        state
+                            .gc
+                            .heap()
+                            .get_element(handle, index)
+                            .ok()
+                            .flatten()
+                            .map(|element| i64::from_ne_bytes(element.to_ne_bytes()))
+                            .filter(|element| !value::is_array_hole(*element))
+                    })
+                })
+                .unwrap_or_else(value::encode_undefined);
+            state.array_properties.insert((handle, key), current);
             state.array_property_flags.insert((handle, key), flags);
         }
         return *object;

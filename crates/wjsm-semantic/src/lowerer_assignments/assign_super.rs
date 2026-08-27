@@ -1,14 +1,14 @@
 use super::*;
 
 /// super 属性赋值的 Reflect.get / Reflect.set 操作数（target、key、receiver）。
-struct SuperPropAccess {
+pub(crate) struct SuperPropAccess {
     base: ValueId,
     key: ValueId,
     this: ValueId,
 }
 
 impl Lowerer {
-    fn lower_super_prop_access(
+    pub(crate) fn lower_super_prop_access(
         &mut self,
         super_prop: &swc_ast::SuperPropExpr,
         block: BasicBlockId,
@@ -72,7 +72,7 @@ impl Lowerer {
         dest
     }
 
-    fn emit_super_prop_set(
+    pub(crate) fn emit_super_prop_set(
         &mut self,
         block: BasicBlockId,
         access: &SuperPropAccess,
