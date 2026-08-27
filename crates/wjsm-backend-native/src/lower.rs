@@ -2800,11 +2800,11 @@ fn lower_instruction(
                 BinaryOp::Div => cx.builder.ins().fdiv(lhs, rhs),
                 _ => unreachable!("guard restricts direct f64 operations"),
             };
-            let result = box_f64_result(cx.builder, result);
+            let result = box_f64_arithmetic(cx.builder, *op, result);
             define_value(cx.builder, cx.variables, *dest, result)
         }
         Instruction::Binary { dest, op, lhs, rhs } => {
-            lower_dynamic_binary(cx, *dest, *op, *lhs, *rhs, feedback_ptr)
+            lower_dynamic_binary(cx, *dest, *op, *lhs, *rhs, feedback_ptr, tables.f64_values)
         }
         Instruction::Unary { dest, op, value } => {
             if tables.f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
@@ -6314,7 +6314,10 @@ fn lower_dynamic_binary(
     lhs: ValueId,
     rhs: ValueId,
     feedback_ptr: Option<ir::Value>,
+    f64_values: &HashSet<ValueId>,
 ) -> Result<()> {
+    let lhs_id = lhs;
+    let rhs_id = rhs;
     let lhs = use_value(cx.builder, cx.variables, lhs)?;
     let rhs = use_value(cx.builder, cx.variables, rhs)?;
 
@@ -6336,10 +6339,10 @@ fn lower_dynamic_binary(
         emit_inline_binary_feedback(cx.builder, cx.ctx, slot, operation, lhs, rhs);
     }
 
-    // number/number 直接发原生浮点指令；加法只要原始操作数一侧已是字符串，
-    // ToPrimitive 后必进入字符串拼接，可绕过通用 dispatcher 直达语义等价 thunk。
-    let lhs_is_number = emit_is_number(cx.builder, lhs);
-    let rhs_is_number = emit_is_number(cx.builder, rhs);
+    // number/number 直接发原生浮点指令；已证明的 f64 操作数跳过 is_number。
+    // 加法只要原始操作数一侧已是字符串，ToPrimitive 后必进入字符串拼接。
+    let lhs_is_number = emit_number_or_proven_f64(cx.builder, lhs, lhs_id, f64_values);
+    let rhs_is_number = emit_number_or_proven_f64(cx.builder, rhs, rhs_id, f64_values);
     let both_numbers = cx.builder.ins().band(lhs_is_number, rhs_is_number);
 
     let number_block = cx.builder.create_block();
@@ -6366,7 +6369,7 @@ fn lower_dynamic_binary(
         BinaryOp::Div => cx.builder.ins().fdiv(lhs_f64, rhs_f64),
         _ => unreachable!("guard restricts guarded binary operations"),
     };
-    let result = box_f64_result(cx.builder, result);
+    let result = box_f64_arithmetic(cx.builder, op, result);
     define_value(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
@@ -8030,6 +8033,36 @@ pub(crate) fn boxed_frame_local_names<'a>(
         .copied()
         .filter(|name| !f64_locals.contains(name))
         .collect()
+}
+
+fn box_f64_arithmetic(
+    builder: &mut FunctionBuilder<'_>,
+    op: BinaryOp,
+    result: ir::Value,
+) -> ir::Value {
+    match op {
+        // 有限数 +/- 不会产生 NaN；跳过 canonicalize，避免每次 add 的 unordered 比较。
+        BinaryOp::Add | BinaryOp::Sub => {
+            builder
+                .ins()
+                .bitcast(types::I64, ir::MemFlagsData::new(), result)
+        }
+        _ => box_f64_result(builder, result),
+    }
+}
+
+fn emit_number_or_proven_f64(
+    builder: &mut FunctionBuilder<'_>,
+    encoded: ir::Value,
+    id: ValueId,
+    f64_values: &HashSet<ValueId>,
+) -> ir::Value {
+    if f64_values.contains(&id) {
+        let zero = builder.ins().iconst(types::I64, 0);
+        builder.ins().icmp(ir::condcodes::IntCC::Equal, zero, zero)
+    } else {
+        emit_is_number(builder, encoded)
+    }
 }
 
 fn box_f64_result(builder: &mut FunctionBuilder<'_>, result: ir::Value) -> ir::Value {

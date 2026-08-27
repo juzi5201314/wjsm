@@ -718,6 +718,24 @@ mod tests {
     }
 
     #[test]
+    fn f64_add_skips_nan_canonicalization() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&arithmetic_artifact())
+            .expect("arithmetic diagnostics should compile");
+        assert!(
+            diagnostics.clif.contains("fadd"),
+            "expected native fadd:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            !diagnostics.clif.contains("uno"),
+            "f64 Add/Sub should bitcast without unordered NaN canonicalize:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    #[test]
     fn diagnostics_report_clif_and_machine_disassembly() {
         let compiler = NativeCompiler::new().expect("host ISA should be supported");
         let diagnostics = compiler
