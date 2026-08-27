@@ -2,4 +2,4 @@ exit_code: 2
 --- stdout ---
 --- stderr ---
 Runtime error: RangeError: Maximum call stack size exceeded
- at recurse (errors/stack_overflow_backtrace.js:2:1) (repeated)
+ at recurse (errors/stack_overflow_backtrace.js:3:1) (repeated)

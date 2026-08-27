@@ -1,0 +1,340 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = number(0)
+    c21 = string("liftoff")
+    c22 = undefined
+    c23 = string("$0.countdown")
+    c24 = number(1)
+    c25 = functionref(@0)
+    c26 = undefined
+    c27 = string("$0.countdown")
+    c28 = string("$0.countdown")
+    c29 = undefined
+    c30 = undefined
+    c31 = string("$0.countdown")
+    c32 = number(0)
+    c33 = undefined
+    c34 = undefined
+    c35 = string("$0.countdown")
+    c36 = number(1)
+    c37 = undefined
+    c38 = undefined
+    c39 = string("$0.countdown")
+    c40 = number(10)
+    c41 = number(0)
+    c42 = undefined
+    c43 = string("$0.sum")
+    c44 = number(1)
+    c45 = functionref(@1)
+    c46 = string("$0.sum")
+    c47 = string("$0.sum")
+    c48 = undefined
+    c49 = undefined
+    c50 = string("$0.sum")
+    c51 = number(10)
+    c52 = number(0)
+    c53 = number(1)
+    c54 = bool(true)
+    c55 = bool(true)
+    c56 = number(1)
+    c57 = undefined
+    c58 = string("$0.factorial")
+    c59 = number(1)
+    c60 = functionref(@2)
+    c61 = string("$0.factorial")
+    c62 = string("$0.factorial")
+    c63 = undefined
+    c64 = undefined
+    c65 = string("$0.factorial")
+    c66 = number(6)
+    c67 = bool(false)
+
+  fn @countdown [needs_prototype] [captures: $0.countdown] [params: $1.$env, $1.$this, $1.n] [entry=bb0]:
+    bb0:
+      %0 = load var $1.n
+      %1 = const c20
+      %2 = call builtin.strict_eq(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %3 = const c21
+      return %3
+    bb2:
+      %8 = load var $1.n
+      %9 = const c24
+      %10 = sub %8, %9
+      store var $1.n, %10
+      jump bb0
+
+  fn @sum [needs_prototype] [captures: $0.sum] [params: $3.$env, $3.$this, $3.n, $3.acc] [entry=bb0]:
+    bb0:
+      %0 = load var $3.n
+      %1 = const c41
+      %2 = call builtin.strict_eq(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %3 = load var $3.acc
+      return %3
+    bb2:
+      %8 = load var $3.n
+      %9 = const c44
+      %10 = sub %8, %9
+      %11 = load var $3.acc
+      %12 = load var $3.n
+      %13 = add %11, %12
+      store var $3.n, %10
+      store var $3.acc, %13
+      jump bb0
+
+  fn @factorial [needs_prototype] [captures: $0.factorial] [params: $5.$env, $5.$this, $5.n] [entry=bb0]:
+    bb0:
+      %0 = load var $5.n
+      %1 = const c53
+      %3 = const c54
+      %4 = const c55
+      %2 = call builtin.abstract_compare(%0, %1, %3, %4)
+      branch %2, bb1, bb2
+    bb1:
+      %5 = const c56
+      return %5
+    bb2:
+      %6 = load var $5.n
+      %7 = const c57
+      %8 = load var $env
+      %9 = const c58
+      %10 = get_prop %8, %9
+      %11 = load var $5.n
+      %12 = const c59
+      %13 = sub %11, %12
+      %14 = call %10, this=%7, args=[%13]
+      %15 = mul %6, %14
+      return %15
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = const c25
+      %22 = const c26
+      store var $0.$shared_env, %22
+      %23 = new_object(capacity=1)
+      %24 = load var $env
+      set_proto %23, %24
+      store var $0.$shared_env, %23
+      %25 = load var $0.countdown
+      %26 = const c27
+      %27 = set_prop %23, %26, %25
+      %28 = call builtin.create_closure(%21, %23)
+      store var $0.countdown, %28
+      %29 = const c28
+      %30 = set_prop %23, %29, %28
+      %31 = const c29
+      %32 = load var $0.$shared_env
+      %33 = const c30
+      %34 = stricteq %32, %33
+      %35 = const c31
+      branch %34, bb1, bb2
+    bb1:
+      %37 = load var $0.countdown
+      jump bb4
+    bb2:
+      %36 = call builtin.object.has_own(%32, %35)
+      branch %36, bb3, bb1
+    bb3:
+      %38 = get_prop %32, %35
+      jump bb4
+    bb4:
+      %39 = phi [(bb1, %37), (bb3, %38)]
+      %40 = const c32
+      %41 = call %39, this=%31, args=[%40]
+      %42 = call builtin.console.log(%41)
+      %43 = is_exception %42
+      branch %43, bb6, bb5
+    bb5:
+      %45 = const c33
+      %46 = load var $0.$shared_env
+      %47 = const c34
+      %48 = stricteq %46, %47
+      %49 = const c35
+      branch %48, bb7, bb8
+    bb6:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb7:
+      %51 = load var $0.countdown
+      jump bb10
+    bb8:
+      %50 = call builtin.object.has_own(%46, %49)
+      branch %50, bb9, bb7
+    bb9:
+      %52 = get_prop %46, %49
+      jump bb10
+    bb10:
+      %53 = phi [(bb7, %51), (bb9, %52)]
+      %54 = const c36
+      %55 = call %53, this=%45, args=[%54]
+      %56 = call builtin.console.log(%55)
+      %57 = is_exception %56
+      branch %57, bb12, bb11
+    bb11:
+      %59 = const c37
+      %60 = load var $0.$shared_env
+      %61 = const c38
+      %62 = stricteq %60, %61
+      %63 = const c39
+      branch %62, bb13, bb14
+    bb12:
+      %58 = call builtin.exception_value(%56)
+      throw %58
+    bb13:
+      %65 = load var $0.countdown
+      jump bb16
+    bb14:
+      %64 = call builtin.object.has_own(%60, %63)
+      branch %64, bb15, bb13
+    bb15:
+      %66 = get_prop %60, %63
+      jump bb16
+    bb16:
+      %67 = phi [(bb13, %65), (bb15, %66)]
+      %68 = const c40
+      %69 = call %67, this=%59, args=[%68]
+      %70 = call builtin.console.log(%69)
+      %71 = is_exception %70
+      branch %71, bb18, bb17
+    bb17:
+      %73 = const c45
+      %74 = load var $0.$shared_env
+      %75 = load var $0.sum
+      %76 = const c46
+      %77 = set_prop %74, %76, %75
+      %78 = call builtin.create_closure(%73, %74)
+      store var $0.sum, %78
+      %79 = const c47
+      %80 = set_prop %74, %79, %78
+      %81 = const c48
+      %82 = load var $0.$shared_env
+      %83 = const c49
+      %84 = stricteq %82, %83
+      %85 = const c50
+      branch %84, bb19, bb20
+    bb18:
+      %72 = call builtin.exception_value(%70)
+      throw %72
+    bb19:
+      %87 = load var $0.sum
+      jump bb22
+    bb20:
+      %86 = call builtin.object.has_own(%82, %85)
+      branch %86, bb21, bb19
+    bb21:
+      %88 = get_prop %82, %85
+      jump bb22
+    bb22:
+      %89 = phi [(bb19, %87), (bb21, %88)]
+      %90 = const c51
+      %91 = const c52
+      %92 = call %89, this=%81, args=[%90, %91]
+      %93 = call builtin.console.log(%92)
+      %94 = is_exception %93
+      branch %94, bb24, bb23
+    bb23:
+      %96 = const c60
+      %97 = load var $0.$shared_env
+      %98 = load var $0.factorial
+      %99 = const c61
+      %100 = set_prop %97, %99, %98
+      %101 = call builtin.create_closure(%96, %97)
+      store var $0.factorial, %101
+      %102 = const c62
+      %103 = set_prop %97, %102, %101
+      %104 = const c63
+      %105 = load var $0.$shared_env
+      %106 = const c64
+      %107 = stricteq %105, %106
+      %108 = const c65
+      branch %107, bb25, bb26
+    bb24:
+      %95 = call builtin.exception_value(%93)
+      throw %95
+    bb25:
+      %110 = load var $0.factorial
+      jump bb28
+    bb26:
+      %109 = call builtin.object.has_own(%105, %108)
+      branch %109, bb27, bb25
+    bb27:
+      %111 = get_prop %105, %108
+      jump bb28
+    bb28:
+      %112 = phi [(bb25, %110), (bb27, %111)]
+      %113 = const c66
+      %114 = call %112, this=%104, args=[%113]
+      %115 = call builtin.console.log(%114)
+      %116 = is_exception %115
+      branch %116, bb30, bb29
+    bb29:
+      return
+    bb30:
+      %117 = call builtin.exception_value(%115)
+      throw %117
+}

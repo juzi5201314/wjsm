@@ -9,3 +9,4 @@ pub(crate) mod inline_for_ea;
 pub(crate) mod object_literal_read_fold;
 pub(crate) mod string_concat;
 pub(crate) mod string_fold;
+pub(crate) mod tail_self_loop;

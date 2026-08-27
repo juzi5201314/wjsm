@@ -62,6 +62,11 @@ fn block_var_hoist_before_block_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn tco_countdown_fixture_matches_ir_snapshot() {
+    assert_snapshot("tco_countdown");
+}
+
+#[test]
 fn undeclared_var_reports_diagnostic() {
     let source = "console.log(z);\n";
     let error = lower_module(parse_module(source).expect("parse should succeed"), false)
