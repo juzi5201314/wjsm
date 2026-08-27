@@ -43,15 +43,16 @@ lowering 按语法域拆成独立模块，避免单文件膨胀：
 
 ## lowering 后的优化 pass
 
-`lowerer_core.rs` 在产出模块后按固定顺序跑五个 IR 优化 pass（`passes/`），每个都有明确的语义安全前提：
+`lowerer_core.rs` 在产出模块后按固定顺序跑一系列 IR 优化 pass（`passes/`），每个都有明确的语义安全前提，主干如下：
 
 1. **direct_call**：识别「不可变函数声明绑定 ∧ 函数体不依赖 env/this/new.target ∧ 无 eval」的函数，把 `LoadVar`/`GetProp` 绑定读取原地替换为 `Const(FunctionRef)`，并写回 `direct_callable` 标记。后端据此对调用点发射直接 `call`，省掉 callee 求值、类型分派与闭包解包。
 2. **tail_self_loop**：尾位置的自递归调用改写为「实参回写形参槽 + 跳回函数入口」的回边循环，深递归不再线性消耗调用栈。等价性来自「一次新调用相对当前帧只改变形参绑定」——其余每次调用都要重做的初始化（hoisted var 置 undefined、闭包 env 分配、参数默认值、解构）本就位于入口块之后，回边会原样重跑。排除回边无法复现的调用状态：`this`、`new.target`、`arguments` / rest 参数、async / generator resume，以及被内层闭包捕获（非栈帧局部）的形参。后端零改动——IR 入口块本就被映射成独立的 `entry_body` CLIF 块，可以有前驱。
 3. **inline_for_ea**：两阶段内联。阶段 A 把 direct_callable 函数的整个多块函数体展开到调用处（构造器内联保留 `new` 语义）；阶段 C 对 `GetProp` 常量键的方法调用发射 `GuardSameFunction` 守卫 + 快路径克隆，失配回退动态调用。内联与 cfg_fold 迭代至不动点。模块任一函数含 `eval` 时整个 pass 禁用。
 4. **escape_scalar**：逃逸分析 + 标量替换。函数内局部 `NewObject` 若所有使用都是常量键属性读写且不逃逸，则把属性读取替换为写入值并删除分配指令；不逃逸的模块级 `InitObjectLiteral`（如只读写固定键的 `RECORD`）同样降为字段 SSA，循环内不再走属性访问。
 5. **cfg_fold**：终轮清理。IsException/IsJsObject 常量折叠、常量分支折叠、死块中和、phi 化简、DCE，按序应用到不动点（上限 8 轮）。
+6. **licm**：循环不变量外提与 Shape 检查外提。在自然循环（回边 target 支配 source）前新建 pre-header，把三类可证明「无可观察副作用、不抛异常、必然终止、循环期间结果不变」的指令搬出循环：循环不变 `LoadVar`（全部 store 站点支配循环头且循环体不写）；稳定 record 的常量键 `GetProp`——receiver 是模板字面量分配、模块内全部使用可白名单分析、引用不逃逸也不可能被循环内代码改写，此时后端为该读取发射的 Inline Cache（shape 检查 + 原型链 generation 验证）随指令整体移入 pre-header 只执行一次，循环体内退化为寄存器复用；以及实参循环不变的 T1 纯直接调用（CFG 无环 ⇒ 终止，无状态读写/异常/分配——Cranelift egraph LICM 把 call 硬编码为有副作用，这类外提只能在 IR 层做）。`WJSM_DISABLE_LICM` 非空且非 `0`/`false`/`off` 时整体跳过（wjsm-bench 用它保持循环基准的真实性能）。
 
-这五个 pass 都只变换不新增语义：替换前提（绑定不可变、对象不逃逸、callee 唯一）在 lowering 阶段已静态可判。pass 顺序有依赖——direct_call 先标 `direct_callable`，inline_for_ea 才有内联对象，escape_scalar 才能消除内联暴露的分配；tail_self_loop 紧跟 direct_call，因此 callee 既可能已是 `Const(FunctionRef)`，也可能仍是不可变绑定的 `LoadVar` / `GetProp(env, name)`（自递归函数会把自身名字捕获进 env，direct_call 对这种形状保守跳过），两种形状都要识别。
+这些 pass 都只变换不新增语义：替换前提（绑定不可变、对象不逃逸、callee 唯一）在 lowering 阶段已静态可判。pass 顺序有依赖——direct_call 先标 `direct_callable`，inline_for_ea 才有内联对象，escape_scalar 才能消除内联暴露的分配；tail_self_loop 紧跟 direct_call，因此 callee 既可能已是 `Const(FunctionRef)`，也可能仍是不可变绑定的 `LoadVar` / `GetProp(env, name)`（自递归函数会把自身名字捕获进 env，direct_call 对这种形状保守跳过），两种形状都要识别。
 
 > 注意：ECMAScript 只在严格模式下规定 proper tail call，而栈深度本身不在规范约束内——引擎在栈耗尽时抛 `RangeError` 是实现行为，不是规范行为。因此 tail_self_loop 不区分严格 / 非严格：把可证明等价的自递归尾调用降为循环没有观测语义损失，代价只是这类无限尾递归不再抛 `RangeError` 而是变成无限循环（V8 未实现 PTC，Node.js 在同样代码上会抛栈溢出）。
 

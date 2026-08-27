@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+6
+[object Object]
+[object Object]
+--- stderr ---

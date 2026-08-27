@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+number NaN true false NaN null
+number NaN true false NaN null
+number NaN true false NaN null
+number true
+1 true NaN
+nan
+1
+Infinity -Infinity false
+0
+true true
+--- stderr ---

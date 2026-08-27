@@ -71,7 +71,10 @@ fn decode_template_key(constants: &[Constant], raw: u64) -> Option<String> {
     Some(bytes.iter().map(|byte| char::from(*byte)).collect())
 }
 
-fn template_key_names(constants: &[Constant], template: ConstantId) -> Option<Vec<String>> {
+pub(crate) fn template_key_names(
+    constants: &[Constant],
+    template: ConstantId,
+) -> Option<Vec<String>> {
     let Constant::ObjectTemplate { keys } = constants.get(template.0 as usize)? else {
         return None;
     };

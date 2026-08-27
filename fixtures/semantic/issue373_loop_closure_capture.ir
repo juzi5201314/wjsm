@@ -520,7 +520,7 @@ module {
       %30 = const c23
       %31 = set_prop %28, %30, %29
       store var $1.$iteration_env.0, %28
-      jump bb1
+      jump bb228
     bb1:
       %32 = load var $1.$iteration_env.0
       %33 = const c24
@@ -531,7 +531,6 @@ module {
       %36 = call builtin.abstract_compare(%34, %35, %37, %38)
       branch %36, bb2, bb5
     bb2:
-      %39 = load var $0.letClosures
       %40 = const c28
       %41 = get_prop %39, %40
       %42 = const c30
@@ -584,7 +583,7 @@ module {
       %78 = load var $0.j
       %79 = const c40
       %80 = set_prop %77, %79, %78
-      jump bb12
+      jump bb231
     bb11:
       %74 = call builtin.exception_value(%72)
       throw %74
@@ -595,7 +594,6 @@ module {
       %84 = const c42
       branch %83, bb16, bb17
     bb13:
-      %93 = load var $0.varClosures
       %94 = const c46
       %95 = get_prop %93, %94
       %96 = const c48
@@ -753,7 +751,7 @@ module {
       %180 = load var $0.closureWrite
       %181 = const c75
       %182 = set_prop %179, %181, %180
-      jump bb47
+      jump bb230
     bb46:
       %177 = call builtin.exception_value(%175)
       throw %177
@@ -774,7 +772,6 @@ module {
       %207 = const c88
       branch %206, bb56, bb57
     bb50:
-      %189 = load var $0.closureWrite
       jump bb53
     bb51:
       %188 = call builtin.object.has_own(%184, %187)
@@ -834,7 +831,7 @@ module {
       %231 = const c111
       %232 = set_prop %229, %231, %230
       store var $17.$iteration_env.1, %229
-      jump bb64
+      jump bb232
     bb63:
       %224 = call builtin.exception_value(%222)
       throw %224
@@ -857,7 +854,7 @@ module {
       %244 = const c117
       %245 = set_prop %242, %244, %243
       store var $19.$iteration_env.2, %242
-      jump bb69
+      jump bb229
     bb66:
       %279 = load var $17.$iteration_env.1
       %280 = load var $0.$shared_env
@@ -893,7 +890,6 @@ module {
       %250 = call builtin.abstract_compare(%248, %249, %251, %252)
       branch %250, bb70, bb73
     bb70:
-      %253 = load var $0.nestedClosures
       %254 = const c122
       %255 = get_prop %253, %254
       %256 = const c126
@@ -1021,7 +1017,7 @@ module {
       %352 = load var $0.nonLoopValue
       %353 = const c156
       %354 = set_prop %351, %353, %352
-      jump bb97
+      jump bb225
     bb96:
       %347 = call builtin.exception_value(%345)
       throw %347
@@ -1031,7 +1027,6 @@ module {
       %357 = lt %355, %356
       branch %357, bb98, bb100
     bb98:
-      %360 = load var $0.nonLoopReads
       %361 = const c160
       %362 = get_prop %360, %361
       %363 = const c162
@@ -1061,7 +1056,7 @@ module {
       %383 = const c170
       %384 = init_object_literal(c168, values=[%382, %383])
       %385 = call builtin.enumerator.from(%384)
-      jump bb105
+      jump bb226
     bb104:
       %380 = call builtin.exception_value(%378)
       throw %380
@@ -1079,7 +1074,6 @@ module {
       %392 = load var $29.$iteration_env.3
       %393 = const c171
       %394 = set_prop %392, %393, %389
-      %395 = load var $0.keys
       %396 = const c172
       %397 = get_prop %395, %396
       %398 = const c174
@@ -1123,7 +1117,7 @@ module {
       %419 = call builtin.exception_value(%417)
       throw %419
     bb115:
-      jump bb117
+      jump bb227
     bb116:
       %426 = call builtin.exception_value(%424)
       throw %426
@@ -1141,7 +1135,6 @@ module {
       %435 = load var $33.$iteration_env.4
       %436 = const c182
       %437 = set_prop %435, %436, %432
-      %438 = load var $0.values
       %439 = const c183
       %440 = get_prop %438, %439
       %441 = const c185
@@ -1550,4 +1543,27 @@ module {
     bb224:
       %620 = call builtin.exception_value(%618)
       throw %620
+    bb225:
+      %360 = load var $0.nonLoopReads
+      jump bb97
+    bb226:
+      %395 = load var $0.keys
+      jump bb105
+    bb227:
+      %438 = load var $0.values
+      jump bb117
+    bb228:
+      %39 = load var $0.letClosures
+      jump bb1
+    bb229:
+      jump bb69
+    bb230:
+      %189 = load var $0.closureWrite
+      jump bb47
+    bb231:
+      %93 = load var $0.varClosures
+      jump bb12
+    bb232:
+      %253 = load var $0.nestedClosures
+      jump bb64
 }

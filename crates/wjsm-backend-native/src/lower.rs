@@ -37,6 +37,10 @@ use crate::template_meta::{
     template_property_index_for_key, trio_field_for_access,
 };
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
+use crate::value_repr::{
+    ValueRepr, box_f64_result, define_value_as, define_value_boxed, define_value_f64, unbox_f64,
+    use_value_as, use_value_boxed, use_value_f64,
+};
 use crate::{NativeCompileError, NativeObject};
 
 const HOST_OPERATION_SYMBOL: NativeHostSymbol = NativeHostSymbol::HostOperationDispatcher;
@@ -196,11 +200,7 @@ impl FrameLowering {
     }
 
     /// 在可 GC / 可重入调用之前把暂存的 root 集合真正写入 root frame。
-    fn flush(
-        &mut self,
-        builder: &mut FunctionBuilder<'_>,
-        variables: &HashMap<ValueId, Variable>,
-    ) -> Result<()> {
+    fn flush(&mut self, builder: &mut FunctionBuilder<'_>, variables: &ValueRepr) -> Result<()> {
         if !self.staged_dirty {
             return Ok(());
         }
@@ -217,7 +217,7 @@ impl FrameLowering {
     fn publish(
         &mut self,
         builder: &mut FunctionBuilder<'_>,
-        variables: &HashMap<ValueId, Variable>,
+        variables: &ValueRepr,
         roots: &[ValueId],
         temporaries: &[ir::Value],
     ) -> Result<()> {
@@ -231,7 +231,7 @@ impl FrameLowering {
         }
         let local_base = self.pinned_local_count;
         for (index, root) in roots.iter().enumerate() {
-            let value = use_value(builder, variables, *root)?;
+            let value = use_value_boxed(builder, variables, *root)?;
             builder.ins().store(
                 MemFlagsData::trusted(),
                 value,
@@ -663,6 +663,9 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub math_thunks: &'a HashMap<Builtin, DeclaredFunction>,
     pub root_bitmaps: &'a [DeclaredData],
     pub f64_values: &'a HashSet<ValueId>,
+    /// `f64_values` 中**可靠**证明的子集：只有它才允许提升成 F64 机器变量。
+    /// 运行时反馈推测出来的 number 由守卫兜底，位模式没有静态保证。
+    pub typed_f64_values: &'a HashSet<ValueId>,
     pub int32_values: &'a HashSet<ValueId>,
     pub variable_slots: &'a HashMap<String, u32>,
     pub root_plan: &'a RootPlan,
@@ -682,7 +685,7 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
 /// 指令级 lowering 的共享可变上下文。
 struct LoweringCx<'a, 'f> {
     builder: &'a mut FunctionBuilder<'f>,
-    variables: &'a HashMap<ValueId, Variable>,
+    variables: &'a ValueRepr,
     root_frame: Option<&'a mut FrameLowering>,
     dispatcher: ir::FuncRef,
     string_add: ir::FuncRef,
@@ -1042,6 +1045,12 @@ fn compile_program_inner(
                 math_thunks: &math_thunk_decls,
                 root_bitmaps: &bitmap_decls,
                 f64_values: inferred_f64
+                    .get(&FunctionId(
+                        u32::try_from(index).expect("function index fits u32"),
+                    ))
+                    .expect("analysis covers every function"),
+                // base 编译没有反馈推测，静态分析结果本身就是可靠集合。
+                typed_f64_values: inferred_f64
                     .get(&FunctionId(
                         u32::try_from(index).expect("function index fits u32"),
                     ))
@@ -1514,10 +1523,21 @@ pub(crate) fn lower_function(
     builder.append_block_params_for_function_params(entry);
 
     let value_ids = collect_value_ids(ir_function);
-    let mut variables = HashMap::with_capacity(value_ids.len());
-    for value_id in value_ids {
-        variables.insert(value_id, builder.declare_var(types::I64));
-    }
+    let has_suspend = ir_function.blocks().iter().any(|block| {
+        block.instructions().iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Suspend { .. } | Instruction::GeneratorSuspend { .. }
+            )
+        })
+    });
+    let mut variables = ValueRepr::plan(
+        ir_function,
+        input.typed_f64_values,
+        frame_local_names,
+        has_suspend,
+    );
+    variables.declare_values(&mut builder, &value_ids);
     let mut frame_locals = frame_local_variables(frame_local_names);
     let boxed_local_order = boxed_local_order(boxed_local_names);
     let boxed_local_indices = frame_local_indices(&boxed_local_order);
@@ -1554,7 +1574,7 @@ pub(crate) fn lower_function(
         frame.link(&mut builder, ctx_value)?;
         Some(frame)
     };
-    initialize_frame_locals(&mut builder, &mut frame_locals);
+    initialize_frame_locals(&mut builder, &mut frame_locals, &variables);
     if let Some(root_frame) = root_frame.as_mut() {
         pin_initialized_frame_locals(root_frame, &mut builder, &frame_locals, &boxed_local_order)?;
     }
@@ -1810,9 +1830,16 @@ fn lower_function_parameters(
         };
         let value = param_values[index];
         if let Some(local) = frame_locals.get(storage_name).copied() {
-            cx.builder.def_var(local, value);
+            // typed 局部只在「该名字的全部 load 都已证明 f64」时成立，入参的
+            // NaN-Box 位模式此时就是 double，入口一次 bitcast 即可。
+            let native = if cx.variables.is_typed_local(storage_name) {
+                unbox_f64(cx.builder, value)
+            } else {
+                value
+            };
+            cx.builder.def_var(local, native);
             if let Some(index) = frame_local_indices.get(storage_name).copied() {
-                cx.update_pinned_local(index, value)?;
+                cx.update_pinned_local(index, native)?;
             }
             continue;
         }
@@ -2104,7 +2131,7 @@ fn lower_native_object_allocation(
 
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
-    define_value(
+    define_value_boxed(
         cx.builder,
         cx.variables,
         dest,
@@ -2183,7 +2210,7 @@ fn emit_template_receiver_guard(
     store: bool,
 ) -> Result<TemplateReceiver> {
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
-    let obj = use_value(cx.builder, cx.variables, object)?;
+    let obj = use_value_boxed(cx.builder, cx.variables, object)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let ht_base = cx.ht_base;
     let barrier_state = cx.barrier_state;
@@ -2414,7 +2441,7 @@ fn lower_get_template_prop_inline(
         .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), addr, offset);
-    define_value(cx.builder, cx.variables, dest, loaded)?;
+    define_value_boxed(cx.builder, cx.variables, dest, loaded)?;
     cx.builder.ins().jump(merge_block, &[]);
     Ok(())
 }
@@ -2431,7 +2458,7 @@ fn lower_set_template_prop_inline(
     merge_block: ir::Block,
     fallback_block: ir::Block,
 ) -> Result<()> {
-    let stored = use_value(cx.builder, cx.variables, value)?;
+    let stored = use_value_boxed(cx.builder, cx.variables, value)?;
     let hit_block = cx.builder.create_block();
     cx.builder.append_block_param(hit_block, types::I64);
     cx.builder.append_block_param(hit_block, types::I8);
@@ -2554,7 +2581,7 @@ fn emit_template_own_store(
 
     cx.builder.switch_to_block(store_done_block);
     cx.builder.seal_block(store_done_block);
-    define_value(cx.builder, cx.variables, dest, stored)?;
+    define_value_boxed(cx.builder, cx.variables, dest, stored)?;
     cx.builder.ins().jump(merge_block, &[]);
     Ok(())
 }
@@ -2677,7 +2704,7 @@ fn emit_init_object_literal_heap_value_guard(
             cx.builder.switch_to_block(check_block);
             cx.builder.seal_block(check_block);
         }
-        let stored = use_value(cx.builder, cx.variables, *value)?;
+        let stored = use_value_boxed(cx.builder, cx.variables, *value)?;
         let boxed_bits = cx.builder.ins().band_imm_s(stored, box_base);
         let is_heap_value =
             cx.builder
@@ -2895,7 +2922,7 @@ fn lower_init_object_literal(
     );
     let logical_addr = top;
     for property in 0..prop_count {
-        let stored = use_value(
+        let stored = use_value_boxed(
             cx.builder,
             cx.variables,
             values[usize::try_from(property).expect("property index fits usize")],
@@ -2915,7 +2942,7 @@ fn lower_init_object_literal(
     cx.builder.seal_block(slow_block);
     let mut call_args = vec![cx.builder.ins().iconst(types::I64, i64::from(meta_index))];
     for value in values {
-        call_args.push(use_value(cx.builder, cx.variables, *value)?);
+        call_args.push(use_value_boxed(cx.builder, cx.variables, *value)?);
     }
     let slow = cx.call(NativeRuntimeOp::InitObjectLiteral.id(), &call_args, None)?;
     cx.builder
@@ -2924,7 +2951,7 @@ fn lower_init_object_literal(
 
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
-    define_value(
+    define_value_boxed(
         cx.builder,
         cx.variables,
         dest,
@@ -2950,6 +2977,14 @@ fn lower_instruction(
                 .constants
                 .get(constant_index)
                 .with_context(|| format!("constant {} is missing", constant_id.0))?;
+            // typed 目标直接物化成浮点常量，省掉「iconst + bitcast」这对指令。
+            if let Constant::Number(number) = constant
+                && cx.variables.is_typed_value(*dest)
+            {
+                let canonical = f64::from_bits(value::encode_f64(*number) as u64);
+                let native = cx.builder.ins().f64const(canonical);
+                return define_value_f64(cx.builder, cx.variables, *dest, native);
+            }
             let native = match constant {
                 Constant::Number(value) => cx
                     .builder
@@ -2998,17 +3033,17 @@ fn lower_instruction(
                     result
                 }
             };
-            define_value(cx.builder, cx.variables, *dest, native)
+            define_value_boxed(cx.builder, cx.variables, *dest, native)
         }
         Instruction::Binary { dest, op, lhs, rhs }
             if tables.speculative
                 && tables.int32_values.contains(dest)
                 && matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
         {
-            let lhs_val = use_value(cx.builder, cx.variables, *lhs)?;
-            let rhs_val = use_value(cx.builder, cx.variables, *rhs)?;
+            let lhs_val = use_value_f64(cx.builder, cx.variables, *lhs)?;
+            let rhs_val = use_value_f64(cx.builder, cx.variables, *rhs)?;
             let result = emit_i32_arithmetic(cx, *op, lhs_val, rhs_val)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_f64(cx.builder, cx.variables, *dest, result)
         }
         Instruction::Binary { dest, op, lhs, rhs }
             if tables.f64_values.contains(dest)
@@ -3017,16 +3052,8 @@ fn lower_instruction(
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
                 ) =>
         {
-            let lhs = use_value(cx.builder, cx.variables, *lhs)?;
-            let rhs = use_value(cx.builder, cx.variables, *rhs)?;
-            let lhs = cx
-                .builder
-                .ins()
-                .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-            let rhs = cx
-                .builder
-                .ins()
-                .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+            let lhs = use_value_f64(cx.builder, cx.variables, *lhs)?;
+            let rhs = use_value_f64(cx.builder, cx.variables, *rhs)?;
             let result = match op {
                 BinaryOp::Add => cx.builder.ins().fadd(lhs, rhs),
                 BinaryOp::Sub => cx.builder.ins().fsub(lhs, rhs),
@@ -3034,46 +3061,50 @@ fn lower_instruction(
                 BinaryOp::Div => cx.builder.ins().fdiv(lhs, rhs),
                 _ => unreachable!("guard restricts direct f64 operations"),
             };
+            if cx.variables.is_typed_value(*dest) {
+                return define_value_f64(cx.builder, cx.variables, *dest, result);
+            }
             let result = box_f64_arithmetic(cx.builder, *op, result);
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::Binary { dest, op, lhs, rhs } => {
             lower_dynamic_binary(cx, *dest, *op, *lhs, *rhs, feedback_ptr, tables.f64_values)
         }
         Instruction::Unary { dest, op, value } => {
             if tables.f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) {
-                let value = use_value(cx.builder, cx.variables, *value)?;
-                let result = if *op == UnaryOp::Neg {
-                    let value =
-                        cx.builder
-                            .ins()
-                            .bitcast(types::F64, ir::MemFlagsData::new(), value);
-                    let result = cx.builder.ins().fneg(value);
-                    box_f64_result(cx.builder, result)
-                } else {
-                    value
-                };
-                define_value(cx.builder, cx.variables, *dest, result)
+                if *op == UnaryOp::Neg {
+                    let input = use_value_f64(cx.builder, cx.variables, *value)?;
+                    let result = cx.builder.ins().fneg(input);
+                    return define_value_f64(cx.builder, cx.variables, *dest, result);
+                }
+                // 一元 `+` 对已证明 number 是恒等运算，按目标表示原样搬运即可。
+                let dest_is_typed = cx.variables.is_typed_value(*dest);
+                let native = use_value_as(cx.builder, cx.variables, dest_is_typed, *value)?;
+                define_value_as(cx.builder, cx.variables, *dest, native)
             } else {
                 let operation = DYNAMIC_UNARY_BASE + u32::from(unary_tag(*op));
-                let input = use_value(cx.builder, cx.variables, *value)?;
+                let input = use_value_boxed(cx.builder, cx.variables, *value)?;
                 let result = cx.call(operation, &[input], feedback_ptr)?;
-                define_value(cx.builder, cx.variables, *dest, result)
+                define_value_boxed(cx.builder, cx.variables, *dest, result)
             }
         }
         Instruction::Compare { dest, op, lhs, rhs } if op.is_relational() => {
-            let lhs_val = use_value(cx.builder, cx.variables, *lhs)?;
-            let rhs_val = use_value(cx.builder, cx.variables, *rhs)?;
             if tables.speculative
                 && tables.int32_values.contains(lhs)
                 && tables.int32_values.contains(rhs)
             {
+                let lhs_val = use_value_f64(cx.builder, cx.variables, *lhs)?;
+                let rhs_val = use_value_f64(cx.builder, cx.variables, *rhs)?;
                 let result = emit_i32_relational(cx.builder, lhs_val, rhs_val, *op)?;
-                define_value(cx.builder, cx.variables, *dest, result)
+                define_value_boxed(cx.builder, cx.variables, *dest, result)
             } else if tables.f64_values.contains(lhs) && tables.f64_values.contains(rhs) {
+                let lhs_val = use_value_f64(cx.builder, cx.variables, *lhs)?;
+                let rhs_val = use_value_f64(cx.builder, cx.variables, *rhs)?;
                 let result = emit_f64_relational(cx.builder, lhs_val, rhs_val, *op);
-                define_value(cx.builder, cx.variables, *dest, result)
+                define_value_boxed(cx.builder, cx.variables, *dest, result)
             } else {
+                let lhs_val = use_value_boxed(cx.builder, cx.variables, *lhs)?;
+                let rhs_val = use_value_boxed(cx.builder, cx.variables, *rhs)?;
                 let reverse = matches!(*op, CompareOp::Gt | CompareOp::LtEq);
                 let invert = matches!(*op, CompareOp::LtEq | CompareOp::GtEq);
                 let reverse_v = cx
@@ -3089,7 +3120,7 @@ fn lower_instruction(
                     &[lhs_val, rhs_val, reverse_v, invert_v],
                     feedback_ptr,
                 )?;
-                define_value(cx.builder, cx.variables, *dest, result)
+                define_value_boxed(cx.builder, cx.variables, *dest, result)
             }
         }
         Instruction::Compare { dest, op, lhs, rhs } => {
@@ -3112,14 +3143,16 @@ fn lower_instruction(
             builtin: Builtin::AbstractCompare,
             args,
         } if args.len() == 4 => {
-            let lhs = use_value(cx.builder, cx.variables, args[0])?;
-            let rhs = use_value(cx.builder, cx.variables, args[1])?;
-            let reverse = use_value(cx.builder, cx.variables, args[2])?;
-            let invert = use_value(cx.builder, cx.variables, args[3])?;
+            let reverse = use_value_boxed(cx.builder, cx.variables, args[2])?;
+            let invert = use_value_boxed(cx.builder, cx.variables, args[3])?;
             if tables.f64_values.contains(&args[0]) && tables.f64_values.contains(&args[1]) {
+                let lhs = use_value_f64(cx.builder, cx.variables, args[0])?;
+                let rhs = use_value_f64(cx.builder, cx.variables, args[1])?;
                 let result = emit_f64_abstract_compare(cx.builder, lhs, rhs, reverse, invert);
-                define_value(cx.builder, cx.variables, *dest, result)?;
+                define_value_boxed(cx.builder, cx.variables, *dest, result)?;
             } else {
+                let lhs = use_value_boxed(cx.builder, cx.variables, args[0])?;
+                let rhs = use_value_boxed(cx.builder, cx.variables, args[1])?;
                 let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
                 let lhs_masked = cx.builder.ins().band_imm_s(lhs, box_base);
                 let lhs_is_f64 = cx.builder.ins().icmp_imm_s(
@@ -3146,7 +3179,10 @@ fn lower_instruction(
 
                 cx.builder.switch_to_block(fast_block);
                 cx.builder.seal_block(fast_block);
-                let fast_result = emit_f64_abstract_compare(cx.builder, lhs, rhs, reverse, invert);
+                let lhs_f64 = unbox_f64(cx.builder, lhs);
+                let rhs_f64 = unbox_f64(cx.builder, rhs);
+                let fast_result =
+                    emit_f64_abstract_compare(cx.builder, lhs_f64, rhs_f64, reverse, invert);
                 cx.builder
                     .ins()
                     .jump(merge_block, &[ir::BlockArg::Value(fast_result)]);
@@ -3165,7 +3201,7 @@ fn lower_instruction(
                 cx.builder.switch_to_block(merge_block);
                 cx.builder.seal_block(merge_block);
                 let result = cx.builder.block_params(merge_block)[0];
-                define_value(cx.builder, cx.variables, *dest, result)?;
+                define_value_boxed(cx.builder, cx.variables, *dest, result)?;
             }
             Ok(())
         }
@@ -3182,11 +3218,7 @@ fn lower_instruction(
                 | Builtin::MathFround),
             args,
         } if tables.f64_values.contains(dest) && args.len() == 1 => {
-            let input = use_value(cx.builder, cx.variables, args[0])?;
-            let input = cx
-                .builder
-                .ins()
-                .bitcast(types::F64, ir::MemFlagsData::new(), input);
+            let input = use_value_f64(cx.builder, cx.variables, args[0])?;
             let result = match builtin {
                 Builtin::MathAbs => cx.builder.ins().fabs(input),
                 Builtin::MathSqrt => cx.builder.ins().sqrt(input),
@@ -3199,8 +3231,7 @@ fn lower_instruction(
                 }
                 _ => unreachable!("arm 模式已限定这六个 builtin"),
             };
-            let result = box_f64_result(cx.builder, result);
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_f64(cx.builder, cx.variables, *dest, result)
         }
         Instruction::CallBuiltin {
             dest: Some(dest),
@@ -3220,7 +3251,7 @@ fn lower_instruction(
             builtin: Builtin::IsString,
             args,
         } if args.len() == 1 => {
-            let encoded = use_value(cx.builder, cx.variables, args[0])?;
+            let encoded = use_value_boxed(cx.builder, cx.variables, args[0])?;
             let inline = emit_inline_string_predicate(cx.builder, encoded);
             let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
             let boxed = cx.builder.ins().band_imm_s(encoded, box_base);
@@ -3259,7 +3290,7 @@ fn lower_instruction(
                 .ins()
                 .iconst(types::I64, value::encode_bool(false));
             let result = cx.builder.ins().select(valid, yes, no);
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::CallBuiltin {
             dest: Some(dest),
@@ -3290,7 +3321,7 @@ fn lower_instruction(
             builtin: Builtin::StringBuilderFinish,
             args,
         } if args.len() == 1 => {
-            let builder = use_value(cx.builder, cx.variables, args[0])?;
+            let builder = use_value_boxed(cx.builder, cx.variables, args[0])?;
             cx.flush()?;
             let call = cx
                 .builder
@@ -3298,7 +3329,7 @@ fn lower_instruction(
                 .call(cx.string_builder_finish, &[cx.ctx, builder]);
             if let Some(dest) = dest {
                 let result = cx.builder.inst_results(call)[0];
-                define_value(cx.builder, cx.variables, *dest, result)?;
+                define_value_boxed(cx.builder, cx.variables, *dest, result)?;
             }
             Ok(())
         }
@@ -3324,11 +3355,7 @@ fn lower_instruction(
             )?;
             let result = match symbol.signature() {
                 NativeSignature::F64Unary => {
-                    let input = use_value(cx.builder, cx.variables, args[0])?;
-                    let input =
-                        cx.builder
-                            .ins()
-                            .bitcast(types::F64, ir::MemFlagsData::new(), input);
+                    let input = use_value_f64(cx.builder, cx.variables, args[0])?;
                     let call = cx.builder.ins().call(thunk, &[input]);
                     *cx.builder
                         .inst_results(call)
@@ -3336,16 +3363,8 @@ fn lower_instruction(
                         .context("typed math thunk returned no result")?
                 }
                 NativeSignature::F64Binary => {
-                    let lhs = use_value(cx.builder, cx.variables, args[0])?;
-                    let rhs = use_value(cx.builder, cx.variables, args[1])?;
-                    let lhs = cx
-                        .builder
-                        .ins()
-                        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-                    let rhs = cx
-                        .builder
-                        .ins()
-                        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
+                    let lhs = use_value_f64(cx.builder, cx.variables, args[0])?;
+                    let rhs = use_value_f64(cx.builder, cx.variables, args[1])?;
                     let call = cx.builder.ins().call(thunk, &[lhs, rhs]);
                     *cx.builder
                         .inst_results(call)
@@ -3362,8 +3381,7 @@ fn lower_instruction(
                     unreachable!("math thunk 不存在 host 或 ZGC 屏障签名")
                 }
             };
-            let result = box_f64_result(cx.builder, result);
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_f64(cx.builder, cx.variables, *dest, result)
         }
         Instruction::CallBuiltin {
             dest: Some(dest),
@@ -3384,11 +3402,11 @@ fn lower_instruction(
         } => {
             let mut values = Vec::with_capacity(args.len());
             for arg in args {
-                values.push(use_value(cx.builder, cx.variables, *arg)?);
+                values.push(use_value_boxed(cx.builder, cx.variables, *arg)?);
             }
             let result = cx.call(u32::from(builtin.wire_id()), &values, feedback_ptr)?;
             if let Some(dest) = dest {
-                define_value(cx.builder, cx.variables, *dest, result)?;
+                define_value_boxed(cx.builder, cx.variables, *dest, result)?;
             }
             Ok(())
         }
@@ -3505,9 +3523,9 @@ fn lower_instruction(
         }
         Instruction::NewPromise { dest } => {
             lower_native_object_allocation(cx, *dest, 2, false)?;
-            let object = use_value(cx.builder, cx.variables, *dest)?;
+            let object = use_value_boxed(cx.builder, cx.variables, *dest)?;
             let initialized = cx.call(NativeRuntimeOp::InitPromise.id(), &[object], None)?;
-            define_value(cx.builder, cx.variables, *dest, initialized)
+            define_value_boxed(cx.builder, cx.variables, *dest, initialized)
         }
         Instruction::NewObject { dest, capacity } => {
             lower_native_object_allocation(cx, *dest, *capacity, false)
@@ -3561,7 +3579,7 @@ fn lower_instruction(
         Instruction::CloneArrayTemplate { dest, template } => {
             let template = cx.builder.ins().iconst(types::I64, i64::from(template.0));
             let result = cx.call(NativeRuntimeOp::CloneArrayTemplate.id(), &[template], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::InitObjectLiteral {
             dest,
@@ -3611,11 +3629,11 @@ fn lower_instruction(
         ),
         Instruction::GetSuperBase { dest } => {
             let result = cx.call(NativeRuntimeOp::GetSuperBase.id(), &[], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::GetSuperConstructor { dest } => {
             let result = cx.call(NativeRuntimeOp::GetSuperConstructor.id(), &[], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::ObjectSpread { dest, source } => {
             lower_value_operation(cx, NativeRuntimeOp::ObjectSpread, &[*dest, *source], None)
@@ -3625,22 +3643,22 @@ fn lower_instruction(
             callee,
             function,
         } => {
-            let callee = use_value(cx.builder, cx.variables, *callee)?;
+            let callee = use_value_boxed(cx.builder, cx.variables, *callee)?;
             let function = cx.builder.ins().iconst(types::I64, i64::from(function.0));
             let result = cx.call(
                 NativeRuntimeOp::GuardSameFunction.id(),
                 &[callee, function],
                 None,
             )?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::CollectRestArgs { dest, skip } => {
             let skip = cx.builder.ins().iconst(types::I64, i64::from(*skip));
             let result = cx.call(NativeRuntimeOp::CollectRestArguments.id(), &[skip], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::IsException { dest, value: input } => {
-            let input = use_value(cx.builder, cx.variables, *input)?;
+            let input = use_value_boxed(cx.builder, cx.variables, *input)?;
             let condition = emit_is_exception(cx.builder, input);
             let true_value = cx
                 .builder
@@ -3651,12 +3669,12 @@ fn lower_instruction(
                 .ins()
                 .iconst(types::I64, value::encode_bool(false));
             let boolean = cx.builder.ins().select(condition, true_value, false_value);
-            define_value(cx.builder, cx.variables, *dest, boolean)
+            define_value_boxed(cx.builder, cx.variables, *dest, boolean)
         }
         Instruction::EncodeException { dest, value: input } => {
-            let input = use_value(cx.builder, cx.variables, *input)?;
+            let input = use_value_boxed(cx.builder, cx.variables, *input)?;
             let result = cx.call(NativeRuntimeOp::CreateException.id(), &[input], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::PromiseResolve { promise, value } => lower_builtin_operation(
             cx,
@@ -3671,19 +3689,23 @@ fn lower_instruction(
             None,
         ),
         Instruction::ExceptionToObject { dest, value: input } => {
-            let input = use_value(cx.builder, cx.variables, *input)?;
+            let input = use_value_boxed(cx.builder, cx.variables, *input)?;
             let result = cx.call(NativeRuntimeOp::ExceptionValue.id(), &[input], None)?;
-            define_value(cx.builder, cx.variables, *dest, result)
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::StoreVar { name, value } => {
-            let value = use_value(cx.builder, cx.variables, *value)?;
             if let Some(local) = tables.frame_locals.get(name).copied() {
-                cx.builder.def_var(local, value);
+                // typed 局部与 typed 源同为浮点表示时这里不产出任何转换指令，
+                // 归纳变量的回写因此留在浮点寄存器内。
+                let typed_local = cx.variables.is_typed_local(name);
+                let native = use_value_as(cx.builder, cx.variables, typed_local, *value)?;
+                cx.builder.def_var(local, native);
                 if let Some(index) = tables.frame_local_indices.get(name).copied() {
-                    cx.update_pinned_local(index, value)?;
+                    cx.update_pinned_local(index, native)?;
                 }
                 return Ok(());
             }
+            let value = use_value_boxed(cx.builder, cx.variables, *value)?;
             let slot = tables
                 .variable_slots
                 .get(name)
@@ -3695,8 +3717,13 @@ fn lower_instruction(
         }
         Instruction::LoadVar { dest, name } => {
             if let Some(local) = tables.frame_locals.get(name).copied() {
+                let typed_local = cx.variables.is_typed_local(name);
                 let value = cx.builder.use_var(local);
-                return define_value(cx.builder, cx.variables, *dest, value);
+                return if typed_local {
+                    define_value_f64(cx.builder, cx.variables, *dest, value)
+                } else {
+                    define_value_boxed(cx.builder, cx.variables, *dest, value)
+                };
             }
             let slot = tables
                 .variable_slots
@@ -3705,11 +3732,11 @@ fn lower_instruction(
                 .with_context(|| format!("variable slot is missing for {name}"))?;
             let slot = cx.builder.ins().iconst(types::I64, i64::from(slot));
             let value = cx.call(NativeRuntimeOp::LoadVar.id(), &[slot], None)?;
-            define_value(cx.builder, cx.variables, *dest, value)
+            define_value_boxed(cx.builder, cx.variables, *dest, value)
         }
 
         Instruction::Suspend { promise, state } => {
-            let promise = use_value(cx.builder, cx.variables, *promise)?;
+            let promise = use_value_boxed(cx.builder, cx.variables, *promise)?;
             let suspend_state = cx
                 .builder
                 .ins()
@@ -3724,7 +3751,7 @@ fn lower_instruction(
             Ok(())
         }
         Instruction::GeneratorSuspend { result, state } => {
-            let result = use_value(cx.builder, cx.variables, *result)?;
+            let result = use_value_boxed(cx.builder, cx.variables, *result)?;
             let continuation = cx.call(NativeRuntimeOp::LoadCallEnv.id(), &[], None)?;
             cx.publish_roots(roots, &[continuation])?;
             let slot = cx.builder.ins().iconst(types::I64, value::encode_f64(0.0));
@@ -3768,7 +3795,7 @@ fn lower_fast_direct_call_instruction(
     roots: &[ValueId],
     arity: usize,
 ) -> Result<()> {
-    let this_value = use_value(cx.builder, cx.variables, this_value)?;
+    let this_value = use_value_boxed(cx.builder, cx.variables, this_value)?;
     let undefined = cx
         .builder
         .ins()
@@ -3783,7 +3810,7 @@ fn lower_fast_direct_call_instruction(
     call_args.push(this_value);
     for index in 0..arity {
         if let Some(argument) = args.get(index) {
-            call_args.push(use_value(cx.builder, cx.variables, *argument)?);
+            call_args.push(use_value_boxed(cx.builder, cx.variables, *argument)?);
         } else {
             call_args.push(undefined);
         }
@@ -3810,7 +3837,7 @@ fn lower_fast_direct_call_instruction(
 
     cx.publish_roots(roots, &[result])?;
     if let Some(destination) = destination {
-        define_value(cx.builder, cx.variables, destination, result)?;
+        define_value_boxed(cx.builder, cx.variables, destination, result)?;
     }
     Ok(())
 }
@@ -3823,7 +3850,7 @@ fn lower_direct_call_instruction(
     args: &[ValueId],
     roots: &[ValueId],
 ) -> Result<()> {
-    let this_value = use_value(cx.builder, cx.variables, this_value)?;
+    let this_value = use_value_boxed(cx.builder, cx.variables, this_value)?;
     let active_len_offset = i32::try_from(offset_of!(NativeVmContext, call_arena_active_len))
         .context("call arena active length offset exceeds i32")?;
     let active_len = cx.builder.ins().load(
@@ -3844,7 +3871,7 @@ fn lower_direct_call_instruction(
     let base_addr = cx.builder.ins().iadd(arena_base, active_len_bytes);
 
     for (i, arg) in args.iter().enumerate() {
-        let arg_val = use_value(cx.builder, cx.variables, *arg)?;
+        let arg_val = use_value_boxed(cx.builder, cx.variables, *arg)?;
         let offset = i32::try_from(i * size_of::<i64>()).context("argument offset exceeds i32")?;
         cx.builder
             .ins()
@@ -3896,7 +3923,7 @@ fn lower_direct_call_instruction(
 
     cx.publish_roots(roots, &[result])?;
     if let Some(destination) = destination {
-        define_value(cx.builder, cx.variables, destination, result)?;
+        define_value_boxed(cx.builder, cx.variables, destination, result)?;
     }
     Ok(())
 }
@@ -3916,13 +3943,13 @@ fn lower_call_instruction(
         operation,
         forward_args,
     } = call;
-    let callee = use_value(cx.builder, cx.variables, callee)?;
-    let this_value = use_value(cx.builder, cx.variables, this_value)?;
+    let callee = use_value_boxed(cx.builder, cx.variables, callee)?;
+    let this_value = use_value_boxed(cx.builder, cx.variables, this_value)?;
     let mut call_args = Vec::with_capacity(if forward_args { 1 } else { args.len() + 1 });
     call_args.push(callee);
     if !forward_args {
         for argument in args {
-            call_args.push(use_value(cx.builder, cx.variables, *argument)?);
+            call_args.push(use_value_boxed(cx.builder, cx.variables, *argument)?);
         }
     }
     let entry = cx.call(operation.id(), &call_args, feedback_ptr)?;
@@ -3959,7 +3986,7 @@ fn lower_call_instruction(
     cx.publish_roots(roots, &[result])?;
     let _ = cx.call(NativeRuntimeOp::FinishCall.id(), &[], None)?;
     if let Some(destination) = destination {
-        define_value(cx.builder, cx.variables, destination, result)?;
+        define_value_boxed(cx.builder, cx.variables, destination, result)?;
     }
     Ok(())
 }
@@ -3979,7 +4006,7 @@ fn lower_optional_call_instruction(
         ..
     } = call;
     let destination = destination.context("optional call requires a destination")?;
-    let encoded_callee = use_value(cx.builder, cx.variables, callee)?;
+    let encoded_callee = use_value_boxed(cx.builder, cx.variables, callee)?;
     let nullish = cx.call(
         NativeRuntimeOp::UnaryIsNullish.id(),
         &[encoded_callee],
@@ -4003,7 +4030,7 @@ fn lower_optional_call_instruction(
         .builder
         .ins()
         .iconst(types::I64, value::encode_undefined());
-    define_value(cx.builder, cx.variables, destination, undefined)?;
+    define_value_boxed(cx.builder, cx.variables, destination, undefined)?;
     cx.builder.ins().jump(continuation, &[]);
 
     cx.builder.switch_to_block(call_block);
@@ -4036,7 +4063,7 @@ fn lower_builtin_operation(
 ) -> Result<()> {
     let args = args
         .iter()
-        .map(|value| use_value(cx.builder, cx.variables, *value))
+        .map(|value| use_value_boxed(cx.builder, cx.variables, *value))
         .collect::<Result<Vec<_>>>()?;
     let result = cx.call(builtin.wire_id().into(), &args, feedback_ptr)?;
     if builtin == Builtin::PromiseInstanceResolve || builtin == Builtin::PromiseInstanceReject {
@@ -4046,6 +4073,7 @@ fn lower_builtin_operation(
     Ok(())
 }
 
+/// `lhs` / `rhs` 是原始 f64（非 NaN-Box 编码）；`reverse` / `invert` 仍是编码布尔。
 fn emit_f64_abstract_compare(
     builder: &mut FunctionBuilder<'_>,
     lhs: ir::Value,
@@ -4053,12 +4081,6 @@ fn emit_f64_abstract_compare(
     reverse: ir::Value,
     invert: ir::Value,
 ) -> ir::Value {
-    let lhs = builder
-        .ins()
-        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-    let rhs = builder
-        .ins()
-        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
     let normal = builder
         .ins()
         .fcmp(ir::condcodes::FloatCC::LessThan, lhs, rhs);
@@ -4083,18 +4105,13 @@ fn emit_f64_abstract_compare(
     builder.ins().select(condition, true_value, false_value)
 }
 
+/// `lhs` / `rhs` 是原始 f64（非 NaN-Box 编码）。
 fn emit_f64_relational(
     builder: &mut FunctionBuilder<'_>,
     lhs: ir::Value,
     rhs: ir::Value,
     op: CompareOp,
 ) -> ir::Value {
-    let lhs = builder
-        .ins()
-        .bitcast(types::F64, ir::MemFlagsData::new(), lhs);
-    let rhs = builder
-        .ins()
-        .bitcast(types::F64, ir::MemFlagsData::new(), rhs);
     let cc = match op {
         CompareOp::Lt => ir::condcodes::FloatCC::LessThan,
         CompareOp::Gt => ir::condcodes::FloatCC::GreaterThan,
@@ -4108,10 +4125,8 @@ fn emit_f64_relational(
     builder.ins().select(condition, true_value, false_value)
 }
 
-fn f64_bits_to_i32(builder: &mut FunctionBuilder<'_>, bits: ir::Value) -> (ir::Value, ir::Value) {
-    let float = builder
-        .ins()
-        .bitcast(types::F64, ir::MemFlagsData::new(), bits);
+/// 把一个原始 f64 收窄成 i32，并返回「收窄是否无损」。
+fn f64_to_i32(builder: &mut FunctionBuilder<'_>, float: ir::Value) -> (ir::Value, ir::Value) {
     let sat = builder.ins().fcvt_to_sint_sat(types::I32, float);
     let back = builder.ins().fcvt_from_sint(types::F64, sat);
     let ordered = builder
@@ -4126,8 +4141,8 @@ fn emit_i32_relational(
     rhs: ir::Value,
     op: CompareOp,
 ) -> Result<ir::Value> {
-    let (lhs_i, lhs_ok) = f64_bits_to_i32(builder, lhs);
-    let (rhs_i, rhs_ok) = f64_bits_to_i32(builder, rhs);
+    let (lhs_i, lhs_ok) = f64_to_i32(builder, lhs);
+    let (rhs_i, rhs_ok) = f64_to_i32(builder, rhs);
     let both = builder.ins().band(lhs_ok, rhs_ok);
     let cc = match op {
         CompareOp::Lt => ir::condcodes::IntCC::SignedLessThan,
@@ -4149,8 +4164,8 @@ fn emit_i32_arithmetic(
     lhs: ir::Value,
     rhs: ir::Value,
 ) -> Result<ir::Value> {
-    let (lhs_i, lhs_ok) = f64_bits_to_i32(cx.builder, lhs);
-    let (rhs_i, rhs_ok) = f64_bits_to_i32(cx.builder, rhs);
+    let (lhs_i, lhs_ok) = f64_to_i32(cx.builder, lhs);
+    let (rhs_i, rhs_ok) = f64_to_i32(cx.builder, rhs);
     let both = cx.builder.ins().band(lhs_ok, rhs_ok);
     let (sum, overflow) = match op {
         BinaryOp::Add => cx.builder.ins().sadd_overflow(lhs_i, rhs_i),
@@ -4173,11 +4188,7 @@ fn emit_i32_arithmetic(
     cx.builder.switch_to_block(cont);
     cx.builder.seal_block(cont);
     let widened = cx.builder.ins().sextend(types::I64, sum);
-    let as_f = cx.builder.ins().fcvt_from_sint(types::F64, widened);
-    Ok(cx
-        .builder
-        .ins()
-        .bitcast(types::I64, ir::MemFlagsData::new(), as_f))
+    Ok(cx.builder.ins().fcvt_from_sint(types::F64, widened))
 }
 
 fn emit_deopt_to_generic(
@@ -4216,7 +4227,7 @@ fn store_resume_lives(cx: &mut LoweringCx<'_, '_>, lives: &[ValueId]) -> Result<
         vmctx_offset(offset_of!(NativeVmContext, resume_live_slots))?,
     );
     for (index, live) in lives.iter().enumerate() {
-        let value = use_value(cx.builder, cx.variables, *live)?;
+        let value = use_value_boxed(cx.builder, cx.variables, *live)?;
         let offset = i32::try_from(index * 8).context("resume live offset")?;
         cx.builder
             .ins()
@@ -4302,7 +4313,7 @@ fn emit_resume_dispatch(
                 .builder
                 .ins()
                 .load(types::I64, MemFlagsData::trusted(), slots, offset);
-            define_value(cx.builder, cx.variables, *live, value)?;
+            define_value_boxed(cx.builder, cx.variables, *live, value)?;
         }
         let target = if *header == function.entry() {
             entry_body
@@ -4391,7 +4402,12 @@ fn emit_overlay_header_guards(
         if !tables.f64_values.contains(live) && !tables.int32_values.contains(live) {
             continue;
         }
-        let encoded = use_value(cx.builder, cx.variables, *live)?;
+        // 常驻 F64 寄存器的值按构造就是 number，守卫恒真；发它反而会把
+        // 原始 NaN 位模式误判成 NaN-Box 前缀而无谓 deopt。
+        if cx.variables.is_typed_value(*live) {
+            continue;
+        }
+        let encoded = use_value_boxed(cx.builder, cx.variables, *live)?;
         let ok = emit_is_number(cx.builder, encoded);
         let deopt = cx.builder.create_block();
         let cont = cx.builder.create_block();
@@ -5089,8 +5105,8 @@ fn lower_string_element(
     object: ValueId,
     index: ValueId,
 ) -> Result<()> {
-    let object = use_value(cx.builder, cx.variables, object)?;
-    let encoded_index = use_value(cx.builder, cx.variables, index)?;
+    let object = use_value_boxed(cx.builder, cx.variables, object)?;
+    let encoded_index = use_value_boxed(cx.builder, cx.variables, index)?;
     let (index, valid_index) = emit_nonnegative_integer_index(cx.builder, encoded_index);
     let index_block = cx.builder.create_block();
     let inline_string_block = cx.builder.create_block();
@@ -5149,14 +5165,14 @@ fn lower_string_element(
     cx.builder.seal_block(inline_ascii_char_block);
     let inline_unit = emit_extract_inline_ascii_unit(cx.builder, object, index);
     let inline_result = emit_inline_ascii_char_value(cx, inline_unit);
-    define_value(cx.builder, cx.variables, dest, inline_result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, inline_result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(inline_latin1_char_block);
     cx.builder.seal_block(inline_latin1_char_block);
     let inline_unit = emit_extract_inline_latin1_unit(cx.builder, object, index);
     let inline_result = emit_latin1_char_handle(cx, inline_unit, miss_block)?;
-    define_value(cx.builder, cx.variables, dest, inline_result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, inline_result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(dispatch_block);
@@ -5191,7 +5207,7 @@ fn lower_string_element(
     let address = emit_string_address(cx, barrier_thunks, object, miss_block)?;
     let unit = emit_flat_string_code_unit(cx, address, index, miss_block, out_of_bounds_block);
     let result = emit_latin1_char_handle(cx, unit, miss_block)?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // 数组读取
@@ -5269,7 +5285,7 @@ fn lower_string_element(
     cx.builder.switch_to_block(elem_hit_block);
     cx.builder.seal_block(elem_hit_block);
     let clean_elem = emit_strip_gc_color(cx.builder, elem_val);
-    define_value(cx.builder, cx.variables, dest, clean_elem)?;
+    define_value_boxed(cx.builder, cx.variables, dest, clean_elem)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(out_of_bounds_block);
@@ -5278,7 +5294,7 @@ fn lower_string_element(
         .builder
         .ins()
         .iconst(types::I64, value::encode_undefined());
-    define_value(cx.builder, cx.variables, dest, undefined)?;
+    define_value_boxed(cx.builder, cx.variables, dest, undefined)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(miss_block);
@@ -5288,7 +5304,7 @@ fn lower_string_element(
         &[object, encoded_index],
         None,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -5392,7 +5408,7 @@ fn lower_packed_array_store(
     cx.builder.switch_to_block(after_store_block);
     cx.builder.seal_block(after_store_block);
     if let Some(dest) = dest {
-        define_value(cx.builder, cx.variables, dest, stored)?;
+        define_value_boxed(cx.builder, cx.variables, dest, stored)?;
     }
     cx.builder.ins().jump(merge_block, &[]);
 
@@ -5408,7 +5424,7 @@ fn lower_packed_array_store(
         i32::try_from(constants::HEAP_ARRAY_LENGTH_OFFSET).expect("length offset fits i32"),
     );
     if let Some(dest) = dest {
-        define_value(cx.builder, cx.variables, dest, stored)?;
+        define_value_boxed(cx.builder, cx.variables, dest, stored)?;
     }
     cx.builder.ins().jump(merge_block, &[]);
     Ok(())
@@ -5422,9 +5438,9 @@ fn lower_set_elem(
     index: ValueId,
     stored: ValueId,
 ) -> Result<()> {
-    let object_val = use_value(cx.builder, cx.variables, object)?;
-    let encoded_index = use_value(cx.builder, cx.variables, index)?;
-    let stored_val = use_value(cx.builder, cx.variables, stored)?;
+    let object_val = use_value_boxed(cx.builder, cx.variables, object)?;
+    let encoded_index = use_value_boxed(cx.builder, cx.variables, index)?;
+    let stored_val = use_value_boxed(cx.builder, cx.variables, stored)?;
     let (index_val, valid_index) = emit_nonnegative_integer_index(cx.builder, encoded_index);
     let index_block = cx.builder.create_block();
     let array_block = cx.builder.create_block();
@@ -5470,7 +5486,7 @@ fn lower_set_elem(
         &[object_val, encoded_index, stored_val],
         None,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -5484,8 +5500,8 @@ fn lower_array_push_inline(
     object: ValueId,
     stored: ValueId,
 ) -> Result<()> {
-    let object_val = use_value(cx.builder, cx.variables, object)?;
-    let stored_val = use_value(cx.builder, cx.variables, stored)?;
+    let object_val = use_value_boxed(cx.builder, cx.variables, object)?;
+    let stored_val = use_value_boxed(cx.builder, cx.variables, stored)?;
     let miss_block = cx.builder.create_block();
     let array_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
@@ -5712,14 +5728,14 @@ fn lower_string_slice_builtin(
     args: &[ValueId],
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
-    let receiver = use_value(cx.builder, cx.variables, args[0])?;
+    let receiver = use_value_boxed(cx.builder, cx.variables, args[0])?;
     let encoded_start = if let Some(start) = args.get(1) {
-        use_value(cx.builder, cx.variables, *start)?
+        use_value_boxed(cx.builder, cx.variables, *start)?
     } else {
         cx.builder.ins().iconst(types::I64, value::encode_f64(0.0))
     };
     let encoded_end = if let Some(end) = args.get(2) {
-        Some(use_value(cx.builder, cx.variables, *end)?)
+        Some(use_value_boxed(cx.builder, cx.variables, *end)?)
     } else {
         None
     };
@@ -5775,13 +5791,13 @@ fn lower_string_slice_builtin(
         types::I64,
         value::encode_inline_ascii(b"").expect("empty inline ascii"),
     );
-    define_value(cx.builder, cx.variables, dest, empty)?;
+    define_value_boxed(cx.builder, cx.variables, dest, empty)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(slice_block);
     cx.builder.seal_block(slice_block);
     let sliced = emit_pack_inline_ascii_slice(cx, receiver, start, end);
-    define_value(cx.builder, cx.variables, dest, sliced)?;
+    define_value_boxed(cx.builder, cx.variables, dest, sliced)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(miss_block);
@@ -5795,7 +5811,7 @@ fn lower_string_slice_builtin(
         &call_args,
         feedback_ptr,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -5831,9 +5847,9 @@ fn lower_string_char_builtin(
     args: &[ValueId],
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
-    let receiver = use_value(cx.builder, cx.variables, args[0])?;
+    let receiver = use_value_boxed(cx.builder, cx.variables, args[0])?;
     let encoded_index = if let Some(index) = args.get(1) {
-        use_value(cx.builder, cx.variables, *index)?
+        use_value_boxed(cx.builder, cx.variables, *index)?
     } else {
         cx.builder.ins().iconst(types::I64, value::encode_f64(0.0))
     };
@@ -5893,7 +5909,7 @@ fn lower_string_char_builtin(
     } else {
         emit_inline_ascii_char_value(cx, ascii_unit)
     };
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(inline_latin1_char_block);
@@ -5905,7 +5921,7 @@ fn lower_string_char_builtin(
     } else {
         emit_latin1_char_handle(cx, latin1_unit, miss_block)?
     };
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(string_block);
@@ -5918,7 +5934,7 @@ fn lower_string_char_builtin(
     } else {
         emit_latin1_char_handle(cx, unit, miss_block)?
     };
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(out_of_bounds_block);
@@ -5928,7 +5944,7 @@ fn lower_string_char_builtin(
             .builder
             .ins()
             .iconst(types::I64, value::encode_f64(f64::NAN));
-        define_value(cx.builder, cx.variables, dest, result)?;
+        define_value_boxed(cx.builder, cx.variables, dest, result)?;
         cx.builder.ins().jump(merge_block, &[]);
     } else {
         cx.builder.ins().jump(miss_block, &[]);
@@ -5941,7 +5957,7 @@ fn lower_string_char_builtin(
         &[receiver, encoded_index],
         feedback_ptr,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -6343,7 +6359,7 @@ fn emit_string_builder_append_miss(
         args,
         feedback_ptr,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
     Ok(())
 }
@@ -6498,7 +6514,7 @@ fn lower_string_builder_append(
 ) -> Result<()> {
     let mut values = Vec::with_capacity(args.len());
     for arg in args {
-        values.push(use_value(cx.builder, cx.variables, *arg)?);
+        values.push(use_value_boxed(cx.builder, cx.variables, *arg)?);
     }
     let last = *values
         .last()
@@ -6548,7 +6564,7 @@ fn lower_string_builder_append(
         cursor_units = cx.builder.ins().iadd(cursor_units, part.units);
     }
     emit_store_builder_length(cx, &builder_state, string_total);
-    define_value(cx.builder, cx.variables, dest, values[0])?;
+    define_value_boxed(cx.builder, cx.variables, dest, values[0])?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // ── 数字路径:末片段是 Number 且为安全整数时内联 itoa。──
@@ -6644,7 +6660,7 @@ fn lower_string_builder_append(
     cx.builder.switch_to_block(len_store_block);
     cx.builder.seal_block(len_store_block);
     emit_store_builder_length(cx, &builder_state, number_total);
-    define_value(cx.builder, cx.variables, dest, values[0])?;
+    define_value_boxed(cx.builder, cx.variables, dest, values[0])?;
     cx.builder.ins().jump(merge_block, &[]);
 
     emit_string_builder_append_miss(cx, dest, &values, feedback_ptr, miss_block, merge_block)?;
@@ -6669,8 +6685,8 @@ fn lower_strict_eq(
     mode: StrictEqMode,
     feedback_ptr: Option<ir::Value>,
 ) -> Result<()> {
-    let lhs = use_value(cx.builder, cx.variables, lhs_id)?;
-    let rhs = use_value(cx.builder, cx.variables, rhs_id)?;
+    let lhs = use_value_boxed(cx.builder, cx.variables, lhs_id)?;
+    let rhs = use_value_boxed(cx.builder, cx.variables, rhs_id)?;
     if let Some(slot) = feedback_ptr {
         emit_inline_binary_feedback(cx.builder, cx.ctx, slot, mode.slow_operation, lhs, rhs);
     }
@@ -6734,7 +6750,7 @@ fn lower_strict_eq(
         .ins()
         .iconst(types::I64, value::encode_bool(mode.invert));
     let result = cx.builder.ins().select(same_raw, true_value, false_value);
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(non_inline_block);
@@ -6749,7 +6765,7 @@ fn lower_strict_eq(
         .builder
         .ins()
         .iconst(types::I64, value::encode_bool(!mode.invert));
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(compare_block);
@@ -6891,7 +6907,7 @@ fn lower_strict_eq(
         .builder
         .ins()
         .iconst(types::I64, value::encode_bool(!mode.invert));
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(content_block);
@@ -6929,7 +6945,7 @@ fn lower_strict_eq(
     } else {
         cx.builder.ins().select(equal, true_value, false_value)
     };
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(false_block);
@@ -6938,13 +6954,13 @@ fn lower_strict_eq(
         .builder
         .ins()
         .iconst(types::I64, value::encode_bool(mode.invert));
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
     let result = cx.call(mode.slow_operation, &[lhs, rhs], None)?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -6963,8 +6979,8 @@ fn lower_dynamic_binary(
 ) -> Result<()> {
     let lhs_id = lhs;
     let rhs_id = rhs;
-    let lhs = use_value(cx.builder, cx.variables, lhs)?;
-    let rhs = use_value(cx.builder, cx.variables, rhs)?;
+    let lhs = use_value_boxed(cx.builder, cx.variables, lhs)?;
+    let rhs = use_value_boxed(cx.builder, cx.variables, rhs)?;
 
     // 位运算、% 与 ** 仍需 ToPrimitive/ToNumber/ToBigInt 等完整语义，继续走 dispatcher。
     if !matches!(
@@ -6973,7 +6989,7 @@ fn lower_dynamic_binary(
     ) {
         let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
         let result = cx.call(operation, &[lhs, rhs], feedback_ptr)?;
-        return define_value(cx.builder, cx.variables, dest, result);
+        return define_value_boxed(cx.builder, cx.variables, dest, result);
     }
 
     // #389 的 number 快路径不经过 dispatcher，二元反馈必须在守卫前内联更新，
@@ -7015,7 +7031,7 @@ fn lower_dynamic_binary(
         _ => unreachable!("guard restricts guarded binary operations"),
     };
     let result = box_f64_arithmetic(cx.builder, op, result);
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(non_number_block);
@@ -7049,7 +7065,7 @@ fn lower_dynamic_binary(
         cx.flush()?;
         let call = cx.builder.ins().call(cx.string_add, &[cx.ctx, lhs, rhs]);
         let result = cx.builder.inst_results(call)[0];
-        define_value(cx.builder, cx.variables, dest, result)?;
+        define_value_boxed(cx.builder, cx.variables, dest, result)?;
         cx.builder.ins().jump(merge_block, &[]);
 
         cx.builder.switch_to_block(slow_block);
@@ -7057,7 +7073,7 @@ fn lower_dynamic_binary(
     }
     let operation = DYNAMIC_BINARY_BASE + u32::from(binary_tag(op));
     let result = cx.call(operation, &[lhs, rhs], None)?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -7238,8 +7254,8 @@ fn lower_get_prop_ic_non_nullish(
         slot,
         trio_field,
     } = access;
-    let obj = use_value(cx.builder, cx.variables, object)?;
-    let key_value = use_value(cx.builder, cx.variables, key)?;
+    let obj = use_value_boxed(cx.builder, cx.variables, object)?;
+    let key_value = use_value_boxed(cx.builder, cx.variables, key)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let ht_base = cx.ht_base;
@@ -7620,7 +7636,7 @@ fn lower_get_prop_ic_non_nullish(
         .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
-    define_value(cx.builder, cx.variables, dest, value)?;
+    define_value_boxed(cx.builder, cx.variables, dest, value)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // PROTO_DATA 命中：从 holder 对象的值槽 load。
@@ -7636,7 +7652,7 @@ fn lower_get_prop_ic_non_nullish(
         cx.builder
             .ins()
             .load(types::I64, MemFlagsData::trusted(), proto_value_addr, 0);
-    define_value(cx.builder, cx.variables, dest, proto_value)?;
+    define_value_boxed(cx.builder, cx.variables, dest, proto_value)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // ACCESSOR 命中：load getter 后直接走宿主 invoke_callable。getter 是刚从
@@ -7655,7 +7671,7 @@ fn lower_get_prop_ic_non_nullish(
         .load(types::I64, MemFlagsData::trusted(), getter_addr, 0);
     cx.publish_roots(roots, &[getter])?;
     let result = cx.call(NativeRuntimeOp::GetPropAccessor.id(), &[getter, obj], None)?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
@@ -7666,7 +7682,7 @@ fn lower_get_prop_ic_non_nullish(
         &[obj, key_value, ic_ptr],
         None,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     Ok(())
@@ -7685,9 +7701,9 @@ fn lower_set_prop_ic(
         slot,
         trio_field,
     } = access;
-    let obj = use_value(cx.builder, cx.variables, object)?;
-    let key_value = use_value(cx.builder, cx.variables, key)?;
-    let stored = use_value(cx.builder, cx.variables, value)?;
+    let obj = use_value_boxed(cx.builder, cx.variables, object)?;
+    let key_value = use_value_boxed(cx.builder, cx.variables, key)?;
+    let stored = use_value_boxed(cx.builder, cx.variables, value)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let ht_base = cx.ht_base;
@@ -7993,7 +8009,7 @@ fn lower_set_prop_ic(
 
     cx.builder.switch_to_block(store_done_block);
     cx.builder.seal_block(store_done_block);
-    define_value(cx.builder, cx.variables, dest, stored)?;
+    define_value_boxed(cx.builder, cx.variables, dest, stored)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // miss：宿主完整 [[Set]] + IC 回填；`ic_ptr` 作为回填目标传入。
@@ -8004,7 +8020,7 @@ fn lower_set_prop_ic(
         &[obj, key_value, stored, ic_ptr],
         None,
     )?;
-    define_value(cx.builder, cx.variables, dest, result)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     cx.builder.switch_to_block(merge_block);
@@ -8019,7 +8035,7 @@ fn lower_optional_get_prop_ic(
     roots: &[ValueId],
 ) -> Result<()> {
     let PropAccess { dest, object, .. } = access;
-    let obj = use_value(cx.builder, cx.variables, object)?;
+    let obj = use_value_boxed(cx.builder, cx.variables, object)?;
 
     // 第零级：null / undefined 检查。
     let is_null =
@@ -8047,7 +8063,7 @@ fn lower_optional_get_prop_ic(
         .builder
         .ins()
         .iconst(types::I64, value::encode_undefined());
-    define_value(cx.builder, cx.variables, dest, undefined)?;
+    define_value_boxed(cx.builder, cx.variables, dest, undefined)?;
     cx.builder.ins().jump(merge_block, &[]);
 
     // IC 分支入口：非 nullish 值走与 GetProp 相同的共享核心。
@@ -8068,11 +8084,11 @@ fn lower_value_operation(
 ) -> Result<()> {
     let args = args
         .iter()
-        .map(|value| use_value(cx.builder, cx.variables, *value))
+        .map(|value| use_value_boxed(cx.builder, cx.variables, *value))
         .collect::<Result<Vec<_>>>()?;
     let result = cx.call(operation.id(), &args, None)?;
     if let Some(destination) = destination {
-        define_value(cx.builder, cx.variables, destination, result)?;
+        define_value_boxed(cx.builder, cx.variables, destination, result)?;
     }
     Ok(())
 }
@@ -8180,7 +8196,7 @@ fn lower_terminator(
     match terminator {
         Terminator::Return { value } => {
             let result = match value {
-                Some(value) => use_value(cx.builder, cx.variables, *value)?,
+                Some(value) => use_value_boxed(cx.builder, cx.variables, *value)?,
                 None => cx
                     .builder
                     .ins()
@@ -8207,7 +8223,7 @@ fn lower_terminator(
                 lower_cooperative_poll(cx)?;
             }
             let condition_is_boolean = boolean_values.contains(condition);
-            let condition = use_value(cx.builder, cx.variables, *condition)?;
+            let condition = use_value_boxed(cx.builder, cx.variables, *condition)?;
             let condition = if condition_is_boolean {
                 cx.builder.ins().icmp_imm_s(
                     ir::condcodes::IntCC::Equal,
@@ -8252,7 +8268,7 @@ fn lower_terminator(
                 cx.flush()?;
                 lower_cooperative_poll(cx)?;
             }
-            let value = use_value(cx.builder, cx.variables, *value)?;
+            let value = use_value_boxed(cx.builder, cx.variables, *value)?;
             if cases.is_empty() {
                 define_phi_edge(
                     cx.builder,
@@ -8310,7 +8326,7 @@ fn lower_terminator(
             }
         }
         Terminator::Throw { value } => {
-            let value = use_value(cx.builder, cx.variables, *value)?;
+            let value = use_value_boxed(cx.builder, cx.variables, *value)?;
             let exception = cx.call(NativeRuntimeOp::CreateException.id(), &[value], None)?;
             cx.unlink_roots()?;
             cx.builder.ins().return_(&[exception]);
@@ -8465,9 +8481,13 @@ fn switch_constant_immediate(constant: &Constant) -> Result<i64> {
     }
 }
 
+/// φ 边上的并行赋值：先按各自 dest 的表示读出全部 source，再统一写入。
+///
+/// 逐对选择表示，两端都是 typed 时不产出转换指令；循环回边因此不会把归纳变量
+/// 打标再拆包。
 fn define_phi_edge(
     builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
+    variables: &ValueRepr,
     phi_edges: &HashMap<(BasicBlockId, BasicBlockId), Vec<(ValueId, ValueId)>>,
     predecessor: BasicBlockId,
     target: BasicBlockId,
@@ -8475,10 +8495,12 @@ fn define_phi_edge(
     if let Some(assignments) = phi_edges.get(&(predecessor, target)) {
         let values: Vec<_> = assignments
             .iter()
-            .map(|(_, source)| use_value(builder, variables, *source))
+            .map(|(dest, source)| {
+                use_value_as(builder, variables, variables.is_typed_value(*dest), *source)
+            })
             .collect::<Result<_>>()?;
         for ((dest, _), value) in assignments.iter().zip(values) {
-            define_value(builder, variables, *dest, value)?;
+            define_value_as(builder, variables, *dest, value)?;
         }
     }
     Ok(())
@@ -8604,11 +8626,18 @@ fn frame_local_variables(names: &BTreeSet<&str>) -> HashMap<String, Variable> {
 fn initialize_frame_locals(
     builder: &mut FunctionBuilder<'_>,
     locals: &mut HashMap<String, Variable>,
+    repr: &ValueRepr,
 ) {
-    for variable in locals.values_mut() {
-        *variable = builder.declare_var(types::I64);
-        let undefined = builder.ins().iconst(types::I64, value::encode_undefined());
-        builder.def_var(*variable, undefined);
+    for (name, variable) in locals.iter_mut() {
+        *variable = builder.declare_var(repr.local_type(name));
+        // typed 局部的资格保证入口定义到不了任何 load（见 `ValueRepr::plan`），
+        // 这里的 0.0 只是给 Cranelift 的 SSA 构造一个确定的支配定义。
+        let initial = if repr.is_typed_local(name) {
+            builder.ins().f64const(0.0)
+        } else {
+            builder.ins().iconst(types::I64, value::encode_undefined())
+        };
+        builder.def_var(*variable, initial);
     }
 }
 
@@ -8706,45 +8735,6 @@ fn emit_number_or_proven_f64(
     } else {
         emit_is_number(builder, encoded)
     }
-}
-
-fn box_f64_result(builder: &mut FunctionBuilder<'_>, result: ir::Value) -> ir::Value {
-    let is_nan = builder
-        .ins()
-        .fcmp(ir::condcodes::FloatCC::Unordered, result, result);
-    let bits = builder
-        .ins()
-        .bitcast(types::I64, ir::MemFlagsData::new(), result);
-    let canonical_nan = builder
-        .ins()
-        .iconst(types::I64, value::encode_f64(f64::NAN));
-    builder.ins().select(is_nan, canonical_nan, bits)
-}
-
-fn use_value(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    value: ValueId,
-) -> Result<ir::Value> {
-    let variable = variables
-        .get(&value)
-        .copied()
-        .with_context(|| format!("value {} has no native variable", value.0))?;
-    Ok(builder.use_var(variable))
-}
-
-fn define_value(
-    builder: &mut FunctionBuilder<'_>,
-    variables: &HashMap<ValueId, Variable>,
-    value: ValueId,
-    native_value: ir::Value,
-) -> Result<()> {
-    let variable = variables
-        .get(&value)
-        .copied()
-        .with_context(|| format!("value {} has no native variable", value.0))?;
-    builder.def_var(variable, native_value);
-    Ok(())
 }
 
 fn binary_tag(op: BinaryOp) -> u16 {

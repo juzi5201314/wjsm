@@ -70,6 +70,24 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 `NATIVE_ABI_HASH` 覆盖 generated code 可见的 vmctx/CallArgs/frame layout、host/runtime operation signatures 与 value constants。任何布局或协议变化都必须改变 hash，并使旧 native cache miss。
 
+### 2.1 值的机器表示（boxed i64 / typed f64）
+
+函数内部的每个 SSA 值与帧局部各自绑定一个 Cranelift `Variable`，其机器类型由 `value_repr::ValueRepr` 规划：
+
+- **boxed**（`types::I64`）是默认表示，持有 NaN-Box 编码值。所有 ABI 边界（函数参数与返回值、host dispatcher 参数、GC root frame 槽、resume live 槽）一律是 boxed i64，`NATIVE_ABI_HASH` 因此不受本节影响。
+- **typed**（`types::F64`）持有**原始机器浮点位**，供 f64 分析可靠证明为 number 的值使用。逐条指令不再 `box_f64_result` / `bitcast`，循环携带的归纳变量整轮迭代常驻浮点寄存器。
+
+提升资格：
+
+- SSA 值必须属于**可靠**证明集合（`FunctionCompileInput::typed_f64_values`）。base 编译即静态分析结果；特化 overlay 只取入口 tag 守卫背书的种子分析结果，运行时反馈推测出的 number 留在 boxed 表示，由循环头守卫兜底。
+- 在此之上，定义点还必须真的产出机器浮点数：`f64const`、`fadd`/`fsub`/`fmul`/`fdiv`、`fneg`、内联 Math builtin 与 typed math thunk 是 producer；φ 与一元 `+` 只是搬运，资格随源值；`LoadVar` 的资格随帧局部。**`Call` 的返回值一律不合格**——即便分析证明被调函数每条 `Return` 都返回 number，抛出路径仍按 ABI 返回 exception 编码（一个 NaN-Box 值），而 `IsException` 是调用点之后的独立指令，逃逸时的 NaN 规范化会把异常静默改写成 `NaN`。落到 host dispatcher 的算子（`%`、`**`、位运算）同理只有 boxed 结果。
+- 帧局部还要求该名字被读过、被写过、**全部 `LoadVar` 的产出都已证明 f64**，且**全部 `StoreVar` 的源值本身 typed**。「全部 load 已证明」保护入口初值：入口把局部定义成 `undefined`（一个 NaN-Box 值），这条要求等价于「`variable_ssa` 解出的入口定义到不了任何 load」。「被写过」保护 GC：`boxed_frame_local_names` 只把「全部 store 都写入已证明 f64」的局部排除出 root 槽，零 store 的局部仍会被钉住，而 typed 局部写回的是原始浮点位。
+- 含 `Suspend` / `GeneratorSuspend` 的函数整体退回 boxed：活跃值经宿主 continuation 以 boxed 形态往返。
+
+转换点由 `value_repr` 的 `use_value_boxed` / `use_value_f64` / `define_value_boxed` / `define_value_f64` 统一收口，φ 边与 `StoreVar` 走 `use_value_as` + `define_value_as` 逐对选择表示，两端一致时不产出指令。**typed → boxed 必须规范化 NaN**：硬件默认 QNaN 的位模式与 `value::BOX_BASE` 相同，不规范化会被运行时误判成句柄。反方向只需 `bitcast`。
+
+overlay 的循环头类型守卫对 typed 活跃值恒真，直接省略；它们进入 `store_resume_lives` 时按 boxed 规范化，deopt / OSR 对端读到的仍是合法 NaN-Box 值。
+
 `NativeCompiler::compile_specialized_function` 只接受已验证 `Program`、目标函数、变量槽快照和实际参数 tag profile。wrapper 保持 `NativeSlowEntry` ABI，入口 tag 不符时读取 base function table 的 slow entry 回落；编译前克隆 `Program`，用与 AOT 相同的值类 / `typed_cfg` 按种子重建 CFG。命中时 number 参数从 call arena 进入重建后的 typed body。循环头类型 miss 调用 `DeoptToGeneric` 恢复 generic 循环头 live；generic 循环头在 `osr_entry` 非零时 OSR 进入 overlay body。typed body 继续复用 generic dispatcher、Shape IC、`RootPlan`、W^X 与 unwind 路径。
 
 ## 3. Native image 与 cache
