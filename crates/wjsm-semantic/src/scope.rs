@@ -275,23 +275,9 @@ impl ScopeTree {
         }
     }
 
-    /// 收集严格位于 `scope_id` 之上（祖先方向）的 With 作用域 id（由内到外）。
-    /// 供 eval 顶层 `var`/函数声明的「不遮蔽 with 链」规则使用（sloppy direct
-    /// eval 的 var 环境在 with 对象环境之外）。
-    pub(crate) fn with_scopes_above(&self, scope_id: usize) -> Vec<usize> {
-        let mut result = Vec::new();
-        let mut cursor = self.arenas[scope_id].parent;
-        while let Some(id) = cursor {
-            let scope = &self.arenas[id];
-            if matches!(scope.kind, ScopeKind::With) {
-                result.push(scope.id);
-            }
-            cursor = scope.parent;
-        }
-        result
-    }
-
     /// 判断 `ancestor` 是否为 `descendant` 的祖先（不含自身相等）。
+    /// 供 direct eval 的 with 层 inner_names 计算判定「绑定声明于该 with
+    /// 层内侧」。
     pub(crate) fn is_strict_ancestor(&self, ancestor: usize, descendant: usize) -> bool {
         let mut cursor = self.arenas[descendant].parent;
         while let Some(id) = cursor {

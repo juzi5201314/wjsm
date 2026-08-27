@@ -851,6 +851,30 @@ impl Lowerer {
                         false,
                     )?;
                     callee_block = member_block;
+                } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
+                    && self.eval_scope_record
+                    && self.eval_scope_bridge_active()
+                    && self.scopes.lookup(&ident.sym).is_err()
+                {
+                    // eval 代码的自由名 callee：ScopeRecord 可能携带调用方的
+                    // with 链，this 绑定按 WithBaseObject（§9.1.1.2.10）由宿主
+                    // 解析（无 with 层时恒 undefined）。
+                    let env = self.load_eval_scope_env(block);
+                    let key = self.append_eval_env_key_const(block, ident.sym.as_ref());
+                    this_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(this_val),
+                            builtin: Builtin::EvalWithBase,
+                            args: vec![env, key],
+                        },
+                    );
+                    let this_cont = self.lower_value_exception_branch(block, this_val)?;
+                    let mut callee_eval_block = this_cont;
+                    callee_val =
+                        self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
+                    callee_block = callee_eval_block;
                 } else {
                     // 普通调用 → this = undefined
                     let undef_const = self.module.add_constant(Constant::Undefined);
@@ -1127,7 +1151,12 @@ impl Lowerer {
             let value_from_env = !self.binding_belongs_to_current_function(&binding)
                 || self.is_shared_binding(&binding);
             let value = if value_from_env {
-                self.load_captured_binding(eval_block, &binding)?
+                // 共享/捕获绑定读取会分叉（shared env 探测 branch + phi），
+                // 必须消化续接并推进插入点，否则后续指令覆盖分支终结器、
+                // phi 结果悬空（invalid IR）。
+                let value = self.load_captured_binding(eval_block, &binding)?;
+                self.resolve_expr_continuations(&mut eval_block);
+                value
             } else {
                 let value = self.alloc_value();
                 self.current_function.append_instruction(
@@ -1162,6 +1191,37 @@ impl Lowerer {
                     dest: None,
                     builtin: Builtin::ScopeRecordAddBinding,
                     args: vec![scope_record, name_val, value, is_tdz, is_const],
+                },
+            );
+        }
+
+        // 4b. 包围 eval 站点的 with 链（§9.1.1.2 对象环境记录）：按解析序
+        // （由内到外）追加。inner_names 为声明于该层内侧的可见绑定名——
+        // 解析这些名字时静态绑定先于该层对象命中，宿主 EvalGet/Set/HasBinding
+        // 据此在静态绑定与 with 对象之间正确插层。
+        for with_scope_id in self.enclosing_with_scopes() {
+            let object = self.load_with_object(&mut eval_block, with_scope_id)?;
+            let inner_names = all_bindings
+                .iter()
+                .filter(|(scope_id, ..)| self.scopes.is_strict_ancestor(with_scope_id, *scope_id))
+                .map(|(_, name, ..)| name.as_str())
+                .collect::<Vec<_>>()
+                .join("\0");
+            let names_const = self.module.add_constant(Constant::String(inner_names));
+            let names_val = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::Const {
+                    dest: names_val,
+                    constant: names_const,
+                },
+            );
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ScopeRecordAddWithLayer,
+                    args: vec![scope_record, object, names_val],
                 },
             );
         }
@@ -1340,12 +1400,14 @@ impl Lowerer {
                 },
             );
 
+            // 回写必须平面读取自有绑定：经 EvalGetBinding 会被 with 层拦截，
+            // 把 with 对象属性错误回写进调用方静态绑定。
             let value = self.alloc_value();
             self.current_function.append_instruction(
                 continue_block,
                 Instruction::CallBuiltin {
                     dest: Some(value),
-                    builtin: Builtin::EvalGetBinding,
+                    builtin: Builtin::ScopeRecordGetBinding,
                     args: vec![scope_record, name_val],
                 },
             );

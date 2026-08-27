@@ -56,12 +56,10 @@ impl Lowerer {
                 (value, true)
             }
             WithFallback::Undeclared => {
-                let dummy = self.emit_runtime_error_throw(
-                    miss,
-                    Builtin::ReferenceErrorConstructor,
-                    &format!("{name} is not defined"),
-                )?;
-                (dummy, false)
+                // 未声明名查运行时全局对象（隐式全局），缺失才 ReferenceError。
+                let (value, end) = self.lower_with_global_read(&name, miss)?;
+                miss_end = end;
+                (value, true)
             }
             WithFallback::Tdz => {
                 let dummy = self.emit_runtime_error_throw(
