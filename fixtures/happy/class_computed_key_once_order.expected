@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+k1,k2,k3,k4,v2,sb,v4,|,v1
+1 1
+1 v
+0 1 2
+false 1
+42
+keyboom
+badkey
+--- stderr ---

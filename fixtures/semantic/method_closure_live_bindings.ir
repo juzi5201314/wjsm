@@ -96,13 +96,13 @@ module {
     c93 = number(1)
     c94 = functionref(@5)
     c95 = string("constructor")
-    c96 = string("$0.staticValue")
+    c96 = string("read")
     c97 = string("$0.staticValue")
-    c98 = number(2)
-    c99 = functionref(@6)
+    c98 = functionref(@6)
+    c99 = string("$0.staticValue")
     c100 = string("$0.staticValue")
-    c101 = string("read")
-    c102 = string("$0.staticValue")
+    c101 = string("$0.staticValue")
+    c102 = number(2)
     c103 = functionref(@7)
     c104 = string("prototype")
     c105 = undefined
@@ -309,10 +309,17 @@ module {
     bb0:
       return
 
-  fn @StaticClosure.static_init_0 [home_object=@5] [captures: $0.staticValue] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @StaticClosure.read [home_object=@5] [captures: $0.staticValue] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c96
+      %1 = const c97
+      %2 = get_prop %0, %1
+      return %2
+
+  fn @StaticClosure.static_init_0 [home_object=@5] [captures: $0.staticValue] [params: $9.$env, $9.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c100
       jump bb1
     bb1:
       %2 = phi [(bb0, %0), (bb3, %4)]
@@ -325,8 +332,8 @@ module {
       %5 = is_nullish %4
       branch %5, bb2, bb1
     bb4:
-      %7 = const c97
-      %8 = const c98
+      %7 = const c101
+      %8 = const c102
       %9 = set_prop %2, %7, %8
       %10 = is_exception %9
       branch %10, bb6, bb5
@@ -335,13 +342,6 @@ module {
     bb6:
       %11 = call builtin.exception_value(%9)
       throw %11
-
-  fn @StaticClosure.read [home_object=@5] [captures: $0.staticValue] [params: $9.$env, $9.$this] [entry=bb0]:
-    bb0:
-      %0 = load var $env
-      %1 = const c102
-      %2 = get_prop %0, %1
-      return %2
 
   fn @AccessorClosure.constructor [home_object=@8.prototype] [needs_prototype] [direct_callable] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
@@ -792,10 +792,14 @@ module {
       %173 = new_object(capacity=4)
       %174 = const c95
       %175 = set_prop %173, %174, %172
-      %177 = load var $0.$shared_env
-      %178 = load var $0.staticValue
-      %179 = const c100
-      %180 = set_prop %177, %179, %178
+      %176 = const c96
+      %177 = const c98
+      %178 = load var $0.$shared_env
+      %179 = load var $0.staticValue
+      %180 = const c99
+      %181 = set_prop %178, %180, %179
+      %182 = call builtin.create_closure(%177, %178)
+      %183 = set_prop %172, %176, %182
       jump bb123
     bb36:
       %170 = call builtin.exception_value(%168)
@@ -1156,10 +1160,6 @@ module {
     bb121:
       jump bb120
     bb122:
-      %182 = const c101
-      %183 = const c103
-      %184 = call builtin.create_closure(%183, %177)
-      %185 = set_prop %172, %182, %184
       %186 = const c104
       %187 = set_prop %172, %186, %173
       store var $6.StaticClosure, %172
@@ -1170,10 +1170,10 @@ module {
       %191 = const c106
       branch %190, bb37, bb38
     bb123:
-      %397 = const c96
+      %397 = const c100
       jump bb124
     bb124:
-      %398 = phi [(bb123, %177), (bb126, %400)]
+      %398 = phi [(bb123, %178), (bb126, %400)]
       %399 = call builtin.object.has_own(%398, %397)
       branch %399, bb125, bb126
     bb125:
@@ -1183,8 +1183,8 @@ module {
       %401 = is_nullish %400
       branch %401, bb125, bb124
     bb127:
-      %403 = const c97
-      %404 = const c98
+      %403 = const c101
+      %404 = const c102
       %405 = set_prop %398, %403, %404
       %406 = is_exception %405
       branch %406, bb129, bb128

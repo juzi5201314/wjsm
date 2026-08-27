@@ -1650,137 +1650,126 @@ module {
       %1 = load var $29.$this
       super_call %0, this=%1, forward_args
       %2 = const c339
-      %3 = load var $29.$this
-      %4 = const c340
-      call builtin.private_set(%3, %2, %4)
+      %3 = const c340
+      %4 = load var $29.$this
+      call builtin.private_set(%4, %2, %3)
       %5 = const c341
-      %6 = load var $29.$this
-      %58 = const c0
-      jump bb4
+      %60 = const c0
+      jump bb6
     bb1:
-      %13 = load var $29.$this
-      %14 = load var $env
-      %15 = const c351
-      %16 = get_prop %14, %15
-      %17 = const c352
-      call builtin.private_set(%13, %17, %16)
-      %18 = load var $29.$this
-      %19 = load var $env
-      %20 = const c353
-      %21 = get_prop %19, %20
-      %22 = const c354
-      call builtin.private_set(%18, %22, %21)
-      %23 = load var $29.$this
-      %24 = load var $env
-      %25 = const c355
-      %26 = get_prop %24, %25
-      %27 = const c356
-      call builtin.private_set(%23, %27, %26)
-      %28 = load var $29.$this
-      %29 = load var $env
-      %30 = const c357
-      %31 = get_prop %29, %30
-      %32 = const c358
-      call builtin.private_set(%28, %32, %31)
-      %33 = load var $29.$this
-      %34 = load var $env
-      %35 = const c359
-      %36 = get_prop %34, %35
-      %37 = const c360
-      call builtin.private_set(%33, %37, %36)
-      %38 = load var $29.$this
-      %39 = load var $env
-      %40 = const c361
-      %41 = get_prop %39, %40
-      %42 = const c362
-      call builtin.private_set(%38, %42, %41)
-      %43 = load var $29.$this
-      %44 = load var $env
-      %45 = const c363
-      %46 = get_prop %44, %45
-      %47 = const c364
-      call builtin.private_set(%43, %47, %46)
-      %48 = load var $29.$this
-      %49 = load var $env
-      %50 = const c365
-      %51 = get_prop %49, %50
-      %52 = const c366
-      call builtin.private_set(%48, %52, %51)
-      %53 = load var $29.$this
-      %54 = load var $env
-      %55 = const c367
-      %56 = get_prop %54, %55
-      %57 = const c368
-      call builtin.private_set(%53, %57, %56)
-      return
+      %11 = load var $29.$this
+      %12 = create_data_property %11, %5, %83
+      %13 = is_exception %12
+      branch %13, bb4, bb3
     bb2:
-      %12 = call builtin.exception_value(%10)
-      throw %12
+      %10 = call builtin.exception_value(%83)
+      throw %10
     bb3:
-      %10 = set_prop %6, %5, %81
-      %11 = is_exception %10
-      branch %11, bb2, bb1
+      %15 = load var $29.$this
+      %16 = load var $env
+      %17 = const c351
+      %18 = get_prop %16, %17
+      %19 = const c352
+      call builtin.private_set(%15, %19, %18)
+      %20 = load var $29.$this
+      %21 = load var $env
+      %22 = const c353
+      %23 = get_prop %21, %22
+      %24 = const c354
+      call builtin.private_set(%20, %24, %23)
+      %25 = load var $29.$this
+      %26 = load var $env
+      %27 = const c355
+      %28 = get_prop %26, %27
+      %29 = const c356
+      call builtin.private_set(%25, %29, %28)
+      %30 = load var $29.$this
+      %31 = load var $env
+      %32 = const c357
+      %33 = get_prop %31, %32
+      %34 = const c358
+      call builtin.private_set(%30, %34, %33)
+      %35 = load var $29.$this
+      %36 = load var $env
+      %37 = const c359
+      %38 = get_prop %36, %37
+      %39 = const c360
+      call builtin.private_set(%35, %39, %38)
+      %40 = load var $29.$this
+      %41 = load var $env
+      %42 = const c361
+      %43 = get_prop %41, %42
+      %44 = const c362
+      call builtin.private_set(%40, %44, %43)
+      %45 = load var $29.$this
+      %46 = load var $env
+      %47 = const c363
+      %48 = get_prop %46, %47
+      %49 = const c364
+      call builtin.private_set(%45, %49, %48)
+      %50 = load var $29.$this
+      %51 = load var $env
+      %52 = const c365
+      %53 = get_prop %51, %52
+      %54 = const c366
+      call builtin.private_set(%50, %54, %53)
+      %55 = load var $29.$this
+      %56 = load var $env
+      %57 = const c367
+      %58 = get_prop %56, %57
+      %59 = const c368
+      call builtin.private_set(%55, %59, %58)
+      return
     bb4:
-      %59 = const c343
-      %60 = new_object(capacity=4)
-      %61 = const c344
-      %62 = set_prop %60, %61, %59
-      %63 = const c345
-      %64 = const c347
-      %65 = set_prop %60, %63, %64
-      %66 = const c348
-      %67 = set_prop %59, %66, %60
-      store var $31.Probe, %59
-      store var $30.Probe, %59
-      %68 = load var $30.Probe
-      %69 = new_object(capacity=4)
-      %70 = call builtin.get_prototype_from_constructor(%68)
-      set_proto %69, %70
-      jump bb15
+      %14 = call builtin.exception_value(%12)
+      throw %14
     bb5:
-      unreachable
+      %9 = is_exception %83
+      branch %9, bb2, bb1
     bb6:
-      jump bb7
+      %61 = const c343
+      %62 = new_object(capacity=4)
+      %63 = const c344
+      %64 = set_prop %62, %63, %61
+      %65 = const c345
+      %66 = const c347
+      %67 = set_prop %62, %65, %66
+      %68 = const c348
+      %69 = set_prop %61, %68, %62
+      store var $31.Probe, %61
+      store var $30.Probe, %61
+      %70 = load var $30.Probe
+      %71 = new_object(capacity=4)
+      %72 = call builtin.get_prototype_from_constructor(%70)
+      set_proto %71, %72
+      jump bb17
     bb7:
-      jump bb9
+      unreachable
     bb8:
-      unreachable
+      jump bb9
     bb9:
-      jump bb10
+      jump bb11
     bb10:
-      jump bb12
-    bb11:
       unreachable
+    bb11:
+      jump bb12
     bb12:
-      %79 = const c349
-      %80 = get_prop %69, %79
-      %82 = guard_same_function %80, @23
-      branch %82, bb17, bb16
+      jump bb14
     bb13:
       unreachable
     bb14:
-      jump bb6
+      %81 = const c349
+      %82 = get_prop %71, %81
+      %83 = call %82, this=%71
+      store var $30.Probe, %60
+      store var $31.Probe, %60
+      jump bb5
     bb15:
-      jump bb14
+      unreachable
     bb16:
-      %81 = call %80, this=%69
-      store var $30.Probe, %58
-      store var $31.Probe, %58
-      jump bb3
+      jump bb8
     bb17:
-      %84 = const c346
-      jump bb18
-    bb18:
-      store var $30.Probe, %58
-      store var $31.Probe, %58
-      jump bb19
-    bb19:
-      %95 = set_prop %6, %5, %84
-      %96 = is_exception %95
-      branch %96, bb20, bb1
-    bb20:
-      %97 = call builtin.exception_value(%95)
-      throw %97
+      jump bb16
 
   fn @Task.run [home_object=@25.prototype] [direct_callable] [params: $34.$env, $34.$this, $34.extra] [entry=bb0]:
     bb0:

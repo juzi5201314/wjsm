@@ -30,10 +30,8 @@ impl Lowerer {
         // 计算键实例字段：键在类定义期求值一次（ClassFieldDefinitionEvaluation），
         // 构造期复用。键值经构造器闭包的 key env（每次类求值新建，见
         // materialize_ctor_function_value）传递，构造器沿 $env 原型链按名读取。
-        let computed_instance_keys = Self::collect_computed_instance_key_names(
-            &class.body,
-            self.next_private_name_id,
-        );
+        let computed_instance_keys =
+            Self::collect_computed_instance_key_names(&class.body, self.next_private_name_id);
 
         // ── 构造器 IR 函数 ──
         // 构造器体延迟到类求值完成后才执行，期间类名已初始化（构造器体/实例字段初始化器可引用类名）；

@@ -52,8 +52,13 @@ impl Lowerer {
                 self.current_function
                     .record_known_callee(class_binding.var_ir_name(), function_id);
             }
-            block =
-                self.store_binding_value(block, &class_binding, ctor_dest, class_expr.span(), true)?;
+            block = self.store_binding_value(
+                block,
+                &class_binding,
+                ctor_dest,
+                class_expr.span(),
+                true,
+            )?;
             self.scopes.pop_scope();
         }
 
