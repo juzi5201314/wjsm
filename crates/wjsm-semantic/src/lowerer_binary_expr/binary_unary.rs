@@ -121,6 +121,23 @@ impl Lowerer {
         Ok(value)
     }
 
+    /// 对可能为异常哨兵的值做三态检查：普通体内立即分叉传播；规范拥有者
+    /// （动态 import 等）抑制期间延迟分叉交拥有者处理；async 状态机体内
+    /// 不插入表达式级分叉（见 `expr_exception_fork_allowed`）。
+    pub(crate) fn fork_or_defer_exception_branch(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        if self.expr_exception_fork_allowed() {
+            return self.lower_value_exception_branch(block, value);
+        }
+        if self.exception_fork_suppressed() {
+            return Ok(self.defer_value_exception_branch(block, value));
+        }
+        Ok(block)
+    }
+
     pub(crate) fn lower_expr_collecting_exception_forks_then_continue(
         &mut self,
         expr: &swc_ast::Expr,
@@ -189,13 +206,7 @@ impl Lowerer {
                 args: vec![array, source],
             },
         );
-        if self.expr_exception_fork_allowed() {
-            return self.lower_value_exception_branch(block, result);
-        }
-        if self.exception_fork_suppressed() {
-            return Ok(self.defer_value_exception_branch(block, result));
-        }
-        Ok(block)
+        self.fork_or_defer_exception_branch(block, result)
     }
 
     pub(crate) fn lower_binary(
@@ -874,9 +885,7 @@ impl Lowerer {
                     },
                 );
                 // 成员读取可触发用户 getter 抛出，必须在 ToNumeric 前中止传播。
-                if self.expr_exception_fork_allowed() {
-                    block = self.lower_value_exception_branch(block, old_val)?;
-                }
+                block = self.fork_or_defer_exception_branch(block, old_val)?;
             }
         }
         if let Some(name) = &tdz_checked_name {
@@ -944,11 +953,7 @@ impl Lowerer {
                 value: old_val,
             },
         );
-        let block = if self.expr_exception_fork_allowed() {
-            self.lower_value_exception_branch(block, num_val)?
-        } else {
-            block
-        };
+        let block = self.fork_or_defer_exception_branch(block, num_val)?;
 
         let one = self.module.add_constant(Constant::Number(1.0));
         let one_val = self.alloc_value();
