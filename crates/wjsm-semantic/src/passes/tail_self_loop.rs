@@ -179,7 +179,7 @@ fn collect_tail_sites(
             continue;
         }
         // 调用结果只被这条 return 消费；否则删除 Call 会留下悬空 use。
-        if call_result_escapes(function, block.id(), *dest) {
+        if value_is_used(function, *dest, Some(block.id())) {
             continue;
         }
         sites.push(TailSite {
@@ -265,23 +265,20 @@ fn is_undefined_const(
     )
 }
 
-/// 调用结果除了尾块那条 `Return` 之外还有别的使用者。
-fn call_result_escapes(function: &Function, tail_block: BasicBlockId, dest: ValueId) -> bool {
-    if !collect_uses(function, dest).is_empty() {
-        return true;
-    }
-    function.blocks().iter().any(|block| {
-        block.id() != tail_block && terminator_uses(block.terminator()).contains(&dest)
-    })
-}
-
 /// `value` 在函数内是否还有使用者（含 Phi source 与终止器）。
-fn value_is_used(function: &Function, value: ValueId) -> bool {
+///
+/// `ignored_terminator` 指定的块的终止器不计入：判定尾调用时，那条即将被回边替换掉的
+/// `Return` 不算「别的使用者」。
+fn value_is_used(
+    function: &Function,
+    value: ValueId,
+    ignored_terminator: Option<BasicBlockId>,
+) -> bool {
     !collect_uses(function, value).is_empty()
-        || function
-            .blocks()
-            .iter()
-            .any(|block| terminator_uses(block.terminator()).contains(&value))
+        || function.blocks().iter().any(|block| {
+            Some(block.id()) != ignored_terminator
+                && terminator_uses(block.terminator()).contains(&value)
+        })
 }
 
 /// 就地改写：删除 `Call`，按形参顺序回写实参，终止器换成跳回入口的回边。
@@ -335,7 +332,7 @@ fn drop_dead_env_reads(function: &mut Function) {
                 .enumerate()
                 .filter(|(_, instruction)| match instruction {
                     Instruction::GetProp { dest, object, .. } => {
-                        env_values.contains(object) && !value_is_used(function, *dest)
+                        env_values.contains(object) && !value_is_used(function, *dest, None)
                     }
                     _ => false,
                 })
