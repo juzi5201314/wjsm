@@ -52,6 +52,9 @@ pub(crate) struct ModuleFacts {
     pub(crate) numbers: HashMap<u32, ValueClassSet>,
     /// 每函数是否为「可证明终止的纯函数」（T1：无环、无调用、无状态读写）。
     pub(crate) pure_callees: Vec<bool>,
+    /// 单赋值数组绑定 → 元素统一模板（elem-guard 外提用，见
+    /// [`super::licm_elem_guard`]）。
+    pub(crate) elem_array_templates: HashMap<String, wjsm_ir::ConstantId>,
 }
 
 impl ModuleFacts {
@@ -72,6 +75,7 @@ impl ModuleFacts {
             records: collect_records(module),
             numbers,
             pure_callees,
+            elem_array_templates: super::licm_elem_guard::stable_elem_array_bindings(module),
         }
     }
 }

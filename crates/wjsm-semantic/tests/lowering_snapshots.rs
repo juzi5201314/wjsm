@@ -299,6 +299,16 @@ fn licm_shape_mutation_loop_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn licm_elem_guard_hoist_loop_fixture_matches_ir_snapshot() {
+    assert_snapshot("licm_elem_guard_hoist_loop");
+}
+
+#[test]
+fn licm_elem_guard_mutation_loop_fixture_matches_ir_snapshot() {
+    assert_snapshot("licm_elem_guard_mutation_loop");
+}
+
+#[test]
 fn break_continue_fixture_matches_ir_snapshot() {
     assert_snapshot("break_continue");
 }

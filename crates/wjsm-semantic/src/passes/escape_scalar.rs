@@ -845,6 +845,35 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
                 changed = true;
             }
         }
+        Instruction::ElemShapeGuard { array, .. } => {
+            if let Some(new) = replacements.get(array) {
+                *array = *new;
+                changed = true;
+            }
+        }
+        Instruction::GetElemGuarded {
+            object,
+            index,
+            guard,
+            ..
+        } => {
+            for operand in [object, index, guard] {
+                if let Some(new) = replacements.get(operand) {
+                    *operand = *new;
+                    changed = true;
+                }
+            }
+        }
+        Instruction::GetPropGuarded {
+            object, key, guard, ..
+        } => {
+            for operand in [object, key, guard] {
+                if let Some(new) = replacements.get(operand) {
+                    *operand = *new;
+                    changed = true;
+                }
+            }
+        }
         Instruction::SetElem {
             dest,
             object,

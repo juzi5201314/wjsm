@@ -198,6 +198,33 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             add(object);
             add(index);
         }
+        ElemShapeGuard { dest, array, .. } => {
+            add(dest);
+            add(array);
+        }
+        GetElemGuarded {
+            dest,
+            object,
+            index,
+            guard,
+        } => {
+            add(dest);
+            add(object);
+            add(index);
+            add(guard);
+        }
+        GetPropGuarded {
+            dest,
+            object,
+            key,
+            guard,
+            ..
+        } => {
+            add(dest);
+            add(object);
+            add(key);
+            add(guard);
+        }
         SetElem {
             dest,
             object,
@@ -420,6 +447,33 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(dest);
             rep(object);
             rep(index);
+        }
+        ElemShapeGuard { dest, array, .. } => {
+            rep(dest);
+            rep(array);
+        }
+        GetElemGuarded {
+            dest,
+            object,
+            index,
+            guard,
+        } => {
+            rep(dest);
+            rep(object);
+            rep(index);
+            rep(guard);
+        }
+        GetPropGuarded {
+            dest,
+            object,
+            key,
+            guard,
+            ..
+        } => {
+            rep(dest);
+            rep(object);
+            rep(key);
+            rep(guard);
         }
         SetElem {
             dest,

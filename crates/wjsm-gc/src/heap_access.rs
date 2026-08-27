@@ -2899,6 +2899,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map_err(HeapAccessV2Error::Memory)
     }
 
+    /// 按槽下标读对象值槽（strip GC color 后返回），供宿主只读校验
+    /// （如 licm elem-guard 的 `ElemShapeGuard`）绕过属性名查找直读槽值。
+    pub fn value_slot(&self, handle: u32, index: u32) -> Result<u64, HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.load_value_slot(object, index)
+    }
+
     fn store_value_slot(
         &self,
         handle: u32,

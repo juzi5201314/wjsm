@@ -141,6 +141,16 @@ fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
         } => *object == target || *key == target || *value == target,
         Instruction::SetProto { object, value } => *object == target || *value == target,
         Instruction::GetElem { object, index, .. } => *object == target || *index == target,
+        Instruction::ElemShapeGuard { array, .. } => *array == target,
+        Instruction::GetElemGuarded {
+            object,
+            index,
+            guard,
+            ..
+        } => *object == target || *index == target || *guard == target,
+        Instruction::GetPropGuarded {
+            object, key, guard, ..
+        } => *object == target || *key == target || *guard == target,
         Instruction::SetElem {
             object,
             index,

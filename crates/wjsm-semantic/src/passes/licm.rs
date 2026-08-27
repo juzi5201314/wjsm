@@ -14,6 +14,10 @@
 //! 3. **纯直接调用**：callee 可静态解析且 T1 纯（CFG 无环 ⇒ 终止、无状态
 //!    读写、无异常、无分配），实参全部循环不变。Cranelift egraph LICM 把
 //!    call 硬编码为有副作用永远不提升，此处在 IR 层完成。
+//! 4. **elem-guard 外提（`POINTS[i].x` 型逐迭代 receiver）**：pre-header 插
+//!    一条 `ElemShapeGuard` 运行期一次性校验数组与元素 shape，循环体内成对
+//!    的 `GetElem`/`GetProp` 替换为 Guarded 变体——守卫为真时属性读取跳过
+//!    逐迭代 shape 检查、单指令直读模板槽。见 [`super::licm_elem_guard`]。
 //!
 //! 安全性基线：被外提指令必须「无可观察副作用、不抛异常、必然终止」，因此
 //! 即使循环 0 次进入，pre-header 多执行一次也不可观察。读取类候选还要求
@@ -123,21 +127,21 @@ fn natural_loops(function: &Function, cfg: &ControlFlowGraph) -> Vec<NaturalLoop
 
 // ── 候选收集 ────────────────────────────────────────────────────────────
 
-/// 循环级上下文（对单个循环的只读快照分析）。
-struct LoopView<'a> {
-    function: &'a Function,
-    func_idx: usize,
-    body: &'a HashSet<BasicBlockId>,
+/// 循环级上下文（对单个循环的只读快照分析；elem-guard 子阶段共用）。
+pub(crate) struct LoopView<'a> {
+    pub(crate) function: &'a Function,
+    pub(crate) func_idx: usize,
+    pub(crate) body: &'a HashSet<BasicBlockId>,
     /// header 的支配者集合（LoadVar 的 store 站点支配性检查用）。
     header_dominators: &'a HashSet<BasicBlockId>,
     /// ValueId → 定义位置（块 id + 下标）。
-    defs: &'a HashMap<ValueId, (BasicBlockId, usize)>,
+    pub(crate) defs: &'a HashMap<ValueId, (BasicBlockId, usize)>,
     /// 函数内常量字符串定义。
-    strings: &'a HashMap<ValueId, String>,
+    pub(crate) strings: &'a HashMap<ValueId, String>,
     /// 循环体内被 StoreVar 的名字。
     store_names: HashSet<String>,
     /// 循环体内含 Suspend / GeneratorSuspend。
-    has_suspend: bool,
+    pub(crate) has_suspend: bool,
     /// 当前函数是模块/builtin 入口（只执行一次、不可被调用 ⇒ 无重入）。
     is_entry: bool,
     /// 循环体内不可能执行任何用户代码（见 [`loop_never_runs_user_code`]）。
@@ -162,11 +166,19 @@ fn plan_one_loop(module: &Module, func_idx: usize, facts: &ModuleFacts) -> Optio
             facts,
         );
         let moves = collect_moves(module, &view, facts);
-        if !moves.is_empty() {
+        // elem-guard 依赖往轮已把循环不变 LoadVar（数组 receiver）搬进
+        // pre-header，因此只在常规候选耗尽后规划，一轮一类。
+        let elem_guards = if moves.is_empty() {
+            super::licm_elem_guard::plan_elem_guards(module, &view, facts)
+        } else {
+            Vec::new()
+        };
+        if !moves.is_empty() || !elem_guards.is_empty() {
             return Some(Plan {
                 header: natural.header,
                 body: natural.body,
                 moves,
+                elem_guards,
             });
         }
     }

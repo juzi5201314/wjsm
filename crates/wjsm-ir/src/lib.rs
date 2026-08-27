@@ -1239,6 +1239,37 @@ pub enum Instruction {
         object: ValueId,
         key: ValueId,
     },
+    /// 元素 shape 守卫（licm elem-guard 外提专用，仅出现在循环 pre-header）：
+    /// 宿主一次性校验 `array` 当前是无洞的普通 packed 数组、全部元素都是
+    /// shape 等于 `template` 烘焙 shape 的普通对象、且元素各值槽均非对象
+    /// （消除循环内 ToPrimitive 触发用户代码的可能）。产出布尔值；false 时
+    /// 同循环的 Guarded 指令逐次退回通用路径，语义不变。
+    ElemShapeGuard {
+        dest: ValueId,
+        array: ValueId,
+        template: ConstantId,
+    },
+    /// 语义与 [`Instruction::GetElem`] 完全一致；唯一区别是宿主 miss 路径
+    /// 可能执行用户代码（原型链上的索引 accessor / ToPropertyKey 回调），
+    /// 进入宿主前后端必须先把 `guard` 的变量置 false，使同循环全部
+    /// GetPropGuarded 快路径失效（true→false 单向闩锁，只关闭优化）。
+    GetElemGuarded {
+        dest: ValueId,
+        object: ValueId,
+        index: ValueId,
+        guard: ValueId,
+    },
+    /// 语义与 [`Instruction::GetProp`] 完全一致；`guard` 为 true 时 receiver
+    /// 已被 [`Instruction::ElemShapeGuard`] 证明持有 `template` 的烘焙 shape，
+    /// 后端跳过逐迭代 shape 检查，直接按模板槽偏移读取；其余情况先把
+    /// `guard` 置 false 再走完整 GetProp IC。
+    GetPropGuarded {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+        guard: ValueId,
+        template: ConstantId,
+    },
     /// 可选链调用：callee?.(...args)，callee 为 null/undefined 时返回 undefined
     OptionalCall {
         dest: ValueId,
@@ -1513,6 +1544,36 @@ impl fmt::Display for Instruction {
             Self::OptionalGetElem { dest, object, key } => {
                 write!(formatter, "{dest} = optional_get_elem {object}, {key}")
             }
+            Self::ElemShapeGuard {
+                dest,
+                array,
+                template,
+            } => {
+                write!(formatter, "{dest} = elem_shape_guard {array}, {template}")
+            }
+            Self::GetElemGuarded {
+                dest,
+                object,
+                index,
+                guard,
+            } => {
+                write!(
+                    formatter,
+                    "{dest} = get_elem_guarded {object}, {index}, guard={guard}"
+                )
+            }
+            Self::GetPropGuarded {
+                dest,
+                object,
+                key,
+                guard,
+                template,
+            } => {
+                write!(
+                    formatter,
+                    "{dest} = get_prop_guarded {object}, {key}, guard={guard}, template={template}"
+                )
+            }
             Self::OptionalCall {
                 dest,
                 callee,
@@ -1751,6 +1812,33 @@ impl Instruction {
                 *dest = f(*dest);
                 *object = f(*object);
                 *key = f(*key);
+            }
+            Self::ElemShapeGuard { dest, array, .. } => {
+                *dest = f(*dest);
+                *array = f(*array);
+            }
+            Self::GetElemGuarded {
+                dest,
+                object,
+                index,
+                guard,
+            } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *index = f(*index);
+                *guard = f(*guard);
+            }
+            Self::GetPropGuarded {
+                dest,
+                object,
+                key,
+                guard,
+                ..
+            } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+                *guard = f(*guard);
             }
             Self::OptionalCall {
                 dest,

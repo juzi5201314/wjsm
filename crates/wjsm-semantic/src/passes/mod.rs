@@ -8,6 +8,7 @@ pub(crate) mod escape_scalar_record;
 pub(crate) mod inline_for_ea;
 pub(crate) mod licm;
 pub(crate) mod licm_apply;
+pub(crate) mod licm_elem_guard;
 pub(crate) mod licm_facts;
 pub(crate) mod object_literal_read_fold;
 pub(crate) mod string_concat;

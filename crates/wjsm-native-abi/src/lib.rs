@@ -457,6 +457,10 @@ pub enum NativeRuntimeOp {
     InitPromise = 0x1_0512,
     /// 以 install 期烘焙的对象模板初始化字面量：`[template_meta_index, ...values]`。
     InitObjectLiteral = 0x1_0513,
+    /// licm elem-guard 外提的 pre-header 守卫：`[array, template_meta_index]`。
+    /// 校验数组当前 packed 无洞、全部元素为该模板烘焙 shape 的普通对象、
+    /// 元素值槽均非对象；只读不分配，返回编码布尔。
+    ElemShapeGuard = 0x1_0514,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -524,6 +528,7 @@ impl NativeRuntimeOp {
             0x1_0510 => Some(Self::GetPropAccessor),
             0x1_0512 => Some(Self::InitPromise),
             0x1_0513 => Some(Self::InitObjectLiteral),
+            0x1_0514 => Some(Self::ElemShapeGuard),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -963,6 +968,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::GetPropAccessor,
             NativeRuntimeOp::InitPromise,
             NativeRuntimeOp::InitObjectLiteral,
+            NativeRuntimeOp::ElemShapeGuard,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,
             NativeRuntimeOp::LoadArgument,

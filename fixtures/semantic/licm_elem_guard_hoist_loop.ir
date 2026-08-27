@@ -1,0 +1,162 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = object_template([4613128577683030136, 4613128577683030137])
+    c21 = number(1)
+    c22 = number(2)
+    c23 = object_template([4613128577683030136, 4613128577683030137])
+    c24 = number(3)
+    c25 = number(4)
+    c26 = object_template([4613128577683030136, 4613128577683030137])
+    c27 = number(5)
+    c28 = number(6)
+    c29 = number(0)
+    c30 = number(0)
+    c31 = string("length")
+    c32 = bool(false)
+    c33 = bool(false)
+    c34 = string("x")
+    c35 = number(1)
+    c36 = string("length")
+    c37 = bool(true)
+
+  fn @$module_main [direct_callable] [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = new_array(capacity=4)
+      %22 = const c21
+      %23 = const c22
+      %24 = init_object_literal(c20, values=[%22, %23])
+      call builtin.array.push(%21, %24)
+      %25 = const c24
+      %26 = const c25
+      %27 = init_object_literal(c23, values=[%25, %26])
+      call builtin.array.push(%21, %27)
+      %28 = const c27
+      %29 = const c28
+      %30 = init_object_literal(c26, values=[%28, %29])
+      call builtin.array.push(%21, %30)
+      store var $0.POINTS, %21
+      %31 = const c29
+      store var $0.sum, %31
+      %32 = const c30
+      store var $1.i, %32
+      jump bb11
+    bb1:
+      %33 = load var $1.i
+      %35 = const c31
+      %36 = get_prop %34, %35
+      %38 = const c32
+      %39 = const c33
+      %37 = call builtin.abstract_compare(%33, %36, %38, %39)
+      branch %37, bb2, bb4
+    bb2:
+      %40 = load var $0.sum
+      %42 = load var $1.i
+      %43 = get_elem_guarded %41, %42, guard=%63
+      %44 = const c34
+      %45 = get_prop_guarded %43, %44, guard=%63, template=c20
+      %46 = add %40, %45
+      store var $0.sum, %46
+      %47 = is_exception %46
+      branch %47, bb6, bb5
+    bb3:
+      %49 = load var $1.i
+      %50 = pos %49
+      %51 = const c35
+      %52 = add %50, %51
+      store var $1.i, %52
+      jump bb1
+    bb4:
+      %53 = load var $0.sum
+      %54 = call builtin.console.log(%53)
+      %55 = is_exception %54
+      branch %55, bb8, bb7
+    bb5:
+      jump bb3
+    bb6:
+      %48 = call builtin.exception_value(%46)
+      throw %48
+    bb7:
+      %57 = load var $0.POINTS
+      %58 = const c36
+      %59 = get_prop %57, %58
+      %60 = call builtin.console.log(%59)
+      %61 = is_exception %60
+      branch %61, bb10, bb9
+    bb8:
+      %56 = call builtin.exception_value(%54)
+      throw %56
+    bb9:
+      return
+    bb10:
+      %62 = call builtin.exception_value(%60)
+      throw %62
+    bb11:
+      %34 = load var $0.POINTS
+      %41 = load var $0.POINTS
+      jump bb12
+    bb12:
+      %63 = elem_shape_guard %41, c20
+      jump bb1
+}
