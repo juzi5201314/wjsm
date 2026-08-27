@@ -209,6 +209,35 @@ impl Lowerer {
         self.fork_or_defer_exception_branch(block, result)
     }
 
+    /// 发射 `ObjectSpread` 并检查其结果：CopyDataProperties 读取 source 自有
+    /// 属性时 getter/Proxy trap 抛错会以 TAG_EXCEPTION 返回，必须按
+    /// ECMAScript CopyDataProperties 传播，不得丢弃后静默产生残缺对象。
+    /// 三态处理与 `emit_array_push_spread_checked` 一致：普通函数体直接分叉
+    /// 抛出；规范拥有者抑制期间延迟分叉；async 状态机体内不插表达式级分叉。
+    pub(crate) fn emit_object_spread_checked(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        source: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::ObjectSpread {
+                dest: result,
+                object,
+                source,
+            },
+        );
+        if self.expr_exception_fork_allowed() {
+            return self.lower_value_exception_branch(block, result);
+        }
+        if self.exception_fork_suppressed() {
+            return Ok(self.defer_value_exception_branch(block, result));
+        }
+        Ok(block)
+    }
+
     pub(crate) fn lower_binary(
         &mut self,
         bin: &swc_ast::BinExpr,
@@ -283,8 +312,48 @@ impl Lowerer {
                 }
                 Ok(dest)
             }
-            // in 操作符：检查对象是否有属性
+            // in 操作符：检查对象是否有属性。
+            // 左操作数为私有名（`#x in obj`）时按 ES §13.10.1 做 brand 检查：
+            // 私有名在编译期解析为存储名，运行时经 PrivateHas 查实例/构造器的
+            // 私有槽（字段/方法/访问器同一存储），RHS 非对象抛 TypeError，
+            // 错误显示名（字段 `#x` / 实例方法访问器为类 brand）对齐 V8/Node。
             In => {
+                if let swc_ast::Expr::PrivateName(private_name) = bin.left.as_ref() {
+                    let (field_name, display_name) = self
+                        .resolve_private_in_names(private_name.name.as_ref(), private_name.span)?;
+                    let mut current_block = block;
+                    let object =
+                        self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                    // `? GetValue(rref)`：RHS 求值异常必须先传播，不得流入 brand 检查
+                    // 被误报为 TypeError（抑制上下文的延迟分叉由 lower_expr_then_continue
+                    // 处理，async 状态机内由 PrivateHas 宿主端透传异常值）。
+                    if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref())
+                    {
+                        current_block = self.lower_value_exception_branch(current_block, object)?;
+                    }
+                    let key = self.emit_string_const(current_block, &field_name);
+                    let display = self.emit_string_const(current_block, &display_name);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        current_block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::PrivateHas,
+                            args: vec![object, key, display],
+                        },
+                    );
+                    // brand 检查自身的 TypeError（receiver 非对象）须在本函数内分叉，
+                    // 方法体内 try/catch 才能本地捕获；抑制上下文由
+                    // lower_expr_then_continue 的延迟分叉兜底（expr_can_throw 含 In）。
+                    if self.expr_exception_fork_allowed() {
+                        let continue_block =
+                            self.lower_value_exception_branch(current_block, dest)?;
+                        self.expr_merge_block = Some(continue_block);
+                    } else if current_block != block {
+                        self.expr_merge_block = Some(current_block);
+                    }
+                    return Ok(dest);
+                }
                 let mut current_block = block;
                 let prop = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
                 let object =

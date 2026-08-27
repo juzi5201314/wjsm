@@ -3911,9 +3911,18 @@ fn lower_instruction(
             let result = cx.call(NativeRuntimeOp::GetSuperConstructor.id(), &[], None)?;
             define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
-        Instruction::ObjectSpread { dest, source } => {
-            lower_value_operation(cx, NativeRuntimeOp::ObjectSpread, &[*dest, *source], None)
-        }
+        Instruction::ObjectSpread {
+            dest,
+            object,
+            source,
+        } => lower_value_operation(
+            cx,
+            NativeRuntimeOp::ObjectSpread,
+            &[*object, *source],
+            // 结果槽：成功为 object，getter/Proxy 抛错为 TAG_EXCEPTION，
+            // 丢弃它会吞掉 CopyDataProperties 的异常。
+            Some(*dest),
+        ),
         Instruction::GuardSameFunction {
             dest,
             callee,

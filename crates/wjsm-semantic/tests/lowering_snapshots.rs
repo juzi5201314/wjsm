@@ -830,6 +830,11 @@ fn class_private_async_method_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn private_in_brand_check_fixture_matches_ir_snapshot() {
+    assert_snapshot("private_in_brand_check");
+}
+
+#[test]
 fn issue373_loop_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("issue373_loop_closure_capture");
 }
@@ -842,6 +847,11 @@ fn issue384_object_method_self_reference_fixture_matches_ir_snapshot() {
 #[test]
 fn object_literal_static_keys_fixture_matches_ir_snapshot() {
     assert_snapshot("object_literal_static_keys");
+}
+
+#[test]
+fn object_computed_key_eval_order_fixture_matches_ir_snapshot() {
+    assert_snapshot("object_computed_key_eval_order");
 }
 
 #[test]

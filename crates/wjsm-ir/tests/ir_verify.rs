@@ -197,7 +197,7 @@ fn verifier_rejects_super_call_forward_args_with_explicit_args() {
 }
 
 #[test]
-fn verifier_treats_object_spread_destination_as_an_operand() {
+fn verifier_treats_object_spread_object_as_an_operand_and_dest_as_a_definition() {
     let module = Module::new();
     let mut entry = BasicBlock::new(BasicBlockId(0));
     entry.push_instruction(Instruction::NewObject {
@@ -209,8 +209,14 @@ fn verifier_treats_object_spread_destination_as_an_operand() {
         capacity: 1,
     });
     entry.push_instruction(Instruction::ObjectSpread {
-        dest: ValueId(0),
+        dest: ValueId(2),
+        object: ValueId(0),
         source: ValueId(1),
+    });
+    // dest 是定义：后续可作为操作数使用（异常检查读取 spread 结果）
+    entry.push_instruction(Instruction::IsException {
+        dest: ValueId(3),
+        value: ValueId(2),
     });
     entry.set_terminator(Terminator::Return {
         value: Some(ValueId(0)),

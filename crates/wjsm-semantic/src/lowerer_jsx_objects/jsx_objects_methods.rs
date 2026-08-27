@@ -31,8 +31,35 @@ impl Lowerer {
             match prop {
                 swc_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
                     swc_ast::Prop::KeyValue(kv) => {
+                        if is_proto_object_literal_key(&kv.key) {
+                            // `__proto__: value` 走 SetProto；静态键无副作用，
+                            // 仅需按规范传播属性值求值抛出的异常。
+                            let val_dest =
+                                self.lower_expr_then_continue(&kv.value, &mut block)?;
+                            if self.expr_exception_fork_allowed()
+                                && self.expr_can_throw(&kv.value)
+                            {
+                                block = self.lower_value_exception_branch(block, val_dest)?;
+                            }
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::SetProto {
+                                    object: obj_dest,
+                                    value: val_dest,
+                                },
+                            );
+                            continue;
+                        }
+                        // PropertyDefinitionEvaluation：先求属性键再求属性值；
+                        // 计算键抛异常必须传播且不得继续求属性值。
+                        let key_dest = self.lower_prop_name_checked(&kv.key, &mut block)?;
                         let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
-                        self.lower_object_prop(obj_dest, &kv.key, val_dest, &mut block)?;
+                        // 属性值求值抛异常必须传播，
+                        // 不得把 TAG_EXCEPTION 存为属性值后继续求值后续属性。
+                        if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
+                            block = self.lower_value_exception_branch(block, val_dest)?;
+                        }
+                        self.emit_set_prop(block, obj_dest, key_dest, val_dest);
                     }
                     swc_ast::Prop::Shorthand(ident) => {
                         let val_dest = self.lower_ident(ident, block)?;
@@ -50,8 +77,7 @@ impl Lowerer {
                         self.emit_set_prop(block, obj_dest, key_dest, val_dest);
                     }
                     swc_ast::Prop::Getter(getter) => {
-                        let key_dest = self.lower_prop_name(&getter.key, block)?;
-                        block = self.resolve_store_block(block);
+                        let key_dest = self.lower_prop_name_checked(&getter.key, &mut block)?;
                         let body = getter
                             .body
                             .as_ref()
@@ -82,8 +108,7 @@ impl Lowerer {
                         );
                     }
                     swc_ast::Prop::Setter(setter) => {
-                        let key_dest = self.lower_prop_name(&setter.key, block)?;
-                        block = self.resolve_store_block(block);
+                        let key_dest = self.lower_prop_name_checked(&setter.key, &mut block)?;
                         let body = setter
                             .body
                             .as_ref()
@@ -118,8 +143,7 @@ impl Lowerer {
                         );
                     }
                     swc_ast::Prop::Method(method) => {
-                        let key_dest = self.lower_prop_name(&method.key, block)?;
-                        block = self.resolve_store_block(block);
+                        let key_dest = self.lower_prop_name_checked(&method.key, &mut block)?;
                         let home_object = if method
                             .function
                             .body
@@ -153,13 +177,12 @@ impl Lowerer {
                 },
                 swc_ast::PropOrSpread::Spread(spread) => {
                     let source = self.lower_expr_then_continue(&spread.expr, &mut block)?;
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::ObjectSpread {
-                            dest: obj_dest,
-                            source,
-                        },
-                    );
+                    // CopyDataProperties：spread 源求值抛异常必须传播，
+                    // 不得让 TAG_EXCEPTION 流入 ObjectSpread 被静默吞掉。
+                    if self.expr_exception_fork_allowed() && self.expr_can_throw(&spread.expr) {
+                        block = self.lower_value_exception_branch(block, source)?;
+                    }
+                    block = self.emit_object_spread_checked(block, obj_dest, source)?;
                 }
             }
         }
@@ -237,33 +260,22 @@ impl Lowerer {
         }
     }
 
-    /// 对对象字面量中的 KeyValue prop 设置属性，支持计算属性名
-    pub(crate) fn lower_object_prop(
+    /// 求值属性名并推进 block。计算键遵循 PropertyDefinitionEvaluation：
+    /// 键表达式抛出的异常必须在求属性值 / 构建方法闭包之前传播。
+    fn lower_prop_name_checked(
         &mut self,
-        obj_dest: ValueId,
         key: &swc_ast::PropName,
-        val_dest: ValueId,
         block: &mut BasicBlockId,
-    ) -> Result<(), LoweringError> {
-        let is_proto_key = match key {
-            swc_ast::PropName::Ident(ident) => ident.sym.as_ref() == "__proto__",
-            swc_ast::PropName::Str(s) => s.value.to_string_lossy().as_ref() == "__proto__",
-            _ => false,
+    ) -> Result<ValueId, LoweringError> {
+        let swc_ast::PropName::Computed(computed) = key else {
+            // 静态键只发射 Const，不产生控制流与异常。
+            return self.lower_prop_name(key, *block);
         };
-        if is_proto_key {
-            self.current_function.append_instruction(
-                *block,
-                Instruction::SetProto {
-                    object: obj_dest,
-                    value: val_dest,
-                },
-            );
-        } else {
-            let key_dest = self.lower_prop_name(key, *block)?;
-            *block = self.resolve_store_block(*block);
-            self.emit_set_prop(*block, obj_dest, key_dest, val_dest);
+        let key_dest = self.lower_expr_then_continue(&computed.expr, block)?;
+        if self.expr_exception_fork_allowed() && self.expr_can_throw(&computed.expr) {
+            *block = self.lower_value_exception_branch(*block, key_dest)?;
         }
-        Ok(())
+        Ok(key_dest)
     }
 
     fn create_method_env_with_home(
@@ -695,6 +707,11 @@ impl Lowerer {
                 unreachable!("collect_sso_object_literal_keys 仅接受 KeyValue");
             };
             let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+            // 与通用路径一致：属性值求值抛异常必须传播，
+            // 不得把 TAG_EXCEPTION 烘焙进 InitObjectLiteral 的值列表。
+            if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
+                block = self.lower_value_exception_branch(block, val_dest)?;
+            }
             values.push(val_dest);
         }
         let obj_dest = self.alloc_value();

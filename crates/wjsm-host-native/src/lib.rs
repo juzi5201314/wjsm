@@ -1087,7 +1087,7 @@ struct NativeAgentState {
     fatal_exception: Option<i64>,
     callable_prototypes: HashMap<i64, i64>,
     private_slots: HashMap<(i64, PropertyKey), NativePrivateSlot>,
-    private_brands: HashMap<u32, i64>,
+    private_brands: HashMap<PropertyKey, i64>,
     callable_properties: HashMap<(i64, PropertyKey), i64>,
     callable_accessors: HashMap<(i64, PropertyKey), (i64, i64)>,
     callable_property_flags: HashMap<(i64, PropertyKey), u32>,

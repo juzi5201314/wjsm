@@ -567,9 +567,13 @@ fn encode_instruction(
             value_id(encoder, *this_val);
             value_ids(encoder, args)?;
         }
-        Instruction::ObjectSpread { dest, source } => {
+        Instruction::ObjectSpread {
+            dest,
+            object,
+            source,
+        } => {
             encoder.u16(23);
-            two_values(encoder, *dest, *source);
+            three_values(encoder, *dest, *object, *source);
         }
         Instruction::GetSuperBase { dest } => {
             encoder.u16(24);
@@ -839,8 +843,12 @@ fn decode_instruction(
             args: decode_value_ids(decoder, limits)?,
         }),
         23 => {
-            let (dest, source) = decode_two(decoder)?;
-            Ok(Instruction::ObjectSpread { dest, source })
+            let (dest, object, source) = decode_three(decoder)?;
+            Ok(Instruction::ObjectSpread {
+                dest,
+                object,
+                source,
+            })
         }
         24 => Ok(Instruction::GetSuperBase {
             dest: next_value(decoder)?,
