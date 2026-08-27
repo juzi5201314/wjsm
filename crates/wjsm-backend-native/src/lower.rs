@@ -1918,37 +1918,46 @@ fn emit_load_object_template_meta_word(
     Ok(cx.builder.ins().uextend(types::I64, word))
 }
 
-/// 在新分配对象已知 value slot 上直写属性值（仅用于 unboxed 数字等无需 store barrier 的值）。
-fn lower_create_data_property_fast(
-    cx: &mut LoweringCx<'_, '_>,
-    logical_addr: ir::Value,
-    heap_delta: ir::Value,
-    slot_index: ir::Value,
-    stored: ir::Value,
-) {
-    let value_shift = cx.builder.ins().ishl_imm_u(slot_index, 3);
-    let value_offset = cx
-        .builder
-        .ins()
-        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
-    let value_addr = cx.builder.ins().iadd(logical_addr, value_offset);
-    let value_addr = cx.builder.ins().iadd(value_addr, heap_delta);
-    cx.builder
-        .ins()
-        .store(MemFlagsData::trusted(), stored, value_addr, 0);
+/// 模板自有数据属性的编译期槽偏移：空 shape 按键序追加时 `slot_index == prop_index`。
+fn template_value_slot_offset(prop_index: u32) -> Result<i32> {
+    let scaled = u64::from(prop_index)
+        .checked_mul(u64::from(constants::HEAP_OBJECT_VALUE_SLOT_SIZE))
+        .context("template slot scale overflows")?;
+    let offset = u64::from(constants::HEAP_OBJECT_HEADER_SIZE)
+        .checked_add(scaled)
+        .context("template slot offset overflows")?;
+    i32::try_from(offset).context("template slot offset exceeds i32")
 }
 
-/// 模板对象自有数据属性读：install 期烘焙 shape/slot，shape 失配回落 fallback。
-fn lower_get_template_prop_inline(
+fn template_hit_args(
+    logical_addr: ir::Value,
+    direct_store: Option<ir::Value>,
+) -> Vec<ir::BlockArg> {
+    let mut args = vec![ir::BlockArg::Value(logical_addr)];
+    if let Some(flag) = direct_store {
+        args.push(ir::BlockArg::Value(flag));
+    }
+    args
+}
+
+struct TemplateReceiver {
+    handle_i32: ir::Value,
+    heap_delta: ir::Value,
+    barrier_disabled: ir::Value,
+}
+
+/// 模板对象：标签 / 句柄 / epoch / 烘焙 shape 命中后跳到 `hit_block`。
+///
+/// `store` 时 `hit_block` 额外接收 `direct_store: i8`（young + 未标记）。
+fn emit_template_receiver_guard(
     cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
-    dest: ValueId,
     object: ValueId,
     meta_index: u32,
-    prop_index: u32,
-    merge_block: ir::Block,
+    hit_block: ir::Block,
     fallback_block: ir::Block,
-) -> Result<()> {
+    store: bool,
+) -> Result<TemplateReceiver> {
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let obj = use_value(cx.builder, cx.variables, object)?;
     let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
@@ -1978,7 +1987,9 @@ fn lower_get_template_prop_inline(
     let receiver_assist_block = cx.builder.create_block();
     let shape_check_block = cx.builder.create_block();
     cx.builder.append_block_param(shape_check_block, types::I64);
-    let own_hit_block = cx.builder.create_block();
+    if store {
+        cx.builder.append_block_param(shape_check_block, types::I8);
+    }
 
     cx.builder
         .ins()
@@ -2021,13 +2032,11 @@ fn lower_get_template_prop_inline(
 
     cx.builder.switch_to_block(legacy_entry_block);
     cx.builder.seal_block(legacy_entry_block);
-    cx.builder.ins().brif(
-        stable,
-        shape_check_block,
-        &[ir::BlockArg::Value(logical_addr)],
-        fallback_block,
-        &[],
-    );
+    let legacy_direct = store.then(|| cx.builder.ins().iconst(types::I8, 1));
+    let legacy_args = template_hit_args(logical_addr, legacy_direct);
+    cx.builder
+        .ins()
+        .brif(stable, shape_check_block, &legacy_args, fallback_block, &[]);
 
     cx.builder.switch_to_block(zgc_entry_block);
     cx.builder.seal_block(zgc_entry_block);
@@ -2052,14 +2061,39 @@ fn lower_get_template_prop_inline(
 
     cx.builder.switch_to_block(zgc_fast_block);
     cx.builder.seal_block(zgc_fast_block);
-    increment_barrier_counter(
-        cx.builder,
-        barrier_state,
-        offset_of!(NativeBarrierState, load_fast_events),
-    );
-    cx.builder
-        .ins()
-        .jump(shape_check_block, &[ir::BlockArg::Value(logical_addr)]);
+    let zgc_direct = if store {
+        let phase_addr = cx.builder.ins().iadd_imm_s(
+            barrier_state,
+            i64::try_from(offset_of!(NativeBarrierState, phase)).expect("phase offset fits i64"),
+        );
+        let phase = cx
+            .builder
+            .ins()
+            .atomic_load(types::I64, MemFlagsData::trusted(), phase_addr);
+        let marking = cx
+            .builder
+            .ins()
+            .band_imm_u(phase, NATIVE_BARRIER_MARKING_MASK as i64);
+        let marking_idle = cx
+            .builder
+            .ins()
+            .icmp_imm_u(ir::condcodes::IntCC::Equal, marking, 0);
+        let stable_young = cx.builder.ins().icmp_imm_u(
+            ir::condcodes::IntCC::Equal,
+            entry_state,
+            i64::from(constants::HANDLE_STATE_STABLE_YOUNG),
+        );
+        Some(cx.builder.ins().band(marking_idle, stable_young))
+    } else {
+        increment_barrier_counter(
+            cx.builder,
+            barrier_state,
+            offset_of!(NativeBarrierState, load_fast_events),
+        );
+        None
+    };
+    let fast_args = template_hit_args(logical_addr, zgc_direct);
+    cx.builder.ins().jump(shape_check_block, &fast_args);
 
     cx.builder.switch_to_block(receiver_assist_block);
     cx.builder.seal_block(receiver_assist_block);
@@ -2072,10 +2106,12 @@ fn lower_get_template_prop_inline(
         .builder
         .ins()
         .icmp_imm_u(ir::condcodes::IntCC::NotEqual, assisted, 0);
+    let assist_direct = store.then(|| cx.builder.ins().iconst(types::I8, 0));
+    let assist_args = template_hit_args(assisted, assist_direct);
     cx.builder.ins().brif(
         assisted_ok,
         shape_check_block,
-        &[ir::BlockArg::Value(assisted)],
+        &assist_args,
         fallback_block,
         &[],
     );
@@ -2083,6 +2119,7 @@ fn lower_get_template_prop_inline(
     cx.builder.switch_to_block(shape_check_block);
     cx.builder.seal_block(shape_check_block);
     let logical_addr = cx.builder.block_params(shape_check_block)[0];
+    let direct_store = store.then(|| cx.builder.block_params(shape_check_block)[1]);
     let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
     let baked_shape = emit_load_object_template_meta_word(cx, meta_index, 0)?;
     let obj_word = cx
@@ -2094,24 +2131,206 @@ fn lower_get_template_prop_inline(
         .builder
         .ins()
         .icmp(ir::condcodes::IntCC::Equal, obj_shape, baked_shape);
+    let hit_args = template_hit_args(logical_addr, direct_store);
     cx.builder
         .ins()
-        .brif(shape_match, own_hit_block, &[], fallback_block, &[]);
+        .brif(shape_match, hit_block, &hit_args, fallback_block, &[]);
 
-    cx.builder.switch_to_block(own_hit_block);
-    cx.builder.seal_block(own_hit_block);
-    let slot_index = emit_load_object_template_meta_word(cx, meta_index, 4 + prop_index)?;
-    let value_shift = cx.builder.ins().ishl_imm_u(slot_index, 3);
-    let value_offset = cx
-        .builder
+    Ok(TemplateReceiver {
+        handle_i32,
+        heap_delta,
+        barrier_disabled,
+    })
+}
+
+/// 在新分配对象已知 value slot 上直写属性值（仅用于 unboxed 数字等无需 store barrier 的值）。
+fn lower_create_data_property_fast(
+    cx: &mut LoweringCx<'_, '_>,
+    logical_addr: ir::Value,
+    heap_delta: ir::Value,
+    prop_index: u32,
+    stored: ir::Value,
+) -> Result<()> {
+    let offset = template_value_slot_offset(prop_index)?;
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    cx.builder
         .ins()
-        .iadd_imm_s(value_shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
-    let value_addr = cx.builder.ins().iadd(addr, value_offset);
+        .store(MemFlagsData::trusted(), stored, addr, offset);
+    Ok(())
+}
+
+/// 模板对象自有数据属性读：shape 命中后 `load [obj+imm]`，失配回落 fallback。
+fn lower_get_template_prop_inline(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    object: ValueId,
+    meta_index: u32,
+    prop_index: u32,
+    merge_block: ir::Block,
+    fallback_block: ir::Block,
+) -> Result<()> {
+    let hit_block = cx.builder.create_block();
+    cx.builder.append_block_param(hit_block, types::I64);
+    let receiver = emit_template_receiver_guard(
+        cx,
+        barrier_thunks,
+        object,
+        meta_index,
+        hit_block,
+        fallback_block,
+        false,
+    )?;
+    cx.builder.switch_to_block(hit_block);
+    cx.builder.seal_block(hit_block);
+    let logical_addr = cx.builder.block_params(hit_block)[0];
+    let addr = cx.builder.ins().iadd(logical_addr, receiver.heap_delta);
+    let offset = template_value_slot_offset(prop_index)?;
     let loaded = cx
         .builder
         .ins()
-        .load(types::I64, MemFlagsData::trusted(), value_addr, 0);
+        .load(types::I64, MemFlagsData::trusted(), addr, offset);
     define_value(cx.builder, cx.variables, dest, loaded)?;
+    cx.builder.ins().jump(merge_block, &[]);
+    Ok(())
+}
+
+/// 模板对象自有数据属性写：shape 命中后 `store [obj+imm]`，失配回落 fallback。
+fn lower_set_template_prop_inline(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    object: ValueId,
+    value: ValueId,
+    meta_index: u32,
+    prop_index: u32,
+    merge_block: ir::Block,
+    fallback_block: ir::Block,
+) -> Result<()> {
+    let stored = use_value(cx.builder, cx.variables, value)?;
+    let hit_block = cx.builder.create_block();
+    cx.builder.append_block_param(hit_block, types::I64);
+    cx.builder.append_block_param(hit_block, types::I8);
+    let receiver = emit_template_receiver_guard(
+        cx,
+        barrier_thunks,
+        object,
+        meta_index,
+        hit_block,
+        fallback_block,
+        true,
+    )?;
+    emit_template_own_store(
+        cx,
+        barrier_thunks,
+        dest,
+        stored,
+        receiver,
+        prop_index,
+        hit_block,
+        merge_block,
+        fallback_block,
+    )
+}
+
+fn emit_template_own_store(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    stored: ir::Value,
+    receiver: TemplateReceiver,
+    prop_index: u32,
+    hit_block: ir::Block,
+    merge_block: ir::Block,
+    fallback_block: ir::Block,
+) -> Result<()> {
+    let offset = template_value_slot_offset(prop_index)?;
+    let legacy_store_block = cx.builder.create_block();
+    let zgc_store_mode_block = cx.builder.create_block();
+    let zgc_direct_store_block = cx.builder.create_block();
+    let scalar_elide_block = cx.builder.create_block();
+    let barrier_store_block = cx.builder.create_block();
+    let store_done_block = cx.builder.create_block();
+
+    cx.builder.switch_to_block(hit_block);
+    cx.builder.seal_block(hit_block);
+    let logical_addr = cx.builder.block_params(hit_block)[0];
+    let direct_store = cx.builder.block_params(hit_block)[1];
+    let addr = cx.builder.ins().iadd(logical_addr, receiver.heap_delta);
+    let logical_slot = cx.builder.ins().iadd_imm_s(logical_addr, i64::from(offset));
+    let value_addr = cx.builder.ins().iadd_imm_s(addr, i64::from(offset));
+    cx.builder.ins().brif(
+        receiver.barrier_disabled,
+        legacy_store_block,
+        &[],
+        zgc_store_mode_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(zgc_store_mode_block);
+    cx.builder.seal_block(zgc_store_mode_block);
+    cx.builder.ins().brif(
+        direct_store,
+        zgc_direct_store_block,
+        &[],
+        scalar_elide_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(scalar_elide_block);
+    cx.builder.seal_block(scalar_elide_block);
+    let stored_unboxed = emit_unboxed_nanbox_predicate(cx.builder, stored);
+    let old = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, offset);
+    let old_unboxed = emit_unboxed_nanbox_predicate(cx.builder, old);
+    let scalar_direct = cx.builder.ins().band(stored_unboxed, old_unboxed);
+    cx.builder.ins().brif(
+        scalar_direct,
+        zgc_direct_store_block,
+        &[],
+        barrier_store_block,
+        &[],
+    );
+
+    cx.builder.switch_to_block(legacy_store_block);
+    cx.builder.seal_block(legacy_store_block);
+    cx.builder
+        .ins()
+        .store(MemFlagsData::trusted(), stored, addr, offset);
+    cx.builder.ins().jump(store_done_block, &[]);
+
+    cx.builder.switch_to_block(zgc_direct_store_block);
+    cx.builder.seal_block(zgc_direct_store_block);
+    cx.builder
+        .ins()
+        .atomic_store(MemFlagsData::trusted(), stored, value_addr);
+    increment_barrier_counter(
+        cx.builder,
+        cx.barrier_state,
+        offset_of!(NativeBarrierState, store_fast_events),
+    );
+    cx.builder.ins().jump(store_done_block, &[]);
+
+    cx.builder.switch_to_block(barrier_store_block);
+    cx.builder.seal_block(barrier_store_block);
+    let call = cx.builder.ins().call(
+        barrier_thunks.store,
+        &[cx.ctx, receiver.handle_i32, logical_slot, stored],
+    );
+    let status = cx.builder.inst_results(call)[0];
+    let stored_ok = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::Equal, status, 0);
+    cx.builder
+        .ins()
+        .brif(stored_ok, store_done_block, &[], fallback_block, &[]);
+
+    cx.builder.switch_to_block(store_done_block);
+    cx.builder.seal_block(store_done_block);
+    define_value(cx.builder, cx.variables, dest, stored)?;
     cx.builder.ins().jump(merge_block, &[]);
     Ok(())
 }
@@ -2144,18 +2363,8 @@ fn lower_get_prop_with_template_or_ic(
         )?;
         cx.builder.switch_to_block(fallback_block);
         cx.builder.seal_block(fallback_block);
-        if let Some(slot) = tables.ic_slots.get(&dest).copied() {
-            lower_get_prop_ic_non_nullish(
-                cx,
-                barrier_thunks,
-                prop_access(tables, dest, object, key, slot),
-                roots,
-                merge_block,
-            )?;
-        } else {
-            lower_value_operation(cx, NativeRuntimeOp::GetProp, &[object, key], Some(dest))?;
-            cx.builder.ins().jump(merge_block, &[]);
-        }
+        lower_value_operation(cx, NativeRuntimeOp::GetProp, &[object, key], Some(dest))?;
+        cx.builder.ins().jump(merge_block, &[]);
         cx.builder.switch_to_block(merge_block);
         cx.builder.seal_block(merge_block);
         return Ok(());
@@ -2169,6 +2378,63 @@ fn lower_get_prop_with_template_or_ic(
         )
     } else {
         lower_value_operation(cx, NativeRuntimeOp::GetProp, &[object, key], Some(dest))
+    }
+}
+
+fn lower_set_prop_with_template_or_ic(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &InstructionTables<'_>,
+    barrier_thunks: &BarrierThunks,
+    dest: ValueId,
+    object: ValueId,
+    key: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let template_inline = tables.template_origins.get(&object).and_then(|site| {
+        template_property_index_for_key(tables.constants, tables.constant_defs, site.template, key)
+            .map(|prop_index| (site.meta_index, prop_index))
+    });
+    if let Some((meta_index, prop_index)) = template_inline {
+        let merge_block = cx.builder.create_block();
+        let fallback_block = cx.builder.create_block();
+        lower_set_template_prop_inline(
+            cx,
+            barrier_thunks,
+            dest,
+            object,
+            value,
+            meta_index,
+            prop_index,
+            merge_block,
+            fallback_block,
+        )?;
+        cx.builder.switch_to_block(fallback_block);
+        cx.builder.seal_block(fallback_block);
+        lower_value_operation(
+            cx,
+            NativeRuntimeOp::SetProp,
+            &[object, key, value],
+            Some(dest),
+        )?;
+        cx.builder.ins().jump(merge_block, &[]);
+        cx.builder.switch_to_block(merge_block);
+        cx.builder.seal_block(merge_block);
+        return Ok(());
+    }
+    if let Some(slot) = tables.ic_slots.get(&dest).copied() {
+        lower_set_prop_ic(
+            cx,
+            barrier_thunks,
+            prop_access(tables, dest, object, key, slot),
+            value,
+        )
+    } else {
+        lower_value_operation(
+            cx,
+            NativeRuntimeOp::SetProp,
+            &[object, key, value],
+            Some(dest),
+        )
     }
 }
 
@@ -2405,13 +2671,12 @@ fn lower_init_object_literal(
     );
     let logical_addr = top;
     for property in 0..prop_count {
-        let slot_index = emit_load_object_template_meta_word(cx, meta_index, 4 + property)?;
         let stored = use_value(
             cx.builder,
             cx.variables,
             values[usize::try_from(property).expect("property index fits usize")],
         )?;
-        lower_create_data_property_fast(cx, logical_addr, heap_delta, slot_index, stored);
+        lower_create_data_property_fast(cx, logical_addr, heap_delta, property, stored)?;
     }
     let value_prefix = cx.builder.ins().iconst(
         types::I64,
@@ -2990,23 +3255,15 @@ fn lower_instruction(
             object,
             key,
             value,
-        } => {
-            if let Some(slot) = tables.ic_slots.get(dest).copied() {
-                lower_set_prop_ic(
-                    cx,
-                    tables.barrier_thunks,
-                    prop_access(tables, *dest, *object, *key, slot),
-                    *value,
-                )
-            } else {
-                lower_value_operation(
-                    cx,
-                    NativeRuntimeOp::SetProp,
-                    &[*object, *key, *value],
-                    Some(*dest),
-                )
-            }
-        }
+        } => lower_set_prop_with_template_or_ic(
+            cx,
+            tables,
+            tables.barrier_thunks,
+            *dest,
+            *object,
+            *key,
+            *value,
+        ),
         Instruction::CreateDataProperty {
             dest,
             object,

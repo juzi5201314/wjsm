@@ -543,6 +543,12 @@ mod tests {
             object: ValueId(3),
             key: ValueId(12),
         });
+        block.push_instruction(Instruction::SetProp {
+            dest: ValueId(13),
+            object: ValueId(3),
+            key: ValueId(10),
+            value: ValueId(0),
+        });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(4)),
         });
@@ -578,6 +584,101 @@ mod tests {
         assert!(
             diagnostics.disassembly.contains("cmp") || diagnostics.clif.contains("icmp"),
             "expected shape guard in generated code"
+        );
+        for offset in ["+24", "+32", "+40"] {
+            assert!(
+                diagnostics.clif.contains(offset),
+                "expected compile-time slot offset {offset} in clif:\n{}",
+                diagnostics.clif
+            );
+        }
+        assert!(
+            diagnostics.clif.contains("store"),
+            "expected template SetProp store in clif:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    #[test]
+    fn template_origins_follow_module_binding_across_functions() {
+        fn sso_key(text: &str) -> u64 {
+            let encoded = wjsm_ir::value::encode_inline_ascii(text.as_bytes()).expect("sso key");
+            wjsm_ir::value::inline_property_key_raw(encoded).expect("property key")
+        }
+        let mut program = Program::new();
+        let template = program.add_constant(Constant::ObjectTemplate {
+            keys: vec![sso_key("name"), sso_key("value"), sso_key("length")],
+        });
+        let key_name = program.add_constant(Constant::String("name".into()));
+        let one = program.add_constant(Constant::Number(1.0));
+        let mut init = Function::new("init", BasicBlockId(0));
+        let mut init_block = BasicBlock::new(BasicBlockId(0));
+        init_block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: one,
+        });
+        init_block.push_instruction(Instruction::InitObjectLiteral {
+            dest: ValueId(1),
+            template,
+            values: vec![ValueId(0), ValueId(0), ValueId(0)],
+        });
+        init_block.push_instruction(Instruction::StoreVar {
+            name: "$0.RECORD".into(),
+            value: ValueId(1),
+        });
+        init_block.set_terminator(Terminator::Return { value: None });
+        init.push_block(init_block);
+        program.push_function(init);
+
+        let mut work = Function::new("work", BasicBlockId(0));
+        let mut work_block = BasicBlock::new(BasicBlockId(0));
+        work_block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$0.RECORD".into(),
+        });
+        work_block.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: key_name,
+        });
+        work_block.push_instruction(Instruction::GetProp {
+            dest: ValueId(2),
+            object: ValueId(0),
+            key: ValueId(1),
+        });
+        work_block.push_instruction(Instruction::SetProp {
+            dest: ValueId(3),
+            object: ValueId(0),
+            key: ValueId(1),
+            value: ValueId(2),
+        });
+        work_block.set_terminator(Terminator::Return {
+            value: Some(ValueId(2)),
+        });
+        work.push_block(work_block);
+        program.push_function(work);
+
+        let origins = crate::template_meta::build_template_origin_maps(&program);
+        assert!(
+            origins
+                .get(1)
+                .is_some_and(|map| map.contains_key(&ValueId(0))),
+            "work() LoadVar RECORD should keep template origin: {origins:?}"
+        );
+        let artifact = PortableArtifact::from_input(&ArtifactBuildInput {
+            program: Arc::new(program),
+            manifest: Arc::new(ModuleManifest::single("input.js", true)),
+            options: BuildOptions::default(),
+            source_text: None,
+        })
+        .expect("cross-function template artifact should encode");
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&artifact)
+            .expect("cross-function template diagnostics should compile");
+        assert!(
+            diagnostics.clif.contains("+24"),
+            "expected compile-time name slot offset in work():\n{}",
+            diagnostics.clif
         );
     }
 

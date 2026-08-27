@@ -1,6 +1,6 @@
 //! 对象模板 install 期元数据的编译期辅助：模板溯源、属性键匹配与 IC 预填 hint。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wjsm_ir::{Constant, ConstantId, Function, Instruction, Program, ValueId, value};
 
@@ -114,16 +114,66 @@ pub fn ic_template_hints(program: &Program) -> Vec<IcTemplateHint> {
 pub(crate) type TemplateOriginMap = HashMap<ValueId, TemplateSite>;
 
 pub(crate) fn build_template_origin_maps(program: &Program) -> Vec<TemplateOriginMap> {
+    let seed = collect_shared_template_vars(program);
     program
         .functions()
         .iter()
-        .map(|function| build_template_origin_map(function, program.constants()))
+        .map(|function| build_template_origin_map(function, program.constants(), &seed))
         .collect()
 }
 
-fn build_template_origin_map(function: &Function, constants: &[Constant]) -> TemplateOriginMap {
+/// 模块绑定上的模板对象：任一函数 `StoreVar` 写入后，其它函数的 `LoadVar` 也能溯源。
+fn collect_shared_template_vars(program: &Program) -> HashMap<String, TemplateSite> {
+    let mut seeded: HashMap<String, TemplateSite> = HashMap::new();
+    let mut conflict: HashSet<String> = HashSet::new();
+    for function in program.functions() {
+        for (name, site) in collect_template_var_stores(function, program.constants()) {
+            if conflict.contains(&name) {
+                continue;
+            }
+            match seeded.get(&name) {
+                None => {
+                    seeded.insert(name, site);
+                }
+                Some(existing) if *existing == site => {}
+                Some(_) => {
+                    conflict.insert(name.clone());
+                    seeded.remove(&name);
+                }
+            }
+        }
+    }
+    seeded
+}
+
+fn collect_template_var_stores(
+    function: &Function,
+    constants: &[Constant],
+) -> Vec<(String, TemplateSite)> {
+    let origins = build_template_origin_map(function, constants, &HashMap::new());
+    let mut stores = Vec::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::StoreVar { name, value } = instruction
+                && let Some(site) = origins.get(value).copied()
+            {
+                stores.push((name.clone(), site));
+            }
+        }
+    }
+    stores
+}
+
+fn build_template_origin_map(
+    function: &Function,
+    constants: &[Constant],
+    seed: &HashMap<String, TemplateSite>,
+) -> TemplateOriginMap {
     let mut value_origins = HashMap::new();
-    let mut var_origins: HashMap<&str, TemplateSite> = HashMap::new();
+    let mut var_origins: HashMap<&str, TemplateSite> = seed
+        .iter()
+        .map(|(name, site)| (name.as_str(), *site))
+        .collect();
     for block in function.blocks() {
         for instruction in block.instructions() {
             match instruction {
@@ -141,6 +191,8 @@ fn build_template_origin_map(function: &Function, constants: &[Constant]) -> Tem
                 Instruction::StoreVar { name, value } => {
                     if let Some(site) = value_origins.get(value).copied() {
                         var_origins.insert(name.as_str(), site);
+                    } else {
+                        var_origins.remove(name.as_str());
                     }
                 }
                 Instruction::LoadVar { dest, name } => {
