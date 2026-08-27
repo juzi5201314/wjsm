@@ -823,6 +823,12 @@ fn reflect_get(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     let [target, key, rest @ ..] = args else {
         return fail_dispatch(ctx);
     };
+    // Reflect.get（§28.1.5）step 2：先 ToPropertyKey 再 [[Get]]；
+    // `super[k]` 成员读复用本入口，对象键在此完成用户转换再入。
+    let key = &match super::runtime::to_property_key_value(ctx, state, *key) {
+        Ok(key) => key,
+        Err(exception) => return exception,
+    };
     let receiver = rest.first().copied().unwrap_or(*target);
     if value::is_proxy(*target) {
         get(ctx, state, *target, *key, receiver)
@@ -835,6 +841,12 @@ fn reflect_get(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
 fn reflect_set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [target, key, stored, rest @ ..] = args else {
         return fail_dispatch(ctx);
+    };
+    // Reflect.set（§28.1.9）step 2：先 ToPropertyKey 再 [[Set]]；
+    // `super[k] = v` 成员写复用本入口，对象键在此完成用户转换再入。
+    let key = &match super::runtime::to_property_key_value(ctx, state, *key) {
+        Ok(key) => key,
+        Err(exception) => return exception,
     };
     let receiver = rest.first().copied().unwrap_or(*target);
     if value::is_proxy(*target) {

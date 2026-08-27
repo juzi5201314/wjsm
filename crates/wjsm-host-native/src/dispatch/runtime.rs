@@ -224,6 +224,11 @@ pub(super) fn dispatch_runtime(
             let [object, key] = args else {
                 return fail_dispatch(ctx);
             };
+            // 动态键（`o[k]++` / 解构计算键等）可能是对象，须先 ToPropertyKey 再入。
+            let key = &match to_property_key_value(ctx, state, *key) {
+                Ok(key) => key,
+                Err(exception) => return exception,
+            };
             get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
         }
         NativeRuntimeOp::GetPropIc => {
@@ -263,6 +268,11 @@ pub(super) fn dispatch_runtime(
             if value::is_null(*object) || value::is_undefined(*object) {
                 return value::encode_undefined();
             }
+            // 基座非空后才做 ToPropertyKey（可选链短路时不得再入用户转换）。
+            let key = &match to_property_key_value(ctx, state, *key) {
+                Ok(key) => key,
+                Err(exception) => return exception,
+            };
             if let Some(index) = array_index(state, *key) {
                 if let Some(stored) =
                     super::typedarray::get_element_intern(state, *object, index as usize)
@@ -290,11 +300,21 @@ pub(super) fn dispatch_runtime(
             let [object, key, stored] = args else {
                 return fail_dispatch(ctx);
             };
+            // PutValue 步骤 3.a：ToObject(base) 先于 ToPropertyKey，null/undefined
+            // 基座须在键转换（可能执行用户代码）之前抛 TypeError。
+            if let Some(exception) = set_on_nullish_receiver(ctx, state, *object, *key) {
+                return exception;
+            }
+            // 动态键可能是对象，[[Set]]（含 proxy trap）须接收已转换的属性键。
+            let key = match to_property_key_value(ctx, state, *key) {
+                Ok(key) => key,
+                Err(exception) => return exception,
+            };
             set_property_impl(
                 ctx,
                 state,
                 *object,
-                *key,
+                key,
                 *stored,
                 operation == NativeRuntimeOp::SetPropStrict,
             )
@@ -306,7 +326,12 @@ pub(super) fn dispatch_runtime(
             if !value::is_object(*object) {
                 return fail_dispatch(ctx);
             }
-            let Some(key) = property_key(state, *key) else {
+            // CreateDataPropertyOrThrow 接收属性键：对象键先 ToPropertyKey 再入。
+            let key = match to_property_key_value(ctx, state, *key) {
+                Ok(key) => key,
+                Err(exception) => return exception,
+            };
+            let Some(key) = property_key(state, key) else {
                 return fail_dispatch(ctx);
             };
             match set_property_or_out_of_memory(
@@ -332,6 +357,11 @@ pub(super) fn dispatch_runtime(
         NativeRuntimeOp::DeleteProp => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
+            };
+            // `delete o[k]`：[[Delete]]（含 proxy trap）须接收已转换的属性键。
+            let key = &match to_property_key_value(ctx, state, *key) {
+                Ok(key) => key,
+                Err(exception) => return exception,
             };
             if value::is_proxy(*object) {
                 return super::proxy::dispatch_proxy(
@@ -390,6 +420,11 @@ pub(super) fn dispatch_runtime(
             let [object, index] = args else {
                 return fail_dispatch(ctx);
             };
+            // `o[k]`：[[Get]]（含 proxy trap）之前先做 ToPropertyKey 再入。
+            let index = &match to_property_key_value(ctx, state, *index) {
+                Ok(key) => key,
+                Err(exception) => return exception,
+            };
             if value::is_proxy(*object) {
                 return super::proxy::get(ctx, state, *object, *index, *object);
             }
@@ -422,6 +457,15 @@ pub(super) fn dispatch_runtime(
         NativeRuntimeOp::SetElem | NativeRuntimeOp::SetElemStrict => {
             let [object, index, stored] = args else {
                 return fail_dispatch(ctx);
+            };
+            // PutValue 步骤 3.a：null/undefined 基座先于 ToPropertyKey 抛 TypeError。
+            if let Some(exception) = set_on_nullish_receiver(ctx, state, *object, *index) {
+                return exception;
+            }
+            // `o[k] = v`：[[Set]]（含 proxy trap）之前先做 ToPropertyKey 再入。
+            let index = &match to_property_key_value(ctx, state, *index) {
+                Ok(key) => key,
+                Err(exception) => return exception,
             };
             // 基元接收者先行短路：decode_handle 对 SSO/基元产出无效句柄，
             // 后续 typed_arrays 等按句柄查表的分支不得先于本判定执行。
@@ -875,6 +919,41 @@ fn set_property_impl(
     }
 }
 
+/// 值是否为 ECMAScript 基元（含 null / undefined）。
+fn is_primitive_value(encoded: i64) -> bool {
+    value::is_null(encoded)
+        || value::is_undefined(encoded)
+        || value::is_string(encoded)
+        || value::is_f64(encoded)
+        || value::is_bool(encoded)
+        || value::is_symbol(encoded)
+        || value::is_bigint(encoded)
+}
+
+/// PutValue 步骤 3.a：ToObject 对 null/undefined 基座直接抛 TypeError（与
+/// strict 无关），且先于 ToPropertyKey——后者可能执行用户代码，其副作用不得
+/// 在本 TypeError 之前发生。返回 `None` 表示基座不是 null/undefined。
+fn set_on_nullish_receiver(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+) -> Option<i64> {
+    if !value::is_null(object) && !value::is_undefined(object) {
+        return None;
+    }
+    let base = if value::is_null(object) {
+        "null"
+    } else {
+        "undefined"
+    };
+    let message = format!(
+        "Cannot set properties of {base} (setting '{}')",
+        render_value(state, key)
+    );
+    Some(type_error(ctx, state, &message))
+}
+
 /// PutValue 对基元 base 的 [[Set]] 终局（OrdinarySetWithOwnDescriptor 步骤
 /// 3.d.iv：Receiver 非对象时数据属性写入必然失败）：
 /// - null / undefined base：ToObject 直接抛 TypeError（与 strict 无关）；
@@ -888,17 +967,6 @@ fn set_property_impl(
 /// String.prototype 等的扩展在 [[Get]] 路径同样不可见，因此这里不存在可
 /// 命中的用户 accessor setter；若未来打通用户可扩展基元原型，Get/Set 两侧
 /// 需一并补上原型链 accessor 查找。
-/// 值是否为 ECMAScript 基元（含 null / undefined）。
-fn is_primitive_value(encoded: i64) -> bool {
-    value::is_null(encoded)
-        || value::is_undefined(encoded)
-        || value::is_string(encoded)
-        || value::is_f64(encoded)
-        || value::is_bool(encoded)
-        || value::is_symbol(encoded)
-        || value::is_bigint(encoded)
-}
-
 fn set_on_primitive_receiver(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -907,17 +975,8 @@ fn set_on_primitive_receiver(
     stored: i64,
     strict: bool,
 ) -> Option<i64> {
-    if value::is_null(object) || value::is_undefined(object) {
-        let base = if value::is_null(object) {
-            "null"
-        } else {
-            "undefined"
-        };
-        let message = format!(
-            "Cannot set properties of {base} (setting '{}')",
-            render_value(state, key)
-        );
-        return Some(type_error(ctx, state, &message));
+    if let Some(exception) = set_on_nullish_receiver(ctx, state, object, key) {
+        return Some(exception);
     }
     let type_name = if value::is_string(object) {
         "string"
@@ -2756,6 +2815,24 @@ pub(super) fn to_primitive(
         state,
         "cannot convert object to primitive value",
     ))
+}
+
+/// ECMAScript ToPropertyKey（§7.1.19）的值域版本：对象键经 ToPrimitive(string)
+/// 再入用户转换（`Symbol.toPrimitive` / `toString` / `valueOf`），Symbol 结果保留
+/// 为 symbol 键，其余原始值交由下游 `property_key` / `array_index` 统一处理
+/// （数字保持数字以保留索引快路径）；非对象输入零开销原样返回。
+pub(super) fn to_property_key_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    encoded: i64,
+) -> Result<i64, i64> {
+    if value::is_exception(encoded) {
+        return Err(encoded);
+    }
+    if !value::is_js_object(encoded) && !value::is_regexp(encoded) {
+        return Ok(encoded);
+    }
+    to_primitive(ctx, state, encoded, PrimitiveHint::String)
 }
 
 pub(super) fn to_number_coerced(
