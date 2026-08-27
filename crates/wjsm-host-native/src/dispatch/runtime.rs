@@ -1942,6 +1942,8 @@ pub(super) fn delete_property(
     let key = property_key(state, encoded_key).ok_or(())?;
     let configurable = constants::FLAG_CONFIGURABLE as u32;
     if value::is_callable(object) {
+        // callable 侧表键统一为去色规范形，与写入/查找路径一致。
+        let object = value::strip_gc_color(object);
         if state
             .callable_property_flags
             .get(&(object, key))
