@@ -1401,7 +1401,7 @@ module {
       call builtin.array.push_spread(%0, %7)
       return %0
 
-  fn @sum$async [params: $21.$env, $21.$this] [entry=bb0]:
+  fn @sum$async [home_object=@14.prototype] [params: $21.$env, $21.$this] [entry=bb0]:
     bb0:
       %0 = load var $21.$env
       %1 = const c269
@@ -1533,7 +1533,7 @@ module {
     bb13:
       unreachable
 
-  fn @sum [needs_prototype] [params: $23.$env, $23.$this] [entry=bb0]:
+  fn @sum [home_object=@14.prototype] [needs_prototype] [params: $23.$env, $23.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c298
@@ -1567,7 +1567,7 @@ module {
       call builtin.async_function.resume(%5, %7, %19, %20, %21)
       return %4
 
-  fn @joinStatic$async [captures: $1.Seq] [params: $24.$env, $24.$this] [entry=bb0]:
+  fn @joinStatic$async [home_object=@14] [captures: $1.Seq] [params: $24.$env, $24.$this] [entry=bb0]:
     bb0:
       %0 = load var $24.$env
       %1 = const c317
@@ -1714,7 +1714,7 @@ module {
     bb15:
       unreachable
 
-  fn @joinStatic [needs_prototype] [captures: $1.Seq] [params: $26.$env, $26.$this] [entry=bb0]:
+  fn @joinStatic [home_object=@14] [needs_prototype] [captures: $1.Seq] [params: $26.$env, $26.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c349

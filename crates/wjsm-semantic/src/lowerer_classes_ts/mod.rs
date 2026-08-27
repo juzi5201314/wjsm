@@ -822,8 +822,10 @@ impl Lowerer {
             declare: false,
             function: pm.function.clone(),
         };
+        // 私有 generator 体内 super 尚未接线：构造器 id 在 collect 阶段未知，
+        // 且 body/wrapper 双函数的 home 元数据需成对回填，留作后续任务。
         let lowered = if pm.function.is_async {
-            self.lower_async_gen_function(&declaration)
+            self.lower_async_gen_function(&declaration, MethodSuperBinding::None)
         } else {
             self.lower_gen_function(&declaration)
         };
