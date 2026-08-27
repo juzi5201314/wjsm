@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+spread source: boom
+getter: getter-throw
+partial: partial-throw
+static-key value: boom
+generic value: boom
+order: 1,caught
+order2: 1,caught,4,getter-caught
+nested: boom
+in function: getter-throw
+ok: {"0":"a","1":"b","w":0,"x":1,"y":9,"z":3} 0
+--- stderr ---

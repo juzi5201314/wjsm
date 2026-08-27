@@ -162,6 +162,35 @@ impl Lowerer {
         Ok(block)
     }
 
+    /// 发射 `ObjectSpread` 并检查其结果：CopyDataProperties 读取 source 自有
+    /// 属性时 getter/Proxy trap 抛错会以 TAG_EXCEPTION 返回，必须按
+    /// ECMAScript CopyDataProperties 传播，不得丢弃后静默产生残缺对象。
+    /// 三态处理与 `emit_array_push_spread_checked` 一致：普通函数体直接分叉
+    /// 抛出；规范拥有者抑制期间延迟分叉；async 状态机体内不插表达式级分叉。
+    pub(crate) fn emit_object_spread_checked(
+        &mut self,
+        block: BasicBlockId,
+        object: ValueId,
+        source: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::ObjectSpread {
+                dest: result,
+                object,
+                source,
+            },
+        );
+        if self.expr_exception_fork_allowed() {
+            return self.lower_value_exception_branch(block, result);
+        }
+        if self.exception_fork_suppressed() {
+            return Ok(self.defer_value_exception_branch(block, result));
+        }
+        Ok(block)
+    }
+
     pub(crate) fn lower_binary(
         &mut self,
         bin: &swc_ast::BinExpr,

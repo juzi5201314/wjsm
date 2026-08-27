@@ -1020,7 +1020,11 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
                 changed = true;
             }
         }
-        Instruction::ObjectSpread { source, .. } => {
+        Instruction::ObjectSpread { object, source, .. } => {
+            if let Some(new) = replacements.get(object) {
+                *object = *new;
+                changed = true;
+            }
             if let Some(new) = replacements.get(source) {
                 *source = *new;
                 changed = true;

@@ -106,7 +106,7 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         | EncodeException { value, .. }
         | ExceptionToObject { value, .. } => vec![*value],
         GuardSameFunction { callee, .. } => vec![*callee],
-        ObjectSpread { dest, source } => vec![*dest, *source],
+        ObjectSpread { object, source, .. } => vec![*object, *source],
         StoreVar { value, .. } => vec![*value],
         InitObjectLiteral { values, .. } => values.clone(),
         // 无操作数
@@ -188,7 +188,8 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | IsException { dest, .. }
         | GuardSameFunction { dest, .. }
         | EncodeException { dest, .. }
-        | ExceptionToObject { dest, .. } => *dest,
+        | ExceptionToObject { dest, .. }
+        | ObjectSpread { dest, .. } => *dest,
         Call { dest, .. }
         | CallBuiltin { dest, .. }
         | SuperCall { dest, .. }
@@ -196,7 +197,6 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         // 非 producing
         StoreVar { .. }
         | SetProto { .. }
-        | ObjectSpread { .. }
         | PromiseResolve { .. }
         | PromiseReject { .. }
         | Suspend { .. }

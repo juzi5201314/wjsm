@@ -9,22 +9,27 @@ impl Lowerer {
         // 降低 tag 名
         let tag_val = self.lower_jsx_element_name(&jsx_el.opening.name, block)?;
 
-        // 降低 props
-        let props_val = self.lower_jsx_attrs(&jsx_el.opening.attrs, block)?;
+        // 降低 props：spread 属性的异常分叉会推进 block，
+        // 后续 children 与 CallBuiltin 必须落在推进后的块上。
+        let mut current = block;
+        let props_val = self.lower_jsx_attrs(&jsx_el.opening.attrs, &mut current)?;
 
-        // 降低 children（作为数组）
-        let children_val = self.lower_jsx_children(&jsx_el.children, block)?;
+        // 降低 children（作为数组）；嵌套子元素同样可能分叉推进 block
+        let children_val = self.lower_jsx_children(&jsx_el.children, &mut current)?;
 
         // 调用 jsx_create_element(tag, props, children)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin: Builtin::JsxCreateElement,
                 args: vec![tag_val, props_val, children_val],
             },
         );
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
         Ok(dest)
     }
 
@@ -56,19 +61,23 @@ impl Lowerer {
             },
         );
 
-        // 收集 children
-        let children_val = self.lower_jsx_children(&jsx_frag.children, block)?;
+        // 收集 children；嵌套子元素的异常分叉可能推进 block
+        let mut current = block;
+        let children_val = self.lower_jsx_children(&jsx_frag.children, &mut current)?;
 
         // 调用 jsx_create_element(tag, null, children)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin: Builtin::JsxCreateElement,
                 args: vec![tag_val, props_val, children_val],
             },
         );
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
         Ok(dest)
     }
 
@@ -166,17 +175,19 @@ impl Lowerer {
         }
     }
 
+    /// 属性值/spread 源求值与异常分叉可能推进 block，调用方须以推进后的
+    /// `*block` 作为后续发射点。
     pub(crate) fn lower_jsx_attrs(
         &mut self,
         attrs: &[swc_ast::JSXAttrOrSpread],
-        block: BasicBlockId,
+        block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         if attrs.is_empty() {
             // 无属性 → null
             let null_const = self.module.add_constant(Constant::Null);
             let null_val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::Const {
                     dest: null_val,
                     constant: null_const,
@@ -189,7 +200,7 @@ impl Lowerer {
         let capacity = std::cmp::max(4, attrs.len() as u32);
         let obj_dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            *block,
             Instruction::NewObject {
                 dest: obj_dest,
                 capacity,
@@ -213,7 +224,7 @@ impl Lowerer {
                                 let const_id = self.module.add_constant(Constant::String(str_val));
                                 let val = self.alloc_value();
                                 self.current_function.append_instruction(
-                                    block,
+                                    *block,
                                     Instruction::Const {
                                         dest: val,
                                         constant: const_id,
@@ -223,14 +234,16 @@ impl Lowerer {
                             }
                             swc_ast::JSXAttrValue::JSXExprContainer(expr_container) => {
                                 match &expr_container.expr {
-                                    swc_ast::JSXExpr::Expr(expr) => self.lower_expr(expr, block)?,
+                                    swc_ast::JSXExpr::Expr(expr) => {
+                                        self.lower_expr_then_continue(expr, block)?
+                                    }
                                     swc_ast::JSXExpr::JSXEmptyExpr(_) => {
                                         // 空表达式 → true
                                         let true_const =
                                             self.module.add_constant(Constant::Bool(true));
                                         let val = self.alloc_value();
                                         self.current_function.append_instruction(
-                                            block,
+                                            *block,
                                             Instruction::Const {
                                                 dest: val,
                                                 constant: true_const,
@@ -241,10 +254,14 @@ impl Lowerer {
                                 }
                             }
                             swc_ast::JSXAttrValue::JSXElement(el) => {
-                                self.lower_jsx_element(el, block)?
+                                let val = self.lower_jsx_element(el, *block)?;
+                                *block = self.resolve_store_block(*block);
+                                val
                             }
                             swc_ast::JSXAttrValue::JSXFragment(frag) => {
-                                self.lower_jsx_fragment(frag, block)?
+                                let val = self.lower_jsx_fragment(frag, *block)?;
+                                *block = self.resolve_store_block(*block);
+                                val
                             }
                         }
                     } else {
@@ -252,7 +269,7 @@ impl Lowerer {
                         let true_const = self.module.add_constant(Constant::Bool(true));
                         let val = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            *block,
                             Instruction::Const {
                                 dest: val,
                                 constant: true_const,
@@ -265,23 +282,22 @@ impl Lowerer {
                     let key_const = self.module.add_constant(Constant::String(attr_name));
                     let key_dest = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        *block,
                         Instruction::Const {
                             dest: key_dest,
                             constant: key_const,
                         },
                     );
-                    self.emit_create_data_property(block, obj_dest, key_dest, attr_value);
+                    self.emit_create_data_property(*block, obj_dest, key_dest, attr_value);
                 }
                 swc_ast::JSXAttrOrSpread::SpreadElement(spread) => {
-                    let source = self.lower_expr(&spread.expr, block)?;
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::ObjectSpread {
-                            dest: obj_dest,
-                            source,
-                        },
-                    );
+                    let source = self.lower_expr_then_continue(&spread.expr, block)?;
+                    // 与对象字面量 spread 一致：源求值与 CopyDataProperties
+                    // 的异常都必须传播，不得静默产生残缺 props。
+                    if self.expr_exception_fork_allowed() && self.expr_can_throw(&spread.expr) {
+                        *block = self.lower_value_exception_branch(*block, source)?;
+                    }
+                    *block = self.emit_object_spread_checked(*block, obj_dest, source)?;
                 }
             }
         }
@@ -292,14 +308,14 @@ impl Lowerer {
     pub(crate) fn lower_jsx_children(
         &mut self,
         children: &[swc_ast::JSXElementChild],
-        block: BasicBlockId,
+        block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         if children.is_empty() {
             // 无 children → null
             let null_const = self.module.add_constant(Constant::Null);
             let null_val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::Const {
                     dest: null_val,
                     constant: null_const,
@@ -311,13 +327,14 @@ impl Lowerer {
         // 创建 children 数组
         let arr = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            *block,
             Instruction::NewArray {
                 dest: arr,
                 capacity: children.len() as u32,
             },
         );
 
+        // 子表达式/嵌套元素求值可能分叉推进 block，push 必须落在推进后的块上
         for child in children {
             let child_val = match child {
                 swc_ast::JSXElementChild::JSXText(text) => {
@@ -330,7 +347,7 @@ impl Lowerer {
                         .add_constant(Constant::String(trimmed.to_string()));
                     let val = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        *block,
                         Instruction::Const {
                             dest: val,
                             constant: str_const,
@@ -340,18 +357,26 @@ impl Lowerer {
                 }
                 swc_ast::JSXElementChild::JSXExprContainer(expr_container) => {
                     match &expr_container.expr {
-                        swc_ast::JSXExpr::Expr(expr) => self.lower_expr(expr, block)?,
+                        swc_ast::JSXExpr::Expr(expr) => {
+                            self.lower_expr_then_continue(expr, block)?
+                        }
                         swc_ast::JSXExpr::JSXEmptyExpr(_) => continue,
                     }
                 }
-                swc_ast::JSXElementChild::JSXElement(el) => self.lower_jsx_element(el, block)?,
+                swc_ast::JSXElementChild::JSXElement(el) => {
+                    let val = self.lower_jsx_element(el, *block)?;
+                    *block = self.resolve_store_block(*block);
+                    val
+                }
                 swc_ast::JSXElementChild::JSXFragment(frag) => {
-                    self.lower_jsx_fragment(frag, block)?
+                    let val = self.lower_jsx_fragment(frag, *block)?;
+                    *block = self.resolve_store_block(*block);
+                    val
                 }
                 _ => continue,
             };
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::CallBuiltin {
                     dest: None,
                     builtin: Builtin::ArrayPush,
