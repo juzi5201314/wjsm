@@ -357,6 +357,7 @@ module {
       branch %64, bb15, bb17
     bb15:
       %65 = get_elem %43, %62
+      %70 = const c0
       jump bb24
     bb16:
       %68 = set_elem %61, %62, %73
@@ -386,6 +387,7 @@ module {
     bb24:
       %71 = const c103
       %73 = call %65, this=%71
+      store var $16.read, %70
       jump bb23
 
   fn @arrow_9 [captures: $17.outer, $19.inner] [params: $21.$env, $21.$this] [entry=bb0]:
@@ -1202,6 +1204,7 @@ module {
       branch %477, bb134, bb136
     bb134:
       %478 = get_elem %452, %475
+      %603 = const c0
       jump bb218
     bb135:
       %481 = set_elem %474, %475, %606
@@ -1251,6 +1254,7 @@ module {
       branch %497, bb147, bb149
     bb147:
       %498 = get_elem %409, %495
+      %599 = const c0
       jump bb216
     bb148:
       %501 = set_elem %494, %495, %602
@@ -1300,6 +1304,7 @@ module {
       branch %517, bb160, bb162
     bb160:
       %518 = get_elem %371, %515
+      %595 = const c0
       jump bb214
     bb161:
       %521 = set_elem %514, %515, %598
@@ -1348,6 +1353,7 @@ module {
       branch %537, bb173, bb175
     bb173:
       %538 = get_elem %295, %535
+      %591 = const c0
       jump bb212
     bb174:
       %541 = set_elem %534, %535, %594
@@ -1396,6 +1402,7 @@ module {
       branch %557, bb186, bb188
     bb186:
       %558 = get_elem %118, %555
+      %587 = const c0
       jump bb210
     bb187:
       %561 = set_elem %554, %555, %590
@@ -1444,6 +1451,7 @@ module {
       branch %577, bb199, bb201
     bb199:
       %578 = get_elem %65, %575
+      %583 = const c0
       jump bb208
     bb200:
       %581 = set_elem %574, %575, %586
@@ -1475,6 +1483,7 @@ module {
     bb208:
       %584 = const c35
       %586 = call %578, this=%584
+      store var $4.read, %583
       jump bb207
     bb209:
       %560 = is_exception %590
@@ -1482,6 +1491,7 @@ module {
     bb210:
       %588 = const c53
       %590 = call %558, this=%588
+      store var $7.read, %587
       jump bb209
     bb211:
       %540 = is_exception %594
@@ -1489,6 +1499,7 @@ module {
     bb212:
       %592 = const c135
       %594 = call %538, this=%592
+      store var $22.read, %591
       jump bb211
     bb213:
       %520 = is_exception %598
@@ -1496,6 +1507,7 @@ module {
     bb214:
       %596 = const c164
       %598 = call %518, this=%596
+      store var $28.read, %595
       jump bb213
     bb215:
       %500 = is_exception %602
@@ -1503,6 +1515,7 @@ module {
     bb216:
       %600 = const c176
       %602 = call %498, this=%600
+      store var $32.read, %599
       jump bb215
     bb217:
       %480 = is_exception %606
@@ -1510,6 +1523,7 @@ module {
     bb218:
       %604 = const c187
       %606 = call %478, this=%604
+      store var $36.read, %603
       jump bb217
     bb219:
       %344 = add %340, %610

@@ -124,6 +124,7 @@ module {
       call builtin.define_property(%22, %30, %31)
       %36 = const c33
       %37 = const c34
+      %42 = const c0
       jump bb4
     bb1:
       return
@@ -145,5 +146,8 @@ module {
       %55 = const c22
       %56 = get_elem %22, %55
       %57 = add %53, %56
+      store var $1.a, %42
+      store var $1.b, %42
+      store var $1.strings, %42
       jump bb3
 }

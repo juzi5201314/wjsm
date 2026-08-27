@@ -9,6 +9,47 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::variable_ssa::{VarDef, VariableSsa};
 use crate::{BinaryOp, Constant, Function, Instruction, Program, UnaryOp, ValueId};
 
+/// 值类 SSA 可见变量：帧局部 + 本函数内 load/store 都出现的 `$0.*` 模块绑定。
+///
+/// host 槽提升仍只用 [`Program::frame_local_variable_names`]；此处额外纳入
+/// `$0.i` 这类模块级循环计数器，供 VariableSsa 做到达定义分析。
+fn ssa_variable_names<'a>(
+    function: &'a Function,
+    frame_locals: &BTreeSet<&'a str>,
+) -> BTreeSet<&'a str> {
+    let mut names = frame_locals.clone();
+    let captured: BTreeSet<&str> = function.captured_names.iter().map(String::as_str).collect();
+    let mut loaded = BTreeSet::new();
+    let mut stored = BTreeSet::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            match instruction {
+                Instruction::LoadVar { name, .. } => {
+                    if name.starts_with("$0.")
+                        && !captured.contains(name.as_str())
+                        && !matches!(name.as_str(), "$0.$global" | "$0.$shared_env")
+                    {
+                        loaded.insert(name.as_str());
+                    }
+                }
+                Instruction::StoreVar { name, .. } => {
+                    if name.starts_with("$0.")
+                        && !captured.contains(name.as_str())
+                        && !matches!(name.as_str(), "$0.$global" | "$0.$shared_env")
+                    {
+                        stored.insert(name.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for name in loaded.intersection(&stored) {
+        names.insert(name);
+    }
+    names
+}
+
 /// 单函数值类分析结果。
 #[derive(Clone, Debug, Default)]
 pub struct ValueClassSet {
@@ -37,7 +78,8 @@ pub fn infer_function(
     frame_locals: &BTreeSet<&str>,
     seeds: &FunctionSeeds,
 ) -> ValueClassSet {
-    let variables = VariableSsa::build(function, frame_locals);
+    let ssa_names = ssa_variable_names(function, frame_locals);
+    let variables = VariableSsa::build(function, &ssa_names);
     let js_params = function.params().len().saturating_sub(2);
     let mut param_flags = vec![false; js_params];
     for (index, flag) in seeds.param_is_number.iter().copied().enumerate() {
@@ -49,7 +91,7 @@ pub fn infer_function(
         program,
         function,
         &variables,
-        frame_locals,
+        &ssa_names,
         &param_flags,
         &seeds.extra_numbers,
     )
@@ -86,7 +128,7 @@ fn analyze(
     program: &Program,
     function: &Function,
     variables: &VariableSsa<'_>,
-    frame_locals: &BTreeSet<&str>,
+    ssa_names: &BTreeSet<&str>,
     f64_params: &[bool],
     extra_numbers: &HashSet<ValueId>,
 ) -> ValueClassSet {
@@ -162,7 +204,7 @@ fn analyze(
         }
     }
 
-    let int32s = infer_int32(program, function, frame_locals, &numbers);
+    let int32s = infer_int32(program, function, ssa_names, &numbers);
     ValueClassSet { numbers, int32s }
 }
 
@@ -284,7 +326,7 @@ fn definition_is_number(
 fn infer_int32(
     program: &Program,
     function: &Function,
-    frame_locals: &BTreeSet<&str>,
+    ssa_names: &BTreeSet<&str>,
     numbers: &HashSet<ValueId>,
 ) -> HashSet<ValueId> {
     let mut int32s = HashSet::new();
@@ -310,7 +352,7 @@ fn infer_int32(
                 let dest = match instruction {
                     Instruction::LoadVar { dest, name }
                         if numbers.contains(dest)
-                            && frame_locals.contains(name.as_str())
+                            && ssa_names.contains(name.as_str())
                             && name_int32s.contains(name) =>
                     {
                         *dest

@@ -130,6 +130,7 @@ module {
       branch %47, bb8, bb12
     bb8:
       %48 = get_elem %26, %45
+      %53 = const c0
       jump bb19
     bb9:
       %51 = call builtin.to_boolean(%56)
@@ -163,5 +164,6 @@ module {
       %57 = const c25
       %58 = const c26
       %56 = call builtin.abstract_compare(%48, %55, %57, %58)
+      store var $1.x, %53
       jump bb18
 }

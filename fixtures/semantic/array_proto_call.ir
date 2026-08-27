@@ -125,6 +125,7 @@ module {
       branch %46, bb8, bb10
     bb8:
       %47 = get_elem %25, %44
+      %52 = const c0
       jump bb17
     bb9:
       %50 = set_elem %43, %44, %55
@@ -151,5 +152,6 @@ module {
     bb17:
       %54 = const c23
       %55 = mul %47, %54
+      store var $1.x, %52
       jump bb16
 }

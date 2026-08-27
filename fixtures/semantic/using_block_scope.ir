@@ -108,6 +108,7 @@ module {
       %21 = const c25
       store var $0.makeDisposable, %21
       %24 = const c27
+      %40 = const c0
       jump bb9
     bb1:
       %30 = load var $3.a
@@ -151,5 +152,6 @@ module {
       %48 = const c24
       %49 = call builtin.symbol.well_known(%48)
       %50 = set_prop %41, %49, %47
+      store var $1.name, %40
       jump bb8
 }

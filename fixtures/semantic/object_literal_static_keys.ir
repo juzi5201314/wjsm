@@ -419,6 +419,7 @@ module {
       %190 = const c99
       %193 = load var $0.many
       %194 = const c101
+      %307 = const c0
       jump bb49
     bb22:
       %133 = call builtin.exception_value(%131)
@@ -575,19 +576,27 @@ module {
       branch %207, bb24, bb23
     bb45:
       %302 = get_elem %203, %204
+      store var $2.k, %299
+      store var $2.o, %299
       jump bb44
     bb46:
       %203 = load var $0.many
       %204 = const c105
+      %299 = const c0
       jump bb45
     bb47:
       %306 = get_elem %198, %199
+      store var $2.k, %303
+      store var $2.o, %303
       jump bb46
     bb48:
       %198 = load var $0.many
       %199 = const c103
+      %303 = const c0
       jump bb47
     bb49:
       %310 = get_elem %193, %194
+      store var $2.k, %307
+      store var $2.o, %307
       jump bb48
 }

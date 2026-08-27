@@ -218,6 +218,7 @@ module {
       %30 = set_prop %26, %29, %28
       %32 = call builtin.promise.create_resolve_function(%23)
       %33 = call builtin.promise.create_reject_function(%23)
+      %75 = const c0
       jump bb14
     bb1:
       store var $0.p1, %23
@@ -228,6 +229,7 @@ module {
       %42 = set_prop %39, %41, %40
       %44 = call builtin.promise.create_resolve_function(%37)
       %45 = call builtin.promise.create_reject_function(%37)
+      %68 = const c0
       jump bb10
     bb2:
       %36 = call builtin.exception_value(%23)
@@ -276,9 +278,11 @@ module {
       %73 = is_exception %72
       branch %73, bb12, bb11
     bb11:
+      store var $2.reject, %68
       jump bb9
     bb12:
       %74 = call builtin.exception_value(%72)
+      store var $2.reject, %68
       throw %74
     bb13:
       %35 = is_exception %23
@@ -289,8 +293,10 @@ module {
       %80 = is_exception %79
       branch %80, bb16, bb15
     bb15:
+      store var $1.reject, %75
       jump bb13
     bb16:
       %81 = call builtin.exception_value(%79)
+      store var $1.reject, %75
       throw %81
 }

@@ -83,6 +83,7 @@ module {
       %21 = const c21
       store var $0.makeResource, %21
       %24 = const c23
+      %32 = const c0
       jump bb4
     bb1:
       return
@@ -101,5 +102,6 @@ module {
       %33 = new_object(capacity=4)
       %35 = const c20
       %36 = set_prop %33, %35, %24
+      store var $1.value, %32
       jump bb3
 }

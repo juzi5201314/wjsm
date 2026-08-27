@@ -263,6 +263,7 @@ module {
       %28 = set_prop %24, %27, %26
       %29 = call builtin.create_closure(%22, %24)
       store var $0.makeCounter, %29
+      %59 = const c0
       jump bb10
     bb1:
       store var $0.counter, %69
@@ -324,5 +325,7 @@ module {
       %67 = const c55
       %68 = set_prop %64, %67, %66
       %69 = call builtin.create_closure(%62, %64)
+      store var $1.$shared_env, %59
+      store var $1.count, %59
       jump bb9
 }
