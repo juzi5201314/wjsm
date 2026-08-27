@@ -80,7 +80,8 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 提升资格：
 
 - SSA 值必须属于**可靠**证明集合（`FunctionCompileInput::typed_f64_values`）。base 编译即静态分析结果；特化 overlay 只取入口 tag 守卫背书的种子分析结果，运行时反馈推测出的 number 留在 boxed 表示，由循环头守卫兜底。
-- 帧局部还要求该名字的**全部 `StoreVar` 与全部 `LoadVar` 都已证明 f64**。入口初值是 `undefined`（一个 NaN-Box 值），这条要求等价于「`variable_ssa` 解出的入口定义到不了任何 load」。
+- 在此之上，定义点还必须真的产出机器浮点数：`f64const`、`fadd`/`fsub`/`fmul`/`fdiv`、`fneg`、内联 Math builtin 与 typed math thunk 是 producer；φ 与一元 `+` 只是搬运，资格随源值；`LoadVar` 的资格随帧局部。**`Call` 的返回值一律不合格**——即便分析证明被调函数每条 `Return` 都返回 number，抛出路径仍按 ABI 返回 exception 编码（一个 NaN-Box 值），而 `IsException` 是调用点之后的独立指令，逃逸时的 NaN 规范化会把异常静默改写成 `NaN`。落到 host dispatcher 的算子（`%`、`**`、位运算）同理只有 boxed 结果。
+- 帧局部还要求该名字被读过、被写过、**全部 `LoadVar` 的产出都已证明 f64**，且**全部 `StoreVar` 的源值本身 typed**。「全部 load 已证明」保护入口初值：入口把局部定义成 `undefined`（一个 NaN-Box 值），这条要求等价于「`variable_ssa` 解出的入口定义到不了任何 load」。「被写过」保护 GC：`boxed_frame_local_names` 只把「全部 store 都写入已证明 f64」的局部排除出 root 槽，零 store 的局部仍会被钉住，而 typed 局部写回的是原始浮点位。
 - 含 `Suspend` / `GeneratorSuspend` 的函数整体退回 boxed：活跃值经宿主 continuation 以 boxed 形态往返。
 
 转换点由 `value_repr` 的 `use_value_boxed` / `use_value_f64` / `define_value_boxed` / `define_value_f64` 统一收口，φ 边与 `StoreVar` 走 `use_value_as` + `define_value_as` 逐对选择表示，两端一致时不产出指令。**typed → boxed 必须规范化 NaN**：硬件默认 QNaN 的位模式与 `value::BOX_BASE` 相同，不规范化会被运行时误判成句柄。反方向只需 `bitcast`。

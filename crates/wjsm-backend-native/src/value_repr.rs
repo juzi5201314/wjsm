@@ -19,7 +19,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use anyhow::{Context, Result};
 use cranelift_codegen::ir::{self, InstBuilder, types};
 use cranelift_frontend::{FunctionBuilder, Variable};
-use wjsm_ir::{Instruction, ValueId, value};
+use wjsm_ir::{BinaryOp, Builtin, Instruction, UnaryOp, ValueId, value};
+use wjsm_native_abi::NativeHostSymbol;
 
 /// SSA 值与帧局部的机器表示计划，兼作「ValueId → Cranelift 变量」索引。
 pub(crate) struct ValueRepr {
@@ -34,10 +35,16 @@ impl ValueRepr {
     /// `f64_values` 必须是**可靠**证明集合（不含运行时反馈推测出来的 number），
     /// typed 变量没有守卫，位模式一旦不是 double 就会被后续规范化改写。
     ///
-    /// 帧局部的资格比 SSA 值严格：入口初值是 `undefined`（一个 NaN-Box 值），
-    /// 若它能被某条 `LoadVar` 观察到，规范化就会把 `undefined` 改写成 `NaN`。
-    /// 因此要求该局部的**全部 store 与全部 load 都已证明 f64**——等价于说
-    /// [`wjsm_ir::variable_ssa`] 解出的入口定义到不了任何 load。
+    /// 在此之上还要求「值确实由浮点指令产出」：`Call` 与 dispatcher 返回值在 ABI
+    /// 上可能是 exception 编码（一个 NaN-Box 值），把它搬进浮点寄存器后逃逸点的
+    /// NaN 规范化会将其改写成 `NaN`，随后的 `IsException` 就再也识别不出来。
+    /// 因此只有 f64 分析证明、**并且**定义形态是浮点产出或 typed 之间搬运的值才提升。
+    ///
+    /// 帧局部的资格比 SSA 值再严格一层，见 [`candidate_locals`]：要求它被读过、
+    /// 被写过、**全部 load 都已证明 f64**，且**全部 store 的源值本身 typed**。
+    ///
+    /// 两个集合互相依赖（`i = φ(0, i + 1)` 经帧局部往返），故取最大不动点：先全部
+    /// 纳入候选，再迭代剔除条件不成立者。最小不动点会因自依赖把整条循环链剔光。
     pub(crate) fn plan(
         function: &wjsm_ir::Function,
         f64_values: &HashSet<ValueId>,
@@ -54,8 +61,50 @@ impl ValueRepr {
         if has_suspend {
             return repr;
         }
-        repr.typed_f64_ssa = f64_values.clone();
-        repr.typed_f64_locals = plan_typed_locals(function, f64_values, frame_local_names);
+
+        let definitions: Vec<(ValueId, TypedDef<'_>)> = function
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .filter_map(|instruction| classify_definition(instruction, frame_local_names))
+            .filter(|(dest, _)| f64_values.contains(dest))
+            .collect();
+        let mut typed_ssa: HashSet<ValueId> = definitions.iter().map(|(dest, _)| *dest).collect();
+        let mut typed_locals = candidate_locals(function, f64_values, frame_local_names);
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (dest, definition) in &definitions {
+                if !typed_ssa.contains(dest) {
+                    continue;
+                }
+                let holds = match definition {
+                    TypedDef::Producer => true,
+                    TypedDef::Copy(sources) => {
+                        sources.iter().all(|source| typed_ssa.contains(source))
+                    }
+                    TypedDef::LoadOf(name) => typed_locals.contains(*name),
+                };
+                if !holds {
+                    typed_ssa.remove(dest);
+                    changed = true;
+                }
+            }
+            for block in function.blocks() {
+                for instruction in block.instructions() {
+                    if let Instruction::StoreVar { name, value } = instruction
+                        && !typed_ssa.contains(value)
+                        && typed_locals.remove(name.as_str())
+                    {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        repr.typed_f64_ssa = typed_ssa;
+        repr.typed_f64_locals = typed_locals.into_iter().map(str::to_owned).collect();
         repr
     }
 
@@ -101,21 +150,109 @@ impl ValueRepr {
     }
 }
 
-/// 逐条 `LoadVar` / `StoreVar` 求解帧局部的 typed 资格。
-fn plan_typed_locals<'a>(
+/// 一个已证明 f64 的定义在机器层的产出形态，决定它能否常驻浮点寄存器。
+enum TypedDef<'a> {
+    /// 定义点直接发浮点指令（`f64const` / `fadd` / `sqrt` / typed math thunk），
+    /// 产出必然是货真价实的 double，与操作数当下的表示无关。
+    Producer,
+    /// 定义点只是搬运，表示随源值而定。
+    Copy(Vec<ValueId>),
+    /// 从帧局部读出，资格随该局部。
+    LoadOf(&'a str),
+}
+
+/// 判定一条指令的产出值是否有资格常驻浮点寄存器，并给出它依赖的前提。
+///
+/// 返回 `None` 表示无条件不合格。关键是 [`Instruction::Call`]：即便 f64 分析
+/// 证明被调函数的每条 `Return` 都返回 number，抛出路径仍会按 ABI 返回 exception
+/// 编码（一个 NaN-Box 值），而调用点的 `IsException` 是独立指令、不在定义点拦截。
+/// 把它搬进浮点寄存器，逃逸时的 NaN 规范化就会将其改写成 `NaN`，异常被静默吞掉。
+///
+/// 各分支与 [`crate::lower`] 的 lowering arm 一一对应：只有那里真的发浮点指令的
+/// 形态才算 `Producer`，落到宿主 dispatcher 的形态（`%`、`**`、位运算等）产出
+/// boxed 结果，一律不合格。
+fn classify_definition<'a>(
+    instruction: &'a Instruction,
+    frame_local_names: &BTreeSet<&str>,
+) -> Option<(ValueId, TypedDef<'a>)> {
+    match instruction {
+        // 非 number 常量不会进入 f64 集合，调用方已按 f64 集合过滤。
+        Instruction::Const { dest, .. } => Some((*dest, TypedDef::Producer)),
+        Instruction::Binary { dest, op, .. }
+            if matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+            ) =>
+        {
+            Some((*dest, TypedDef::Producer))
+        }
+        Instruction::Unary {
+            dest,
+            op: UnaryOp::Neg,
+            ..
+        } => Some((*dest, TypedDef::Producer)),
+        // 一元 `+` 对已证明 number 是恒等运算，按目标表示原样搬运。
+        Instruction::Unary {
+            dest,
+            op: UnaryOp::Pos,
+            value,
+        } => Some((*dest, TypedDef::Copy(vec![*value]))),
+        Instruction::Phi { dest, sources } if !sources.is_empty() => Some((
+            *dest,
+            TypedDef::Copy(sources.iter().map(|source| source.value).collect()),
+        )),
+        // 非帧局部（宿主共享槽）经运行时 `LoadVar` 往返，只有 boxed 表示。
+        Instruction::LoadVar { dest, name } => frame_local_names
+            .contains(name.as_str())
+            .then(|| (*dest, TypedDef::LoadOf(name.as_str()))),
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin:
+                Builtin::MathAbs
+                | Builtin::MathSqrt
+                | Builtin::MathCeil
+                | Builtin::MathFloor
+                | Builtin::MathTrunc
+                | Builtin::MathFround,
+            args,
+        } if args.len() == 1 => Some((*dest, TypedDef::Producer)),
+        Instruction::CallBuiltin {
+            dest: Some(dest),
+            builtin,
+            args,
+        } if NativeHostSymbol::for_builtin(*builtin).is_some_and(|symbol| {
+            args.len() == usize::from(symbol.signature().argument_count())
+        }) =>
+        {
+            Some((*dest, TypedDef::Producer))
+        }
+        _ => None,
+    }
+}
+
+/// 帧局部的 typed 候选集：被读过、被写过，且每条 `LoadVar` 的产出都已证明 f64。
+///
+/// 「全部 load 已证明」是入口初值的安全条件：入口把局部定义成 `undefined`
+/// （一个 NaN-Box 值），若它能被某条 load 观察到，规范化就会把 `undefined` 改写
+/// 成 `NaN`。该条件等价于 [`wjsm_ir::variable_ssa`] 解出的入口定义到不了任何 load。
+///
+/// 「被写过」不是收益判断而是 GC 安全条件：[`crate::lower::boxed_frame_local_names`]
+/// 只把「全部 store 都写入已证明 f64」的局部排除出 root 槽，零 store 的局部仍会
+/// 被钉在 root 槽里，而 typed 局部写回的是原始浮点位——硬件 NaN 的位模式恰好是
+/// `BOX_BASE` 前缀，会被 GC 当成句柄扫描。
+fn candidate_locals<'a>(
     function: &'a wjsm_ir::Function,
     f64_values: &HashSet<ValueId>,
     frame_local_names: &BTreeSet<&str>,
-) -> HashSet<String> {
+) -> HashSet<&'a str> {
     let mut loaded: HashSet<&'a str> = HashSet::new();
+    let mut stored: HashSet<&'a str> = HashSet::new();
     let mut rejected: HashSet<&'a str> = HashSet::new();
     for block in function.blocks() {
         for instruction in block.instructions() {
             match instruction {
-                Instruction::StoreVar { name, value } => {
-                    if !f64_values.contains(value) {
-                        rejected.insert(name.as_str());
-                    }
+                Instruction::StoreVar { name, .. } => {
+                    stored.insert(name.as_str());
                 }
                 Instruction::LoadVar { dest, name } => {
                     loaded.insert(name.as_str());
@@ -127,10 +264,11 @@ fn plan_typed_locals<'a>(
             }
         }
     }
-    frame_local_names
-        .iter()
-        .filter(|name| loaded.contains(*name) && !rejected.contains(*name))
-        .map(|name| (*name).to_owned())
+    loaded
+        .into_iter()
+        .filter(|name| {
+            frame_local_names.contains(*name) && stored.contains(name) && !rejected.contains(name)
+        })
         .collect()
 }
 
@@ -254,6 +392,16 @@ mod tests {
 
     /// `let i = 0; while (…) { i = i + 1; }` 的帧局部形状：全部 store/load 都已证明。
     fn numeric_loop() -> wjsm_ir::Function {
+        numeric_loop_with_step(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Add,
+            lhs: ValueId(1),
+            rhs: ValueId(0),
+        })
+    }
+
+    /// 同上，但循环体内递增值由 `step` 定义，用于考察不同定义形态的资格。
+    fn numeric_loop_with_step(step: Instruction) -> wjsm_ir::Function {
         let mut function = wjsm_ir::Function::new("loop", BasicBlockId(0));
         let mut bb0 = BasicBlock::new(BasicBlockId(0));
         bb0.push_instruction(Instruction::Const {
@@ -272,6 +420,7 @@ mod tests {
             dest: ValueId(1),
             name: "$1.i".into(),
         });
+        bb1.push_instruction(step);
         bb1.push_instruction(Instruction::StoreVar {
             name: "$1.i".into(),
             value: ValueId(2),
@@ -282,14 +431,64 @@ mod tests {
         function
     }
 
+    fn all_values() -> HashSet<ValueId> {
+        HashSet::from([ValueId(0), ValueId(1), ValueId(2)])
+    }
+
     #[test]
     fn all_proven_local_becomes_typed() {
         let function = numeric_loop();
-        let f64_values = HashSet::from([ValueId(0), ValueId(1), ValueId(2)]);
         let names = BTreeSet::from(["$1.i"]);
-        let repr = ValueRepr::plan(&function, &f64_values, &names, false);
+        let repr = ValueRepr::plan(&function, &all_values(), &names, false);
         assert!(repr.is_typed_local("$1.i"));
         assert_eq!(repr.local_type("$1.i"), types::F64);
+        assert!(repr.is_typed_value(ValueId(2)));
+    }
+
+    /// 调用返回值在 ABI 上可能是 exception 编码，即便 f64 分析证明它是 number
+    /// 也不得进浮点寄存器；整条依赖链随之退回 boxed。
+    #[test]
+    fn call_result_is_never_typed() {
+        let function = numeric_loop_with_step(Instruction::Call {
+            dest: Some(ValueId(2)),
+            callee: ValueId(1),
+            this_val: ValueId(1),
+            args: Vec::new(),
+        });
+        let names = BTreeSet::from(["$1.i"]);
+        let repr = ValueRepr::plan(&function, &all_values(), &names, false);
+        assert!(!repr.is_typed_value(ValueId(2)));
+        assert!(!repr.is_typed_local("$1.i"));
+        assert!(!repr.is_typed_value(ValueId(1)));
+    }
+
+    /// `%` 落到宿主 dispatcher，返回的是 boxed 结果，不是浮点寄存器里的 double。
+    #[test]
+    fn dispatcher_backed_operator_is_never_typed() {
+        let function = numeric_loop_with_step(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Mod,
+            lhs: ValueId(1),
+            rhs: ValueId(0),
+        });
+        let names = BTreeSet::from(["$1.i"]);
+        let repr = ValueRepr::plan(&function, &all_values(), &names, false);
+        assert!(!repr.is_typed_value(ValueId(2)));
+        assert!(!repr.is_typed_local("$1.i"));
+    }
+
+    /// typed 常量与浮点算子照常提升，即便所在局部因别的原因退回 boxed。
+    #[test]
+    fn producer_stays_typed_when_local_is_rejected() {
+        let function = numeric_loop_with_step(Instruction::Binary {
+            dest: ValueId(2),
+            op: BinaryOp::Mod,
+            lhs: ValueId(1),
+            rhs: ValueId(0),
+        });
+        let names = BTreeSet::from(["$1.i"]);
+        let repr = ValueRepr::plan(&function, &all_values(), &names, false);
+        assert!(repr.is_typed_value(ValueId(0)));
     }
 
     #[test]
@@ -330,6 +529,28 @@ mod tests {
             false,
         );
         assert!(!repr.is_typed_local("$1.x"));
+    }
+
+    /// 只读不写的局部（如只读参数）仍被钉在 GC root 槽里，提升会把原始浮点位
+    /// 写进 root 槽，保持 boxed。
+    #[test]
+    fn never_stored_local_stays_boxed() {
+        let mut function = wjsm_ir::Function::new("load_only", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$1.x".into(),
+        });
+        block.set_terminator(Terminator::Return { value: None });
+        function.push_block(block);
+        let repr = ValueRepr::plan(
+            &function,
+            &HashSet::from([ValueId(0)]),
+            &BTreeSet::from(["$1.x"]),
+            false,
+        );
+        assert!(!repr.is_typed_local("$1.x"));
+        assert!(!repr.is_typed_value(ValueId(0)));
     }
 
     /// 宿主共享槽不在帧局部集合里，即使全部 load/store 已证明也不得提升。
