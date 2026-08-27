@@ -30,15 +30,8 @@ pub(super) fn dispatch_operator(
             let [left, right] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            // async 状态机等不插表达式级分叉的上下文里，操作数求值异常以
-            // TAG_EXCEPTION 流入，按求值顺序（lval 先于 rval）原样透传，
-            // 不得当普通值比较后吞掉返回 false。
-            if value::is_exception(*left) {
-                return Some(*left);
-            }
-            if value::is_exception(*right) {
-                return Some(*right);
-            }
+            // 操作数求值异常（lval 先于 rval）已由 dispatch_builtin 入口的
+            // 实参哨兵透传统一处理，此处只做比较本身。
             match abstract_equal(ctx, state, *left, *right) {
                 Ok(equal) => value::encode_bool(equal),
                 Err(exception) => exception,
@@ -48,13 +41,7 @@ pub(super) fn dispatch_operator(
             let [left, right] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            // 严格相等自身不抛，但操作数求值异常须透传（同 AbstractEq）。
-            if value::is_exception(*left) {
-                return Some(*left);
-            }
-            if value::is_exception(*right) {
-                return Some(*right);
-            }
+            // 严格相等自身不抛；操作数哨兵已在 dispatch 入口透传。
             value::encode_bool(strict_equal(state, *left, *right))
         }
         Builtin::TypeOf => type_of(ctx, state, args),
@@ -221,17 +208,12 @@ fn op_in(ctx: &mut NativeVmContext, state: &mut NativeAgentState, object: i64, k
 
 /// ES InstanceofOperator：步骤 1 target 非对象抛 TypeError（先于
 /// @@hasInstance 查找），随后 @@hasInstance → OrdinaryHasInstance。
-/// async 状态机上下文的求值异常按求值顺序（lval 先于 rval）透传。
+/// 操作数求值异常（lval 先于 rval，与实参序一致）已由 dispatch_builtin
+/// 入口的实参哨兵透传统一处理。
 fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [object, constructor] = args else {
         return fail_dispatch(ctx);
     };
-    if value::is_exception(*object) {
-        return *object;
-    }
-    if value::is_exception(*constructor) {
-        return *constructor;
-    }
     if !(value::is_js_object(*constructor) || value::is_regexp(*constructor)) {
         return type_error(
             ctx,
