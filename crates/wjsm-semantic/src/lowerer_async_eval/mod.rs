@@ -182,3 +182,4 @@ mod async_bindings;
 mod async_env;
 mod async_import_promise;
 mod async_main;
+mod async_spill;
