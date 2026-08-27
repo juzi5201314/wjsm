@@ -528,6 +528,10 @@ pub enum Builtin {
     /// TDZ 运行时检查：值为未初始化哨兵时抛 ReferenceError，否则原样返回。
     /// args: [value, name(字符串常量，用于错误消息)]。
     TdzCheck,
+    /// ECMAScript ToPropertyKey（§7.1.19）：对象键经 ToPrimitive(string) 再入
+    /// 用户 `toString` / `valueOf` / `Symbol.toPrimitive`，转换抛出的异常原样传播；
+    /// 非对象输入原样返回。args: [key]。
+    ToPropertyKey,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -563,7 +567,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::TdzCheck as u16
+        Self::ToPropertyKey as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1051,6 +1055,7 @@ impl Builtin {
             Self::StringBuilderFinish => "string.builder_finish",
             Self::IsString => "is_string",
             Self::TdzCheck => "tdz_check",
+            Self::ToPropertyKey => "to_property_key",
         }
     }
 }

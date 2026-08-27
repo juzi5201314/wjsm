@@ -419,8 +419,8 @@ module {
       %190 = const c99
       %193 = load var $0.many
       %194 = const c101
-      %310 = const c0
-      jump bb51
+      %313 = const c0
+      jump bb53
     bb22:
       %133 = call builtin.exception_value(%131)
       throw %133
@@ -451,158 +451,165 @@ module {
       store var $0.computedKey, %225
       %226 = new_object(capacity=4)
       %227 = load var $0.computedKey
-      %228 = const c115
-      %229 = set_prop %226, %227, %228
-      store var $0.computed, %226
-      %230 = const c116
-      %231 = load var $0.computed
-      %232 = const c117
-      %233 = get_prop %231, %232
-      %234 = call builtin.console.log(%230, %233)
-      %235 = is_exception %234
-      branch %235, bb28, bb27
+      %228 = call builtin.to_property_key(%227)
+      %229 = is_exception %228
+      branch %229, bb28, bb27
     bb26:
       %224 = call builtin.exception_value(%222)
       throw %224
     bb27:
-      %237 = new_object(capacity=4)
-      %238 = const c118
-      %239 = const c122
-      %240 = new_object(capacity=4)
-      %241 = const c123
-      %242 = set_prop %240, %241, %239
-      %243 = const c124
-      %244 = const c125
-      %245 = set_prop %240, %243, %244
-      %246 = const c126
-      %247 = const c127
-      %248 = set_prop %240, %246, %247
-      call builtin.define_property(%237, %238, %240)
-      store var $0.accessor, %237
-      %249 = const c128
-      %250 = load var $0.accessor
-      %251 = const c129
-      %252 = get_prop %250, %251
-      %253 = call builtin.console.log(%249, %252)
-      %254 = is_exception %253
-      branch %254, bb30, bb29
+      %231 = const c115
+      %232 = set_prop %226, %228, %231
+      store var $0.computed, %226
+      %233 = const c116
+      %234 = load var $0.computed
+      %235 = const c117
+      %236 = get_prop %234, %235
+      %237 = call builtin.console.log(%233, %236)
+      %238 = is_exception %237
+      branch %238, bb30, bb29
     bb28:
-      %236 = call builtin.exception_value(%234)
-      throw %236
+      %230 = call builtin.exception_value(%228)
+      throw %230
     bb29:
-      %256 = new_object(capacity=4)
-      %257 = const c132
-      %258 = init_object_literal(c131, values=[%257])
-      %259 = object_spread %258 into %256
-      %260 = is_exception %259
-      branch %260, bb32, bb31
+      %240 = new_object(capacity=4)
+      %241 = const c118
+      %242 = const c122
+      %243 = new_object(capacity=4)
+      %244 = const c123
+      %245 = set_prop %243, %244, %242
+      %246 = const c124
+      %247 = const c125
+      %248 = set_prop %243, %246, %247
+      %249 = const c126
+      %250 = const c127
+      %251 = set_prop %243, %249, %250
+      call builtin.define_property(%240, %241, %243)
+      store var $0.accessor, %240
+      %252 = const c128
+      %253 = load var $0.accessor
+      %254 = const c129
+      %255 = get_prop %253, %254
+      %256 = call builtin.console.log(%252, %255)
+      %257 = is_exception %256
+      branch %257, bb32, bb31
     bb30:
-      %255 = call builtin.exception_value(%253)
-      throw %255
+      %239 = call builtin.exception_value(%237)
+      throw %239
     bb31:
-      %262 = const c133
-      %263 = const c134
-      %264 = set_prop %256, %262, %263
-      store var $0.spread, %256
-      %265 = const c135
-      %266 = load var $0.spread
-      %267 = const c136
-      %268 = get_prop %266, %267
-      %269 = load var $0.spread
-      %270 = const c137
-      %271 = get_prop %269, %270
-      %272 = call builtin.console.log(%265, %268, %271)
-      %273 = is_exception %272
-      branch %273, bb34, bb33
+      %259 = new_object(capacity=4)
+      %260 = const c132
+      %261 = init_object_literal(c131, values=[%260])
+      %262 = object_spread %261 into %259
+      %263 = is_exception %262
+      branch %263, bb34, bb33
     bb32:
-      %261 = call builtin.exception_value(%259)
-      throw %261
+      %258 = call builtin.exception_value(%256)
+      throw %258
     bb33:
-      %275 = const c140
-      %276 = init_object_literal(c139, values=[%275])
-      store var $0.frozen, %276
-      %277 = load var $0.frozen
-      %278 = call builtin.object.freeze(%277)
-      %279 = is_exception %278
-      branch %279, bb36, bb35
+      %265 = const c133
+      %266 = const c134
+      %267 = set_prop %259, %265, %266
+      store var $0.spread, %259
+      %268 = const c135
+      %269 = load var $0.spread
+      %270 = const c136
+      %271 = get_prop %269, %270
+      %272 = load var $0.spread
+      %273 = const c137
+      %274 = get_prop %272, %273
+      %275 = call builtin.console.log(%268, %271, %274)
+      %276 = is_exception %275
+      branch %276, bb36, bb35
     bb34:
-      %274 = call builtin.exception_value(%272)
-      throw %274
+      %264 = call builtin.exception_value(%262)
+      throw %264
     bb35:
-      %281 = const c141
-      store var $0.freezeError, %281
-      jump bb37
+      %278 = const c140
+      %279 = init_object_literal(c139, values=[%278])
+      store var $0.frozen, %279
+      %280 = load var $0.frozen
+      %281 = call builtin.object.freeze(%280)
+      %282 = is_exception %281
+      branch %282, bb38, bb37
     bb36:
-      %280 = call builtin.exception_value(%278)
-      throw %280
+      %277 = call builtin.exception_value(%275)
+      throw %277
     bb37:
-      %282 = load var $0.frozen
-      %283 = const c142
-      %284 = const c143
-      %285 = set_prop %282, %283, %284
-      %286 = is_exception %285
-      branch %286, bb41, bb40
-    bb38:
-      %294 = const c145
-      %295 = load var $0.frozen
-      %296 = const c146
-      %297 = get_prop %295, %296
-      %298 = load var $0.freezeError
-      %299 = call builtin.console.log(%294, %297, %298)
-      %300 = is_exception %299
-      branch %300, bb45, bb44
-    bb39:
-      %288 = load var $tmp.0
-      store var $5.error, %288
-      %289 = load var $5.error
-      %290 = const c144
-      %291 = get_prop %289, %290
-      store var $0.freezeError, %291
-      %292 = is_exception %291
-      branch %292, bb43, bb42
-    bb40:
-      jump bb38
-    bb41:
-      %287 = call builtin.exception_value(%285)
-      store var $tmp.0, %287
+      %284 = const c141
+      store var $0.freezeError, %284
       jump bb39
+    bb38:
+      %283 = call builtin.exception_value(%281)
+      throw %283
+    bb39:
+      %285 = load var $0.frozen
+      %286 = const c142
+      %287 = const c143
+      %288 = set_prop %285, %286, %287
+      %289 = is_exception %288
+      branch %289, bb43, bb42
+    bb40:
+      %297 = const c145
+      %298 = load var $0.frozen
+      %299 = const c146
+      %300 = get_prop %298, %299
+      %301 = load var $0.freezeError
+      %302 = call builtin.console.log(%297, %300, %301)
+      %303 = is_exception %302
+      branch %303, bb47, bb46
+    bb41:
+      %291 = load var $tmp.0
+      store var $5.error, %291
+      %292 = load var $5.error
+      %293 = const c144
+      %294 = get_prop %292, %293
+      store var $0.freezeError, %294
+      %295 = is_exception %294
+      branch %295, bb45, bb44
     bb42:
-      jump bb38
+      jump bb40
     bb43:
-      %293 = call builtin.exception_value(%291)
-      throw %293
+      %290 = call builtin.exception_value(%288)
+      store var $tmp.0, %290
+      jump bb41
     bb44:
-      return
+      jump bb40
     bb45:
-      %301 = call builtin.exception_value(%299)
-      throw %301
+      %296 = call builtin.exception_value(%294)
+      throw %296
     bb46:
-      %206 = call builtin.console.log(%190, %313, %309, %305)
+      return
+    bb47:
+      %304 = call builtin.exception_value(%302)
+      throw %304
+    bb48:
+      %206 = call builtin.console.log(%190, %316, %312, %308)
       %207 = is_exception %206
       branch %207, bb24, bb23
-    bb47:
-      %305 = get_elem %203, %204
-      store var $2.k, %302
-      store var $2.o, %302
-      jump bb46
-    bb48:
-      %203 = load var $0.many
-      %204 = const c105
-      %302 = const c0
-      jump bb47
     bb49:
-      %309 = get_elem %198, %199
-      store var $2.k, %306
-      store var $2.o, %306
+      %308 = get_elem %203, %204
+      store var $2.k, %305
+      store var $2.o, %305
       jump bb48
     bb50:
-      %198 = load var $0.many
-      %199 = const c103
-      %306 = const c0
+      %203 = load var $0.many
+      %204 = const c105
+      %305 = const c0
       jump bb49
     bb51:
-      %313 = get_elem %193, %194
-      store var $2.k, %310
-      store var $2.o, %310
+      %312 = get_elem %198, %199
+      store var $2.k, %309
+      store var $2.o, %309
       jump bb50
+    bb52:
+      %198 = load var $0.many
+      %199 = const c103
+      %309 = const c0
+      jump bb51
+    bb53:
+      %316 = get_elem %193, %194
+      store var $2.k, %313
+      store var $2.o, %313
+      jump bb52
 }

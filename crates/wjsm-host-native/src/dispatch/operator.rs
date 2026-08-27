@@ -97,6 +97,15 @@ pub(super) fn dispatch_operator(
                 *checked
             }
         }
+        Builtin::ToPropertyKey => {
+            let [key] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            match super::runtime::to_property_key_value(ctx, state, *key) {
+                Ok(key) => key,
+                Err(exception) => exception,
+            }
+        }
         Builtin::GetPrototypeFromConstructor => {
             let Some(constructor) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));
