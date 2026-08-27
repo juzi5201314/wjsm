@@ -157,7 +157,7 @@ impl Lowerer {
             expr_merge_block: None,
             exception_fork_suppression_depth: 0,
             deferred_exception_forks_stack: Vec::new(),
-            eval_completion: None,
+            eval_completion_var: None,
         }
     }
 
@@ -1098,6 +1098,11 @@ impl Lowerer {
             },
         );
 
+        // eval 模式：完成值槽初始化为 undefined（空脚本 / empty 完成值 → undefined）。
+        if self.eval_mode {
+            self.init_eval_completion_var(entry);
+        }
+
         let mut flow = StmtFlow::Open(entry);
 
         for item in &module.body {
@@ -1213,20 +1218,7 @@ impl Lowerer {
                         .block(block)
                         .is_some_and(|b| matches!(b.terminator(), Terminator::Unreachable));
                     if self.eval_mode {
-                        let return_value = if let Some(value) = self.eval_completion {
-                            value
-                        } else {
-                            let undef_const = self.module.add_constant(Constant::Undefined);
-                            let undef_val = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::Const {
-                                    dest: undef_val,
-                                    constant: undef_const,
-                                },
-                            );
-                            undef_val
-                        };
+                        let return_value = self.emit_eval_completion_return_value(block);
                         self.current_function.set_terminator(
                             block,
                             Terminator::Return {

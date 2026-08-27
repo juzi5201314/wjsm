@@ -574,9 +574,20 @@ impl Lowerer {
             let mut active = saved[..keep_len].to_vec();
             active.extend(pending.iter().cloned());
             self.active_finalizers = active;
+            // eval 完成值：throw 穿越 finally 时同样丢弃 finally 的正常完成值。
+            let saved_completion = match flow {
+                StmtFlow::Open(block) => self.eval_completion_save_for_finalizer(block),
+                StmtFlow::Terminated => None,
+            };
             flow = self.lower_block_body(&finalizer.block, flow)?;
-            if matches!(flow, StmtFlow::Terminated) {
-                break;
+            match flow {
+                StmtFlow::Open(after) => {
+                    self.eval_completion_restore_after_finalizer(
+                        after,
+                        saved_completion.as_deref(),
+                    );
+                }
+                StmtFlow::Terminated => break,
             }
         }
 

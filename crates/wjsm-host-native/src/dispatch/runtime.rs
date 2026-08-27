@@ -757,9 +757,18 @@ pub(super) fn dispatch_runtime(
             };
             value::encode_f64(f64::from(to_uint32(left) >> (to_uint32(right) & 31)))
         }
+        // `!` 自身不抛（ToBoolean 全定义），但 async 状态机等不插表达式级
+        // 分叉的上下文里操作数可能是 TAG_EXCEPTION（如 `!=`/`!==` 先经
+        // AbstractEq/StrictEq 透传），须原样透传而非折叠成布尔值吞掉。
         NativeRuntimeOp::UnaryNot => args
             .first()
-            .map(|value| value::encode_bool(!is_truthy(state, *value)))
+            .map(|input| {
+                if value::is_exception(*input) {
+                    *input
+                } else {
+                    value::encode_bool(!is_truthy(state, *input))
+                }
+            })
             .unwrap_or_else(|| fail_dispatch(ctx)),
         NativeRuntimeOp::UnaryNeg if args.first().is_some_and(|input| value::is_bigint(*input)) => {
             super::bigint::dispatch_bigint(ctx, state, wjsm_ir::Builtin::BigIntNeg, args)
@@ -786,6 +795,14 @@ pub(super) fn dispatch_runtime(
             let [left, right] = args else {
                 return fail_dispatch(ctx);
             };
+            // 操作数求值异常按求值顺序透传（同 Builtin::StrictEq），
+            // 不得当普通值比较后吞掉。
+            if value::is_exception(*left) {
+                return *left;
+            }
+            if value::is_exception(*right) {
+                return *right;
+            }
             let equal = strict_equal(state, *left, *right);
             value::encode_bool(if operation == NativeRuntimeOp::CompareStrictEq {
                 equal

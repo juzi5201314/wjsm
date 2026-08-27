@@ -6495,11 +6495,15 @@ mod tests {
 
     #[test]
     fn tlab_object_template_literal_fast_path() {
+        // `keep = object` 让字面量逃逸：不逃逸的版本会被标量替换整体消除，
+        // 使本用例观察不到任何 TLAB 分配（诊断对象是 TLAB 快路径本身）。
         let artifact = artifact(
             r#"
                 let total = 0;
+                let keep = null;
                 for (let i = 0; i < 64; i++) {
                     const object = { name: i, value: i * 2, length: i + 1 };
+                    keep = object;
                     total += object.name + object.value + object.length;
                 }
                 console.log(total);
