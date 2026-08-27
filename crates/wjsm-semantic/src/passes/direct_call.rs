@@ -22,7 +22,7 @@ use wjsm_ir::{
 };
 
 /// 是否为 env 变量 IR 名（`$env` 或 `${scope}.$env`）。
-fn is_env_name(name: &str) -> bool {
+pub(crate) fn is_env_name(name: &str) -> bool {
     name == "$env" || name.ends_with(".$env")
 }
 
@@ -192,15 +192,11 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
     })
 }
 
-/// 运行 direct_call pass。任一函数含 eval 时全局禁用（eval 可动态改写绑定）。
-pub fn run(module: &mut Module) {
-    // 1. 全局守卫：eval 可动态改写绑定，保守禁用整个 pass。
-    if module.functions().iter().any(|f| f.has_eval()) {
-        return;
-    }
-
-    // 2. 不可变绑定集合：known_callee_vars 中 store 恰一次的函数或类声明名。
-    //    唯一一次 store 即声明初始 store（record_known_callee + StoreVar 路径）。
+/// 不可变函数/类声明绑定：`known_callee_vars` 中全模块只被 `StoreVar` 写过一次的名字。
+///
+/// 唯一一次 store 即声明的初始 store（`record_known_callee` + `StoreVar` 路径），
+/// 因此该名字的读取恒等于初始函数值。调用方必须先确认全模块无 eval。
+pub(crate) fn immutable_function_bindings(module: &Module) -> HashMap<String, FunctionId> {
     let mut store_count: HashMap<&str, u32> = HashMap::new();
     for function in module.functions() {
         for block in function.blocks() {
@@ -211,7 +207,7 @@ pub fn run(module: &mut Module) {
             }
         }
     }
-    let mut immutable: HashMap<String, FunctionId> = HashMap::new();
+    let mut immutable = HashMap::new();
     for function in module.functions() {
         for (name, function_id) in function.known_callee_vars() {
             if store_count.get(name.as_str()) == Some(&1) {
@@ -219,6 +215,18 @@ pub fn run(module: &mut Module) {
             }
         }
     }
+    immutable
+}
+
+/// 运行 direct_call pass。任一函数含 eval 时全局禁用（eval 可动态改写绑定）。
+pub fn run(module: &mut Module) {
+    // 1. 全局守卫：eval 可动态改写绑定，保守禁用整个 pass。
+    if module.functions().iter().any(|f| f.has_eval()) {
+        return;
+    }
+
+    // 2. 不可变绑定集合。
+    let immutable = immutable_function_bindings(module);
 
     // 3. per 函数判定：env_required / has_new_target / resolvable_env_gets。
     let mut env_required: HashSet<FunctionId> = HashSet::new();
