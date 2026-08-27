@@ -237,6 +237,9 @@ struct PrivateFunctionMeta {
     instance_binding: Option<CapturedBinding>,
     value: Option<ValueId>,
     span: Span,
+    /// generator / async generator 的 wrapper 函数：与公有 generator 方法一致，
+    /// 不接线 home_object（generator 体内 super 不经 wrapper 解析）。
+    is_generator: bool,
 }
 
 impl Lowerer {
@@ -614,6 +617,19 @@ impl Lowerer {
             let field_name =
                 self.resolve_private_storage_name(pm.key.name.as_ref(), pm.key.span)?;
             let is_static = pm.is_static;
+            // 私有 generator（含 async generator）方法：yield/await 需要续体调度，
+            // 不能走下方直接降级方法体的同步路径，改由声明路径的 body + wrapper
+            // 双函数结构生成 wrapper 函数值（与公有 generator 方法的路由一致）。
+            if matches!(pm.kind, swc_ast::MethodKind::Method) && pm.function.is_generator {
+                let member = self.lower_private_generator_member(
+                    class_name,
+                    pm,
+                    field_name,
+                    &mut next_function_index,
+                )?;
+                out.push(member);
+                continue;
+            }
             let accessor = matches!(
                 pm.kind,
                 swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter
@@ -721,20 +737,11 @@ impl Lowerer {
             if let Some(sid) = class_scope_id {
                 let _ = self.scopes.set_initialised(sid, class_name, false);
             }
-            let instance_binding = if is_static {
-                None
-            } else {
-                let binding_name = format!(
-                    "$private_function#{}_{}",
-                    self.next_private_name_id, next_function_index
-                );
-                next_function_index += 1;
-                let scope_id = self
-                    .scopes
-                    .declare(&binding_name, VarKind::Let, true)
-                    .map_err(|message| self.error(pm.span, message))?;
-                Some(CapturedBinding::new(binding_name, scope_id))
-            };
+            let instance_binding = self.declare_private_instance_binding(
+                is_static,
+                pm.span,
+                &mut next_function_index,
+            )?;
             let private_function = PrivateFunctionMeta {
                 lowered_function: LoweredClassFunction {
                     function_id: m_function_id,
@@ -743,6 +750,7 @@ impl Lowerer {
                 instance_binding,
                 value: None,
                 span: pm.span,
+                is_generator: false,
             };
 
             if accessor {
@@ -780,6 +788,89 @@ impl Lowerer {
             }
         }
         Ok(out)
+    }
+
+    /// 私有 generator / async generator 方法：复用函数声明路径的 body + wrapper
+    /// 双函数结构（yield/await 经续体槽调度），返回统一的私有成员元数据。
+    fn lower_private_generator_member(
+        &mut self,
+        class_name: &str,
+        pm: &swc_ast::PrivateMethod,
+        field_name: String,
+        next_function_index: &mut usize,
+    ) -> Result<PrivateMemberMeta, LoweringError> {
+        let is_static = pm.is_static;
+        let fn_name = if is_static {
+            format!("{}.static_#{}", class_name, pm.key.name)
+        } else {
+            format!("{}.#{}", class_name, pm.key.name)
+        };
+        // 方法体延迟到类求值完成后才执行，期间类名已初始化（方法体可引用类名）；
+        // 函数体 lowering 期间临时退出 TDZ，结束后恢复。
+        let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+        if let Some(sid) = class_scope_id {
+            self.scopes
+                .set_initialised(sid, class_name, true)
+                .map_err(|msg| self.error(pm.span, msg))?;
+        }
+        let declaration = swc_ast::FnDecl {
+            ident: swc_ast::Ident::new(
+                fn_name.into(),
+                pm.key.span,
+                swc_core::common::SyntaxContext::empty(),
+            ),
+            declare: false,
+            function: pm.function.clone(),
+        };
+        // 私有 generator 体内 super 尚未接线：构造器 id 在 collect 阶段未知，
+        // 且 body/wrapper 双函数的 home 元数据需成对回填，留作后续任务。
+        let lowered = if pm.function.is_async {
+            self.lower_async_gen_function(&declaration, MethodSuperBinding::None)
+        } else {
+            self.lower_gen_function(&declaration)
+        };
+        if let Some(sid) = class_scope_id {
+            let _ = self.scopes.set_initialised(sid, class_name, false);
+        }
+        let (function_id, captured) = lowered?;
+        let instance_binding =
+            self.declare_private_instance_binding(is_static, pm.span, next_function_index)?;
+        Ok(PrivateMemberMeta {
+            field_name,
+            is_static,
+            kind: PrivateMemberKind::Method(PrivateFunctionMeta {
+                lowered_function: LoweredClassFunction {
+                    function_id,
+                    captured,
+                },
+                instance_binding,
+                value: None,
+                span: pm.span,
+                is_generator: true,
+            }),
+        })
+    }
+
+    /// 实例私有方法的函数值经词法绑定传递给构造器（静态私有方法直接物化，无需绑定）。
+    fn declare_private_instance_binding(
+        &mut self,
+        is_static: bool,
+        span: Span,
+        next_function_index: &mut usize,
+    ) -> Result<Option<CapturedBinding>, LoweringError> {
+        if is_static {
+            return Ok(None);
+        }
+        let binding_name = format!(
+            "$private_function#{}_{}",
+            self.next_private_name_id, *next_function_index
+        );
+        *next_function_index += 1;
+        let scope_id = self
+            .scopes
+            .declare(&binding_name, VarKind::Let, true)
+            .map_err(|message| self.error(span, message))?;
+        Ok(Some(CapturedBinding::new(binding_name, scope_id)))
     }
 
     fn materialize_private_member_values(
@@ -853,6 +944,10 @@ impl Lowerer {
                 HomeObject::Prototype(ctor_function_id)
             };
             let mut patch = |function: &PrivateFunctionMeta| {
+                // generator wrapper 与公有 generator 方法一致，不接线 home_object。
+                if function.is_generator {
+                    return;
+                }
                 if let Some(ir_function) = self
                     .module
                     .function_mut(function.lowered_function.function_id)
