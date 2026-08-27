@@ -177,6 +177,17 @@ pub struct MemoryFootprintSample {
     pub free_bytes_reusable: usize,
 }
 
+/// 一次 production collection 的精确变更集合。
+#[derive(Clone, Debug, Default)]
+pub struct RuntimeGcReport {
+    pub retired_handles: Vec<u32>,
+    pub relocated_handles: Vec<u32>,
+    pub promoted_handles: Vec<u32>,
+    pub live_host_values: Vec<i64>,
+    pub cleans_host_tables: bool,
+    pub stats: GcStats,
+}
+
 /// 单次运行结束后暴露给定量基准的 GC 观测快照（后端无关）。
 #[derive(Clone, Debug, Default)]
 pub struct GcExecutionStats {

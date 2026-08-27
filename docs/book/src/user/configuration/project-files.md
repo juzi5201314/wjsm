@@ -69,7 +69,7 @@ browser = true
 wjsm run app.js            # verify-ir 生效（来自配置文件）
 ```
 
-`--gc`、`--inspect`、`--max-heap-size` 等运行时选项不能写进配置文件，只能用 CLI 或环境变量。
+`--inspect`、`--max-heap-size` 等运行时选项不能写进配置文件，只能用 CLI 或环境变量。
 
 ## 深入了解
 

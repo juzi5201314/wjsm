@@ -49,9 +49,9 @@ JS/TS source
 
 每个 agent 拥有独立的 pinned `NativeVmContext`、ManagedHeap、handle table、collector、scheduler、module/Promise/object side tables、反馈槽和 `SpecializationCoordinator`。后台 worker 不接触 runtime/GC/raw pointer；编译结果、失效与 RX overlay 发布只由 owner thread 处理。跨 agent 只允许 structured clone、SAB/Atomics 和显式 IPC 协议，不共享 GC handle 或 mutable runtime owner。
 
-GC 可在 Mark-Sweep、G1、ZGC 中启动时选择；root frame、host roots、weak/ephemeron closure、allocation-pressure safepoint 与 telemetry 由同一 native owner 接合。Shape/IC epoch 或 prototype generation 变化会使对应 overlay 退出选择表并清空对应 `osr_entry`，当前调用继续 generic；`WJSM_DISABLE_SPECIALIZATION=1` 只关闭反馈、overlay、deopt/OSR 发布，不改变 generic AOT、IC 或语义路径。
+GC 固定为并发分代 ZGC（`GenerationalZgc`）；root frame、host roots、weak/ephemeron closure、allocation-pressure safepoint 与 telemetry 由同一 native owner 接合。Shape/IC epoch 或 prototype generation 变化会使对应 overlay 退出选择表并清空对应 `osr_entry`，当前调用继续 generic；`WJSM_DISABLE_SPECIALIZATION=1` 只关闭反馈、overlay、deopt/OSR 发布，不改变 generic AOT、IC 或语义路径。
 
-`NewObject`、`NewArray` 与 `new Array(length)` 的 native object allocation 在 root frame 已发布时按堆水位主动收集；遇到 `HeapExhausted` 时完整收集并重试一次。runtime 在执行开始前预建并显式钉扎冻结的 `RangeError` 对象及专用 exception side-table entry；仍不可恢复时直接返回该 entry，因此三种 collector 都抛出可捕获的 `RangeError("JavaScript heap out of memory")`，不会在满堆上再次分配错误对象或增长 exception 表。该保证只覆盖这些 native object allocation 路径，不表示 array growth、`allocate_array_values`、rest 参数或字符串 intern 已迁移到同一入口。
+`NewObject`、`NewArray` 与 `new Array(length)` 的 native object allocation 在 root frame 已发布时按堆水位主动收集；遇到 `HeapExhausted` 时完整收集并重试一次。runtime 在执行开始前预建并显式钉扎冻结的 `RangeError` 对象及专用 exception side-table entry；仍不可恢复时直接返回该 entry，因此抛出可捕获的 `RangeError("JavaScript heap out of memory")`，不会在满堆上再次分配错误对象或增长 exception 表。该保证只覆盖这些 native object allocation 路径，不表示 array growth、`allocate_array_values`、rest 参数或字符串 intern 已迁移到同一入口。
 
 ### 5. 平台能力 fail-closed
 

@@ -29,7 +29,7 @@ flowchart TD
 
 ## 值、对象与 GC
 
-JavaScript 值使用固定宽度 NaN-boxing。对象、数组、字符串与 Promise 存在统一 ManagedHeap 中；值保存 stable handle，而不是可跨 safepoint 的 raw address。每个 agent 拥有独立 heap、collector、scheduler 与 runtime tables，可在启动时选择 Mark-Sweep、G1 或 ZGC。
+JavaScript 值使用固定宽度 NaN-boxing。对象、数组、字符串与 Promise 存在统一 ManagedHeap 中；值保存 stable handle，而不是可跨 safepoint 的 raw address。每个 agent 拥有独立 heap、`GenerationalZgc` collector、scheduler 与 runtime tables。
 
 ## 平台与安全
 

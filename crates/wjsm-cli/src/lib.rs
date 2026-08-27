@@ -888,13 +888,10 @@ fn hex_digest(bytes: [u8; 32]) -> String {
 }
 fn create_native_runtime(cli: &Cli) -> Result<wjsm_host_native::NativeRuntime> {
     let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
-    let mut runtime_config = wjsm_host_native::NativeRuntimeConfig::from_environment(cache_dir)
+    let runtime_config = wjsm_host_native::NativeRuntimeConfig::from_environment(cache_dir)
         .map_err(anyhow::Error::msg)?
         .with_max_heap_size(cli.max_heap_size)
         .with_output_mode(wjsm_host_native::OutputMode::Inherit);
-    if let Some(gc_algorithm) = cli.gc {
-        runtime_config.gc_algorithm = gc_algorithm;
-    }
     let inspector = cli
         .inspect_config()
         .map_err(anyhow::Error::msg)?

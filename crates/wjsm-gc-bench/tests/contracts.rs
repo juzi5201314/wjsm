@@ -1,5 +1,5 @@
 use clap::Parser;
-use wjsm_gc_bench::cli::{Cli, GcKind};
+use wjsm_gc_bench::cli::Cli;
 use wjsm_gc_bench::scenario::{Scenario, ScenarioKind};
 
 #[test]
@@ -7,7 +7,6 @@ fn cli_parses_run_defaults() {
     let cli = Cli::parse_from(["wjsm-gc-bench", "run"]);
     match cli.command {
         wjsm_gc_bench::cli::Command::Run(args) => {
-            assert_eq!(args.gc, GcKind::Zgc);
             assert_eq!(args.samples, 10);
             assert_eq!(args.live_set, 50);
             assert_eq!(args.common.heap, 256 * 1024 * 1024);

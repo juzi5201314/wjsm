@@ -17,12 +17,12 @@ pub(crate) fn run_bench(args: &RunArgs) -> Result<BenchReport> {
         args.objects,
     );
     let hardware = HostInfo::detect();
-    let mut driver = WjsmDriver::compile(&scenario, args.gc)?;
+    let mut driver = WjsmDriver::compile(&scenario)?;
     let duration = Duration::from_secs(args.duration);
 
     let mut samples = Vec::with_capacity(args.samples);
     for index in 0..args.samples {
-        let sample = driver.run_sample(args.gc, args.common.heap, duration)?;
+        let sample = driver.run_sample(args.common.heap, duration)?;
         samples.push(SampleReport {
             index,
             steady_state_ns: sample.steady_state_ns,
@@ -35,7 +35,7 @@ pub(crate) fn run_bench(args: &RunArgs) -> Result<BenchReport> {
         schema_version: BENCHMARK_SCHEMA_VERSION,
         evidence_status: hardware.evidence_status().into(),
         config: BenchConfig {
-            gc: args.gc.as_str().into(),
+            gc: "zgc".into(),
             heap_bytes: args.common.heap,
             scenario: scenario.name.into(),
             live_set_percent: args.live_set,

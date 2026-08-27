@@ -6,7 +6,7 @@
 
 `crates/wjsm-cli/src/cli_args.rs` 定义 CLI 参数模型。顶层命令枚举包含 `run`、`build`、`test`、`check`、`lint`、`eval`、`repl`、`fmt`、`install`、`cache`、`completions`、`init`、`version`、`dump-ast`、`dump-ir`、`dump-clif`、`validate`、`size`、`disasm` 等 subcommand。
 
-每个 subcommand 有自己的参数集，通过 `clap` derive 宏定义。全局选项（`--gc`、`--inspect`、`--color` 等）在顶层 `Cli` 结构上。
+每个 subcommand 有自己的参数集，通过 `clap` derive 宏定义。全局选项（`--inspect`、`--color` 等）在顶层 `Cli` 结构上。
 
 verbose 编译提示是 `Compiling portable artifact...`。`--stats` 打印 IR 计数（Constants / Functions / Basic Blocks / Instructions）；存在 portable artifact 时追加字节数；执行路径再打印 `Native cache: entries, bytes, hits, misses, invalidated`。
 
@@ -18,8 +18,8 @@ verbose 编译提示是 `Compiling portable artifact...`。`--stats` 打印 IR �
 
 `cli_config.rs` 负责合并配置来源，优先级从高到低：
 
-1. CLI 参数（`--gc`、`--inspect` 等）
-2. 环境变量（`WJSM_GC`、`WJSM_CACHE_DIR`、`WJSM_OPT_LEVEL` 等）
+1. CLI 参数（`--inspect` 等）
+2. 环境变量（`WJSM_CACHE_DIR`、`WJSM_OPT_LEVEL` 等）
 3. 项目配置文件（`wjsm.toml` / `wjsm.json`）
 4. 默认值
 

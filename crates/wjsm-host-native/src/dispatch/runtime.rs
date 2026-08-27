@@ -1,6 +1,6 @@
 use num_bigint::BigInt;
 use num_traits::{FromPrimitive, Zero};
-use wjsm_gc::{HeapAccessV2Error, StopTheWorldCollectorError};
+use wjsm_gc::HeapAccessV2Error;
 
 use crate::gc::NativeGcError;
 use wjsm_host::RuntimeString;
@@ -2375,10 +2375,7 @@ pub(super) fn allocate_object_or_out_of_memory(
         Err(NativeRuntimeError::Heap(HeapAccessV2Error::HeapExhausted { .. }))
         | Err(NativeRuntimeError::Gc(NativeGcError::Heap(HeapAccessV2Error::HeapExhausted {
             ..
-        })))
-        | Err(NativeRuntimeError::Gc(NativeGcError::StopTheWorld(
-            StopTheWorldCollectorError::Heap(HeapAccessV2Error::HeapExhausted { .. }),
-        ))) => state
+        }))) => state
             .out_of_memory_exception()
             .unwrap_or_else(|| fail_dispatch(ctx)),
         Err(_) => fail_dispatch(ctx),

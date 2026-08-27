@@ -10,7 +10,7 @@
 
 **后端可替换。** ADR 0013 定义了 `JsBackend` + `ExecContext` 契约：JS 语义算法在 `wjsm-builtins`（泛型 `<E: ExecContext>` 单态化），对象模型 `HeapAccessV2<M>` 在 `wjsm-gc`（泛型 `M: GrowableHeapMemory`）。新后端只需实现三个 trait，不需要碰语义代码。
 
-**GC 可插拔且统一。** `mark-sweep`、`g1`、`zgc` 共用一个 ManagedHeap，生产后备是 `NativeHeapMemory`。默认 `zgc`。
+**统一 ManagedHeap + 并发分代 ZGC。** 生产路径只有 `GenerationalZgc`，对象堆后备是 `NativeHeapMemory`；无 `--gc` 或 `WJSM_GC` 选择面。
 
 **启动成本压到构建期。** Native cache 按 artifact hash + ABI + codegen source hash + target 计算键，运行时按需编译或命中缓存，不依赖用户机器上的预编译工件。
 

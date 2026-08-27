@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | NaN-box 值编码 | `wjsm-ir/src/value.rs` | `BOX_BASE`、`TAG_*` 定义在这里 |
 | ABI 常量 | `wjsm-ir/src/constants.rs` | global 名、类型索引等 |
-| GC 算法注册表 | `wjsm-gc/src/registry.rs` | `GcAlgorithmKind` |
+| GC collector | `wjsm-gc::GenerationalZgc` + `wjsm-host-native::NativeGc` | 唯一生产回收器 |
 | 内置模块表 | `wjsm-module/src/builtin_modules.rs` | `node:` 模块 |
 | Builtin 拦截 | `wjsm-semantic/src/builtins.rs` | `Builtin` enum |
 | Cranelift ISA 构造 | `wjsm-backend-native/src/isa_config.rs` | 唯一 ISA/flags owner |

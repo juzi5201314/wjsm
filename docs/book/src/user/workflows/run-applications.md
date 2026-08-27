@@ -56,7 +56,7 @@ wjsm run --watch app.js
 全局选项可与 `run` 自由组合：
 
 ```bash
-wjsm --gc g1 --max-heap-size 512M run app.ts
+wjsm --max-heap-size 512M run app.ts
 wjsm --browser --condition development run app.ts
 ```
 

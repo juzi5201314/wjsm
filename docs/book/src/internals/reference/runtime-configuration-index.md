@@ -6,7 +6,6 @@
 
 | 选项 | 用途 | 默认值 |
 | --- | --- | --- |
-| `--gc` | GC 算法 | `zgc` |
 | `--inspect` / `--inspect-brk` | 启用 CDP 调试器 | 关闭 |
 | `--color` | 输出颜色 | auto |
 | `--max-heap-size` | ManagedHeap 上限 | 64 MiB |
@@ -16,15 +15,6 @@
 `--format native-executable` 用预链 `wjsm-exec` stub + zstd overlay + 制品内源码快照打出同宿主可执行文件（ADR 0016–0019）。产物不可移植。失败时 fail-closed：不创建、不覆盖输出文件。
 
 ## 环境变量
-
-### GC
-
-| 变量 | 用途 | 优先级 |
-| --- | --- | --- |
-| `WJSM_GC` | GC 算法 | 低于 `--gc` 和 `WJSM_TEST_GC` |
-| `WJSM_TEST_GC` | 测试专用 GC 算法 | 高于 `WJSM_GC` |
-
-选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。
 
 ### 编译与特化
 

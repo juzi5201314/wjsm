@@ -131,7 +131,7 @@ ICU4X compiled_data、UTS #46 与 WHATWG Encoding 标签的唯一入口。
 
 | 导出 | 用途 |
 | --- | --- |
-| GcAlgorithmKind | 算法枚举（MarkSweep / G1 / Zgc） |
+| GenerationalZgc | 生产并发分代 ZGC collector |
 | GcStats / CycleKind | 统计与周期类型 |
 | Handle / Value | 类型别名 |
 | StepBudget | 增量步进预算 |

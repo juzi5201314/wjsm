@@ -68,7 +68,6 @@
 | `--color <auto\|always\|never>` | 控制颜色输出 |
 | `--browser` | 启用 browser 模块解析条件 |
 | `--condition <NAME>` | 自定义模块解析条件 |
-| `--gc <mark-sweep\|g1\|zgc>` | 选择 GC 算法 |
 | `--max-heap-size <SIZE>` | 设置堆内存上限 |
 | `--inspect[=HOST:PORT]` | 启动 CDP inspector |
 | `--inspect-brk[=HOST:PORT]` | 启动并在入口暂停 |

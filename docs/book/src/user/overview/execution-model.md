@@ -44,7 +44,7 @@ flowchart LR
 
 - **NaN-boxing**。JavaScript 值使用固定宽度编码，指针与双精度浮点共用同一字宽。
 - **统一 ManagedHeap**。对象、数组、字符串、Promise 等分配在同一堆中，值保存 stable handle，而不是可跨 safepoint 的 raw address。
-- **每 agent 独立 heap**。每个 agent 拥有独立 heap、collector、scheduler 与 runtime tables；`worker_threads` 启动的子 agent 不共享父 heap。启动时可选 `mark-sweep`、`g1` 或 `zgc`。
+- **每 agent 独立 heap**。每个 agent 拥有独立 heap、`GenerationalZgc` collector、scheduler 与 runtime tables；`worker_threads` 启动的子 agent 不共享父 heap。
 
 ## 深入了解
 

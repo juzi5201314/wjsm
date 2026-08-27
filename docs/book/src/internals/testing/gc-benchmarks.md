@@ -4,7 +4,7 @@
 
 ## 目标
 
-GC benchmark 测量三种回收器（mark-sweep、g1、zgc）在不同负载下的性能：
+GC benchmark 测量 `GenerationalZgc` 在不同负载下的性能：
 
 - 暂停时间分布。
 - 吞吐量（每秒分配对象数）。
@@ -17,7 +17,7 @@ GC benchmark 测量三种回收器（mark-sweep、g1、zgc）在不同负载下�
 cargo nextest run -E 'test(gc_benchmark)'
 ```
 
-benchmark 通过 `WJSM_TEST_GC` 环境变量切换 GC 算法，在相同负载下比较。
+也可用 `wjsm-gc-bench` 做跨引擎对比与回归门禁。
 
 ## GcStats
 

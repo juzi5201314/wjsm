@@ -1,6 +1,6 @@
 # 堆、root 帧与内存预留
 
-wjsm 进程的内存占用由几部分组成：JavaScript 托管堆、GC root 帧、native 镜像和运行时表。用户能直接配置的是堆上限和回收器。
+wjsm 进程的内存占用由几部分组成：JavaScript 托管堆、GC root 帧、native 镜像和运行时表。用户能直接配置的是堆上限。生产 collector 固定为并发分代 ZGC，详见 [垃圾回收器](gc.md)。
 
 ## ManagedHeap 上限
 
@@ -11,23 +11,9 @@ wjsm --max-heap-size 256M run app.js
 wjsm --max-heap-size 1G run app.js
 ```
 
-预算耗尽时程序以运行时错误终止，不会继续增长内存。该上限与选哪个 GC 无关。
+预算耗尽时程序以运行时错误终止，不会继续增长内存。
 
 不能写进 `wjsm.toml`，只能用 CLI。
-
-## GC 算法选择
-
-`--gc <mark-sweep|g1|zgc>` 或 `WJSM_GC` 选择回收器，默认 `zgc`。详见 [垃圾回收器](gc.md)。
-
-选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。
-
-GC 算法不影响堆上限，只影响回收策略和暂停时间：
-
-| 值 | 暂停特性 | 适用场景 |
-| --- | --- | --- |
-| `mark-sweep` | STW，随堆增长 | 调试 GC 自身 |
-| `g1` | STW 但分批，目标 200ms | 中等堆 |
-| `zgc` | 并发，与堆大小基本无关 | 默认；大堆必须 |
 
 ## Root 帧
 

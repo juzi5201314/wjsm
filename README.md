@@ -16,7 +16,7 @@ wjsm 是一个实验性的 JavaScript/TypeScript 运行时：使用 SWC 解析�
 | 语言语义 | 已覆盖作用域与 TDZ、闭包、类、异常、生成器、`async`/`await`、Promise、集合、TypedArray、Proxy/Reflect 等大量语义；完整度以测试和 Test262 结果为准 |
 | 模块与包 | 支持 ESM、CommonJS、动态加载、`node_modules` 解析、条件导出和内置 `install` 命令；Node.js 与 npm 生态兼容性仍是子集 |
 | Web/Node API | 已实现 Fetch、Streams、定时器、`async_hooks`、`worker_threads`、`vm`、`perf_hooks` 等已覆盖能力；不是完整 Node.js 替代品 |
-| 内存管理 | 统一 ManagedHeap，可选择 `mark-sweep`、`g1` 或 `zgc`；启动快照默认启用 |
+| 内存管理 | 统一 ManagedHeap + 并发分代 ZGC；启动快照默认启用 |
 | 工具链 | 提供运行、构建、检查、lint、格式化、测试、REPL、IR/AST/CLIF 输出、native 诊断、缓存和 shell 补全 |
 
 ## 快速开始
@@ -82,12 +82,11 @@ Hello, wjsm: 3
 全局选项可以与 `run`、`build` 等子命令组合：
 
 ```bash
-wjsm --gc zgc --max-heap-size 512M run app.ts
+wjsm --max-heap-size 512M run app.ts
 wjsm --inspect=127.0.0.1:9229 run app.ts
 wjsm --browser --condition development run app.ts
 ```
 
-- `--gc <mark-sweep|g1|zgc>`：选择垃圾回收器。
 - `--max-heap-size <SIZE>`：限制 JavaScript 堆，支持 `K`、`M`、`G` 后缀。
 - `--inspect[=<HOST:PORT>]` / `--inspect-brk[=<HOST:PORT>]`：启用 Chrome DevTools Protocol inspector；当前只提供运行时已实现的调试能力，不等同于完整 Node.js inspector。
 - `--browser` / `--condition <NAME>`：控制包解析条件。

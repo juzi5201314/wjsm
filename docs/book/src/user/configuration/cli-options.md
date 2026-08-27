@@ -16,7 +16,6 @@
 | `--no-color` | flag | 等价 `--color never`，与 `--color` 互斥 |
 | `--browser` | flag | 启用 `browser` 解析条件和 `package.json` 的 `browser` 字段 |
 | `--condition <NAME>` | 字符串，可重复 | 追加自定义模块解析条件 |
-| `--gc <ALGO>` | `mark-sweep`/`g1`/`zgc` | 选择垃圾回收器，默认 `zgc` |
 | `--max-heap-size <SIZE>` | 整数+后缀 | JavaScript 对象堆上限，默认 `64M`；支持 `K`/`M`/`G` 后缀 |
 | `--inspect[=HOST:PORT]` | 可选地址 | 启动 CDP inspector，默认 `127.0.0.1:9229` |
 | `--inspect-brk[=HOST:PORT]` | 可选地址 | 启动 inspector 并在入口暂停 |
@@ -26,7 +25,7 @@
 全局选项放在子命令之前：
 
 ```bash
-wjsm --gc zgc --verify-ir run app.ts
+wjsm --verify-ir run app.ts
 wjsm --inspect=9229 run app.js
 wjsm -v --time build app.ts -o out.wjsm
 ```

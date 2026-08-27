@@ -10,7 +10,7 @@
 | object emission | relocation、symbol、alignment | `validate` + `size` |
 | image lifecycle | W^X、unwind、cache invalidation | `disasm` + `cache` 命令 |
 | runtime execution | Promise drain、exit code、diagnostics | `run` + fixture |
-| GC | 三种回收器行为一致 | `WJSM_TEST_GC` 切换跑 fixture |
+| GC | ZGC 回收与屏障 | fixture + `wjsm-gc` 单元测试 |
 
 ## IR → CLIF 测试
 
@@ -24,7 +24,7 @@ AST 正确而 IR 错误，问题属于 semantic lowering；IR 正确而 CLIF 错
 
 ## GC 回归测试
 
-`WJSM_TEST_GC` 环境变量在测试中强制指定 GC 算法，优先级高于 `WJSM_GC`。fixture 在三种回收器下都应行为一致——mark-sweep 虽不移动对象，但代码仍遵守 `INV-C1` / `INV-C2` 不变量。
+fixture 与 `wjsm-gc` 单元测试覆盖 `GenerationalZgc` 的标记、转移与屏障路径；代码遵守 `INV-C1` / `INV-C2` 不变量。
 
 ## 平台 fail-closed 测试
 

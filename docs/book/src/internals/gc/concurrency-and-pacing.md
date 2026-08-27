@@ -51,9 +51,9 @@ pub struct StepBudget {
 
 | 周期类型 | 说明 |
 | --- | --- |
-| `Full` | 完整 mark-sweep 周期 |
-| `Young` | young GC（G1/ZGC） |
-| `Mixed` | mixed GC（G1） |
+| `Full` | 完整堆回收周期 |
+| `Young` | young GC |
+| `Mixed` | mixed GC（old 区部分回收） |
 | `ZgcCycle` | 完整 ZGC 周期 |
 | `Step` | 增量步进 |
 
@@ -63,4 +63,3 @@ pub struct StepBudget {
 
 - [safepoint spill 的后端实现](../backend/liveness-slots-and-spills.md)
 - [ZGC 的并发阶段划分](zgc.md)
-- [G1 的暂停时间控制](g1.md)

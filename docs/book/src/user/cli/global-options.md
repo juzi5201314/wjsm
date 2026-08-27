@@ -12,7 +12,6 @@
 | `--verify-ir` | 在继续 codegen 前验证 IR |
 | `--color <auto\|always\|never>` / `--no-color` | 控制颜色 |
 | `--browser` / `--condition <NAME>` | 模块解析条件 |
-| `--gc <mark-sweep\|g1\|zgc>` | 选择 collector |
 | `--max-heap-size <SIZE>` | 设置 JavaScript ManagedHeap 上限 |
 | `--inspect[=HOST:PORT]` | 启动 CDP inspector |
 | `--inspect-brk[=HOST:PORT]` | 启动并在入口暂停 |

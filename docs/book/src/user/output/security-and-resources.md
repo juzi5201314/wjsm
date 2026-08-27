@@ -11,7 +11,6 @@ wjsm 直接把 verified semantic IR 编译为当前宿主机器码。它不提�
 | 资源 | 配置入口 |
 | --- | --- |
 | JavaScript ManagedHeap | `--max-heap-size <SIZE>` |
-| Collector | `--gc <mark-sweep\|g1\|zgc>`、`WJSM_GC` |
 | Native image cache | `WJSM_CACHE_DIR`、`wjsm cache --dir ...` |
 | Worker / realm / I/O 限额 | 对应 runtime 环境变量与 API contract |
 

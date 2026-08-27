@@ -1,10 +1,10 @@
 # ManagedHeap 架构
 
-这一章说明统一托管堆的组织，以及三种回收器如何共用它。
+这一章说明统一托管堆的组织，以及 `GenerationalZgc` 如何管理它。
 
 ## 统一路径
 
-ADR 0010 确立了统一 ManagedHeap：mark-sweep、G1、ZGC 三种回收器共用同一对象堆和 8 字节句柄。旧设计的 memory32 对象堆、4 字节句柄、dual-heap fallback 和 Wasmtime 线性内存都已删除。生产后备是 `NativeHeapMemory`。
+ADR 0010 确立了统一 ManagedHeap：生产路径只有并发分代 ZGC 与 8 字节句柄。旧设计的 memory32 对象堆、4 字节句柄、dual-heap fallback 和 Wasmtime 线性内存都已删除。生产后备是 `NativeHeapMemory`。
 
 ## 堆的组成
 
@@ -15,7 +15,7 @@ ManagedHeap 由几个部分组成：
 - **页面元数据**：每页的 mark bitmap、remset 等元数据。
 - **分配器**：bump pointer 分配 + 空闲列表。
 
-三种回收器共享这三部分，区别在于扫描、标记和清除的算法不同。
+`GenerationalZgc` 在上述结构上执行并发标记、转移与 epoch reclaim。
 
 ## 句柄 vs 指针
 

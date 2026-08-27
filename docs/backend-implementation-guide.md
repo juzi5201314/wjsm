@@ -98,7 +98,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 - 一个只持 `Weak<CompiledImage>` 的 `NativeImageRepository`；
 - 一个按需启动 bounded worker 的 `SpecializationCoordinator`；
  - 一个 production `ManagedHeap`/`HandleTableV2`/`HeapAccessV2` owner；
- - 启动时固定的 Mark-Sweep、G1 或由 `GenerationalZgc` 实现的并发分代 ZGC collector；
+ - 一个 production `ManagedHeap`/`HandleTableV2`/`HeapAccessV2` owner 与 `GenerationalZgc` collector；
  - module、Promise、continuation、worker、scheduler、snapshot、inspector 与 host side tables。
 
 `NativeRuntime::execute` 的顺序是：
@@ -118,7 +118,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 ## 5. ManagedHeap 与 GC 接合
 
-Production heap 只有一个 owner：同一 layout、`HandleTableV2`、`HeapAccessV2<NativeHeapMemory>` 与 collector。Mark-Sweep/G1 由 `StopTheWorldCollector` 接合；ZGC 由 `GenerationalZgc` 接合，使用共享页、固定 worker pool、分代 mark/relocate 与 epoch reclaim。host side table 只保存 stable handle/generation，不保存可跨 safepoint 的 raw address。
+Production heap 只有一个 owner：同一 layout、`HandleTableV2`、`HeapAccessV2<NativeHeapMemory>` 与 `GenerationalZgc` collector。ZGC 使用共享页、固定 worker pool、分代 mark/relocate 与 epoch reclaim。host side table 只保存 stable handle/generation，不保存可跨 safepoint 的 raw address。
 
 Generated code 在 may-GC edge 发布 live boxed roots。runtime collector 的 strong closure 合并：
 

@@ -185,7 +185,7 @@ fn relocate_string_preserves_payload() {
     let handle = publish_utf16(&heap, &units);
     let old_object = heap.resolve_handle(handle).unwrap();
 
-    // 经 collector capability 的整块搬迁路径（mark-sweep 同款）；返回搬迁字节数，
+    // 经 collector capability 的整块搬迁路径；返回搬迁字节数，
     // 新地址经 handle 解析。
     let moved_bytes = heap
         .collector_capability()

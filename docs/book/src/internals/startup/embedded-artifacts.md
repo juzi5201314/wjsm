@@ -1,6 +1,6 @@
-# 嵌入工件与多 GC flavor 切换
+# 嵌入工件与启动快照
 
-这一章说明启动种子如何与 GC flavor 配合。
+这一章说明启动种子如何与 runtime 初始化配合。
 
 ## 启动快照
 
@@ -14,11 +14,9 @@
 
 解码期望见 `SnapshotExpectations`：`bootstrap_hash`、`NATIVE_CODEGEN_HASH`、`semantic_abi_hash`、`native_abi_hash`、`{ARCH}-{OS}`、endian，以及当前堆的 `object_heap_base` / capacity。
 
-## 快照与 GC flavor
+## 快照与 GC
 
-种子不绑定具体 GC 算法。恢复时按当前 `NativeRuntimeConfig.gc_algorithm` 建 `NativeGc`，再灌入对象区。算法在 runtime 初始化后不可切换。
-
-选择优先级：`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。
+种子不绑定 collector 实现细节。恢复时始终建 `NativeGc`（`GenerationalZgc`），再灌入对象区。collector 在 runtime 初始化后不可切换。
 
 ## 与磁盘缓存
 

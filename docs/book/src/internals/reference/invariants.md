@@ -9,13 +9,13 @@
 - **INV-C1**：JS 值层引用是 handle；`obj_table[h]` 是唯一 ptr truth。
 - **INV-C2**：raw ptr 不跨潜在 moving/collect GC 点；跨越必须重新 resolve。
 
-所有三种回收器都遵守这两条不变量。mark-sweep 虽然不移动对象，但代码仍遵守，保持与移动回收器的兼容性。
+生产 `GenerationalZgc` 遵守这两条不变量；对象可并发移动，raw ptr 不得跨 safepoint 持有。
 
 ## 统一 ManagedHeap
 
 ADR 0010 确立：
 
-- 统一 ManagedHeap，三种回收器共用。
+- 统一 ManagedHeap，由 `GenerationalZgc` 独占。
 - 8 字节句柄（V2），不用 4 字节句柄（V1）。
 - 逻辑 memory64 对象堆（生产 `NativeHeapMemory`），不用 memory32。
 - 不引入 dual-heap fallback 或第二个运行时 owner。

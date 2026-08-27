@@ -1,6 +1,6 @@
 # ADR 0010: Generational ZGC Managed Heap
 
-**Status**: Accepted. Active runtime cutover is complete: unified ManagedHeap on shared memory64 is the sole dynamic object-heap path for mark-sweep, G1, and ZGC. Production `--gc zgc` is owned by `wjsm-host-native::NativeGc` and `wjsm-gc::GenerationalZgc`; the retired `RuntimeCollector`, `ZgcV2`, `YoungController`, and `OldController` paths are not compatibility fallbacks. JDK-normalized performance matrices (Task 24) and isolated 4/16 GiB / named-capability nightly (Task 25) remain **`needs-verification`** until instrumented JDK 25 probe evidence and hard-isolation runners are available. This ADR supersedes [ADR 0005](0005-pluggable-gc-v2.md) for ownership, concurrency, generation, and entry decisions.
+**Status**: Accepted. Active runtime cutover is complete: unified ManagedHeap on shared memory64 is the sole dynamic object-heap path. **Mark-sweep and G1 were retired in 2026**; production is **ZGC-only** (`wjsm-host-native::NativeGc` + `wjsm-gc::GenerationalZgc`). There is no `--gc`, `WJSM_GC`, or `WJSM_TEST_GC` selection surface. The retired `RuntimeCollector`, `ZgcV2`, `YoungController`, and `OldController` paths are not compatibility fallbacks. JDK-normalized performance matrices (Task 24) and isolated 4/16 GiB / named-capability nightly (Task 25) remain **`needs-verification`** until instrumented JDK 25 probe evidence and hard-isolation runners are available. This ADR supersedes [ADR 0005](0005-pluggable-gc-v2.md) for ownership, concurrency, generation, and entry decisions.
 
 **Date**: 2026-07-20  
 **Amended**: 2026-08-16 (production NativeGc/GenerationalZgc cutover and old model retirement)
@@ -53,21 +53,21 @@ ADR 0005 established pluggable mark-sweep / G1 / ZGC under a safepoint-budgeted,
 | `remset` / page metadata | precise remembered edges, generation/page accounting, and promotion destinations |
 | `GcDirector` | allocation-rate prediction, pacing, assist debt, reserve stalls, and uncommit telemetry |
 | `wjsm-host-native::dispatch::weak` | host roots, weak/ephemeron/finalizer closure, side-table cleanup |
-| `NativeGc` | public `--gc zgc` allocation, poll, safepoint, explicit `gc()`, barrier-state, and telemetry entry |
+| `NativeGc` | allocation, poll, safepoint, explicit `gc()`, barrier-state, and telemetry entry for `GenerationalZgc` |
 
-Public GC modes remain `mark-sweep`, `g1`, `zgc` via `RuntimeOptions` / CLI `--gc` / `WJSM_GC`; `WJSM_TEST_GC` is test-matrix only. All three run on the same ManagedHeap.
+Production ships **ZGC only**. Mark-sweep and G1 policies on ManagedHeap were removed in 2026 along with CLI/env GC selection (`--gc` / `WJSM_GC` / `WJSM_TEST_GC`).
 
-### 5. G1 / mark-sweep under ManagedHeap
+### 5. Retired mark-sweep / G1 policies (historical)
 
-- G1 reuses ManagedHeap pages, dual mark bitmaps, worker pool, RSet, telemetry; young/mixed/full policies attach as algorithms, not separate heaps.
-- Mark-sweep is the simple policy on the same heap (mark/retire/sweep), not a parallel dynamic-heap implementation.
+- G1 and mark-sweep once reused ManagedHeap pages, dual mark bitmaps, worker pool, RSet, and telemetry as alternate policies on the same heap.
+- Those collectors and their selection surface are **retired**; `GenerationalZgc` is the sole active policy.
 
 ### 6. Snapshot / support ABI boundary
 
 - Managed-heap snapshot wire format encodes page metadata, 8-byte handle entries, and generation; artifact manifest binds snapshot ABI + engine fingerprint + support ABI.
 - ADR 0003 remains authority for **what** may be captured (primordial / no user objects / no scheduler state); ManagedHeap layout extends the binary format.
 - ADR 0004 remains authority for build-time embedded snapshot/support cwasm families; `wjsm-engine-config` is the sole Wasmtime `Config` owner (threads, memory64, multi-memory, Cranelift fingerprint).
-- Support module imports shared memory64 + ManagedHeap host helpers; three GC flavors still produce distinct support cwasm for barrier/layout differences, selected at startup by active algorithm.
+- Support module imports shared memory64 + ManagedHeap host helpers; a single ZGC barrier/layout ABI is active at startup.
 - Startup snapshot default-on policy of ADR 0003/0004 is unchanged; cold bootstrap remains the only ABI-mismatch fallback (no runtime dual-heap fallback).
 
 ### 7. Performance & platform evidence
@@ -83,7 +83,7 @@ Public GC modes remain `mark-sweep`, `g1`, `zgc` via `RuntimeOptions` / CLI `--g
 
 ### Positive
 
-- One heap/entry/barrier model for all collectors; Generational ZGC can be algorithmically compared to JDK 25 ZGC.
+- One heap/entry/barrier model; Generational ZGC can be algorithmically compared to JDK 25 ZGC.
 - Fail-closed resource admission prevents host OOM and false GREEN on under-provisioned machines.
 - Snapshot/support/engine fingerprint stay auditable after cutover without dual ABI.
 
@@ -101,7 +101,7 @@ Public GC modes remain `mark-sweep`, `g1`, `zgc` via `RuntimeOptions` / CLI `--g
 | INV-C2 explicit GC points | **Kept** |
 | Policy hooks attach/alloc/safepoint/barrier | **Kept** as policy layer on ManagedHeap |
 | host `heap_access` owner | **Kept** as ManagedHeap `HeapAccess` |
-| three support cwasm flavors | **Kept** (ADR 0004); ABI tracks ManagedHeap |
+| three support cwasm flavors | **Superseded** — single ZGC support ABI |
 | non-moving mark-sweep assumption for raw ptrs | **Superseded** — no long-lived raw object ptrs |
 | “true concurrent threads deferred” | **Superseded** — fixed worker pool + shared heap |
 | non-generational incremental ZGC | **Superseded** — young/old concurrent + remset + relocate |
@@ -110,7 +110,7 @@ Public GC modes remain `mark-sweep`, `g1`, `zgc` via `RuntimeOptions` / CLI `--g
 
 ## Compatibility
 
-- Public CLI/env GC selection remains (`--gc` / `WJSM_GC` / `WJSM_TEST_GC`).
+- No public CLI/env GC selection (`--gc` / `WJSM_GC` / `WJSM_TEST_GC` removed with mark-sweep/G1 retirement, 2026).
 - User-visible JS semantics unchanged; GC is not a language feature.
 - Snapshot restore still excludes side tables listed in ADR 0003.
 - No runtime fallback to memory32 dynamic heap or 4-byte entries.
@@ -132,13 +132,10 @@ Public GC modes remain `mark-sweep`, `g1`, `zgc` via `RuntimeOptions` / CLI `--g
 cargo fmt --all -- --check                          # pass
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # pass
 cargo nextest run --workspace                       # 1795 passed, 17 skipped
-WJSM_TEST_GC=mark-sweep cargo nextest run -E 'test(happy__)'  # 666 passed
-WJSM_TEST_GC=g1 cargo nextest run -E 'test(happy__)'          # 666 passed
-WJSM_TEST_GC=zgc cargo nextest run -E 'test(happy__)'         # 666 passed
 cargo +nightly miri test -p wjsm-runtime --test gc_protocol_miri  # 2 passed
 RUSTFLAGS="-Zsanitizer=thread" cargo +nightly test -Zbuild-std \
   --target x86_64-unknown-linux-gnu -p wjsm-runtime --test gc_concurrency_model  # 2 passed
-cargo run -- run --gc zgc -e '…1e6 churn + gc()…'  # stdout: 769
+cargo run -- run -e '…1e6 churn + gc()…'  # stdout: 769
 ```
 
 ## References

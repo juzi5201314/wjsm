@@ -80,7 +80,7 @@ pub fn detect(node_bin: &str, wjsm_bin: &str) -> EnvironmentSnapshot {
         logical_cores,
         physical_memory_bytes: system.total_memory(),
         available_memory_bytes: system.available_memory(),
-        wjsm_gc: std::env::var("WJSM_GC").unwrap_or_else(|_| "zgc".into()),
+        wjsm_gc: "zgc".into(),
         wjsm_backend: "cranelift-native".to_owned(),
         git_rev: git_rev(),
     }

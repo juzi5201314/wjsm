@@ -18,7 +18,7 @@ use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeSymbolResolver, extra_numbers_at_feedback_site};
 use wjsm_gc::backoff::Backoff;
 use wjsm_gc::heap_access::{object_payload_bytes, string_payload_bytes};
-use wjsm_gc::{GcAlgorithmKind, HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey, StrView};
+use wjsm_gc::{HeapAccessV2Error, PROTO_NULL_SENTINEL, PropertyKey, StrView};
 use wjsm_host::{RuntimeString, content_hash_latin1, content_hash_units};
 use wjsm_ir::{Constant, Instruction, is_module_entry_ir_function, value};
 use wjsm_native_abi::{
@@ -296,7 +296,6 @@ pub enum OutputMode {
 #[derive(Clone, Debug)]
 pub struct NativeRuntimeConfig {
     pub cache_dir: Option<PathBuf>,
-    pub gc_algorithm: GcAlgorithmKind,
     pub max_heap_size: u64,
     /// 运行时类型反馈与热函数特化开关；`WJSM_DISABLE_SPECIALIZATION=1` 时关闭，
     /// 用于同 binary 的 generic AOT 对照。关闭时不启动反馈 worker、不发布 overlay，
@@ -314,7 +313,6 @@ impl Default for NativeRuntimeConfig {
     fn default() -> Self {
         Self {
             cache_dir: None,
-            gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled: true,
             allocation_diagnostics_enabled: false,
@@ -326,31 +324,18 @@ impl Default for NativeRuntimeConfig {
 
 impl NativeRuntimeConfig {
     pub fn from_environment(cache_dir: Option<PathBuf>) -> Result<Self, NativeRuntimeError> {
-        let gc_algorithm = std::env::var("WJSM_TEST_GC")
-            .or_else(|_| std::env::var("WJSM_GC"))
-            .ok()
-            .map(|name| name.parse::<GcAlgorithmKind>())
-            .transpose()
-            .map_err(NativeRuntimeError::Configuration)?
-            .unwrap_or(GcAlgorithmKind::Zgc);
         let specialization_enabled =
             std::env::var("WJSM_DISABLE_SPECIALIZATION").ok().as_deref() != Some("1");
         let allocation_diagnostics_enabled =
             std::env::var("WJSM_PERF_DIAGNOSTICS").ok().as_deref() == Some("1");
         Ok(Self {
             cache_dir,
-            gc_algorithm,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             specialization_enabled,
             allocation_diagnostics_enabled,
             output_mode: OutputMode::Capture,
             isolate_native_images: false,
         })
-    }
-
-    pub fn with_gc_algorithm(mut self, gc_algorithm: GcAlgorithmKind) -> Self {
-        self.gc_algorithm = gc_algorithm;
-        self
     }
 
     pub fn with_max_heap_size(mut self, max_heap_size: u64) -> Self {
@@ -376,7 +361,6 @@ impl NativeRuntimeConfig {
     pub(crate) fn child_config(&self) -> Self {
         Self {
             cache_dir: self.cache_dir.clone(),
-            gc_algorithm: self.gc_algorithm,
             max_heap_size: self.max_heap_size,
             specialization_enabled: self.specialization_enabled,
             allocation_diagnostics_enabled: self.allocation_diagnostics_enabled,
@@ -412,7 +396,6 @@ pub struct RuntimeOptions {
     pub working_directory: PathBuf,
     pub env: Vec<(String, String)>,
     pub inherit_env: bool,
-    pub gc_algorithm: GcAlgorithmKind,
     pub max_heap_size: u64,
     pub compile: SourceCompileOptions,
 }
@@ -425,7 +408,6 @@ impl Default for RuntimeOptions {
             working_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             env: Vec::new(),
             inherit_env: true,
-            gc_algorithm: GcAlgorithmKind::Zgc,
             max_heap_size: DEFAULT_MAX_HEAP_BYTES,
             compile: SourceCompileOptions::default(),
         }
@@ -433,11 +415,6 @@ impl Default for RuntimeOptions {
 }
 
 impl RuntimeOptions {
-    pub fn with_gc_algorithm(mut self, gc_algorithm: GcAlgorithmKind) -> Self {
-        self.gc_algorithm = gc_algorithm;
-        self
-    }
-
     pub fn with_max_heap_size(mut self, max_heap_size: u64) -> Self {
         self.max_heap_size = max_heap_size;
         self
@@ -516,7 +493,6 @@ pub fn execute_with_writer_with_options(
     let environment_config = NativeRuntimeConfig::from_environment(None)?;
     let mut runtime = NativeRuntime::new_with_config(NativeRuntimeConfig {
         cache_dir: options.cache_dir,
-        gc_algorithm: options.gc_algorithm,
         max_heap_size: options.max_heap_size,
         specialization_enabled: environment_config.specialization_enabled,
         allocation_diagnostics_enabled: environment_config.allocation_diagnostics_enabled,
@@ -1195,7 +1171,6 @@ impl NativeAgentState {
         // 把 ICU4X compiled_data 留在 rustc 链接的 stub 里，避免 DCE 在 Intl API 落地前删掉。
         wjsm_intl_data::keep_compiled_data();
         let gc = gc::NativeGc::new(
-            config.gc_algorithm,
             config.max_heap_size,
             config.allocation_diagnostics_enabled,
         )?;
@@ -6193,21 +6168,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_gc_algorithm_is_zgc() {
-        assert_eq!(
-            NativeRuntimeConfig::default().gc_algorithm,
-            GcAlgorithmKind::Zgc,
-            "未显式指定时运行时必须默认使用 zgc"
-        );
-        assert_eq!(
-            RuntimeOptions::default().gc_algorithm,
-            GcAlgorithmKind::Zgc,
-            "in-process 执行入口同样默认 zgc"
-        );
-    }
-    #[test]
     fn allocation_diagnostics_follow_runtime_switch() {
-        let disabled = gc::NativeGc::new(GcAlgorithmKind::Zgc, DEFAULT_MAX_HEAP_BYTES, false)
+        let disabled = gc::NativeGc::new(DEFAULT_MAX_HEAP_BYTES, false)
             .expect("disabled diagnostics heap should initialize");
         disabled
             .allocate(64)
@@ -6217,7 +6179,7 @@ mod tests {
             gc::NativeAllocationDiagnostics::default()
         );
 
-        let enabled = gc::NativeGc::new(GcAlgorithmKind::Zgc, DEFAULT_MAX_HEAP_BYTES, true)
+        let enabled = gc::NativeGc::new(DEFAULT_MAX_HEAP_BYTES, true)
             .expect("enabled diagnostics heap should initialize");
         enabled
             .allocate(64)
@@ -6239,7 +6201,6 @@ mod tests {
         let child = parent.child_config();
 
         assert_eq!(child.cache_dir, Some(cache_dir));
-        assert_eq!(child.gc_algorithm, parent.gc_algorithm);
         assert_eq!(child.max_heap_size, parent.max_heap_size);
         assert_eq!(child.specialization_enabled, parent.specialization_enabled);
         assert!(child.isolate_native_images);
@@ -6377,32 +6338,22 @@ mod tests {
                 console.log("done", sink, holder.length);
             "#,
         );
-        for algorithm in [
-            GcAlgorithmKind::MarkSweep,
-            GcAlgorithmKind::G1,
-            GcAlgorithmKind::Zgc,
-        ] {
-            let config = NativeRuntimeConfig::default()
-                .with_gc_algorithm(algorithm)
-                .with_max_heap_size(16 * 1024 * 1024);
-            let mut runtime = NativeRuntime::new_with_config(config)
-                .unwrap_or_else(|error| panic!("{algorithm:?} runtime should initialize: {error}"));
-            let execution = runtime
-                .execute(
-                    &artifact,
-                    std::path::Path::new("."),
-                    std::path::Path::new("."),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("{algorithm:?} bounded live set should complete: {error:?}")
-                });
+        let config = NativeRuntimeConfig::default().with_max_heap_size(16 * 1024 * 1024);
+        let mut runtime = NativeRuntime::new_with_config(config)
+            .unwrap_or_else(|error| panic!("runtime should initialize: {error}"));
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .unwrap_or_else(|error| panic!("bounded live set should complete: {error:?}"));
 
-            assert_eq!(execution.stdout, b"done 11 65536\n", "{algorithm:?}");
-            assert!(
-                runtime.gc_telemetry().cycles > 0,
-                "{algorithm:?} should collect before the 128-backedge poll budget"
-            );
-        }
+        assert_eq!(execution.stdout, b"done 11 65536\n");
+        assert!(
+            runtime.gc_telemetry().cycles > 0,
+            "should collect before the 128-backedge poll budget"
+        );
     }
 
     #[test]
@@ -6416,9 +6367,7 @@ mod tests {
                 console.log(s.length, s === "abcdef", s[5], o.name, Object.keys(o)[0]);
             "#,
         );
-        let config = NativeRuntimeConfig::default()
-            .with_gc_algorithm(GcAlgorithmKind::Zgc)
-            .with_allocation_diagnostics_enabled(true);
+        let config = NativeRuntimeConfig::default().with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("ZGC runtime should initialize");
         let before = runtime.host_side_table_stats().string_ids;
@@ -6460,7 +6409,7 @@ mod tests {
                 console.log(record.name, record.value, record.length);
             "#,
         );
-        let config = NativeRuntimeConfig::default().with_gc_algorithm(GcAlgorithmKind::Zgc);
+        let config = NativeRuntimeConfig::default();
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("ZGC runtime should initialize");
         let execution = runtime
@@ -6496,9 +6445,7 @@ mod tests {
                 );
             "#,
         );
-        let config = NativeRuntimeConfig::default()
-            .with_gc_algorithm(GcAlgorithmKind::Zgc)
-            .with_allocation_diagnostics_enabled(true);
+        let config = NativeRuntimeConfig::default().with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("ZGC runtime should initialize");
         let before = runtime.host_side_table_stats().string_ids;
@@ -6531,7 +6478,6 @@ mod tests {
             "#,
         );
         let config = NativeRuntimeConfig::default()
-            .with_gc_algorithm(GcAlgorithmKind::Zgc)
             .with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("runtime should initialize");
@@ -6564,7 +6510,6 @@ mod tests {
             "#,
         );
         let config = NativeRuntimeConfig::default()
-            .with_gc_algorithm(GcAlgorithmKind::Zgc)
             .with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("runtime should initialize");
@@ -6595,7 +6540,6 @@ mod tests {
             "#,
         );
         let config = NativeRuntimeConfig::default()
-            .with_gc_algorithm(GcAlgorithmKind::Zgc)
             .with_allocation_diagnostics_enabled(true);
         let mut runtime =
             NativeRuntime::new_with_config(config).expect("runtime should initialize");
@@ -6657,31 +6601,22 @@ mod tests {
                 console.log(s.length);
             "#,
         );
-        for algorithm in [
-            GcAlgorithmKind::MarkSweep,
-            GcAlgorithmKind::G1,
-            GcAlgorithmKind::Zgc,
-        ] {
-            let config = NativeRuntimeConfig::default()
-                .with_gc_algorithm(algorithm)
-                .with_max_heap_size(16 * 1024 * 1024);
-            let mut runtime = NativeRuntime::new_with_config(config)
-                .unwrap_or_else(|error| panic!("{algorithm:?} runtime should initialize: {error}"));
-            let execution = runtime
-                .execute(
-                    &artifact,
-                    std::path::Path::new("."),
-                    std::path::Path::new("."),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("{algorithm:?} accumulation should complete: {error:?}")
-                });
-            assert_eq!(execution.stdout, b"23890\n", "{algorithm:?}");
-            assert_eq!(execution.exit_code, 0, "{algorithm:?}");
-        }
+        let config = NativeRuntimeConfig::default().with_max_heap_size(16 * 1024 * 1024);
+        let mut runtime = NativeRuntime::new_with_config(config)
+            .unwrap_or_else(|error| panic!("runtime should initialize: {error}"));
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .unwrap_or_else(|error| panic!("accumulation should complete: {error:?}"));
+        assert_eq!(execution.stdout, b"23890\n");
+        assert_eq!(execution.exit_code, 0);
     }
 
-    fn assert_live_set_exhaustion_is_observable_range_error(algorithm: GcAlgorithmKind) {
+    #[test]
+    fn live_set_exhaustion_is_observable_range_error() {
         let oom_artifact = artifact(
             r#"
                 const retained = new Array(1 << 20);
@@ -6720,20 +6655,16 @@ mod tests {
         );
         let expected = b"first true RangeError JavaScript heap out of memory true\n\
 second true RangeError JavaScript heap out of memory true\n";
-        let config = NativeRuntimeConfig::default()
-            .with_gc_algorithm(algorithm)
-            .with_max_heap_size(16 * 1024 * 1024);
+        let config = NativeRuntimeConfig::default().with_max_heap_size(16 * 1024 * 1024);
         let mut runtime = NativeRuntime::new_with_config(config)
-            .unwrap_or_else(|error| panic!("{algorithm:?} runtime should initialize: {error}"));
+            .unwrap_or_else(|error| panic!("runtime should initialize: {error}"));
         let execution = runtime
             .execute(
                 &oom_artifact,
                 std::path::Path::new("."),
                 std::path::Path::new("."),
             )
-            .unwrap_or_else(|error| {
-                panic!("{algorithm:?} should catch OOM as RangeError: {error:?}")
-            });
+            .unwrap_or_else(|error| panic!("should catch OOM as RangeError: {error:?}"));
         let oom_error = runtime
             .state
             .out_of_memory_error
@@ -6746,9 +6677,9 @@ second true RangeError JavaScript heap out of memory true\n";
                 .filter(|entry| **entry == Some(oom_error))
                 .count(),
             1,
-            "{algorithm:?} should keep one entry for the dedicated OOM error",
+            "should keep one entry for the dedicated OOM error",
         );
-        assert_eq!(execution.stdout, expected, "{algorithm:?}");
+        assert_eq!(execution.stdout, expected);
 
         let lifecycle_execution = runtime
             .execute(
@@ -6757,11 +6688,11 @@ second true RangeError JavaScript heap out of memory true\n";
                 std::path::Path::new("."),
             )
             .unwrap_or_else(|error| {
-                panic!("{algorithm:?} should rebuild the OOM error after reset: {error:?}")
+                panic!("should rebuild the OOM error after reset: {error:?}")
             });
         assert_eq!(
             lifecycle_execution.stdout, b"true RangeError JavaScript heap out of memory\n",
-            "{algorithm:?} reset lifecycle",
+            "reset lifecycle",
         );
         let oom_error = runtime
             .state
@@ -6775,23 +6706,8 @@ second true RangeError JavaScript heap out of memory true\n";
                 .filter(|entry| **entry == Some(oom_error))
                 .count(),
             1,
-            "{algorithm:?} reset should rebuild one entry for the OOM error",
+            "reset should rebuild one entry for the OOM error",
         );
-    }
-
-    #[test]
-    fn live_set_exhaustion_is_observable_range_error_mark_sweep() {
-        assert_live_set_exhaustion_is_observable_range_error(GcAlgorithmKind::MarkSweep);
-    }
-
-    #[test]
-    fn live_set_exhaustion_is_observable_range_error_g1() {
-        assert_live_set_exhaustion_is_observable_range_error(GcAlgorithmKind::G1);
-    }
-
-    #[test]
-    fn live_set_exhaustion_is_observable_range_error_zgc() {
-        assert_live_set_exhaustion_is_observable_range_error(GcAlgorithmKind::Zgc);
     }
 
     fn execute_source_with_specialization(source: &str, enabled: bool) -> NativeExecution {
@@ -7293,34 +7209,24 @@ second true RangeError JavaScript heap out of memory true\n";
         );
     }
     #[test]
-    fn allocation_pressure_collects_with_each_runtime_algorithm() {
+    fn allocation_pressure_collects_under_zgc() {
         let artifact = artifact(
             "let checksum = 0; for (let i = 0; i < 12000; i += 1) { globalThis.current = { i }; checksum += globalThis.current.i; } console.log(checksum);",
         );
-        for algorithm in [
-            GcAlgorithmKind::MarkSweep,
-            GcAlgorithmKind::G1,
-            GcAlgorithmKind::Zgc,
-        ] {
-            let config = NativeRuntimeConfig::default()
-                .with_gc_algorithm(algorithm)
-                .with_max_heap_size(4 * 1024 * 1024);
-            let mut runtime =
-                NativeRuntime::new_with_config(config).expect("native runtime should initialize");
-            let execution = runtime
-                .execute(
-                    &artifact,
-                    std::path::Path::new("."),
-                    std::path::Path::new("."),
-                )
-                .unwrap_or_else(|error| {
-                    panic!("{algorithm:?} allocation pressure should finish: {error:?}")
-                });
-            let telemetry = runtime.gc_telemetry();
-            assert_eq!(execution.stdout, b"71994000\n");
-            assert!(telemetry.cycles > 0, "{algorithm:?} should collect");
-            assert_eq!(telemetry.collector, algorithm.as_str());
-        }
+        let config = NativeRuntimeConfig::default().with_max_heap_size(4 * 1024 * 1024);
+        let mut runtime =
+            NativeRuntime::new_with_config(config).expect("native runtime should initialize");
+        let execution = runtime
+            .execute(
+                &artifact,
+                std::path::Path::new("."),
+                std::path::Path::new("."),
+            )
+            .unwrap_or_else(|error| panic!("allocation pressure should finish: {error:?}"));
+        let telemetry = runtime.gc_telemetry();
+        assert_eq!(execution.stdout, b"71994000\n");
+        assert!(telemetry.cycles > 0, "should collect");
+        assert_eq!(telemetry.collector, "zgc");
     }
 
     #[test]

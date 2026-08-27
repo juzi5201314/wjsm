@@ -36,10 +36,8 @@ fn artifact(source: &str) -> PortableArtifact {
     .expect("artifact should encode")
 }
 
-fn small_zgc_runtime() -> NativeRuntime {
-    let config = NativeRuntimeConfig::default()
-        .with_gc_algorithm(GcAlgorithmKind::Zgc)
-        .with_max_heap_size(4 * 1024 * 1024);
+fn small_heap_runtime() -> NativeRuntime {
+    let config = NativeRuntimeConfig::default().with_max_heap_size(4 * 1024 * 1024);
     NativeRuntime::new_with_config(config).expect("native runtime should initialize")
 }
 
@@ -52,7 +50,7 @@ fn execute_source_with_runtime(runtime: &mut NativeRuntime, source: &str) -> Nat
 
 /// 执行源码、强制 GC、返回表占用快照。
 fn stats_after_gc(source: &str) -> HostSideTableStats {
-    let mut runtime = small_zgc_runtime();
+    let mut runtime = small_heap_runtime();
     execute_source_with_runtime(&mut runtime, source);
     runtime.collect_garbage_now().expect("GC should run");
     runtime.host_side_table_stats()
@@ -60,7 +58,7 @@ fn stats_after_gc(source: &str) -> HostSideTableStats {
 
 #[test]
 fn explicit_gc_waits_for_an_inflight_concurrent_cycle() {
-    let mut runtime = small_zgc_runtime();
+    let mut runtime = small_heap_runtime();
     let artifact = artifact(
         "let keep={v:42}; for(let i=0;i<10;i++){keep.next={v:i,next:keep.next}} gc(); console.log(keep.v);",
     );
@@ -75,7 +73,7 @@ fn explicit_gc_waits_for_an_inflight_concurrent_cycle() {
 
 #[test]
 fn dead_closures_are_reclaimed() {
-    let mut runtime = small_zgc_runtime();
+    let mut runtime = small_heap_runtime();
     let execution = execute_source_with_runtime(
         &mut runtime,
         "const add=(a)=>(b)=>a+b; let t=0; for(let i=0;i<5000;i++) t+=add(1)(2); console.log(t);",
@@ -102,7 +100,7 @@ fn dead_closures_are_reclaimed() {
 
 #[test]
 fn live_closure_survives_and_still_closes() {
-    let mut runtime = small_zgc_runtime();
+    let mut runtime = small_heap_runtime();
     let execution = execute_source_with_runtime(
         &mut runtime,
         "const add=(a)=>(b)=>a+b; const live=add(40); let t=0; for(let i=0;i<5000;i++) t+=add(1)(2); globalThis.live=live; console.log(t, live(2));",
@@ -119,7 +117,7 @@ fn live_closure_survives_and_still_closes() {
 
 #[test]
 fn interned_regexp_captures_are_reclaimed() {
-    let mut runtime = small_zgc_runtime();
+    let mut runtime = small_heap_runtime();
     let execution = execute_source_with_runtime(
         &mut runtime,
         "const re=/a(\\d+)/; let n=0; for(let i=0;i<20000;i++){ const m=re.exec('a'+i); n+=m[1].length; } console.log(n);",
@@ -149,7 +147,7 @@ fn dead_closures_do_not_pin_script_scopes() {
 
 #[test]
 fn reused_closure_slot_does_not_keep_old_environment() {
-    let mut runtime = small_zgc_runtime();
+    let mut runtime = small_heap_runtime();
     let execution = execute_source_with_runtime(
         &mut runtime,
         "const live=(x)=>()=>x; const f=live(7); for(let i=0;i<20000;i++){ live(i)(); } console.log(f());",

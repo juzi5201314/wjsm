@@ -527,9 +527,7 @@ pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcRe
     let live = host_live_set(state, &live_host_values);
     state.cleanup_retired_handles(retired);
     state.prune_string_ids(retired);
-    if report.stats.cycle_kind == CycleKind::Full
-        && state.runtime_config.gc_algorithm == wjsm_gc::GcAlgorithmKind::Zgc
-    {
+    if report.stats.cycle_kind == CycleKind::Full {
         state.prune_unmarked_string_ids();
     }
     if report.cleans_host_tables {

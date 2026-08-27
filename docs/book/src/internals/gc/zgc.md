@@ -45,12 +45,11 @@ Generational ZGC 把 young 对象和 old 对象分开管理。young GC 只扫 yo
 
 ZGC 写屏障使用 `__barrier_buf_ptr` / `__barrier_buf_end` 两个 env global 管理缓冲区。屏障满时调用宿主函数 `gc_barrier_buf_flush` 刷新。着色指针的 `__good_color` global 缓存当前 epoch 的有效颜色值，读屏障先检查该值再决定是否转发。
 
-## 默认回收器
+## 生产回收器
 
-ZGC 是 wjsm 的默认 GC 算法。`--gc` 选项、`WJSM_GC` 环境变量可以切换到 mark-sweep 或 G1。选择逻辑见[GC 选择与配置](configuration-and-invariants.md)。
+wjsm 固定使用并发分代 ZGC（`GenerationalZgc`）；无 `--gc` 或 `WJSM_GC` 选择面。配置与不变量见 [GC 选择与配置](configuration-and-invariants.md)。
 
 ## 深入了解
 
 - [着色指针与读屏障的配合](barriers-and-remset.md)
-- [G1 的 region 回收对比](g1.md)
 - [用户侧的 GC 配置](../../user/configuration/gc.md)

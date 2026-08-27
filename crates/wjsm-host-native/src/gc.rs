@@ -7,10 +7,9 @@ use std::time::Duration;
 
 use thiserror::Error;
 use wjsm_gc::{
-    GcAlgorithmKind, GcRuntimeV2, GcSafepointAction, GcTelemetrySnapshot, GenerationalZgc,
-    GenerationalZgcError, HandleTableV2, HeapAccessV2, HeapAccessV2Error, HeapBarrier,
-    ManagedHeapLayout, MutatorContext, NativeHeapMemory, Nlab, PAGE_GRANULE_BYTES, RootSnapshot,
-    RuntimeGcReport, StopTheWorldCollector, StopTheWorldCollectorError, ZgcBarrierSet,
+    GcRuntimeV2, GcSafepointAction, GcTelemetrySnapshot, GenerationalZgc, GenerationalZgcError,
+    HandleTableV2, HeapAccessV2, HeapAccessV2Error, HeapBarrier, ManagedHeapLayout, MutatorContext,
+    NativeHeapMemory, Nlab, PAGE_GRANULE_BYTES, RootSnapshot, RuntimeGcReport, ZgcBarrierSet,
 };
 use wjsm_ir::value;
 use wjsm_native_abi::{
@@ -86,7 +85,7 @@ impl NativeAllocationCounters {
 }
 
 pub(super) struct NativeGc {
-    collector: NativeCollector,
+    collector: GenerationalZgc<NativeHeapMemory>,
     heap: Arc<HeapAccessV2<NativeHeapMemory>>,
     nlab: RefCell<Nlab>,
     native_tlab: RefCell<Option<NativeTlabWindow>>,
@@ -112,28 +111,17 @@ impl NativeTlabWindow {
     }
 }
 
-enum NativeCollector {
-    StopTheWorld(StopTheWorldCollector),
-    Zgc(GenerationalZgc<NativeHeapMemory>),
-}
-
 impl NativeGc {
     pub(super) fn new(
-        algorithm: GcAlgorithmKind,
         max_heap_size: u64,
         allocation_diagnostics_enabled: bool,
     ) -> Result<Self, NativeGcError> {
-        let heap = Self::fresh_heap(algorithm, max_heap_size)?;
-        let collector = match algorithm {
-            GcAlgorithmKind::MarkSweep | GcAlgorithmKind::G1 => {
-                NativeCollector::StopTheWorld(StopTheWorldCollector::new(algorithm)?)
-            }
-            GcAlgorithmKind::Zgc => NativeCollector::Zgc(GenerationalZgc::new(
-                Arc::clone(&heap),
-                worker_count(),
-                ZGC_PACKET_CAPACITY,
-            )?),
-        };
+        let heap = Self::fresh_heap(max_heap_size)?;
+        let collector = GenerationalZgc::new(
+            Arc::clone(&heap),
+            worker_count(),
+            ZGC_PACKET_CAPACITY,
+        )?;
         let control = GcRuntimeV2::new();
         let mutator = control.register_mutator();
         Ok(Self {
@@ -150,7 +138,6 @@ impl NativeGc {
     }
 
     pub(super) fn fresh_heap(
-        algorithm: GcAlgorithmKind,
         max_heap_size: u64,
     ) -> Result<Arc<HeapAccessV2<NativeHeapMemory>>, NativeGcError> {
         let layout = Arc::new(
@@ -162,14 +149,11 @@ impl NativeGc {
         let handles = Arc::new(
             HandleTableV2::new(layout.as_ref().clone()).map_err(HeapAccessV2Error::HandleTable)?,
         );
-        let barrier = match algorithm {
-            GcAlgorithmKind::Zgc => HeapBarrier::Zgc(Arc::new(ZgcBarrierSet::new(
-                Arc::clone(&handles),
-                memory.clone(),
-                ZGC_BARRIER_RING_CAPACITY,
-            ))),
-            GcAlgorithmKind::MarkSweep | GcAlgorithmKind::G1 => HeapBarrier::Disabled,
-        };
+        let barrier = HeapBarrier::Zgc(Arc::new(ZgcBarrierSet::new(
+            Arc::clone(&handles),
+            memory.clone(),
+            ZGC_BARRIER_RING_CAPACITY,
+        )));
         Ok(Arc::new(HeapAccessV2::with_handles(
             memory, layout, handles, barrier,
         )?))
@@ -196,32 +180,21 @@ impl NativeGc {
             } else {
                 PAGE_GRANULE_BYTES
             };
-            match &self.collector {
-                NativeCollector::StopTheWorld(collector) => {
-                    collector.observe_allocation(observed, Duration::from_micros(10));
-                }
-                NativeCollector::Zgc(collector) => {
-                    collector.observe_allocation(observed, Duration::from_micros(10));
-                }
-            }
+            self.collector
+                .observe_allocation(observed, Duration::from_micros(10));
         }
         Ok(allocation.object().offset())
     }
 
     pub(super) fn mark_black_allocation(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
-        match &self.collector {
-            NativeCollector::StopTheWorld(_) => Ok(()),
-            NativeCollector::Zgc(collector) => collector.mark_black_allocation(handle),
-        }
+        self.collector.mark_black_allocation(handle)
     }
 
     pub(super) fn record_host_write(&self, owner: i64, old: Option<i64>, new: Option<i64>) {
         if self.barrier_state.phase.load(Ordering::Acquire) & NATIVE_BARRIER_MARKING_MASK == 0 {
             return;
         }
-        if let NativeCollector::Zgc(collector) = &self.collector {
-            collector.record_host_write(owner, old, new);
-        }
+        self.collector.record_host_write(owner, old, new);
     }
 
     pub(super) fn take_pacing_poll_request(&self) -> bool {
@@ -230,10 +203,7 @@ impl NativeGc {
 
     pub(super) fn take_safepoint_poll_request(&self) -> bool {
         let pacing_requested = self.take_pacing_poll_request();
-        match &self.collector {
-            NativeCollector::StopTheWorld(_) => pacing_requested,
-            NativeCollector::Zgc(collector) => pacing_requested || collector.cycle_active(),
-        }
+        pacing_requested || self.collector.cycle_active()
     }
     pub(super) fn reserve_native_tlab(&self) -> Result<(), NativeGcError> {
         if self.native_tlab.borrow().is_some() {
@@ -512,14 +482,8 @@ impl NativeGc {
         self.flush_native_tlab(context)?;
         if self.native_allocation_allowed() {
             self.pacing_poll_requested.set(true);
-            match &self.collector {
-                NativeCollector::StopTheWorld(collector) => {
-                    collector.observe_allocation(PAGE_GRANULE_BYTES, Duration::from_micros(10));
-                }
-                NativeCollector::Zgc(collector) => {
-                    collector.observe_allocation(PAGE_GRANULE_BYTES, Duration::from_micros(10));
-                }
-            }
+            self.collector
+                .observe_allocation(PAGE_GRANULE_BYTES, Duration::from_micros(10));
             self.reset_native_tlab();
             self.reserve_native_tlab()?;
         }
@@ -528,9 +492,7 @@ impl NativeGc {
     }
 
     pub(super) fn should_collect_before_native_tlab_refill(&self) -> bool {
-        matches!(self.collector, NativeCollector::Zgc(_))
-            && self.native_tlab.borrow().is_some()
-            && self.heap.free_pages() <= 8
+        self.native_tlab.borrow().is_some() && self.heap.free_pages() <= 8
     }
 
     fn native_allocation_allowed(&self) -> bool {
@@ -559,9 +521,7 @@ impl NativeGc {
     ) -> Result<(), NativeGcError> {
         self.allocation_prototypes_ready.set(false);
         self.reset_native_tlab();
-        if let NativeCollector::Zgc(collector) = &self.collector {
-            collector.reset_heap(Arc::clone(&heap))?;
-        }
+        self.collector.reset_heap(Arc::clone(&heap))?;
         self.heap = heap;
         self.reset_nlab();
         self.sync_barrier_state();
@@ -569,19 +529,11 @@ impl NativeGc {
     }
 
     pub(super) fn safepoint_action(&self) -> GcSafepointAction {
-        match &self.collector {
-            NativeCollector::StopTheWorld(collector) => {
-                collector.safepoint_action(self.heap.collector_capability())
-            }
-            NativeCollector::Zgc(collector) => collector.safepoint_action(),
-        }
+        self.collector.safepoint_action()
     }
 
     pub(super) fn cycle_active(&self) -> bool {
-        match &self.collector {
-            NativeCollector::StopTheWorld(_) => false,
-            NativeCollector::Zgc(collector) => collector.cycle_active(),
-        }
+        self.collector.cycle_active()
     }
     pub(super) fn at_safepoint(
         &mut self,
@@ -600,13 +552,7 @@ impl NativeGc {
                 self.reset_nlab();
             }
         }
-        let report = match &mut self.collector {
-            NativeCollector::StopTheWorld(collector) => snapshot
-                .as_ref()
-                .map(|snapshot| collector.collect(self.heap.collector_capability(), snapshot))
-                .transpose()?,
-            NativeCollector::Zgc(collector) => collector.at_safepoint(snapshot)?,
-        };
+        let report = self.collector.at_safepoint(snapshot)?;
         self.sync_barrier_state();
         if requires_reset {
             self.reserve_native_tlab()?;
@@ -623,12 +569,7 @@ impl NativeGc {
         self.flush_native_tlab(context)?;
         self.reset_native_tlab();
         self.reset_nlab();
-        let report = match &mut self.collector {
-            NativeCollector::StopTheWorld(collector) => {
-                collector.collect(self.heap.collector_capability(), &snapshot)?
-            }
-            NativeCollector::Zgc(collector) => collector.collect_full(snapshot)?,
-        };
+        let report = self.collector.collect_full(snapshot)?;
         self.reset_nlab();
         self.sync_barrier_state();
         self.reserve_native_tlab()?;
@@ -637,17 +578,11 @@ impl NativeGc {
     }
 
     pub(super) fn telemetry_snapshot(&self) -> GcTelemetrySnapshot {
-        match &self.collector {
-            NativeCollector::StopTheWorld(collector) => collector.telemetry_snapshot(),
-            NativeCollector::Zgc(collector) => collector.telemetry_snapshot(),
-        }
+        self.collector.telemetry_snapshot()
     }
 
     pub(super) fn reset_telemetry(&self) {
-        match &self.collector {
-            NativeCollector::StopTheWorld(collector) => collector.reset_telemetry(),
-            NativeCollector::Zgc(collector) => collector.reset_telemetry(),
-        }
+        self.collector.reset_telemetry();
     }
 
     pub(super) fn allocation_diagnostics(&self) -> NativeAllocationDiagnostics {
@@ -655,14 +590,15 @@ impl NativeGc {
     }
 
     fn sync_barrier_state(&self) {
-        let (phase, access_epoch) = match self.heap.barrier() {
-            HeapBarrier::Disabled => (0, 0),
-            HeapBarrier::Zgc(barrier) => (barrier.epoch().pack(), barrier.access_epoch()),
+        let HeapBarrier::Zgc(barrier) = self.heap.barrier() else {
+            unreachable!("production heap must use the ZGC barrier");
         };
-        self.barrier_state.phase.store(phase, Ordering::Release);
+        self.barrier_state
+            .phase
+            .store(barrier.epoch().pack(), Ordering::Release);
         self.barrier_state
             .access_epoch
-            .store(access_epoch, Ordering::Release);
+            .store(barrier.access_epoch(), Ordering::Release);
     }
 }
 
@@ -674,8 +610,6 @@ fn worker_count() -> usize {
 pub enum NativeGcError {
     #[error(transparent)]
     Heap(#[from] HeapAccessV2Error),
-    #[error(transparent)]
-    StopTheWorld(#[from] StopTheWorldCollectorError),
     #[error(transparent)]
     Zgc(#[from] GenerationalZgcError),
     #[error("native heap mapping failed: {0}")]

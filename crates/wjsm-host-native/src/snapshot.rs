@@ -36,7 +36,6 @@ impl NativeAgentState {
     ) -> Result<(), NativeRuntimeError> {
         let restored = restore(
             bytes,
-            self.runtime_config.gc_algorithm,
             self.runtime_config.max_heap_size,
         )?;
         self.gc.reset_native_tlab();
@@ -73,10 +72,9 @@ impl NativeAgentState {
 
 fn restore(
     bytes: &[u8],
-    algorithm: wjsm_gc::GcAlgorithmKind,
     max_heap_size: u64,
 ) -> Result<RestoredBootstrap, NativeRuntimeError> {
-    let heap = gc::NativeGc::fresh_heap(algorithm, max_heap_size)?;
+    let heap = gc::NativeGc::fresh_heap(max_heap_size)?;
     let expected = SnapshotExpectations {
         bootstrap_hash: BOOTSTRAP_HASH,
         lowering_hash: wjsm_backend_native::NATIVE_CODEGEN_HASH,

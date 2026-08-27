@@ -154,8 +154,6 @@
     - [Handle Table](internals/gc/handle-table.md)
     - [NativeHeapMemory 与逻辑堆地址](internals/gc/memory64.md)
     - [对象布局与分配](internals/gc/object-layout-and-allocation.md)
-    - [Mark-Sweep](internals/gc/mark-sweep.md)
-    - [G1](internals/gc/g1.md)
     - [Generational ZGC](internals/gc/zgc.md)
     - [写屏障、读屏障与 Remset](internals/gc/barriers-and-remset.md)
     - [并发阶段、工作线程与 Pacing](internals/gc/concurrency-and-pacing.md)

@@ -1,12 +1,12 @@
 # 写屏障、读屏障与 Remset
 
-GC 屏障维护跨代/跨 region 引用的一致性，remset 记录哪些 old 对象引用了 young 对象。三种回收器对屏障的依赖不同：
+GC 屏障维护跨代引用的一致性；remset 记录哪些 old 对象引用了 young 对象。`GenerationalZgc` 使用：
 
-| 回收器 | 写屏障 | 读屏障 | Remset |
-| --- | --- | --- | --- |
-| Mark-Sweep | 不需要 | 不需要 | 不需要 |
-| G1 | SATB 写屏障 | 不需要 | Region 粒度 remset |
-| ZGC | 代际写屏障 | 着色指针读屏障 | 跨代引用记录 |
+| 机制 | 用途 |
+| --- | --- |
+| 代际写屏障 | 记录跨代引用 |
+| 着色指针读屏障 | 并发移动时转发过时指针 |
+| Remset | young GC 扫描 old→young 边 |
 
 ## 为什么需要屏障
 
@@ -37,12 +37,9 @@ ZGC 的读屏障在读取对象字段时检查指针颜色。着色指针在高�
 
 ## Remset
 
-remset（remembered set）记录「哪些 old 对象引用了 young 对象」。young GC 扫描 remset 里的 old 对象，而不是全部 old 区。
-
-G1 的 remset 是 region 粒度的：每个 region 维护一个「引用本 region young 对象的 old region」集合。ZGC 不使用传统 remset，改用着色指针和并发标记，但分代版本仍需要记录跨代引用。
+remset（remembered set）记录「哪些 old 对象引用了 young 对象」。young GC 扫描 remset 里的 old 对象，而不是全部 old 区。ZGC 分代版本结合着色指针、并发标记与 remset 记录跨代引用。
 
 ## 深入了解
 
-- [G1 的 region 与回收集选择](g1.md)
 - [ZGC 的着色指针与并发移动](zgc.md)
 - [GC 不变量](configuration-and-invariants.md)

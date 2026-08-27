@@ -121,10 +121,6 @@ pub struct Cli {
     #[arg(long = "condition", value_name = "NAME", global = true)]
     pub(crate) condition: Vec<String>,
 
-    /// 选择垃圾回收器；优先于 WJSM_TEST_GC/WJSM_GC。
-    #[arg(long, value_name = "mark-sweep|g1|zgc", global = true)]
-    pub(crate) gc: Option<wjsm_runtime::GcAlgorithmKind>,
-
     /// JavaScript 对象堆容量上限，支持 K、M、G 后缀。
     #[arg(
         long,

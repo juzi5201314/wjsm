@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::scenario::ScenarioKind;
@@ -18,25 +18,6 @@ pub enum Command {
     Info(CommonArgs),
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum GcKind {
-    #[default]
-    Zgc,
-    G1,
-    #[value(name = "mark-sweep")]
-    MarkSweep,
-}
-
-impl GcKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Zgc => "zgc",
-            Self::G1 => "g1",
-            Self::MarkSweep => "mark-sweep",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Parser)]
 pub struct CommonArgs {
     /// 对象堆上限（如 32m、256m、1g）。
@@ -51,9 +32,6 @@ pub struct CommonArgs {
 pub struct RunArgs {
     #[command(flatten)]
     pub common: CommonArgs,
-    /// 选择 collector。
-    #[arg(long, value_enum, default_value_t)]
-    pub gc: GcKind,
     /// 存活集百分比（0–100）。
     #[arg(long, default_value_t = 50)]
     pub live_set: u8,

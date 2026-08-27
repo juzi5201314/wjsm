@@ -11,7 +11,7 @@
 | `NativeVmContext` | pinned vmctx，generated code 的运行时上下文 |
 | `NativeAgentState` | agent 级状态（module、Promise、continuation、worker、scheduler） |
 | ManagedHeap | 统一对象堆 + HandleTableV2 |
-| Collector | Mark-Sweep / G1 / ZGC，启动时固定 |
+| Collector | `GenerationalZgc`（唯一生产回收器） |
 | Module tables | 已加载模块的 namespace 缓存 |
 | Promise tables | pending / fulfilled / rejected Promise |
 | Inspector | CDP 调试器会话 |

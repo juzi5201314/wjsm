@@ -15,7 +15,6 @@
 | `--color <auto\|always\|never>` | 控制颜色输出 | `auto` |
 | `--browser` | 启用 browser 解析条件 | 关闭 |
 | `--condition <NAME>` | 自定义解析条件 | 无 |
-| `--gc <mark-sweep\|g1\|zgc>` | GC 算法 | `zgc` |
 | `--max-heap-size <SIZE>` | 堆内存上限 | `64M` |
 | `--inspect[=HOST:PORT]` | CDP 调试器 | 关闭 |
 | `--inspect-brk[=HOST:PORT]` | CDP 调试器，入口暂停 | 关闭 |
@@ -27,14 +26,10 @@
 | `--include <PATH>` | 补入 native-executable 快照的文件 | 无 |
 | `-o/--output <PATH>` | build 输出路径 | `out.wjsm` |
 
-`--gc` 不能写入配置文件，只接受命令行或环境变量。
-
 ## 环境变量
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_GC` | GC 算法 | `zgc` |
-| `WJSM_TEST_GC` | 测试专用 GC 覆盖 | 未设置 |
 | `WJSM_CACHE_DIR` | native / builtin 缓存目录 | 未设置（关闭） |
 | `WJSM_CACHE_MAX_BYTES` | 磁盘缓存 LRU 上限 | `268435456` |
 | `WJSM_NO_BUILTIN_CACHE` | 禁用 builtin IR 段缓存 | 未设置 |
@@ -60,11 +55,7 @@
 | `browser` / `condition` | 包解析条件 |
 | `root` / `script` | 模块解析根与脚本模式 |
 
-配置文件不能包含 `--gc`、`--max-heap-size`、`--inspect` 等运行时选项——这些只能通过命令行或环境变量设置。完整说明见[`wjsm.toml` 与 `wjsm.json`](../configuration/project-files.md)。
-
-## GC 选择优先级
-
-`--gc` > `WJSM_TEST_GC` > `WJSM_GC` > 默认 `zgc`。
+配置文件不能包含 `--max-heap-size`、`--inspect` 等运行时选项——这些只能通过命令行或环境变量设置。完整说明见[`wjsm.toml` 与 `wjsm.json`](../configuration/project-files.md)。
 
 ## 深入了解
 
