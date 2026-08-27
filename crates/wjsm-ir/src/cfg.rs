@@ -241,6 +241,42 @@ impl ControlFlowGraph {
         children
     }
 
+    /// DFS 回边集合：边 `(u, v)` 中 v 是 u 在 DFS 树上的（在栈）祖先。
+    ///
+    /// 任意有向图的每个环都至少含一条 DFS 回边（首个被发现的环上节点经白路径
+    /// 成为其余环上节点的祖先），因此以此集合作为协作式轮询点可保证每个运行时
+    /// 循环每圈至少轮询一次；与「块 id 递减即回边」不同，表达式级分叉产生的
+    /// 乱序前向边不会被误判。
+    pub fn dfs_back_edges(&self) -> HashSet<(BasicBlockId, BasicBlockId)> {
+        let count = self.block_count();
+        let mut back_edges = HashSet::new();
+        if count == 0 || (self.entry.0 as usize) >= count {
+            return back_edges;
+        }
+        let mut visited = vec![false; count];
+        let mut on_stack = vec![false; count];
+        let mut stack = vec![(self.entry, 0usize)];
+        visited[self.entry.0 as usize] = true;
+        on_stack[self.entry.0 as usize] = true;
+        while let Some((block, cursor)) = stack.pop() {
+            let targets = self.successors(block);
+            if cursor < targets.len() {
+                stack.push((block, cursor + 1));
+                let next = targets[cursor];
+                if on_stack[next.0 as usize] {
+                    back_edges.insert((block, next));
+                } else if !visited[next.0 as usize] {
+                    visited[next.0 as usize] = true;
+                    on_stack[next.0 as usize] = true;
+                    stack.push((next, 0));
+                }
+            } else {
+                on_stack[block.0 as usize] = false;
+            }
+        }
+        back_edges
+    }
+
     /// 完整支配集：`dom[b]` 含 b 自身。不可达块只被自身支配。
     pub fn dominator_sets(&self) -> HashMap<BasicBlockId, HashSet<BasicBlockId>> {
         let idom = self.immediate_dominators();
@@ -378,6 +414,67 @@ mod tests {
         assert_eq!(idom[3], Some(BasicBlockId(1)));
         let frontiers = cfg.dominance_frontiers(&idom);
         assert_eq!(frontiers[2], vec![BasicBlockId(1)]);
+    }
+
+    #[test]
+    fn dfs_back_edges_ignore_id_descending_forward_edges() {
+        // bb0 → bb1(头) → bb4 → {bb2(体), bb3(出口)}；bb2 → bb5 → bb1。
+        // bb4→bb2 与 bb5→bb1 都是块 id 递减的边，但只有 bb5→bb1 闭合环。
+        let mut function = Function::new("loop", BasicBlockId(0));
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        let mut header = BasicBlock::new(BasicBlockId(1));
+        header.set_terminator(Terminator::Jump {
+            target: BasicBlockId(4),
+        });
+        let mut body = BasicBlock::new(BasicBlockId(2));
+        body.set_terminator(Terminator::Jump {
+            target: BasicBlockId(5),
+        });
+        let mut exit = BasicBlock::new(BasicBlockId(3));
+        exit.set_terminator(Terminator::Return { value: None });
+        let mut dispatch = BasicBlock::new(BasicBlockId(4));
+        dispatch.set_terminator(Terminator::Branch {
+            condition: ValueId(0),
+            true_block: BasicBlockId(2),
+            false_block: BasicBlockId(3),
+        });
+        let mut latch = BasicBlock::new(BasicBlockId(5));
+        latch.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        for block in [entry, header, body, exit, dispatch, latch] {
+            function.push_block(block);
+        }
+
+        let cfg = ControlFlowGraph::build(&function);
+        assert_eq!(
+            cfg.dfs_back_edges(),
+            HashSet::from([(BasicBlockId(5), BasicBlockId(1))])
+        );
+    }
+
+    #[test]
+    fn dfs_back_edges_include_self_loop() {
+        let mut function = Function::new("spin", BasicBlockId(0));
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        let mut spin = BasicBlock::new(BasicBlockId(1));
+        spin.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        for block in [entry, spin] {
+            function.push_block(block);
+        }
+        let cfg = ControlFlowGraph::build(&function);
+        assert_eq!(
+            cfg.dfs_back_edges(),
+            HashSet::from([(BasicBlockId(1), BasicBlockId(1))])
+        );
     }
 
     #[test]

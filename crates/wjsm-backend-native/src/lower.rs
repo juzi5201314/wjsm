@@ -1685,6 +1685,10 @@ pub(crate) fn lower_function(
         };
 
         let headers = wjsm_ir::typed_cfg::loop_headers(ir_function);
+        // 协作式轮询只放在真实闭环的 DFS 回边上：表达式级异常分叉会产生
+        // 块 id 递减的前向边，按 id 序误判回边会把轮询预算放大数倍，
+        // 预算提前耗尽会在紧循环中途触发 GC 并关闭 TLAB 快速分配。
+        let poll_edges = wjsm_ir::typed_cfg::dfs_back_edges(ir_function);
         let entry_body = cx.builder.create_block();
         emit_resume_dispatch(&mut cx, ir_function, &blocks, &headers, entry_body)?;
         blocks.insert(ir_function.entry(), entry_body);
@@ -1739,6 +1743,7 @@ pub(crate) fn lower_function(
                 &boolean_values,
                 &blocks,
                 &phi_edges,
+                &poll_edges,
             )?;
         }
         cx.finish_roots();
@@ -8482,6 +8487,7 @@ fn call_dispatcher(
         .context("host dispatcher returned no result")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_terminator(
     cx: &mut LoweringCx<'_, '_>,
     predecessor: BasicBlockId,
@@ -8490,6 +8496,7 @@ fn lower_terminator(
     boolean_values: &HashSet<ValueId>,
     blocks: &HashMap<BasicBlockId, ir::Block>,
     phi_edges: &HashMap<(BasicBlockId, BasicBlockId), Vec<(ValueId, ValueId)>>,
+    poll_edges: &HashSet<(BasicBlockId, BasicBlockId)>,
 ) -> Result<()> {
     match terminator {
         Terminator::Return { value } => {
@@ -8504,7 +8511,7 @@ fn lower_terminator(
             cx.builder.ins().return_(&[result]);
         }
         Terminator::Jump { target } => {
-            if target.0 <= predecessor.0 {
+            if poll_edges.contains(&(predecessor, *target)) {
                 cx.flush()?;
                 lower_cooperative_poll(cx)?;
             }
@@ -8516,7 +8523,9 @@ fn lower_terminator(
             true_block,
             false_block,
         } => {
-            if true_block.0 <= predecessor.0 || false_block.0 <= predecessor.0 {
+            if poll_edges.contains(&(predecessor, *true_block))
+                || poll_edges.contains(&(predecessor, *false_block))
+            {
                 cx.flush()?;
                 lower_cooperative_poll(cx)?;
             }
@@ -8560,8 +8569,10 @@ fn lower_terminator(
             default_block,
             ..
         } => {
-            if cases.iter().any(|case| case.target.0 <= predecessor.0)
-                || default_block.0 <= predecessor.0
+            if cases
+                .iter()
+                .any(|case| poll_edges.contains(&(predecessor, case.target)))
+                || poll_edges.contains(&(predecessor, *default_block))
             {
                 cx.flush()?;
                 lower_cooperative_poll(cx)?;

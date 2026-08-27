@@ -34,10 +34,8 @@ impl Lowerer {
                         if is_proto_object_literal_key(&kv.key) {
                             // `__proto__: value` 走 SetProto；静态键无副作用，
                             // 仅需按规范传播属性值求值抛出的异常。
-                            let val_dest =
-                                self.lower_expr_then_continue(&kv.value, &mut block)?;
-                            if self.expr_exception_fork_allowed()
-                                && self.expr_can_throw(&kv.value)
+                            let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
+                            if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value)
                             {
                                 block = self.lower_value_exception_branch(block, val_dest)?;
                             }
