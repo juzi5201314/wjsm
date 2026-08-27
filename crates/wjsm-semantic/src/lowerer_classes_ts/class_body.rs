@@ -411,8 +411,9 @@ impl Lowerer {
 
         match method.kind {
             swc_ast::MethodKind::Method => {
-                if method.function.is_generator {
-                    // 生成器方法体延迟到类求值完成后才执行，期间类名已初始化。
+                if method.function.is_generator || method.function.is_async {
+                    // generator / async 方法体延迟到类求值完成后才执行，期间类名已初始化；
+                    // 二者都需要 body + wrapper 双函数结构，路由在 lower_method_prop_to_fn。
                     let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
                     if let Some(sid) = class_scope_id {
                         self.scopes

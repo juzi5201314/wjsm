@@ -150,6 +150,14 @@ pub(crate) struct Lowerer {
     pub(crate) is_method: bool,
     /// 当前函数形参个数，供 emit_arguments_init 使用。
     pub(crate) arguments_param_count: u32,
+    /// `arguments` 对象的预物化来源：generator/async 函数 body 从续体槽位加载 wrapper
+    /// 侧物化好的 arguments 对象时设置；`emit_arguments_init` 在入口 take 消费，
+    /// 命中时直接绑定该对象而不再发射 `CollectRestArgs`（body 的原生调用帧没有用户实参）。
+    pub(crate) arguments_source_override: Option<ValueId>,
+    /// rest 形参的预收集来源：generator/async 函数 body 从续体槽位加载 wrapper 侧
+    /// 收集好的 rest 实参数组时设置；`emit_pat_inits_impl` 在入口 take 消费，
+    /// 命中时直接解构该数组而不再发射 `CollectRestArgs`。
+    pub(crate) rest_args_source_override: Option<ValueId>,
     pub(crate) script_mode: bool,
     /// 是否在语句入口发射 `Instruction::DebugCheck`（默认关闭，不影响现有 IR 快照）。
     pub(crate) emit_debug_checks: bool,
@@ -236,6 +244,11 @@ pub(crate) struct AsyncContextState {
     pub(crate) async_generator_scope_id: usize,
     pub(crate) async_closure_env_ir_name: Option<String>,
     pub(crate) pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
+    /// 悬挂中的 arguments/rest 预物化来源随函数上下文入栈清零、出栈恢复：
+    /// 形参默认值里的嵌套函数在 override 设定与消费之间降级，若不清零会把
+    /// 外层 body 的 ValueId 泄漏进嵌套函数（跨函数值引用 → IR 验证失败）。
+    pub(crate) arguments_source_override: Option<ValueId>,
+    pub(crate) rest_args_source_override: Option<ValueId>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HoistedVar {

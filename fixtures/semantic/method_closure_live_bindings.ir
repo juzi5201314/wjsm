@@ -162,23 +162,23 @@ module {
     c159 = number(2)
     c160 = number(3)
     c161 = number(4)
-    c162 = number(0)
-    c163 = functionref(@14)
-    c164 = undefined
-    c165 = string("$0.generatorValue")
-    c166 = number(1)
-    c167 = number(2)
-    c168 = undefined
-    c169 = number(0)
-    c170 = number(1)
-    c171 = number(0)
-    c172 = functionref(@15)
-    c173 = functionref(@14)
-    c174 = number(5)
-    c175 = undefined
-    c176 = number(2)
-    c177 = number(3)
-    c178 = number(4)
+    c162 = number(5)
+    c163 = undefined
+    c164 = string("$0.generatorValue")
+    c165 = number(1)
+    c166 = number(2)
+    c167 = undefined
+    c168 = number(0)
+    c169 = number(1)
+    c170 = number(0)
+    c171 = functionref(@15)
+    c172 = functionref(@14)
+    c173 = number(7)
+    c174 = undefined
+    c175 = number(2)
+    c176 = number(3)
+    c177 = number(4)
+    c178 = number(5)
     c179 = functionref(@15)
     c180 = string("$0.generatorValue")
     c181 = string("home")
@@ -437,48 +437,46 @@ module {
       %10 = const c161
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $19.$this, %11
-      %12 = collect_rest_args skip=0
-      %13 = const c162
-      %15 = const c163
-      %14 = call builtin.create_mapped_arguments_object(%12, %13, %15)
-      store var $19.arguments, %14
+      %12 = const c162
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $19.arguments, %13
       jump bb1
     bb1:
-      %16 = const c164
-      store var $19.$shared_env, %16
-      %36 = load var $19.$state
-      switch %36 [case c169 -> bb2, case c170 -> bb3], default bb8, exit bb9
+      %14 = const c163
+      store var $19.$shared_env, %14
+      %34 = load var $19.$state
+      switch %34 [case c168 -> bb2, case c169 -> bb3], default bb8, exit bb9
     bb2:
-      %17 = load var $19.$closure_env
-      %18 = const c165
-      %19 = get_prop %17, %18
-      %20 = load var $19.$generator
-      %21 = call builtin.generator.next(%20, %19)
-      generator_suspend %21, state=1
+      %15 = load var $19.$closure_env
+      %16 = const c164
+      %17 = get_prop %15, %16
+      %18 = load var $19.$generator
+      %19 = call builtin.generator.next(%18, %17)
+      generator_suspend %19, state=1
       jump bb5
     bb3:
-      %22 = load var $19.$resume_val
-      %23 = load var $19.$is_rejected
-      %24 = const c166
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb7
+      %20 = load var $19.$resume_val
+      %21 = load var $19.$is_rejected
+      %22 = const c165
+      %23 = stricteq %21, %22
+      branch %23, bb4, bb7
     bb4:
-      %28 = load var $19.$generator
-      %29 = call builtin.generator.throw(%28, %22)
-      return %29
+      %26 = load var $19.$generator
+      %27 = call builtin.generator.throw(%26, %20)
+      return %27
     bb5:
-      %33 = load var $19.$generator
-      %34 = const c168
-      %35 = call builtin.generator.return(%33, %34)
-      return %35
+      %31 = load var $19.$generator
+      %32 = const c167
+      %33 = call builtin.generator.return(%31, %32)
+      return %33
     bb6:
-      %30 = load var $19.$generator
-      %31 = call builtin.generator.return(%30, %22)
-      return %31
+      %28 = load var $19.$generator
+      %29 = call builtin.generator.return(%28, %20)
+      return %29
     bb7:
-      %26 = const c167
-      %27 = stricteq %23, %26
-      branch %27, bb6, bb5
+      %24 = const c166
+      %25 = stricteq %21, %24
+      branch %25, bb6, bb5
     bb8:
       return
     bb9:
@@ -487,24 +485,27 @@ module {
   fn @read [needs_prototype] [captures: $0.generatorValue] [params: $20.$env, $20.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c171
-      %3 = const c172
+      %1 = const c170
+      %3 = const c171
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $20.arguments, %2
-      %4 = const c173
+      %4 = const c172
       %5 = load var $env
       %6 = call builtin.create_closure(%4, %5)
-      %7 = const c174
-      %8 = const c175
+      %7 = const c173
+      %8 = const c174
       %9 = call builtin.continuation.create(%6, %8, %7)
       %10 = call builtin.generator.start(%9)
       %11 = load var $20.$this
-      %12 = const c176
+      %12 = const c175
       call builtin.continuation.save_var(%9, %12, %10)
-      %13 = const c177
+      %13 = const c176
       call builtin.continuation.save_var(%9, %13, %5)
-      %14 = const c178
+      %14 = const c177
       call builtin.continuation.save_var(%9, %14, %11)
+      %15 = load var $20.arguments
+      %16 = const c178
+      call builtin.continuation.save_var(%9, %16, %15)
       return %10
 
   fn @$module_main [entry=bb0]:

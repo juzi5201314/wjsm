@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+function
+5
+15
+7
+6
+42
+10
+1
+4
+--- stderr ---

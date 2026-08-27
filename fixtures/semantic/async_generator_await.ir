@@ -22,11 +22,11 @@ module {
     c19 = undefined
     c20 = number(0)
     c21 = number(1)
-    c22 = number(2)
-    c23 = number(3)
-    c24 = number(4)
-    c25 = number(1)
-    c26 = functionref(@0)
+    c22 = number(7)
+    c23 = number(2)
+    c24 = number(3)
+    c25 = number(4)
+    c26 = number(5)
     c27 = undefined
     c28 = undefined
     c29 = number(1)
@@ -51,24 +51,26 @@ module {
     c48 = string("$0.gen")
     c49 = string("callee")
     c50 = functionref(@0)
-    c51 = number(5)
+    c51 = number(8)
     c52 = undefined
     c53 = number(2)
     c54 = number(3)
     c55 = number(4)
-    c56 = functionref(@1)
-    c57 = undefined
-    c58 = number(4)
-    c59 = string("next")
-    c60 = string("value")
-    c61 = functionref(@2)
-    c62 = undefined
-    c63 = string("next")
-    c64 = string("value")
-    c65 = functionref(@3)
-    c66 = undefined
-    c67 = bool(true)
-    c68 = bool(false)
+    c56 = number(5)
+    c57 = number(7)
+    c58 = functionref(@1)
+    c59 = undefined
+    c60 = number(4)
+    c61 = string("next")
+    c62 = string("value")
+    c63 = functionref(@2)
+    c64 = undefined
+    c65 = string("next")
+    c66 = string("value")
+    c67 = functionref(@3)
+    c68 = undefined
+    c69 = bool(true)
+    c70 = bool(false)
 
   fn @gen$asyncgen [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -83,18 +85,19 @@ module {
       store var $1.$resume_val, %5
       %6 = const c22
       %7 = call builtin.continuation.load_var(%0, %6)
-      store var $1.$generator, %7
+      store var $1.$this, %7
       %8 = const c23
       %9 = call builtin.continuation.load_var(%0, %8)
-      store var $1.$closure_env, %9
+      store var $1.$generator, %9
       %10 = const c24
       %11 = call builtin.continuation.load_var(%0, %10)
-      store var $1.input, %11
-      %12 = collect_rest_args skip=0
-      %13 = const c25
-      %15 = const c26
-      %14 = call builtin.create_mapped_arguments_object(%12, %13, %15)
-      store var $1.arguments, %14
+      store var $1.$closure_env, %11
+      %12 = const c25
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $1.input, %13
+      %14 = const c26
+      %15 = call builtin.continuation.load_var(%0, %14)
+      store var $1.arguments, %15
       jump bb1
     bb1:
       %16 = const c27
@@ -226,6 +229,12 @@ module {
       %18 = load var $2.input
       %19 = const c55
       call builtin.continuation.save_var(%14, %19, %18)
+      %20 = load var $2.arguments
+      %21 = const c56
+      call builtin.continuation.save_var(%14, %21, %20)
+      %22 = load var $2.$this
+      %23 = const c57
+      call builtin.continuation.save_var(%14, %23, %22)
       return %15
     bb2:
       %10 = call builtin.exception_value(%8)
@@ -234,7 +243,7 @@ module {
   fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
     bb0:
       %0 = load var $3.result
-      %1 = const c60
+      %1 = const c62
       %2 = get_prop %0, %1
       %3 = call builtin.console.log(%2)
       return %3
@@ -242,7 +251,7 @@ module {
   fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
     bb0:
       %0 = load var $4.result
-      %1 = const c64
+      %1 = const c66
       %2 = get_prop %0, %1
       %3 = call builtin.console.log(%2)
       return %3
@@ -291,22 +300,22 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c56
+      %21 = const c58
       store var $0.gen, %21
-      %22 = const c57
+      %22 = const c59
       %23 = load var $0.gen
-      %24 = const c58
+      %24 = const c60
       %25 = call %23, this=%22, args=[%24]
       %26 = is_exception %25
       branch %26, bb2, bb1
     bb1:
       store var $0.g, %25
       %28 = load var $0.g
-      %29 = const c59
+      %29 = const c61
       %30 = get_prop %28, %29
       %31 = call %30, this=%28
-      %32 = const c61
-      %33 = const c62
+      %32 = const c63
+      %33 = const c64
       %34 = call builtin.promise.then(%31, %32, %33)
       %35 = is_exception %34
       branch %35, bb4, bb3
@@ -315,11 +324,11 @@ module {
       throw %27
     bb3:
       %37 = load var $0.g
-      %38 = const c63
+      %38 = const c65
       %39 = get_prop %37, %38
       %40 = call %39, this=%37
-      %41 = const c65
-      %42 = const c66
+      %41 = const c67
+      %42 = const c68
       %43 = call builtin.promise.then(%40, %41, %42)
       %44 = is_exception %43
       branch %44, bb6, bb5

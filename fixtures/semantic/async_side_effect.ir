@@ -23,10 +23,10 @@ module {
     c20 = number(0)
     c21 = number(0)
     c22 = number(1)
-    c23 = number(2)
-    c24 = number(3)
-    c25 = number(0)
-    c26 = functionref(@0)
+    c23 = number(6)
+    c24 = number(2)
+    c25 = number(3)
+    c26 = number(4)
     c27 = undefined
     c28 = undefined
     c29 = string("$0.undefined")
@@ -43,25 +43,27 @@ module {
     c40 = string("$0.inc")
     c41 = string("callee")
     c42 = functionref(@0)
-    c43 = number(4)
+    c43 = number(7)
     c44 = number(0)
     c45 = number(0)
     c46 = number(1)
     c47 = bool(false)
     c48 = number(2)
     c49 = number(3)
-    c50 = number(0)
-    c51 = undefined
-    c52 = bool(false)
-    c53 = functionref(@1)
-    c54 = undefined
-    c55 = string("$0.undefined")
-    c56 = string("$0.x")
-    c57 = undefined
+    c50 = number(4)
+    c51 = number(6)
+    c52 = number(0)
+    c53 = undefined
+    c54 = bool(false)
+    c55 = functionref(@1)
+    c56 = undefined
+    c57 = string("$0.undefined")
     c58 = string("$0.x")
-    c59 = functionref(@2)
-    c60 = undefined
-    c61 = bool(true)
+    c59 = undefined
+    c60 = string("$0.x")
+    c61 = functionref(@2)
+    c62 = undefined
+    c63 = bool(true)
 
   fn @inc$async [captures: $0.undefined, $0.x] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -76,15 +78,16 @@ module {
       store var $1.$resume_val, %5
       %6 = const c23
       %7 = call builtin.continuation.load_var(%0, %6)
-      store var $1.$promise, %7
+      store var $1.$this, %7
       %8 = const c24
       %9 = call builtin.continuation.load_var(%0, %8)
-      store var $1.$closure_env, %9
-      %10 = collect_rest_args skip=0
-      %11 = const c25
-      %13 = const c26
-      %12 = call builtin.create_mapped_arguments_object(%10, %11, %13)
-      store var $1.arguments, %12
+      store var $1.$promise, %9
+      %10 = const c25
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $1.$closure_env, %11
+      %12 = const c26
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $1.arguments, %13
       jump bb1
     bb1:
       %14 = const c27
@@ -160,10 +163,16 @@ module {
       call builtin.continuation.save_var(%16, %21, %11)
       %22 = const c49
       call builtin.continuation.save_var(%16, %22, %13)
-      %23 = const c50
-      %24 = const c51
-      %25 = const c52
-      call builtin.async_function.resume(%14, %16, %23, %24, %25)
+      %23 = load var $2.arguments
+      %24 = const c50
+      call builtin.continuation.save_var(%16, %24, %23)
+      %25 = load var $2.$this
+      %26 = const c51
+      call builtin.continuation.save_var(%16, %26, %25)
+      %27 = const c52
+      %28 = const c53
+      %29 = const c54
+      call builtin.async_function.resume(%14, %16, %27, %28, %29)
       return %11
     bb2:
       %10 = call builtin.exception_value(%8)
@@ -172,7 +181,7 @@ module {
   fn @arrow_2 [captures: $0.x] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c58
+      %1 = const c60
       %2 = get_prop %0, %1
       %3 = call builtin.console.log(%2)
       return %3
@@ -223,27 +232,27 @@ module {
       store var $this, %20
       %21 = const c20
       store var $0.x, %21
-      %22 = const c53
-      %23 = const c54
+      %22 = const c55
+      %23 = const c56
       store var $0.$shared_env, %23
       %24 = new_object(capacity=2)
       %25 = load var $env
       set_proto %24, %25
       store var $0.$shared_env, %24
       %26 = load var $0.undefined
-      %27 = const c55
+      %27 = const c57
       %28 = set_prop %24, %27, %26
       %29 = load var $0.x
-      %30 = const c56
+      %30 = const c58
       %31 = set_prop %24, %30, %29
       %32 = call builtin.create_closure(%22, %24)
       store var $0.inc, %32
-      %33 = const c57
+      %33 = const c59
       %34 = load var $0.inc
       %35 = call %34, this=%33
-      %36 = const c59
+      %36 = const c61
       %37 = call builtin.create_closure(%36, %24)
-      %38 = const c60
+      %38 = const c62
       %39 = call builtin.promise.then(%35, %37, %38)
       %40 = is_exception %39
       branch %40, bb2, bb1

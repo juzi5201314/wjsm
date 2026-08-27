@@ -444,7 +444,31 @@ impl Lowerer {
                 declare: false,
                 function: Box::new(function.clone()),
             };
-            let (function_id, captured) = self.lower_gen_function(&declaration)?;
+            // async generator 方法与同步 generator 方法各自复用对应的声明路径。
+            let (function_id, captured) = if function.is_async {
+                self.lower_async_gen_function(&declaration)?
+            } else {
+                self.lower_gen_function(&declaration)?
+            };
+            return Ok(LoweredMethodFunction {
+                function_id,
+                captured,
+            });
+        }
+        if function.is_async {
+            // async 方法复用 async 函数表达式的 body + wrapper 构建路径，
+            // 返回 wrapper FunctionId 交由调用方物化为属性值。
+            let method_name = match key {
+                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                _ => "anonymous".to_string(),
+            };
+            let fake_expr = swc_ast::FnExpr {
+                ident: None,
+                function: Box::new(function.clone()),
+            };
+            let (function_id, captured) =
+                self.lower_async_function_parts(&method_name, &fake_expr)?;
             return Ok(LoweredMethodFunction {
                 function_id,
                 captured,
