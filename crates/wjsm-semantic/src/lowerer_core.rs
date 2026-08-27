@@ -269,6 +269,8 @@ impl Lowerer {
             async_generator_scope_id: self.async_generator_scope_id,
             async_closure_env_ir_name: self.async_closure_env_ir_name.clone(),
             pending_suspends: self.pending_suspends.clone(),
+            arguments_source_override: self.arguments_source_override,
+            rest_args_source_override: self.rest_args_source_override,
         }
     }
 
@@ -289,6 +291,8 @@ impl Lowerer {
         self.async_generator_scope_id = context.async_generator_scope_id;
         self.async_closure_env_ir_name = context.async_closure_env_ir_name;
         self.pending_suspends = context.pending_suspends;
+        self.arguments_source_override = context.arguments_source_override;
+        self.rest_args_source_override = context.rest_args_source_override;
     }
 
     pub(crate) fn reset_async_context(&mut self) {
@@ -309,6 +313,8 @@ impl Lowerer {
             async_generator_scope_id: 0,
             async_closure_env_ir_name: None,
             pending_suspends: Vec::new(),
+            arguments_source_override: None,
+            rest_args_source_override: None,
         });
     }
 

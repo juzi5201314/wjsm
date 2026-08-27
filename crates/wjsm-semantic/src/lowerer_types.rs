@@ -244,6 +244,11 @@ pub(crate) struct AsyncContextState {
     pub(crate) async_generator_scope_id: usize,
     pub(crate) async_closure_env_ir_name: Option<String>,
     pub(crate) pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
+    /// 悬挂中的 arguments/rest 预物化来源随函数上下文入栈清零、出栈恢复：
+    /// 形参默认值里的嵌套函数在 override 设定与消费之间降级，若不清零会把
+    /// 外层 body 的 ValueId 泄漏进嵌套函数（跨函数值引用 → IR 验证失败）。
+    pub(crate) arguments_source_override: Option<ValueId>,
+    pub(crate) rest_args_source_override: Option<ValueId>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HoistedVar {
