@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+instance 11,12 1
+instance-again 12,14 2
+static s1,s2
+delegate 0,1,2,3
+arguments 3,b
+brand callable TypeError
+static-async-gen x+y
+async-gen 3
+--- stderr ---
