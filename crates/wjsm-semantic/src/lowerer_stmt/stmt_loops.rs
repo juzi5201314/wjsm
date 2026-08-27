@@ -115,6 +115,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: Some(next),
             iterator_to_close: Some(enum_handle),
+            break_reached: false,
         });
 
         // body: get key, assign lhs
@@ -267,6 +268,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: Some(next_block),
             iterator_to_close: Some(iter_handle),
+            break_reached: false,
         });
 
         // body: get value, assign lhs
@@ -552,6 +554,7 @@ impl Lowerer {
             break_target: close,
             continue_target: Some(header),
             iterator_to_close: Some(iter_for_body_close),
+            break_reached: false,
         });
 
         let awaited_result_for_value = self.alloc_value();

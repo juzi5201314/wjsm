@@ -137,6 +137,9 @@ pub(crate) struct LabelContext {
     pub(crate) break_target: BasicBlockId,
     pub(crate) continue_target: Option<BasicBlockId>,
     pub(crate) iterator_to_close: Option<ValueId>,
+    /// 是否有 break 实际跳转到 `break_target`。标签块的 body 以 abrupt 完成结束时，
+    /// 靠它判定 exit 块是否仍可达（`l: { break l; } after;` 中 after 可达）。
+    pub(crate) break_reached: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

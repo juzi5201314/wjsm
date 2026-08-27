@@ -18,6 +18,9 @@ impl Lowerer {
             flow
         };
 
+        // eval 顶层：完成值按 `UpdateEmpty(·, undefined)` 归一的语句先重置完成值槽。
+        self.eval_completion_reset_for_stmt(stmt, flow);
+
         match stmt {
             swc_ast::Stmt::Expr(expr_stmt) => self.lower_expr_stmt(expr_stmt, flow),
             // N.B.: exhaustive match — new swc_ast::Decl variants must be handled here.
@@ -78,13 +81,21 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
-        if self.eval_mode {
+        if self.eval_completion_tracking() {
             // 必须用 lower_expr_then_continue：EvalGetBinding 等会分叉异常块，
             // 若仅 lower_expr 再 resolve 起始 block，会丢掉 continue 并把 Return 盖掉 Branch。
             let mut current_block = block;
             let value = self.lower_expr_then_continue(&expr_stmt.expr, &mut current_block)?;
-            self.eval_completion = Some(value);
-            return Ok(StmtFlow::Open(current_block));
+            // 调用等可抛表达式的返回值可能是 TAG_EXCEPTION：先分叉异常路径，
+            // 只在正常路径把值写入完成值槽（异常路径经 emit_throw_value 传播）。
+            let continuation =
+                if self.expr_exception_fork_allowed() && self.expr_can_throw(&expr_stmt.expr) {
+                    self.lower_value_exception_branch(current_block, value)?
+                } else {
+                    self.resolve_store_block(current_block)
+                };
+            self.emit_eval_completion_store(continuation, value);
+            return Ok(StmtFlow::Open(continuation));
         }
 
         let result_block = match expr_stmt.expr.as_ref() {
@@ -274,17 +285,14 @@ impl Lowerer {
             },
         );
 
-        let incoming_eval_completion = self.eval_completion;
-
         // lower 'then' branch
+        // eval 完成值经内存槽线程化（lower_stmt 入口已重置），分支各自写槽即可，
+        // 无需 SSA phi 合并。
         let then_flow = self.lower_stmt(&if_stmt.cons, StmtFlow::Open(then_block))?;
-        let then_eval_completion = self.eval_completion;
 
         let has_else = if let Some(alt) = &if_stmt.alt {
-            self.eval_completion = incoming_eval_completion;
             // 'else' uses else_or_merge as its entry
             let else_flow = self.lower_stmt(alt, StmtFlow::Open(else_or_merge))?;
-            let else_eval_completion = self.eval_completion;
             match (then_flow, else_flow) {
                 (StmtFlow::Terminated, StmtFlow::Terminated) => StmtFlow::Terminated,
                 _ => {
@@ -296,13 +304,6 @@ impl Lowerer {
                     let _after_else = self
                         .current_function
                         .ensure_jump_or_terminated(else_flow, merge);
-                    self.merge_eval_completion_after_if(
-                        merge,
-                        then_flow,
-                        then_eval_completion,
-                        else_flow,
-                        else_eval_completion,
-                    );
                     after_then
                 }
             }
@@ -313,55 +314,10 @@ impl Lowerer {
             let _after_then = self
                 .current_function
                 .ensure_jump_or_terminated(then_flow, merge);
-            if self.eval_mode {
-                self.eval_completion = incoming_eval_completion.or(then_eval_completion);
-            }
             StmtFlow::Open(merge)
         };
 
         Ok(has_else)
-    }
-    pub(crate) fn merge_eval_completion_after_if(
-        &mut self,
-        merge: BasicBlockId,
-        then_flow: StmtFlow,
-        then_eval_completion: Option<ValueId>,
-        else_flow: StmtFlow,
-        else_eval_completion: Option<ValueId>,
-    ) {
-        if !self.eval_mode {
-            return;
-        }
-
-        let (StmtFlow::Open(then_block), Some(then_value)) = (then_flow, then_eval_completion)
-        else {
-            self.eval_completion = then_eval_completion.or(else_eval_completion);
-            return;
-        };
-        let (StmtFlow::Open(else_block), Some(else_value)) = (else_flow, else_eval_completion)
-        else {
-            self.eval_completion = then_eval_completion.or(else_eval_completion);
-            return;
-        };
-
-        let result = self.alloc_value();
-        self.current_function.append_instruction(
-            merge,
-            Instruction::Phi {
-                dest: result,
-                sources: vec![
-                    PhiSource {
-                        predecessor: then_block,
-                        value: then_value,
-                    },
-                    PhiSource {
-                        predecessor: else_block,
-                        value: else_value,
-                    },
-                ],
-            },
-        );
-        self.eval_completion = Some(result);
     }
 
     // ── while ───────────────────────────────────────────────────────────────
@@ -409,6 +365,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: Some(header),
             iterator_to_close: None,
+            break_reached: false,
         });
 
         let body_flow = self.lower_stmt(&while_stmt.body, StmtFlow::Open(body))?;
@@ -446,6 +403,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: Some(condition),
             iterator_to_close: None,
+            break_reached: false,
         });
 
         let body_flow = self.lower_stmt(&do_while.body, StmtFlow::Open(body))?;
@@ -566,6 +524,7 @@ impl Lowerer {
             break_target: exit,
             continue_target: Some(per_iteration.unwrap_or(update)),
             iterator_to_close: None,
+            break_reached: false,
         });
 
         if let Some(test) = &for_stmt.test {

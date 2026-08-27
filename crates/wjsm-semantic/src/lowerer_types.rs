@@ -192,7 +192,10 @@ pub(crate) struct Lowerer {
     pub(crate) eval_var_writes_to_scope: bool,
     pub(crate) eval_scope_record: bool,
     pub(crate) eval_caller_has_arguments: bool,
-    pub(crate) eval_completion: Option<ValueId>,
+    /// eval 完成值槽的变量名（`$tmp.N`）。eval 模式在模块入口分配并初始化为
+    /// undefined；完成值经内存槽而非 SSA 值线程化，跨 try/catch、循环等任意
+    /// 控制流不产生支配性问题。详见 `lowerer_stmt/eval_completion.rs`。
+    pub(crate) eval_completion_var: Option<String>,
     /// eval 调用在表达式上下文时的异常检查分叉后的 continue block。
     /// 由 lower_direct_eval_call 设置，由 resolve_store_block 消费。
     pub(crate) eval_continue_block: Option<BasicBlockId>,

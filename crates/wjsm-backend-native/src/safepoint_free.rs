@@ -7,6 +7,7 @@ use wjsm_native_abi::NativeHostSymbol;
 
 use crate::call_graph::{collect_direct_calls, direct_call_targets};
 use crate::f64_analysis::infer_f64_values;
+use crate::lower::infer_boolean_values;
 use crate::root_plan::RootPlan;
 pub(crate) fn infer_safepoint_free_functions(
     program: &Program,
@@ -31,6 +32,9 @@ pub(crate) fn infer_safepoint_free_functions(
                 return false;
             }
             if has_throw_terminator(function) {
+                return false;
+            }
+            if has_non_boolean_branch_condition(function, constants) {
                 return false;
             }
             if parameters_need_host_store(function, &frame_locals[index], variable_slots) {
@@ -98,6 +102,18 @@ fn has_throw_terminator(function: &wjsm_ir::Function) -> bool {
         .blocks()
         .iter()
         .any(|block| matches!(block.terminator(), Terminator::Throw { .. }))
+}
+
+/// 与 Branch 终结子的 lowering 一致：非静态布尔条件走宿主 `IsTruthy` 调用，
+/// 其参数区需要 root frame，因此这类函数不能免除安全点栈帧。
+fn has_non_boolean_branch_condition(function: &wjsm_ir::Function, constants: &[Constant]) -> bool {
+    let booleans = infer_boolean_values(function, constants);
+    function.blocks().iter().any(|block| {
+        matches!(
+            block.terminator(),
+            Terminator::Branch { condition, .. } if !booleans.contains(condition)
+        )
+    })
 }
 
 /// 与 `lower_function_parameters` 一致：非 frame local 的参数会经宿主 `StoreVar` 落槽。
@@ -389,6 +405,40 @@ mod tests {
             value: Some(ValueId(1)),
         });
         function.push_block(block);
+        program.push_function(function);
+
+        let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
+        assert!(free.is_empty());
+    }
+
+    #[test]
+    fn non_boolean_branch_condition_disqualifies_function() {
+        // `if (1) { ... }`：branch 条件是数字常量，lowering 需要宿主 IsTruthy
+        // 调用（带参数区），函数必须保留 root frame。
+        let mut program = Program::new();
+        let number = program.add_constant(Constant::Number(1.0));
+        let mut function = Function::new("branch_on_number", BasicBlockId(0));
+        function.set_direct_callable(true);
+        function.set_params(vec!["$env".into(), "$this".into()]);
+        let mut entry = BasicBlock::new(BasicBlockId(0));
+        entry.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: number,
+        });
+        entry.set_terminator(Terminator::Branch {
+            condition: ValueId(0),
+            true_block: BasicBlockId(1),
+            false_block: BasicBlockId(2),
+        });
+        function.push_block(entry);
+        let mut then_block = BasicBlock::new(BasicBlockId(1));
+        then_block.set_terminator(Terminator::Jump {
+            target: BasicBlockId(2),
+        });
+        function.push_block(then_block);
+        let mut exit = BasicBlock::new(BasicBlockId(2));
+        exit.set_terminator(Terminator::Return { value: None });
+        function.push_block(exit);
         program.push_function(function);
 
         let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
