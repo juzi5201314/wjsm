@@ -21,10 +21,10 @@ module {
     c18 = number(inf)
     c19 = undefined
     c20 = string("name")
-    c21 = string("dispose")
-    c22 = functionref(@0)
-    c23 = undefined
-    c24 = number(6)
+    c21 = number(6)
+    c22 = string("dispose")
+    c23 = functionref(@0)
+    c24 = undefined
     c25 = functionref(@1)
     c26 = undefined
     c27 = string("a")
@@ -37,7 +37,7 @@ module {
 
   fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
-      %0 = const c21
+      %0 = const c22
       %1 = call builtin.console.log(%0)
       %2 = is_exception %1
       branch %2, bb2, bb1
@@ -50,16 +50,22 @@ module {
   fn @makeDisposable [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
-      %1 = load var $1.name
-      %2 = const c20
-      %3 = set_prop %0, %2, %1
-      %4 = const c22
-      %5 = const c23
-      %6 = call builtin.create_closure(%4, %5)
-      %7 = const c24
-      %8 = call builtin.symbol.well_known(%7)
-      %9 = set_prop %0, %8, %6
+      %1 = const c20
+      %2 = load var $1.name
+      %3 = set_prop %0, %1, %2
+      %4 = const c21
+      %5 = call builtin.symbol.well_known(%4)
+      %6 = is_exception %5
+      branch %6, bb2, bb1
+    bb1:
+      %8 = const c23
+      %9 = const c24
+      %10 = call builtin.create_closure(%8, %9)
+      %11 = set_prop %0, %5, %10
       return %0
+    bb2:
+      %7 = call builtin.exception_value(%5)
+      throw %7
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -144,14 +150,21 @@ module {
       branch %28, bb2, bb1
     bb9:
       %41 = new_object(capacity=4)
-      %43 = const c20
-      %44 = set_prop %41, %43, %24
-      %45 = const c22
-      %46 = const c23
-      %47 = call builtin.create_closure(%45, %46)
-      %48 = const c24
-      %49 = call builtin.symbol.well_known(%48)
-      %50 = set_prop %41, %49, %47
+      %42 = const c20
+      %44 = set_prop %41, %42, %24
+      %45 = const c21
+      %46 = call builtin.symbol.well_known(%45)
+      %47 = is_exception %46
+      branch %47, bb11, bb10
+    bb10:
+      %49 = const c23
+      %50 = const c24
+      %51 = call builtin.create_closure(%49, %50)
+      %52 = set_prop %41, %46, %51
       store var $1.name, %40
       jump bb8
+    bb11:
+      %48 = call builtin.exception_value(%46)
+      store var $1.name, %40
+      throw %48
 }
