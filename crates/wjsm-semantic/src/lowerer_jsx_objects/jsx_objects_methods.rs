@@ -262,7 +262,8 @@ impl Lowerer {
     /// 键表达式抛出的异常必须在求属性值 / 构建方法闭包之前传播；随后按
     /// ComputedPropertyName 语义在求属性值之前完成 ToPropertyKey（对象键
     /// 再入用户 `toString` / `valueOf` / `Symbol.toPrimitive`，异常同样传播）。
-    fn lower_prop_name_checked(
+    /// 类成员键（方法 / 字段）与对象字面量键共用本入口。
+    pub(crate) fn lower_prop_name_checked(
         &mut self,
         key: &swc_ast::PropName,
         block: &mut BasicBlockId,

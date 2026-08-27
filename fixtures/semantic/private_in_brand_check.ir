@@ -41,33 +41,33 @@ module {
     c38 = string("$4.$private_function#1_1")
     c39 = string("$4.$private_function#1_2")
     c40 = string("constructor")
-    c41 = string("#sf@0")
-    c42 = number(2)
-    c43 = string("tf")
-    c44 = string("#f@0")
-    c45 = string("#f")
-    c46 = functionref(@5)
-    c47 = string("tm")
-    c48 = string("#m@0")
-    c49 = string("P")
-    c50 = functionref(@6)
-    c51 = string("tg")
-    c52 = string("#g@0")
-    c53 = string("P")
-    c54 = functionref(@7)
-    c55 = string("ts")
-    c56 = string("#s@0")
-    c57 = string("P")
-    c58 = functionref(@8)
-    c59 = string("tsm")
-    c60 = string("#sm@0")
-    c61 = string("#sm")
-    c62 = functionref(@9)
-    c63 = string("tsf")
-    c64 = string("#sf@0")
-    c65 = string("#sf")
-    c66 = functionref(@10)
-    c67 = string("#sm@0")
+    c41 = string("tf")
+    c42 = string("#f@0")
+    c43 = string("#f")
+    c44 = functionref(@5)
+    c45 = string("tm")
+    c46 = string("#m@0")
+    c47 = string("P")
+    c48 = functionref(@6)
+    c49 = string("tg")
+    c50 = string("#g@0")
+    c51 = string("P")
+    c52 = functionref(@7)
+    c53 = string("ts")
+    c54 = string("#s@0")
+    c55 = string("P")
+    c56 = functionref(@8)
+    c57 = string("tsm")
+    c58 = string("#sm@0")
+    c59 = string("#sm")
+    c60 = functionref(@9)
+    c61 = string("tsf")
+    c62 = string("#sf@0")
+    c63 = string("#sf")
+    c64 = functionref(@10)
+    c65 = string("#sm@0")
+    c66 = string("#sf@0")
+    c67 = number(2)
     c68 = string("prototype")
     c69 = string("instance:")
     c70 = string("tf")
@@ -548,9 +548,9 @@ module {
   fn @P.constructor [home_object=@4.prototype] [needs_prototype] [captures: $4.$private_function#1_0, $4.$private_function#1_1, $4.$private_function#1_2] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = const c21
-      %1 = load var $9.$this
-      %2 = const c22
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c22
+      %2 = load var $9.$this
+      call builtin.private_set(%2, %0, %1)
       %3 = load var $9.$this
       %4 = load var $env
       %5 = const c23
@@ -576,8 +576,8 @@ module {
   fn @P.tf [home_object=@4] [direct_callable] [params: $10.$env, $10.$this, $10.o] [entry=bb0]:
     bb0:
       %0 = load var $10.o
-      %1 = const c44
-      %2 = const c45
+      %1 = const c42
+      %2 = const c43
       %3 = call builtin.private_has(%0, %1, %2)
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -590,8 +590,8 @@ module {
   fn @P.tm [home_object=@4] [direct_callable] [params: $11.$env, $11.$this, $11.o] [entry=bb0]:
     bb0:
       %0 = load var $11.o
-      %1 = const c48
-      %2 = const c49
+      %1 = const c46
+      %2 = const c47
       %3 = call builtin.private_has(%0, %1, %2)
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -604,8 +604,8 @@ module {
   fn @P.tg [home_object=@4] [direct_callable] [params: $12.$env, $12.$this, $12.o] [entry=bb0]:
     bb0:
       %0 = load var $12.o
-      %1 = const c52
-      %2 = const c53
+      %1 = const c50
+      %2 = const c51
       %3 = call builtin.private_has(%0, %1, %2)
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -618,8 +618,8 @@ module {
   fn @P.ts [home_object=@4] [direct_callable] [params: $13.$env, $13.$this, $13.o] [entry=bb0]:
     bb0:
       %0 = load var $13.o
-      %1 = const c56
-      %2 = const c57
+      %1 = const c54
+      %2 = const c55
       %3 = call builtin.private_has(%0, %1, %2)
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -632,8 +632,8 @@ module {
   fn @P.tsm [home_object=@4] [direct_callable] [params: $14.$env, $14.$this, $14.o] [entry=bb0]:
     bb0:
       %0 = load var $14.o
-      %1 = const c60
-      %2 = const c61
+      %1 = const c58
+      %2 = const c59
       %3 = call builtin.private_has(%0, %1, %2)
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -646,8 +646,8 @@ module {
   fn @P.tsf [home_object=@4] [direct_callable] [params: $15.$env, $15.$this, $15.o] [entry=bb0]:
     bb0:
       %0 = load var $15.o
-      %1 = const c64
-      %2 = const c65
+      %1 = const c62
+      %2 = const c63
       %3 = call builtin.private_has(%0, %1, %2)
       %4 = is_exception %3
       branch %4, bb2, bb1
@@ -664,9 +664,9 @@ module {
   fn @Outer.constructor [home_object=@12.prototype] [needs_prototype] [direct_callable] [params: $33.$env, $33.$this] [entry=bb0]:
     bb0:
       %0 = const c128
-      %1 = load var $33.$this
-      %2 = const c129
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c129
+      %2 = load var $33.$this
+      call builtin.private_set(%2, %0, %1)
       return
 
   fn @Outer.probe [home_object=@12] [direct_callable] [params: $34.$env, $34.$this, $34.o] [entry=bb0]:
@@ -686,9 +686,9 @@ module {
   fn @Inner.constructor [home_object=@14.prototype] [needs_prototype] [direct_callable] [params: $37.$env, $37.$this] [entry=bb0]:
     bb0:
       %0 = const c137
-      %1 = load var $37.$this
-      %2 = const c138
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c138
+      %2 = load var $37.$this
+      call builtin.private_set(%2, %0, %1)
       return
 
   fn @Inner.probe [home_object=@14] [direct_callable] [params: $38.$env, $38.$this, $38.v] [entry=bb0]:
@@ -802,23 +802,23 @@ module {
       jump bb15
     bb26:
       %54 = const c137
-      %56 = const c138
-      call builtin.private_set(%40, %54, %56)
+      %55 = const c138
+      call builtin.private_set(%40, %54, %55)
       jump bb25
     bb27:
       jump bb2
     bb28:
       %58 = const c137
-      %60 = const c138
-      call builtin.private_set(%14, %58, %60)
+      %59 = const c138
+      call builtin.private_set(%14, %58, %59)
       jump bb27
 
   fn @Base.constructor [home_object=@17.prototype] [needs_prototype] [direct_callable] [params: $40.$env, $40.$this] [entry=bb0]:
     bb0:
       %0 = const c159
-      %1 = load var $40.$this
-      %2 = const c160
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c160
+      %2 = load var $40.$this
+      call builtin.private_set(%2, %0, %1)
       return
 
   fn @Base.hasB [home_object=@17] [direct_callable] [params: $41.$env, $41.$this, $41.o] [entry=bb0]:
@@ -841,9 +841,9 @@ module {
       %1 = load var $43.$this
       super_call %0, this=%1, forward_args
       %2 = const c168
-      %3 = load var $43.$this
-      %4 = const c169
-      call builtin.private_set(%3, %2, %4)
+      %3 = const c169
+      %4 = load var $43.$this
+      call builtin.private_set(%4, %2, %3)
       return
 
   fn @Sub.hasS [home_object=@19] [direct_callable] [params: $44.$env, $44.$this, $44.o] [entry=bb0]:
@@ -863,9 +863,9 @@ module {
   fn @S.constructor [home_object=@21.prototype] [needs_prototype] [direct_callable] [params: $46.$env, $46.$this] [entry=bb0]:
     bb0:
       %0 = const c183
-      %1 = load var $46.$this
-      %2 = const c184
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c184
+      %2 = load var $46.$this
+      call builtin.private_set(%2, %0, %1)
       return
 
   fn @S.t [home_object=@21] [captures: $0.order, $45.S] [params: $47.$env, $47.$this] [entry=bb0]:
@@ -923,8 +923,8 @@ module {
       jump bb4
     bb17:
       %31 = const c183
-      %33 = const c184
-      call builtin.private_set(%13, %31, %33)
+      %32 = const c184
+      call builtin.private_set(%13, %31, %32)
       jump bb16
 
   fn @arrow_23 [home_object=@21] [direct_callable] [params: $51.$env, $51.$this] [entry=bb0]:
@@ -976,8 +976,8 @@ module {
       %12 = load var $52.e
       %13 = const c206
       %14 = get_prop %12, %13
-      %15 = add %11, %14
-      return %15
+      %15 = is_exception %14
+      branch %15, bb9, bb8
     bb4:
       %5 = const c203
       %6 = const c204
@@ -994,17 +994,23 @@ module {
       %9 = call builtin.exception_value(%7)
       store var $tmp.0, %9
       jump bb3
+    bb8:
+      %17 = add %11, %14
+      return %17
+    bb9:
+      %16 = call builtin.exception_value(%14)
+      throw %16
 
   fn @L.constructor [home_object=@25.prototype] [needs_prototype] [direct_callable] [params: $55.$env, $55.$this] [entry=bb0]:
     bb0:
       %0 = const c218
-      %1 = load var $55.$this
-      %2 = const c219
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c219
+      %2 = load var $55.$this
+      call builtin.private_set(%2, %0, %1)
       %3 = const c220
-      %4 = load var $55.$this
-      %5 = const c221
-      call builtin.private_set(%4, %3, %5)
+      %4 = const c221
+      %5 = load var $55.$this
+      call builtin.private_set(%5, %3, %4)
       return
 
   fn @L.t [home_object=@25] [direct_callable] [params: $56.$env, $56.$this, $56.o] [entry=bb0]:
@@ -1045,9 +1051,9 @@ module {
   fn @InMethod.constructor [home_object=@27.prototype] [needs_prototype] [direct_callable] [params: $58.$env, $58.$this] [entry=bb0]:
     bb0:
       %0 = const c235
-      %1 = load var $58.$this
-      %2 = const c236
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c236
+      %2 = load var $58.$this
+      call builtin.private_set(%2, %0, %1)
       return
 
   fn @InMethod.probe [home_object=@27] [direct_callable] [params: $59.$env, $59.$this, $59.o] [entry=bb0]:
@@ -1069,14 +1075,20 @@ module {
       %8 = load var $62.e
       %9 = const c243
       %10 = get_prop %8, %9
-      %11 = add %7, %10
-      return %11
+      %11 = is_exception %10
+      branch %11, bb7, bb6
     bb4:
       return %3
     bb5:
       %5 = call builtin.exception_value(%3)
       store var $tmp.0, %5
       jump bb3
+    bb6:
+      %13 = add %7, %10
+      return %13
+    bb7:
+      %12 = call builtin.exception_value(%10)
+      throw %12
 
   fn @anon_class_0.m [home_object=@30.prototype] [direct_callable] [params: $64.$env, $64.$this] [entry=bb0]:
     bb0:
@@ -1188,9 +1200,9 @@ module {
   fn @A.constructor [home_object=@37.prototype] [needs_prototype] [direct_callable] [params: $83.$env, $83.$this] [entry=bb0]:
     bb0:
       %0 = const c293
-      %1 = load var $83.$this
-      %2 = const c294
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c294
+      %2 = load var $83.$this
+      call builtin.private_set(%2, %0, %1)
       return
 
   fn @gen$gen [params: $84.$env, $84.$this] [entry=bb0]:
@@ -1979,28 +1991,28 @@ module {
       %40 = const c40
       %41 = set_prop %39, %40, %38
       %42 = const c41
-      %43 = const c42
-      call builtin.private_set(%38, %42, %43)
-      %44 = const c43
-      %45 = const c46
-      %46 = set_prop %38, %44, %45
-      %47 = const c47
-      %48 = const c50
-      %49 = set_prop %38, %47, %48
-      %50 = const c51
-      %51 = const c54
-      %52 = set_prop %38, %50, %51
-      %53 = const c55
-      %54 = const c58
-      %55 = set_prop %38, %53, %54
-      %56 = const c59
-      %57 = const c62
-      %58 = set_prop %38, %56, %57
-      %59 = const c63
-      %60 = const c66
-      %61 = set_prop %38, %59, %60
+      %43 = const c44
+      %44 = set_prop %38, %42, %43
+      %45 = const c45
+      %46 = const c48
+      %47 = set_prop %38, %45, %46
+      %48 = const c49
+      %49 = const c52
+      %50 = set_prop %38, %48, %49
+      %51 = const c53
+      %52 = const c56
+      %53 = set_prop %38, %51, %52
+      %54 = const c57
+      %55 = const c60
+      %56 = set_prop %38, %54, %55
+      %57 = const c61
+      %58 = const c64
+      %59 = set_prop %38, %57, %58
+      %60 = const c65
+      call builtin.private_set(%38, %60, %24)
+      %61 = const c66
       %62 = const c67
-      call builtin.private_set(%38, %62, %24)
+      call builtin.private_set(%38, %61, %62)
       %63 = const c68
       %64 = set_prop %38, %63, %39
       store var $4.P, %38
@@ -2009,7 +2021,7 @@ module {
       %66 = new_object(capacity=4)
       %67 = call builtin.get_prototype_from_constructor(%65)
       set_proto %66, %67
-      jump bb280
+      jump bb282
     bb1:
       unreachable
     bb2:
@@ -2483,7 +2495,7 @@ module {
       %310 = call builtin.exception_value(%308)
       throw %310
     bb99:
-      jump bb281
+      jump bb283
     bb100:
       %321 = call builtin.exception_value(%319)
       throw %321
@@ -2594,7 +2606,7 @@ module {
       %394 = new_object(capacity=4)
       %395 = call builtin.get_prototype_from_constructor(%393)
       set_proto %394, %395
-      jump bb278
+      jump bb280
     bb122:
       %360 = load var $tmp.2
       store var $30.e, %360
@@ -2758,7 +2770,7 @@ module {
       %469 = new_object(capacity=4)
       %470 = call builtin.get_prototype_from_constructor(%468)
       set_proto %469, %470
-      jump bb276
+      jump bb278
     bb158:
       %464 = call builtin.exception_value(%462)
       throw %464
@@ -2897,7 +2909,7 @@ module {
       %556 = new_object(capacity=4)
       %557 = call builtin.get_prototype_from_constructor(%555)
       set_proto %556, %557
-      jump bb274
+      jump bb276
     bb185:
       %541 = call builtin.exception_value(%539)
       throw %541
@@ -2959,7 +2971,7 @@ module {
       %593 = new_object(capacity=4)
       %594 = call builtin.get_prototype_from_constructor(%592)
       set_proto %593, %594
-      jump bb272
+      jump bb274
     bb200:
       %578 = call builtin.exception_value(%576)
       throw %578
@@ -3083,322 +3095,328 @@ module {
       call builtin.private_set(%667, %671, %672)
       %673 = const c284
       %674 = const c285
-      %675 = set_prop %667, %673, %674
-      jump bb266
+      %675 = create_data_property %667, %673, %674
+      %676 = is_exception %675
+      branch %676, bb225, bb224
     bb223:
       %666 = call builtin.exception_value(%664)
       throw %666
     bb224:
-      %685 = call builtin.console.log(%679, %682)
-      %686 = is_exception %685
-      branch %686, bb227, bb226
+      jump bb268
     bb225:
-      %684 = call builtin.exception_value(%682)
-      throw %684
+      %677 = call builtin.exception_value(%675)
+      throw %677
     bb226:
-      %688 = const c295
-      %689 = new_object(capacity=5)
-      %690 = const c296
-      %691 = set_prop %689, %690, %688
-      %692 = const c297
-      %693 = const c323
-      %694 = set_prop %689, %692, %693
-      %695 = const c324
-      %696 = const c359
-      %697 = load var $env
-      %698 = new_object(capacity=1)
-      set_proto %698, %697
-      %699 = const c360
-      %700 = set_prop %698, %699, %689
-      %701 = call builtin.create_closure(%696, %698)
-      %702 = set_prop %689, %695, %701
-      %703 = const c361
-      %704 = const c396
-      %705 = load var $env
-      %706 = new_object(capacity=1)
-      set_proto %706, %705
-      %707 = const c397
-      %708 = set_prop %706, %707, %689
-      %709 = call builtin.create_closure(%704, %706)
-      %710 = set_prop %689, %703, %709
-      %711 = const c398
-      %712 = const c430
-      %713 = load var $env
-      %714 = new_object(capacity=1)
-      set_proto %714, %713
-      %715 = const c431
-      %716 = set_prop %714, %715, %689
-      %717 = call builtin.create_closure(%712, %714)
-      %718 = set_prop %689, %711, %717
-      %719 = const c432
-      %720 = const c464
-      %721 = load var $env
-      %722 = new_object(capacity=1)
-      set_proto %722, %721
-      %723 = const c465
-      %724 = set_prop %722, %723, %689
-      %725 = call builtin.create_closure(%720, %722)
-      %726 = set_prop %689, %719, %725
-      %727 = const c466
-      %728 = set_prop %688, %727, %689
-      store var $82.A, %688
-      store var $0.A, %688
-      %729 = const c295
-      %730 = new_object(capacity=4)
-      %731 = call builtin.get_prototype_from_constructor(%729)
-      set_proto %730, %731
-      jump bb264
+      %687 = call builtin.console.log(%681, %684)
+      %688 = is_exception %687
+      branch %688, bb229, bb228
     bb227:
-      %687 = call builtin.exception_value(%685)
-      throw %687
+      %686 = call builtin.exception_value(%684)
+      throw %686
     bb228:
-      unreachable
+      %690 = const c295
+      %691 = new_object(capacity=5)
+      %692 = const c296
+      %693 = set_prop %691, %692, %690
+      %694 = const c297
+      %695 = const c323
+      %696 = set_prop %691, %694, %695
+      %697 = const c324
+      %698 = const c359
+      %699 = load var $env
+      %700 = new_object(capacity=1)
+      set_proto %700, %699
+      %701 = const c360
+      %702 = set_prop %700, %701, %691
+      %703 = call builtin.create_closure(%698, %700)
+      %704 = set_prop %691, %697, %703
+      %705 = const c361
+      %706 = const c396
+      %707 = load var $env
+      %708 = new_object(capacity=1)
+      set_proto %708, %707
+      %709 = const c397
+      %710 = set_prop %708, %709, %691
+      %711 = call builtin.create_closure(%706, %708)
+      %712 = set_prop %691, %705, %711
+      %713 = const c398
+      %714 = const c430
+      %715 = load var $env
+      %716 = new_object(capacity=1)
+      set_proto %716, %715
+      %717 = const c431
+      %718 = set_prop %716, %717, %691
+      %719 = call builtin.create_closure(%714, %716)
+      %720 = set_prop %691, %713, %719
+      %721 = const c432
+      %722 = const c464
+      %723 = load var $env
+      %724 = new_object(capacity=1)
+      set_proto %724, %723
+      %725 = const c465
+      %726 = set_prop %724, %725, %691
+      %727 = call builtin.create_closure(%722, %724)
+      %728 = set_prop %691, %721, %727
+      %729 = const c466
+      %730 = set_prop %690, %729, %691
+      store var $82.A, %690
+      store var $0.A, %690
+      %731 = const c295
+      %732 = new_object(capacity=4)
+      %733 = call builtin.get_prototype_from_constructor(%731)
+      set_proto %732, %733
+      jump bb266
     bb229:
-      jump bb230
+      %689 = call builtin.exception_value(%687)
+      throw %689
     bb230:
-      jump bb232
+      unreachable
     bb231:
-      unreachable
+      jump bb232
     bb232:
-      jump bb233
+      jump bb234
     bb233:
-      jump bb235
-    bb234:
       unreachable
+    bb234:
+      jump bb235
     bb235:
-      store var $0.a, %730
-      %740 = const c467
-      %741 = load var $0.a
-      %742 = const c468
-      %743 = get_prop %741, %742
-      %744 = load var $0.a
-      %745 = call %743, this=%741, args=[%744]
-      %746 = is_exception %745
-      branch %746, bb238, bb237
+      jump bb237
     bb236:
       unreachable
     bb237:
-      %748 = const c469
-      %749 = get_prop %745, %748
-      %750 = call %749, this=%745
-      %751 = const c470
-      %752 = get_prop %750, %751
-      %753 = is_exception %752
-      branch %753, bb240, bb239
+      store var $0.a, %732
+      %742 = const c467
+      %743 = load var $0.a
+      %744 = const c468
+      %745 = get_prop %743, %744
+      %746 = load var $0.a
+      %747 = call %745, this=%743, args=[%746]
+      %748 = is_exception %747
+      branch %748, bb240, bb239
     bb238:
-      %747 = call builtin.exception_value(%745)
-      throw %747
+      unreachable
     bb239:
-      %755 = load var $0.a
-      %756 = const c471
-      %757 = get_prop %755, %756
-      %758 = init_object_literal(c472)
-      %759 = call %757, this=%755, args=[%758]
-      %760 = is_exception %759
-      branch %760, bb242, bb241
+      %750 = const c469
+      %751 = get_prop %747, %750
+      %752 = call %751, this=%747
+      %753 = const c470
+      %754 = get_prop %752, %753
+      %755 = is_exception %754
+      branch %755, bb242, bb241
     bb240:
-      %754 = call builtin.exception_value(%752)
-      throw %754
+      %749 = call builtin.exception_value(%747)
+      throw %749
     bb241:
-      %762 = const c473
-      %763 = get_prop %759, %762
-      %764 = call %763, this=%759
-      %765 = const c474
-      %766 = get_prop %764, %765
-      %767 = is_exception %766
-      branch %767, bb244, bb243
+      %757 = load var $0.a
+      %758 = const c471
+      %759 = get_prop %757, %758
+      %760 = init_object_literal(c472)
+      %761 = call %759, this=%757, args=[%760]
+      %762 = is_exception %761
+      branch %762, bb244, bb243
     bb242:
-      %761 = call builtin.exception_value(%759)
-      throw %761
+      %756 = call builtin.exception_value(%754)
+      throw %756
     bb243:
-      %769 = call builtin.console.log(%740, %752, %766)
-      %770 = is_exception %769
-      branch %770, bb246, bb245
+      %764 = const c473
+      %765 = get_prop %761, %764
+      %766 = call %765, this=%761
+      %767 = const c474
+      %768 = get_prop %766, %767
+      %769 = is_exception %768
+      branch %769, bb246, bb245
     bb244:
-      %768 = call builtin.exception_value(%766)
-      throw %768
+      %763 = call builtin.exception_value(%761)
+      throw %763
     bb245:
-      %772 = load var $0.a
-      %773 = const c475
-      %774 = get_prop %772, %773
-      %775 = load var $0.a
-      %776 = call %774, this=%772, args=[%775]
-      %777 = is_exception %776
-      branch %777, bb248, bb247
+      %771 = call builtin.console.log(%742, %754, %768)
+      %772 = is_exception %771
+      branch %772, bb248, bb247
     bb246:
-      %771 = call builtin.exception_value(%769)
-      throw %771
+      %770 = call builtin.exception_value(%768)
+      throw %770
     bb247:
-      %779 = const c485
-      %780 = load var $0.$shared_env
-      %781 = load var $0.a
-      %782 = const c486
-      %783 = set_prop %780, %782, %781
-      %784 = call builtin.create_closure(%779, %780)
-      %785 = const c487
-      %786 = call builtin.promise.then(%776, %784, %785)
-      %787 = is_exception %786
-      branch %787, bb250, bb249
+      %774 = load var $0.a
+      %775 = const c475
+      %776 = get_prop %774, %775
+      %777 = load var $0.a
+      %778 = call %776, this=%774, args=[%777]
+      %779 = is_exception %778
+      branch %779, bb250, bb249
     bb248:
-      %778 = call builtin.exception_value(%776)
-      throw %778
+      %773 = call builtin.exception_value(%771)
+      throw %773
     bb249:
-      %789 = const c490
-      %790 = load var $0.$shared_env
-      %791 = call builtin.create_closure(%789, %790)
-      %792 = const c491
-      %793 = call builtin.promise.then(%786, %791, %792)
-      %794 = is_exception %793
-      branch %794, bb252, bb251
+      %781 = const c485
+      %782 = load var $0.$shared_env
+      %783 = load var $0.a
+      %784 = const c486
+      %785 = set_prop %782, %784, %783
+      %786 = call builtin.create_closure(%781, %782)
+      %787 = const c487
+      %788 = call builtin.promise.then(%778, %786, %787)
+      %789 = is_exception %788
+      branch %789, bb252, bb251
     bb250:
-      %788 = call builtin.exception_value(%786)
-      throw %788
+      %780 = call builtin.exception_value(%778)
+      throw %780
     bb251:
-      %796 = const c493
-      %797 = const c496
-      %798 = call builtin.promise.then(%793, %796, %797)
-      %799 = is_exception %798
-      branch %799, bb254, bb253
+      %791 = const c490
+      %792 = load var $0.$shared_env
+      %793 = call builtin.create_closure(%791, %792)
+      %794 = const c491
+      %795 = call builtin.promise.then(%788, %793, %794)
+      %796 = is_exception %795
+      branch %796, bb254, bb253
     bb252:
-      %795 = call builtin.exception_value(%793)
-      throw %795
+      %790 = call builtin.exception_value(%788)
+      throw %790
     bb253:
-      %801 = const c499
-      %802 = load var $0.$shared_env
-      %803 = call builtin.create_closure(%801, %802)
-      %804 = const c500
-      %805 = call builtin.promise.then(%798, %803, %804)
-      %806 = is_exception %805
-      branch %806, bb256, bb255
+      %798 = const c493
+      %799 = const c496
+      %800 = call builtin.promise.then(%795, %798, %799)
+      %801 = is_exception %800
+      branch %801, bb256, bb255
     bb254:
-      %800 = call builtin.exception_value(%798)
-      throw %800
+      %797 = call builtin.exception_value(%795)
+      throw %797
     bb255:
-      %808 = const c502
-      %809 = const c508
-      %810 = call builtin.promise.then(%805, %808, %809)
-      %811 = is_exception %810
-      branch %811, bb258, bb257
+      %803 = const c499
+      %804 = load var $0.$shared_env
+      %805 = call builtin.create_closure(%803, %804)
+      %806 = const c500
+      %807 = call builtin.promise.then(%800, %805, %806)
+      %808 = is_exception %807
+      branch %808, bb258, bb257
     bb256:
-      %807 = call builtin.exception_value(%805)
-      throw %807
+      %802 = call builtin.exception_value(%800)
+      throw %802
     bb257:
-      %813 = const c513
-      %814 = load var $0.$shared_env
-      %815 = call builtin.create_closure(%813, %814)
-      %816 = const c514
-      %817 = call builtin.promise.then(%810, %815, %816)
-      %818 = is_exception %817
-      branch %818, bb260, bb259
+      %810 = const c502
+      %811 = const c508
+      %812 = call builtin.promise.then(%807, %810, %811)
+      %813 = is_exception %812
+      branch %813, bb260, bb259
     bb258:
-      %812 = call builtin.exception_value(%810)
-      throw %812
+      %809 = call builtin.exception_value(%807)
+      throw %809
     bb259:
-      %820 = const c525
-      %821 = load var $0.$shared_env
-      %822 = call builtin.create_closure(%820, %821)
-      %823 = const c526
-      %824 = call builtin.promise.then(%817, %822, %823)
-      %825 = is_exception %824
-      branch %825, bb262, bb261
+      %815 = const c513
+      %816 = load var $0.$shared_env
+      %817 = call builtin.create_closure(%815, %816)
+      %818 = const c514
+      %819 = call builtin.promise.then(%812, %817, %818)
+      %820 = is_exception %819
+      branch %820, bb262, bb261
     bb260:
-      %819 = call builtin.exception_value(%817)
-      throw %819
+      %814 = call builtin.exception_value(%812)
+      throw %814
     bb261:
-      return
+      %822 = const c525
+      %823 = load var $0.$shared_env
+      %824 = call builtin.create_closure(%822, %823)
+      %825 = const c526
+      %826 = call builtin.promise.then(%819, %824, %825)
+      %827 = is_exception %826
+      branch %827, bb264, bb263
     bb262:
-      %826 = call builtin.exception_value(%824)
-      throw %826
+      %821 = call builtin.exception_value(%819)
+      throw %821
     bb263:
-      jump bb229
+      return
     bb264:
-      %828 = const c293
-      %830 = const c294
-      call builtin.private_set(%730, %828, %830)
-      jump bb263
+      %828 = call builtin.exception_value(%826)
+      throw %828
     bb265:
-      %677 = const c290
-      %678 = set_prop %667, %677, %668
+      jump bb231
+    bb266:
+      %830 = const c293
+      %831 = const c294
+      call builtin.private_set(%732, %830, %831)
+      jump bb265
+    bb267:
+      %679 = const c290
+      %680 = set_prop %667, %679, %668
       store var $79.SB, %667
       store var $0.SB, %667
-      %679 = const c291
-      %680 = const c280
-      %681 = const c292
-      %682 = get_prop %680, %681
-      %683 = is_exception %682
-      branch %683, bb225, bb224
-    bb266:
-      %833 = const c286
-      %835 = const c287
-      %836 = const c288
-      %837 = call builtin.private_has(%667, %835, %836)
-      %838 = is_exception %837
-      branch %838, bb268, bb267
-    bb267:
-      %840 = set_prop %667, %833, %837
-      %841 = is_exception %840
-      branch %841, bb270, bb269
+      %681 = const c291
+      %682 = const c280
+      %683 = const c292
+      %684 = get_prop %682, %683
+      %685 = is_exception %684
+      branch %685, bb227, bb226
     bb268:
-      %839 = call builtin.exception_value(%837)
-      throw %839
+      %835 = const c286
+      %837 = const c287
+      %838 = const c288
+      %839 = call builtin.private_has(%667, %837, %838)
+      %840 = is_exception %839
+      branch %840, bb270, bb269
     bb269:
-      jump bb265
+      %842 = set_prop %667, %835, %839
+      %843 = is_exception %842
+      branch %843, bb272, bb271
     bb270:
-      %842 = call builtin.exception_value(%840)
-      throw %842
+      %841 = call builtin.exception_value(%839)
+      throw %841
     bb271:
-      jump bb202
+      jump bb267
     bb272:
-      %844 = const c235
-      %846 = const c236
-      call builtin.private_set(%593, %844, %846)
-      jump bb271
+      %844 = call builtin.exception_value(%842)
+      throw %844
     bb273:
-      jump bb187
+      jump bb202
     bb274:
-      %848 = const c218
-      %850 = const c219
-      call builtin.private_set(%556, %848, %850)
-      %851 = const c220
-      %853 = const c221
-      call builtin.private_set(%556, %851, %853)
+      %846 = const c235
+      %847 = const c236
+      call builtin.private_set(%593, %846, %847)
       jump bb273
     bb275:
-      jump bb160
+      jump bb187
     bb276:
-      %855 = const c159
-      %857 = const c160
-      call builtin.private_set(%469, %855, %857)
+      %850 = const c218
+      %851 = const c219
+      call builtin.private_set(%556, %850, %851)
+      %853 = const c220
+      %854 = const c221
+      call builtin.private_set(%556, %853, %854)
       jump bb275
     bb277:
-      jump bb132
+      jump bb160
     bb278:
-      %859 = const c128
-      %861 = const c129
-      call builtin.private_set(%394, %859, %861)
+      %857 = const c159
+      %858 = const c160
+      call builtin.private_set(%469, %857, %858)
       jump bb277
     bb279:
-      jump bb2
+      jump bb132
     bb280:
-      %863 = const c21
-      %865 = const c22
-      call builtin.private_set(%66, %863, %865)
-      %868 = const c23
-      %869 = get_prop %27, %868
-      %870 = const c24
-      call builtin.private_set(%66, %870, %869)
-      %873 = const c25
-      %874 = get_prop %27, %873
-      %875 = const c26
-      %876 = const c27
-      call builtin.private_accessor_bind(%66, %875, %874, %876)
-      %879 = const c28
-      %880 = get_prop %27, %879
-      %881 = const c29
-      %882 = const c30
-      call builtin.private_accessor_bind(%66, %881, %882, %880)
+      %861 = const c128
+      %862 = const c129
+      call builtin.private_set(%394, %861, %862)
       jump bb279
     bb281:
+      jump bb2
+    bb282:
+      %865 = const c21
+      %866 = const c22
+      call builtin.private_set(%66, %865, %866)
+      %870 = const c23
+      %871 = get_prop %27, %870
+      %872 = const c24
+      call builtin.private_set(%66, %872, %871)
+      %875 = const c25
+      %876 = get_prop %27, %875
+      %877 = const c26
+      %878 = const c27
+      call builtin.private_accessor_bind(%66, %877, %876, %878)
+      %881 = const c28
+      %882 = get_prop %27, %881
+      %883 = const c29
+      %884 = const c30
+      call builtin.private_accessor_bind(%66, %883, %884, %882)
+      jump bb281
+    bb283:
       %327 = load var $0.P
       jump bb101
 }

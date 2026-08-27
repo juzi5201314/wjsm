@@ -80,39 +80,67 @@ module {
       %23 = load var $0.i
       %24 = const c22
       %25 = lt %23, %24
-      branch %25, bb2, bb3
-    bb2:
-      %28 = load var $0.i
-      %29 = const c25
-      %30 = add %28, %29
-      store var $0.i, %30
       jump bb4
+    bb2:
+      %30 = load var $0.i
+      %31 = const c25
+      %32 = add %30, %31
+      store var $0.i, %32
+      jump bb6
     bb3:
       return
     bb4:
-      %33 = load var $0.i
-      %34 = const c26
-      %35 = call builtin.abstract_eq(%33, %34)
-      branch %35, bb6, bb7
+      branch %25, bb2, bb3
     bb5:
       unreachable
     bb6:
-      jump bb1
+      %35 = load var $0.i
+      %36 = const c26
+      %37 = call builtin.abstract_eq(%35, %36)
+      %38 = is_exception %37
+      branch %38, bb9, bb8
     bb7:
-      %36 = load var $0.i
-      %37 = const c27
-      %38 = call builtin.abstract_eq(%36, %37)
-      branch %38, bb8, bb9
+      unreachable
     bb8:
-      jump bb3
+      %40 = is_exception %37
+      branch %40, bb11, bb10
     bb9:
-      %39 = load var $0.i
-      %40 = call builtin.console.log(%39)
-      %41 = is_exception %40
-      branch %41, bb11, bb10
+      %39 = call builtin.exception_value(%37)
+      throw %39
     bb10:
-      jump bb1
+      branch %37, bb12, bb13
     bb11:
-      %42 = call builtin.exception_value(%40)
-      throw %42
+      %41 = call builtin.exception_value(%37)
+      throw %41
+    bb12:
+      jump bb1
+    bb13:
+      %42 = load var $0.i
+      %43 = const c27
+      %44 = call builtin.abstract_eq(%42, %43)
+      %45 = is_exception %44
+      branch %45, bb15, bb14
+    bb14:
+      %47 = is_exception %44
+      branch %47, bb17, bb16
+    bb15:
+      %46 = call builtin.exception_value(%44)
+      throw %46
+    bb16:
+      branch %44, bb18, bb19
+    bb17:
+      %48 = call builtin.exception_value(%44)
+      throw %48
+    bb18:
+      jump bb3
+    bb19:
+      %49 = load var $0.i
+      %50 = call builtin.console.log(%49)
+      %51 = is_exception %50
+      branch %51, bb21, bb20
+    bb20:
+      jump bb1
+    bb21:
+      %52 = call builtin.exception_value(%50)
+      throw %52
 }

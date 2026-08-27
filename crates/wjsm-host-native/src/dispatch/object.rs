@@ -1222,6 +1222,26 @@ fn descriptor_object(
     descriptor
 }
 
+/// 构造 CreateDataProperty 的完整数据描述符对象
+/// { value, writable: true, enumerable: true, configurable: true }，
+/// 供 Proxy receiver 的 [[DefineOwnProperty]] trap 消费。
+pub(super) fn full_data_descriptor(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    stored: i64,
+) -> i64 {
+    descriptor_object(
+        ctx,
+        state,
+        wjsm_gc::HeapAccessV2Property {
+            flags: WRITABLE | ENUMERABLE | CONFIGURABLE,
+            value: u64::from_ne_bytes(stored.to_ne_bytes()),
+            getter: u64::from_ne_bytes(value::encode_undefined().to_ne_bytes()),
+            setter: u64::from_ne_bytes(value::encode_undefined().to_ne_bytes()),
+        },
+    )
+}
+
 fn descriptor_field(state: &mut NativeAgentState, descriptor: u32, name: &str) -> Option<i64> {
     let key = state.intern_property_string(name.into())?;
     state

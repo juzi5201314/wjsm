@@ -27,6 +27,12 @@ impl Lowerer {
         self.push_class_private_name_scope(decorator_name.unwrap_or("anonymous"), &class.body);
         let mut private_members = self.collect_class_private_members(class_name, &class.body)?;
 
+        // 计算键实例字段：键在类定义期求值一次（ClassFieldDefinitionEvaluation），
+        // 构造期复用。键值经构造器闭包的 key env（每次类求值新建，见
+        // materialize_ctor_function_value）传递，构造器沿 $env 原型链按名读取。
+        let computed_instance_keys =
+            Self::collect_computed_instance_key_names(&class.body, self.next_private_name_id);
+
         // ── 构造器 IR 函数 ──
         // 构造器体延迟到类求值完成后才执行，期间类名已初始化（构造器体/实例字段初始化器可引用类名）；
         // 函数体 lowering 期间临时退出 TDZ，结束后恢复（类求值期间仍为 TDZ）。
@@ -155,6 +161,7 @@ impl Lowerer {
                 this_scope_id,
                 &class.body,
                 &private_members,
+                &computed_instance_keys,
             )?;
         }
 
@@ -221,6 +228,7 @@ impl Lowerer {
                         this_scope_id,
                         &class.body,
                         &private_members,
+                        &computed_instance_keys,
                     )?);
                     deferred_instance_initializers_emitted = true;
                 }
@@ -270,8 +278,12 @@ impl Lowerer {
             function_id: ctor_function_id,
             captured: ctor_captured,
         };
-        let (block, ctor_dest) =
-            self.materialize_class_function_value(block, &constructor_function, class_span)?;
+        let (block, ctor_dest, ctor_key_env) = self.materialize_ctor_function_value(
+            block,
+            &constructor_function,
+            class_span,
+            computed_instance_keys.len() as u32,
+        )?;
 
         let proto_dest = self.alloc_value();
         let method_count = class
@@ -327,10 +339,14 @@ impl Lowerer {
         let ctor_key_dest = self.emit_string_const(block, "constructor");
         self.emit_set_prop(block, proto_dest, ctor_key_dest, ctor_dest);
 
-        // ── 成员处理 ──
+        // ── 成员处理：按 ClassDefinitionEvaluation 分两遍 ──
+        // 第一遍（源顺序）：ClassElementEvaluation —— 方法/访问器安装、全部字段
+        // 计算键求值（含 ToPropertyKey，异常在类定义期传播）。计算键只在此求值
+        // 一次：实例键写入合成词法绑定供构造器复用，静态键值暂存供第二遍使用。
         let mut block = block;
-        let mut static_init_idx = 0u32;
-        for member in &class.body {
+        let mut static_computed_keys: std::collections::HashMap<usize, ValueId> =
+            std::collections::HashMap::new();
+        for (member_index, member) in class.body.iter().enumerate() {
             match member {
                 swc_ast::ClassMember::Method(method) => {
                     block = self.lower_class_method_member(
@@ -342,6 +358,51 @@ impl Lowerer {
                         proto_dest,
                     )?;
                 }
+                swc_ast::ClassMember::ClassProp(prop)
+                    if matches!(prop.key, swc_ast::PropName::Computed(_)) =>
+                {
+                    let key_dest = self.lower_prop_name_checked(&prop.key, &mut block)?;
+                    if prop.is_static {
+                        self.emit_static_prototype_key_guard(&mut block, key_dest)?;
+                        static_computed_keys.insert(member_index, key_dest);
+                    } else {
+                        let key_name = computed_instance_keys
+                            .get(&member_index)
+                            .expect("computed instance field key name must be pre-collected");
+                        let key_env = ctor_key_env
+                            .expect("ctor key env must exist for computed instance field keys");
+                        let name_const = self.emit_string_const(block, key_name);
+                        self.emit_set_prop(block, key_env, name_const, key_dest);
+                    }
+                }
+                swc_ast::ClassMember::Constructor(_)
+                | swc_ast::ClassMember::PrivateMethod(_)
+                | swc_ast::ClassMember::StaticBlock(_)
+                | swc_ast::ClassMember::PrivateProp(_)
+                | swc_ast::ClassMember::ClassProp(_) => {}
+                other => {
+                    return Err(self.error(
+                        class_member_span(other),
+                        format!(
+                            "unsupported class member `{}` during class lowering",
+                            class_member_kind(other),
+                        ),
+                    ));
+                }
+            }
+        }
+
+        // 静态私有方法/访问器在静态初始化器运行前绑定到构造器：
+        // 规范上方法属于 ClassElementEvaluation（第一遍），静态字段初始化器与
+        // static block（第二遍）可经 `this.#m()` 调用它们。
+        self.emit_static_private_member_binds(block, ctor_dest, &private_members);
+
+        // 第二遍（源顺序）：静态元素执行期 —— 静态字段初始化器与 static block。
+        // 键已全部求值完毕，此处只求初始化器/执行块体（ES ClassDefinitionEvaluation
+        // 对 staticElements 的 DefineField / Call 步骤）。
+        let mut static_init_idx = 0u32;
+        for (member_index, member) in class.body.iter().enumerate() {
+            match member {
                 swc_ast::ClassMember::StaticBlock(static_block) => {
                     block = self.lower_class_static_block(
                         block,
@@ -356,7 +417,7 @@ impl Lowerer {
                 swc_ast::ClassMember::PrivateProp(prop) if prop.is_static => {
                     let field_name =
                         self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
-                    self.emit_static_field_init(
+                    block = self.emit_static_field_init(
                         block,
                         ctor_dest,
                         &field_name,
@@ -365,30 +426,24 @@ impl Lowerer {
                     )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if prop.is_static => {
-                    self.emit_static_field_init_with_key(
+                    let key_dest = match static_computed_keys.get(&member_index) {
+                        Some(key) => *key,
+                        // 静态属性名只发射 Const，不产生控制流。
+                        None => self.lower_prop_name(&prop.key, block)?,
+                    };
+                    block = self.emit_static_field_init_common(
                         block,
                         ctor_dest,
-                        &prop.key,
+                        key_dest,
                         prop.value.as_deref(),
+                        false,
                     )?;
                 }
-                swc_ast::ClassMember::Constructor(_) | swc_ast::ClassMember::PrivateMethod(_) => {}
-                swc_ast::ClassMember::PrivateProp(p) if !p.is_static => {}
-                swc_ast::ClassMember::ClassProp(p) if !p.is_static => {}
-                other => {
-                    return Err(self.error(
-                        class_member_span(other),
-                        format!(
-                            "unsupported class member `{}` during class lowering",
-                            class_member_kind(other),
-                        ),
-                    ));
-                }
+                _ => {}
             }
         }
 
         // ── 后处理 ──
-        self.emit_static_private_member_binds(block, ctor_dest, &private_members);
 
         let proto_key_dest = self.emit_string_const(block, "prototype");
         self.emit_set_prop(block, ctor_dest, proto_key_dest, proto_dest);
@@ -413,7 +468,10 @@ impl Lowerer {
     ) -> Result<BasicBlockId, LoweringError> {
         let is_static = method.is_static;
         let target = if is_static { ctor_dest } else { proto_dest };
-        let (method_name, m_key_dest) = self.lower_class_member_key(&method.key, block)?;
+        let (method_name, m_key_dest) = self.lower_class_member_key(&method.key, &mut block)?;
+        if is_static && matches!(method.key, swc_ast::PropName::Computed(_)) {
+            self.emit_static_prototype_key_guard(&mut block, m_key_dest)?;
+        }
 
         match method.kind {
             swc_ast::MethodKind::Method => {
@@ -762,28 +820,169 @@ impl Lowerer {
     }
 
     /// 提取类成员键（方法/访问器）：返回 (名称字符串, 运行时 key value)。
-    /// 支持 Ident / Str / Computed 三种键类型。
+    /// 计算键按 MethodDefinitionEvaluation 求值 + ToPropertyKey 并推进 block，
+    /// 键异常在方法闭包创建/安装之前传播。
     fn lower_class_member_key(
         &mut self,
         key: &swc_ast::PropName,
-        block: BasicBlockId,
+        block: &mut BasicBlockId,
     ) -> Result<(String, ValueId), LoweringError> {
         match key {
             swc_ast::PropName::Ident(ident) => {
                 let name = ident.sym.to_string();
-                Ok((name, self.emit_string_const(block, ident.sym.as_ref())))
+                Ok((name, self.emit_string_const(*block, ident.sym.as_ref())))
             }
             swc_ast::PropName::Str(s) => {
                 let name = s.value.to_string_lossy().into_owned();
-                let key_dest = self.emit_string_const(block, &name);
+                let key_dest = self.emit_string_const(*block, &name);
                 Ok((name, key_dest))
             }
             swc_ast::PropName::Computed(_)
             | swc_ast::PropName::Num(_)
             | swc_ast::PropName::BigInt(_) => {
-                let key_dest = self.lower_prop_name(key, block)?;
+                let key_dest = self.lower_prop_name_checked(key, block)?;
                 Ok(("<computed>".to_string(), key_dest))
             }
         }
+    }
+
+    /// 静态成员计算键的 `"prototype"` 守卫：MakeConstructor 使构造器的
+    /// `prototype` 不可写不可配置，静态成员定义必然失败；各引擎（V8 /
+    /// SpiderMonkey / JSC）一致在键求值（ToPropertyKey 后）立即抛 TypeError，
+    /// 初始化器与后续键不再求值。Symbol 键与 `"prototype"` 严格不等，自然放行。
+    fn emit_static_prototype_key_guard(
+        &mut self,
+        block: &mut BasicBlockId,
+        key_dest: ValueId,
+    ) -> Result<(), LoweringError> {
+        let proto_const = self.emit_string_const(*block, "prototype");
+        let is_proto = self.alloc_value();
+        self.current_function.append_instruction(
+            *block,
+            Instruction::Compare {
+                dest: is_proto,
+                op: CompareOp::StrictEq,
+                lhs: key_dest,
+                rhs: proto_const,
+            },
+        );
+        let throw_block = self.current_function.new_block();
+        let cont_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            *block,
+            Terminator::Branch {
+                condition: is_proto,
+                true_block: throw_block,
+                false_block: cont_block,
+            },
+        );
+        let msg_val = self.emit_string_const(
+            throw_block,
+            "Classes may not have a static property named 'prototype'",
+        );
+        let error_val = self.alloc_value();
+        self.current_function.append_instruction(
+            throw_block,
+            Instruction::CallBuiltin {
+                dest: Some(error_val),
+                builtin: Builtin::TypeErrorConstructor,
+                args: vec![msg_val],
+            },
+        );
+        self.emit_throw_value(throw_block, error_val)?;
+        *block = cont_block;
+        Ok(())
+    }
+
+    /// 收集计算键实例字段的 key env 属性名（`$class_key#id_idx`）。
+    ///
+    /// 名字带 `#` 且无 `${scope}.` 前缀，与源绑定的 env 键（`$N.name`）及方法
+    /// home env 的 `home` 键都不冲突。`class_private_id` 取
+    /// `push_class_private_name_scope` 之后的 `next_private_name_id`，与
+    /// `$private_function#` 命名同一约定，保证跨类唯一。
+    fn collect_computed_instance_key_names(
+        body: &[swc_ast::ClassMember],
+        class_private_id: u32,
+    ) -> std::collections::HashMap<usize, String> {
+        let mut names = std::collections::HashMap::new();
+        let mut next_key_index = 0usize;
+        for (member_index, member) in body.iter().enumerate() {
+            let swc_ast::ClassMember::ClassProp(prop) = member else {
+                continue;
+            };
+            if prop.is_static || !matches!(prop.key, swc_ast::PropName::Computed(_)) {
+                continue;
+            }
+            names.insert(
+                member_index,
+                format!("$class_key#{class_private_id}_{next_key_index}"),
+            );
+            next_key_index += 1;
+        }
+        names
+    }
+
+    /// 物化构造器函数值。
+    ///
+    /// 含计算键实例字段（`computed_key_count > 0`）时，在捕获 env 外包一层
+    /// key env：每次类求值新建（循环/多次求值的各个类彼此隔离），定义期把
+    /// 求得的键写为其自有属性，构造器沿 `$env` 原型链按名读取。构造器统一
+    /// `super_allowed`，其对外层绑定的写入总是沿链定位 owner env，不会误写
+    /// 到 key env（与方法 home env 包层的既有约定一致）。
+    fn materialize_ctor_function_value(
+        &mut self,
+        block: BasicBlockId,
+        function: &LoweredClassFunction,
+        span: Span,
+        computed_key_count: u32,
+    ) -> Result<(BasicBlockId, ValueId, Option<ValueId>), LoweringError> {
+        if computed_key_count == 0 {
+            let (continuation, value) =
+                self.materialize_class_function_value(block, function, span)?;
+            return Ok((continuation, value, None));
+        }
+
+        let function_ref = self
+            .module
+            .add_constant(Constant::FunctionRef(function.function_id));
+        let function_value = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: function_value,
+                constant: function_ref,
+            },
+        );
+        let (block, base_env) = if function.captured.is_empty() {
+            (block, self.load_env_object(block))
+        } else {
+            let env = self.ensure_shared_env(block, &function.captured, span)?;
+            (self.resolve_store_block(block), env)
+        };
+        let key_env = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: key_env,
+                capacity: computed_key_count,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProto {
+                object: key_env,
+                value: base_env,
+            },
+        );
+        let closure = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(closure),
+                builtin: Builtin::CreateClosure,
+                args: vec![function_value, key_env],
+            },
+        );
+        Ok((block, closure, Some(key_env)))
     }
 }

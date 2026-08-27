@@ -997,7 +997,9 @@ fn lower_export_default_decl(
                 },
                 outer_block,
             )?;
-            let outer_block = lowerer.ensure_open(flow)?;
+            // 类求值可能推进 block（计算键异常分叉等）：消费延续块，
+            // 后续导出 StoreVar 不得落回已终止的入口块。
+            let outer_block = lowerer.resolve_store_block(outer_block);
             if let Some(current_mid) = lowerer.current_module_id
                 && let Some(ir_name) = lowerer
                     .export_map

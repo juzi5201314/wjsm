@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+inst-field-ctor ok
+static-field-ctor ok
+static-field-proto TypeError
+static-method-proto TypeError
+static-getter-proto TypeError
+inst-field-proto ok
+static-field-symbol ok
+k1,k2,caught
+2 2 true true true undefined
+2 2 true undefined
+nonconfigurable: TypeError
+frozen: TypeError
+renamed 5
+--- stderr ---

@@ -267,6 +267,11 @@ pub fn loop_headers(function: &crate::Function) -> Vec<BasicBlockId> {
     headers
 }
 
+/// DFS 回边集合：见 [`ControlFlowGraph::dfs_back_edges`]。
+pub fn dfs_back_edges(function: &crate::Function) -> HashSet<(BasicBlockId, BasicBlockId)> {
+    ControlFlowGraph::build(function).dfs_back_edges()
+}
+
 /// 循环头入口处需要保存/恢复的 SSA：该块全部 φ dest。
 pub fn loop_header_live_phis(function: &crate::Function, header: BasicBlockId) -> Vec<ValueId> {
     let Some(block) = function.blocks().get(header.0 as usize) else {

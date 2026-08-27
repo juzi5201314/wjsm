@@ -448,8 +448,8 @@ module {
     bb1:
       %16 = const c28
       store var $2.$shared_env, %16
-      %75 = load var $2.$state
-      switch %75 [case c42 -> bb2, case c43 -> bb5, case c44 -> bb10], default bb15, exit bb16
+      %87 = load var $2.$state
+      switch %87 [case c42 -> bb2, case c43 -> bb7, case c44 -> bb16], default bb21, exit bb22
     bb2:
       %17 = load var $2.$closure_env
       %18 = const c29
@@ -464,81 +464,105 @@ module {
       %28 = load var $2.$this
       %29 = const c32
       %30 = call builtin.private_get(%28, %29)
-      %31 = load var $2.step
-      %32 = add %30, %31
-      %33 = load var $2.$generator
-      %34 = call builtin.generator.next(%33, %32)
-      %69 = load var $env
-      %70 = const c40
-      %71 = load var $2.step
-      call builtin.continuation.save_var(%69, %70, %71)
-      generator_suspend %34, state=1
-      jump bb7
+      %31 = is_exception %30
+      branch %31, bb6, bb5
     bb4:
       %25 = call builtin.exception_value(%23)
       %26 = load var $2.$generator
       %27 = call builtin.generator.throw(%26, %25)
       return %27
     bb5:
-      %72 = load var $env
-      %73 = const c41
-      %74 = call builtin.continuation.load_var(%72, %73)
-      store var $2.step, %74
-      %35 = load var $2.$resume_val
-      %36 = load var $2.$is_rejected
-      %37 = const c33
-      %38 = stricteq %36, %37
-      branch %38, bb6, bb9
+      %35 = load var $2.step
+      %36 = add %30, %35
+      %37 = load var $2.$generator
+      %38 = call builtin.generator.next(%37, %36)
+      %81 = load var $env
+      %82 = const c40
+      %83 = load var $2.step
+      call builtin.continuation.save_var(%81, %82, %83)
+      generator_suspend %38, state=1
+      jump bb9
     bb6:
-      %41 = load var $2.$generator
-      %42 = call builtin.generator.throw(%41, %35)
-      return %42
+      %32 = call builtin.exception_value(%30)
+      %33 = load var $2.$generator
+      %34 = call builtin.generator.throw(%33, %32)
+      return %34
     bb7:
-      %46 = load var $2.$this
-      %47 = const c35
-      %48 = call builtin.private_get(%46, %47)
-      %49 = load var $2.step
-      %50 = const c36
-      %51 = mul %49, %50
-      %52 = add %48, %51
-      %53 = load var $2.$generator
-      %54 = call builtin.generator.next(%53, %52)
-      generator_suspend %54, state=2
-      jump bb12
+      %84 = load var $env
+      %85 = const c41
+      %86 = call builtin.continuation.load_var(%84, %85)
+      store var $2.step, %86
+      %39 = load var $2.$resume_val
+      %40 = load var $2.$is_rejected
+      %41 = const c33
+      %42 = stricteq %40, %41
+      branch %42, bb8, bb11
     bb8:
-      %43 = load var $2.$generator
-      %44 = call builtin.generator.return(%43, %35)
-      return %44
+      %45 = load var $2.$generator
+      %46 = call builtin.generator.throw(%45, %39)
+      return %46
     bb9:
-      %39 = const c34
-      %40 = stricteq %36, %39
-      branch %40, bb8, bb7
+      %50 = load var $2.$this
+      %51 = const c35
+      %52 = call builtin.private_get(%50, %51)
+      %53 = is_exception %52
+      branch %53, bb13, bb12
     bb10:
-      %55 = load var $2.$resume_val
-      %56 = load var $2.$is_rejected
-      %57 = const c37
-      %58 = stricteq %56, %57
-      branch %58, bb11, bb14
+      %47 = load var $2.$generator
+      %48 = call builtin.generator.return(%47, %39)
+      return %48
     bb11:
-      %61 = load var $2.$generator
-      %62 = call builtin.generator.throw(%61, %55)
-      return %62
+      %43 = const c34
+      %44 = stricteq %40, %43
+      branch %44, bb10, bb9
     bb12:
-      %66 = load var $2.$generator
-      %67 = const c39
-      %68 = call builtin.generator.return(%66, %67)
-      return %68
+      %57 = load var $2.step
+      %58 = const c36
+      %59 = mul %57, %58
+      %60 = is_exception %59
+      branch %60, bb15, bb14
     bb13:
-      %63 = load var $2.$generator
-      %64 = call builtin.generator.return(%63, %55)
-      return %64
+      %54 = call builtin.exception_value(%52)
+      %55 = load var $2.$generator
+      %56 = call builtin.generator.throw(%55, %54)
+      return %56
     bb14:
-      %59 = const c38
-      %60 = stricteq %56, %59
-      branch %60, bb13, bb12
+      %64 = add %52, %59
+      %65 = load var $2.$generator
+      %66 = call builtin.generator.next(%65, %64)
+      generator_suspend %66, state=2
+      jump bb18
     bb15:
-      return
+      %61 = call builtin.exception_value(%59)
+      %62 = load var $2.$generator
+      %63 = call builtin.generator.throw(%62, %61)
+      return %63
     bb16:
+      %67 = load var $2.$resume_val
+      %68 = load var $2.$is_rejected
+      %69 = const c37
+      %70 = stricteq %68, %69
+      branch %70, bb17, bb20
+    bb17:
+      %73 = load var $2.$generator
+      %74 = call builtin.generator.throw(%73, %67)
+      return %74
+    bb18:
+      %78 = load var $2.$generator
+      %79 = const c39
+      %80 = call builtin.generator.return(%78, %79)
+      return %80
+    bb19:
+      %75 = load var $2.$generator
+      %76 = call builtin.generator.return(%75, %67)
+      return %76
+    bb20:
+      %71 = const c38
+      %72 = stricteq %68, %71
+      branch %72, bb19, bb18
+    bb21:
+      return
+    bb22:
       unreachable
 
   fn @Seq.#gen [needs_prototype] [captures: $0.outer] [params: $3.$env, $3.$this, $3.step] [entry=bb0]:
@@ -1321,9 +1345,9 @@ module {
   fn @Seq.constructor [home_object=@14.prototype] [needs_prototype] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3, $1.$private_function#1_4] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = const c223
-      %1 = load var $16.$this
-      %2 = const c224
-      call builtin.private_set(%1, %0, %2)
+      %1 = const c224
+      %2 = load var $16.$this
+      call builtin.private_set(%2, %0, %1)
       %3 = load var $16.$this
       %4 = load var $env
       %5 = const c225
@@ -2261,8 +2285,8 @@ module {
       jump bb2
     bb63:
       %246 = const c223
-      %248 = const c224
-      call builtin.private_set(%97, %246, %248)
+      %247 = const c224
+      call builtin.private_set(%97, %246, %247)
       %251 = const c225
       %252 = get_prop %24, %251
       %253 = const c226
