@@ -5769,7 +5769,11 @@ fn lower_set_elem(
     } else {
         NativeRuntimeOp::SetElem
     };
-    let result = cx.call(set_elem_op.id(), &[object_val, encoded_index, stored_val], None)?;
+    let result = cx.call(
+        set_elem_op.id(),
+        &[object_val, encoded_index, stored_val],
+        None,
+    )?;
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
