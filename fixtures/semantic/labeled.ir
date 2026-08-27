@@ -83,45 +83,49 @@ module {
       %23 = load var $1.i
       %24 = const c22
       %25 = lt %23, %24
-      branch %25, bb2, bb4
+      jump bb5
     bb2:
-      %28 = load var $1.i
-      %29 = const c25
-      %30 = call builtin.strict_eq(%28, %29)
-      branch %30, bb5, bb6
+      %30 = load var $1.i
+      %31 = const c25
+      %32 = call builtin.strict_eq(%30, %31)
+      branch %32, bb7, bb8
     bb3:
-      %39 = load var $1.i
-      %40 = const c27
-      %41 = add %39, %40
-      store var $1.i, %41
+      %41 = load var $1.i
+      %42 = const c27
+      %43 = add %41, %42
+      store var $1.i, %43
       jump bb1
     bb4:
-      %42 = load var $0.total
-      %43 = call builtin.console.log(%42)
-      %44 = is_exception %43
-      branch %44, bb12, bb11
+      %44 = load var $0.total
+      %45 = call builtin.console.log(%44)
+      %46 = is_exception %45
+      branch %46, bb14, bb13
     bb5:
-      jump bb3
+      branch %25, bb2, bb4
     bb6:
-      %31 = load var $1.i
-      %32 = const c26
-      %33 = call builtin.strict_eq(%31, %32)
-      branch %33, bb7, bb8
-    bb7:
-      jump bb4
-    bb8:
-      %34 = load var $0.total
-      %35 = load var $1.i
-      %36 = add %34, %35
-      store var $0.total, %36
-      jump bb9
-    bb9:
-      jump bb3
-    bb10:
       unreachable
+    bb7:
+      jump bb3
+    bb8:
+      %33 = load var $1.i
+      %34 = const c26
+      %35 = call builtin.strict_eq(%33, %34)
+      branch %35, bb9, bb10
+    bb9:
+      jump bb4
+    bb10:
+      %36 = load var $0.total
+      %37 = load var $1.i
+      %38 = add %36, %37
+      store var $0.total, %38
+      jump bb11
     bb11:
-      return
+      jump bb3
     bb12:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      unreachable
+    bb13:
+      return
+    bb14:
+      %47 = call builtin.exception_value(%45)
+      throw %47
 }

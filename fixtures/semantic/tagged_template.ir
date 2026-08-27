@@ -43,19 +43,55 @@ module {
       %0 = load var $1.strings
       %1 = const c20
       %2 = get_elem %0, %1
-      %3 = load var $1.a
-      %4 = add %2, %3
-      %5 = load var $1.strings
-      %6 = const c21
-      %7 = get_elem %5, %6
-      %8 = add %4, %7
-      %9 = load var $1.b
-      %10 = add %8, %9
-      %11 = load var $1.strings
-      %12 = const c22
-      %13 = get_elem %11, %12
-      %14 = add %10, %13
-      return %14
+      %3 = is_exception %2
+      branch %3, bb2, bb1
+    bb1:
+      %5 = load var $1.a
+      %6 = add %2, %5
+      %7 = is_exception %6
+      branch %7, bb4, bb3
+    bb2:
+      %4 = call builtin.exception_value(%2)
+      throw %4
+    bb3:
+      %9 = load var $1.strings
+      %10 = const c21
+      %11 = get_elem %9, %10
+      %12 = is_exception %11
+      branch %12, bb6, bb5
+    bb4:
+      %8 = call builtin.exception_value(%6)
+      throw %8
+    bb5:
+      %14 = add %6, %11
+      %15 = is_exception %14
+      branch %15, bb8, bb7
+    bb6:
+      %13 = call builtin.exception_value(%11)
+      throw %13
+    bb7:
+      %17 = load var $1.b
+      %18 = add %14, %17
+      %19 = is_exception %18
+      branch %19, bb10, bb9
+    bb8:
+      %16 = call builtin.exception_value(%14)
+      throw %16
+    bb9:
+      %21 = load var $1.strings
+      %22 = const c22
+      %23 = get_elem %21, %22
+      %24 = is_exception %23
+      branch %24, bb12, bb11
+    bb10:
+      %20 = call builtin.exception_value(%18)
+      throw %20
+    bb11:
+      %26 = add %18, %23
+      return %26
+    bb12:
+      %25 = call builtin.exception_value(%23)
+      throw %25
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -127,11 +163,11 @@ module {
       %44 = const c0
       jump bb6
     bb1:
-      %41 = call builtin.console.log(%59)
+      %41 = call builtin.console.log(%71)
       %42 = is_exception %41
       branch %42, bb4, bb3
     bb2:
-      %40 = call builtin.exception_value(%59)
+      %40 = call builtin.exception_value(%71)
       throw %40
     bb3:
       return
@@ -139,21 +175,75 @@ module {
       %43 = call builtin.exception_value(%41)
       throw %43
     bb5:
-      %39 = is_exception %59
+      %39 = is_exception %71
       branch %39, bb2, bb1
     bb6:
       %46 = const c20
       %47 = get_elem %22, %46
-      %49 = add %47, %36
-      %51 = const c21
-      %52 = get_elem %22, %51
-      %53 = add %49, %52
-      %55 = add %53, %37
-      %57 = const c22
-      %58 = get_elem %22, %57
-      %59 = add %55, %58
+      %48 = is_exception %47
+      branch %48, bb8, bb7
+    bb7:
+      %51 = add %47, %36
+      %52 = is_exception %51
+      branch %52, bb10, bb9
+    bb8:
+      %49 = call builtin.exception_value(%47)
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      throw %49
+    bb9:
+      %55 = const c21
+      %56 = get_elem %22, %55
+      %57 = is_exception %56
+      branch %57, bb12, bb11
+    bb10:
+      %53 = call builtin.exception_value(%51)
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      throw %53
+    bb11:
+      %59 = add %51, %56
+      %60 = is_exception %59
+      branch %60, bb14, bb13
+    bb12:
+      %58 = call builtin.exception_value(%56)
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      throw %58
+    bb13:
+      %63 = add %59, %37
+      %64 = is_exception %63
+      branch %64, bb16, bb15
+    bb14:
+      %61 = call builtin.exception_value(%59)
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      throw %61
+    bb15:
+      %67 = const c22
+      %68 = get_elem %22, %67
+      %69 = is_exception %68
+      branch %69, bb18, bb17
+    bb16:
+      %65 = call builtin.exception_value(%63)
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      throw %65
+    bb17:
+      %71 = add %63, %68
       store var $1.a, %44
       store var $1.b, %44
       store var $1.strings, %44
       jump bb5
+    bb18:
+      %70 = call builtin.exception_value(%68)
+      store var $1.a, %44
+      store var $1.b, %44
+      store var $1.strings, %44
+      throw %70
 }

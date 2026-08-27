@@ -40,7 +40,13 @@ module {
       %3 = const c25
       %4 = const c26
       %2 = call builtin.abstract_compare(%0, %1, %3, %4)
+      %5 = is_exception %2
+      branch %5, bb2, bb1
+    bb1:
       return %2
+    bb2:
+      %6 = call builtin.exception_value(%2)
+      throw %6
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -164,6 +170,13 @@ module {
       %57 = const c25
       %58 = const c26
       %56 = call builtin.abstract_compare(%48, %55, %57, %58)
+      %59 = is_exception %56
+      branch %59, bb21, bb20
+    bb20:
       store var $1.x, %53
       jump bb18
+    bb21:
+      %60 = call builtin.exception_value(%56)
+      store var $1.x, %53
+      throw %60
 }

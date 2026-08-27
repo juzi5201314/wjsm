@@ -29,6 +29,15 @@ impl Lowerer {
                 | swc_ast::BinaryOp::LShift
                 | swc_ast::BinaryOp::RShift
                 | swc_ast::BinaryOp::ZeroFillRShift => true,
+                // 松散相等与关系比较经 ToPrimitive 可调用用户 valueOf/toString/
+                // @@toPrimitive 抛出（IsLooselyEqual / IsLessThan）；严格相等
+                // （===/!==）无任何强制转换，不会自身抛出，走下方操作数递归。
+                swc_ast::BinaryOp::EqEq
+                | swc_ast::BinaryOp::NotEq
+                | swc_ast::BinaryOp::Lt
+                | swc_ast::BinaryOp::LtEq
+                | swc_ast::BinaryOp::Gt
+                | swc_ast::BinaryOp::GtEq => true,
                 _ => {
                     self.expr_can_throw(bin.left.as_ref())
                         || self.expr_can_throw(bin.right.as_ref())
@@ -105,10 +114,11 @@ impl Lowerer {
         Ok(value)
     }
 
-    /// 按 ArgumentListEvaluation 求值单个实参/操作数：求值后若该表达式可能直接
-    /// 产生 TAG_EXCEPTION 且允许表达式级异常分叉，则立即检查并传播异常。
-    /// 用于调用/构造实参、方法 receiver、被调用者等消费点，防止异常哨兵
-    /// 被当作普通实参值流入调用（ECMAScript 要求实参求值抛出即中止调用）。
+    /// 按 ArgumentListEvaluation / `? GetValue` 求值单个实参/操作数：求值后若该
+    /// 表达式可能直接产生 TAG_EXCEPTION 且允许表达式级异常分叉，则立即检查并
+    /// 传播异常。用于调用/构造实参、方法 receiver、被调用者，以及二元运算的
+    /// 左右操作数（LHS 抛出须短路 RHS 求值，异常哨兵不得作为普通值流入
+    /// ApplyStringOrNumericBinaryOperator / IsLooselyEqual / IsLessThan）。
     pub(crate) fn lower_call_operand_then_continue(
         &mut self,
         expr: &swc_ast::Expr,
@@ -253,10 +263,16 @@ impl Lowerer {
                 self.lower_comparison(bin, block)
             }
             // Standard arithmetic
+            // ES §13.15.4 EvaluateStringOrNumericBinaryExpression：`? GetValue(lref)`
+            // 抛出必须先传播并短路 RHS 求值，`? GetValue(rval)` 抛出必须先于
+            // ApplyStringOrNumericBinaryOperator 传播——异常哨兵不得作为普通
+            // 操作数流入 Binary（否则被字符串拼接/数值转换吞掉）。
             Add | Sub | Mul | Div => {
                 let mut current_block = block;
-                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
-                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                let lhs =
+                    self.lower_call_operand_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs =
+                    self.lower_call_operand_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 let op = match bin.op {
                     Add => BinaryOp::Add,
@@ -272,11 +288,14 @@ impl Lowerer {
                 }
                 Ok(dest)
             }
-            // Mod / Exp → Binary（后端按 BigInt / Number 分派）
+            // Mod / Exp → Binary（后端按 BigInt / Number 分派）；操作数异常
+            // 分叉语义同 Add 臂（GetValue 抛出先传播）。
             Mod | Exp => {
                 let mut current_block = block;
-                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
-                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                let lhs =
+                    self.lower_call_operand_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs =
+                    self.lower_call_operand_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 let op = if bin.op == Mod {
                     BinaryOp::Mod
@@ -290,11 +309,14 @@ impl Lowerer {
                 }
                 Ok(dest)
             }
-            // Bitwise operators — convert to i32, operate, NaN-box back
+            // Bitwise operators — convert to i32, operate, NaN-box back；操作数
+            // 异常分叉语义同 Add 臂（GetValue 抛出先传播）。
             BitOr | BitXor | BitAnd | LShift | RShift | ZeroFillRShift => {
                 let mut current_block = block;
-                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
-                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+                let lhs =
+                    self.lower_call_operand_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs =
+                    self.lower_call_operand_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 let op = match bin.op {
                     BitOr => BinaryOp::BitOr,
@@ -427,14 +449,19 @@ impl Lowerer {
 
     /// Lower comparison operators → Compare instruction.
     /// 注意: == 和 != 使用 abstract_eq builtin 而不是 Compare 指令
+    /// ES §13.10/§13.11：操作数 `? GetValue` 抛出先传播（LHS 抛错短路 RHS 求值）；
+    /// 松散相等与关系比较自身经 ToPrimitive 可调用用户码抛出，结果须在本函数内
+    /// 分叉，try/catch 才能本地捕获；严格相等（===/!==）无强制转换不自身抛出。
+    /// 抑制上下文由 lower_expr_then_continue 的延迟分叉兜底（expr_can_throw 已含
+    /// 松散/关系比较），async 状态机体内由宿主端透传异常哨兵。
     pub(crate) fn lower_comparison(
         &mut self,
         bin: &swc_ast::BinExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut current_block = block;
-        let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
-        let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
+        let lhs = self.lower_call_operand_then_continue(bin.left.as_ref(), &mut current_block)?;
+        let rhs = self.lower_call_operand_then_continue(bin.right.as_ref(), &mut current_block)?;
         let dest = self.alloc_value();
 
         match bin.op {
@@ -448,6 +475,9 @@ impl Lowerer {
                         args: vec![lhs, rhs],
                     },
                 );
+                if self.expr_exception_fork_allowed() {
+                    current_block = self.lower_value_exception_branch(current_block, dest)?;
+                }
             }
             // != 使用 abstract_eq builtin 然后 Not
             swc_ast::BinaryOp::NotEq => {
@@ -460,6 +490,8 @@ impl Lowerer {
                         args: vec![lhs, rhs],
                     },
                 );
+                // 分叉必须先于 Not：Not(异常哨兵) 会把异常折叠为布尔值丢失。
+                current_block = self.fork_or_defer_exception_branch(current_block, eq_result)?;
                 self.current_function.append_instruction(
                     current_block,
                     Instruction::Unary {
@@ -491,6 +523,9 @@ impl Lowerer {
                         args: vec![lhs, rhs, reverse, invert],
                     },
                 );
+                if self.expr_exception_fork_allowed() {
+                    current_block = self.lower_value_exception_branch(current_block, dest)?;
+                }
             }
             swc_ast::BinaryOp::EqEqEq => {
                 self.current_function.append_instruction(

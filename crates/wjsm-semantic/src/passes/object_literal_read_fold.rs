@@ -171,6 +171,10 @@ fn fold_function(function: &mut wjsm_ir::Function, constants: &[Constant]) -> bo
                     let canonical = resolve_canonical(*value, &aliases);
                     if sites.contains_key(&canonical) {
                         var_bindings.insert(name.clone(), canonical);
+                    } else {
+                        // 变量被重新赋值为非跟踪值：残留旧绑定会把后续
+                        // `LoadVar + GetProp` 错误折叠回字面量初值。
+                        var_bindings.remove(name);
                     }
                 }
                 Instruction::LoadVar { dest, name } => {
@@ -477,6 +481,66 @@ mod tests {
 
         let function = &program.functions()[function_id.0 as usize];
         assert_eq!(count_get_prop(function), 1);
+    }
+
+    #[test]
+    fn does_not_fold_after_var_rebind() {
+        let mut program = Program::new();
+        let template = program.add_constant(Constant::ObjectTemplate {
+            keys: vec![sso_key("x")],
+        });
+        let key = program.add_constant(Constant::String("x".into()));
+        let number = program.add_constant(Constant::Number(5.0));
+        let mut function = Function::new("rebound", BasicBlockId(0));
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: program.add_constant(Constant::Number(1.0)),
+        });
+        block.push_instruction(Instruction::InitObjectLiteral {
+            dest: ValueId(1),
+            template,
+            values: vec![ValueId(0)],
+        });
+        block.push_instruction(Instruction::StoreVar {
+            name: "$0.v".into(),
+            value: ValueId(1),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(2),
+            constant: number,
+        });
+        block.push_instruction(Instruction::StoreVar {
+            name: "$0.v".into(),
+            value: ValueId(2),
+        });
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(3),
+            name: "$0.v".into(),
+        });
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(4),
+            constant: key,
+        });
+        block.push_instruction(Instruction::GetProp {
+            dest: ValueId(5),
+            object: ValueId(3),
+            key: ValueId(4),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(5)),
+        });
+        function.push_block(block);
+        let function_id = program.push_function(function);
+
+        run(&mut program);
+
+        let function = &program.functions()[function_id.0 as usize];
+        assert_eq!(
+            count_get_prop(function),
+            1,
+            "rebound variable read must not fold back to the literal value"
+        );
     }
 
     fn name_ref_key(program: &mut Program, text: &str) -> u64 {
