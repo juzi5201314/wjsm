@@ -132,6 +132,36 @@ impl Lowerer {
         continue_block
     }
 
+    /// 发射 `ArrayPushSpread` 并检查其返回值：GetIterator 对不可迭代值抛
+    /// TypeError、迭代器 next()/value 读取抛错都会以 TAG_EXCEPTION 返回，
+    /// 必须按 ECMAScript ArrayAccumulation / ArgumentListEvaluation 传播，
+    /// 不得丢弃后静默产生空数组。普通函数体内直接分叉抛出；规范拥有者
+    /// （动态 import 等）抑制期间延迟分叉交拥有者处理；async 状态机体内
+    /// 沿用整体约定不插入表达式级分叉（见 expr_exception_fork_allowed）。
+    pub(crate) fn emit_array_push_spread_checked(
+        &mut self,
+        block: BasicBlockId,
+        array: ValueId,
+        source: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(result),
+                builtin: Builtin::ArrayPushSpread,
+                args: vec![array, source],
+            },
+        );
+        if self.expr_exception_fork_allowed() {
+            return self.lower_value_exception_branch(block, result);
+        }
+        if self.exception_fork_suppressed() {
+            return Ok(self.defer_value_exception_branch(block, result));
+        }
+        Ok(block)
+    }
+
     pub(crate) fn lower_binary(
         &mut self,
         bin: &swc_ast::BinExpr,

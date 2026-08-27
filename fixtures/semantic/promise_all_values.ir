@@ -100,18 +100,24 @@ module {
       %24 = const c22
       %25 = const c23
       %26 = call builtin.promise.resolve_static(%24, %25)
-      call builtin.array.push(%22, %26)
-      %27 = const c24
-      call builtin.array.push(%22, %27)
-      %28 = call builtin.promise.all(%21, %22)
-      %29 = const c28
-      %30 = const c29
-      %31 = call builtin.promise.then(%28, %29, %30)
-      %32 = is_exception %31
-      branch %32, bb2, bb1
+      %27 = is_exception %26
+      branch %27, bb2, bb1
     bb1:
-      return
+      call builtin.array.push(%22, %26)
+      %29 = const c24
+      call builtin.array.push(%22, %29)
+      %30 = call builtin.promise.all(%21, %22)
+      %31 = const c28
+      %32 = const c29
+      %33 = call builtin.promise.then(%30, %31, %32)
+      %34 = is_exception %33
+      branch %34, bb4, bb3
     bb2:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb3:
+      return
+    bb4:
+      %35 = call builtin.exception_value(%33)
+      throw %35
 }
