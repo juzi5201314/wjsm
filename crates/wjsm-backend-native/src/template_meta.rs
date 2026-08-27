@@ -68,6 +68,17 @@ pub(crate) fn plan_ic_slots(program: &Program) -> IcSlotPlan {
                     } => (*dest, Some(*object), *key),
                     _ => continue,
                 };
+                // IC 快路径只守卫接收者 shape，不比较键：槽必须绑定常量字符串键
+                // 位点。动态键（`o[k]++` / 解构计算键 / 对象键 ToPropertyKey 再入）
+                // 每次执行可指向不同属性，命中即错读错写，一律走完整宿主 op。
+                if !matches!(
+                    const_defs
+                        .get(&key)
+                        .and_then(|id| program.constants().get(id.0 as usize)),
+                    Some(Constant::String(_))
+                ) {
+                    continue;
+                }
                 let key_raw =
                     const_property_key_raw(program.constants(), &const_defs, key).unwrap_or(0);
                 let (template_meta_index, prop_index) = template_hint_for_access(

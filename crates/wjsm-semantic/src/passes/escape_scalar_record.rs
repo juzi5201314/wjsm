@@ -428,6 +428,7 @@ fn rewrite_function_to_scalars(
                     object,
                     key,
                     value,
+                    ..
                 } if family.contains(&object) => {
                     if let Some(key_name) = strings.get(&key)
                         && let Some(name) = scalar_name(plan, key_name)

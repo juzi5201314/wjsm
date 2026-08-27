@@ -2219,14 +2219,9 @@ fn emit_template_receiver_guard(
 ) -> Result<TemplateReceiver> {
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let obj = use_value_boxed(cx.builder, cx.variables, object)?;
-    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let ht_base = cx.ht_base;
     let barrier_state = cx.barrier_state;
-    let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
-    let is_boxed = cx
-        .builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    let is_boxed = emit_is_boxed_handle(cx.builder, obj);
     let tag = cx.builder.ins().ushr_imm_u(obj, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag,
@@ -2881,7 +2876,15 @@ fn lower_set_prop_with_template_or_ic(
     object: ValueId,
     key: ValueId,
     value: ValueId,
+    strict: bool,
 ) -> Result<()> {
+    // strict 位只改变宿主 miss 路径的失败行为（基元接收者 TypeError vs no-op）；
+    // CLIF 快路径仅命中真实对象自有数据属性，与 strict 无关。
+    let set_prop_op = if strict {
+        NativeRuntimeOp::SetPropStrict
+    } else {
+        NativeRuntimeOp::SetProp
+    };
     let template_inline = tables.template_origins.get(&object).and_then(|site| {
         template_property_index_for_key(tables.constants, tables.constant_defs, site.template, key)
             .map(|prop_index| (site.meta_index, prop_index))
@@ -2902,12 +2905,7 @@ fn lower_set_prop_with_template_or_ic(
         )?;
         cx.builder.switch_to_block(fallback_block);
         cx.builder.seal_block(fallback_block);
-        lower_value_operation(
-            cx,
-            NativeRuntimeOp::SetProp,
-            &[object, key, value],
-            Some(dest),
-        )?;
+        lower_value_operation(cx, set_prop_op, &[object, key, value], Some(dest))?;
         cx.builder.ins().jump(merge_block, &[]);
         cx.builder.switch_to_block(merge_block);
         cx.builder.seal_block(merge_block);
@@ -2919,14 +2917,10 @@ fn lower_set_prop_with_template_or_ic(
             barrier_thunks,
             prop_access(tables, dest, object, key, slot),
             value,
+            strict,
         )
     } else {
-        lower_value_operation(
-            cx,
-            NativeRuntimeOp::SetProp,
-            &[object, key, value],
-            Some(dest),
-        )
+        lower_value_operation(cx, set_prop_op, &[object, key, value], Some(dest))
     }
 }
 
@@ -3498,12 +3492,7 @@ fn lower_instruction(
         } if args.len() == 1 => {
             let encoded = use_value_boxed(cx.builder, cx.variables, args[0])?;
             let inline = emit_inline_string_predicate(cx.builder, encoded);
-            let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-            let boxed = cx.builder.ins().band_imm_s(encoded, box_base);
-            let boxed = cx
-                .builder
-                .ins()
-                .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed, box_base);
+            let boxed = emit_is_boxed_handle(cx.builder, encoded);
             let tag = cx.builder.ins().ushr_imm_u(encoded, 32);
             let tag = cx.builder.ins().band_imm_u(
                 tag,
@@ -3789,6 +3778,7 @@ fn lower_instruction(
             object,
             key,
             value,
+            strict,
         } => lower_set_prop_with_template_or_ic(
             cx,
             tables,
@@ -3797,6 +3787,7 @@ fn lower_instruction(
             *object,
             *key,
             *value,
+            *strict,
         ),
         Instruction::CreateDataProperty {
             dest,
@@ -3884,7 +3875,16 @@ fn lower_instruction(
             object,
             index,
             value,
-        } => lower_set_elem(cx, tables.barrier_thunks, *dest, *object, *index, *value),
+            strict,
+        } => lower_set_elem(
+            cx,
+            tables.barrier_thunks,
+            *dest,
+            *object,
+            *index,
+            *value,
+            *strict,
+        ),
         Instruction::OptionalGetProp { dest, object, key } => {
             if let Some(slot) = tables.ic_slots.get(dest).copied() {
                 lower_optional_get_prop_ic(
@@ -4791,15 +4791,7 @@ fn emit_string_address(
     let resolved_block = cx.builder.create_block();
     cx.builder.append_block_param(resolved_block, types::I64);
 
-    let boxed_bits = cx
-        .builder
-        .ins()
-        .band_imm_s(encoded, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
-    let is_boxed = cx.builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        boxed_bits,
-        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
-    );
+    let is_boxed = emit_is_boxed_handle(cx.builder, encoded);
     let tag_word = cx.builder.ins().ushr_imm_u(encoded, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag_word,
@@ -4943,15 +4935,7 @@ fn emit_array_address(
     let resolved_block = cx.builder.create_block();
     cx.builder.append_block_param(resolved_block, types::I64);
 
-    let boxed_bits = cx
-        .builder
-        .ins()
-        .band_imm_s(encoded, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
-    let is_boxed = cx.builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        boxed_bits,
-        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
-    );
+    let is_boxed = emit_is_boxed_handle(cx.builder, encoded);
     let tag_word = cx.builder.ins().ushr_imm_u(encoded, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag_word,
@@ -5740,6 +5724,7 @@ fn lower_set_elem(
     object: ValueId,
     index: ValueId,
     stored: ValueId,
+    strict: bool,
 ) -> Result<()> {
     let object_val = use_value_boxed(cx.builder, cx.variables, object)?;
     let encoded_index = use_value_boxed(cx.builder, cx.variables, index)?;
@@ -5784,8 +5769,13 @@ fn lower_set_elem(
 
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
+    let set_elem_op = if strict {
+        NativeRuntimeOp::SetElemStrict
+    } else {
+        NativeRuntimeOp::SetElem
+    };
     let result = cx.call(
-        NativeRuntimeOp::SetElem.id(),
+        set_elem_op.id(),
         &[object_val, encoded_index, stored_val],
         None,
     )?;
@@ -6289,15 +6279,7 @@ fn emit_idle_string_address(
 ) -> Result<ir::Value> {
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let entry_block = cx.builder.create_block();
-    let boxed_bits = cx
-        .builder
-        .ins()
-        .band_imm_s(encoded, i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()));
-    let is_boxed = cx.builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        boxed_bits,
-        i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes()),
-    );
+    let is_boxed = emit_is_boxed_handle(cx.builder, encoded);
     let tag_word = cx.builder.ins().ushr_imm_u(encoded, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag_word,
@@ -7559,18 +7541,14 @@ fn lower_get_prop_ic_non_nullish(
     } = access;
     let obj = use_value_boxed(cx.builder, cx.variables, object)?;
     let key_value = use_value_boxed(cx.builder, cx.variables, key)?;
-    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let ht_base = cx.ht_base;
     let ic_base = cx.ic_base;
     let barrier_state = cx.barrier_state;
 
-    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
-    let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
-    let is_boxed = cx
-        .builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。boxed 判定并入 SSO
+    // marker 位，避免 inline 字符串（BOX_BASE + 载荷伪造 tag）被误判成对象句柄。
+    let is_boxed = emit_is_boxed_handle(cx.builder, obj);
     let tag = cx.builder.ins().ushr_imm_u(obj, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag,
@@ -7996,6 +7974,7 @@ fn lower_set_prop_ic(
     barrier_thunks: &BarrierThunks,
     access: PropAccess,
     value: ValueId,
+    strict: bool,
 ) -> Result<()> {
     let PropAccess {
         dest,
@@ -8007,18 +7986,14 @@ fn lower_set_prop_ic(
     let obj = use_value_boxed(cx.builder, cx.variables, object)?;
     let key_value = use_value_boxed(cx.builder, cx.variables, key)?;
     let stored = use_value_boxed(cx.builder, cx.variables, value)?;
-    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let ht_base = cx.ht_base;
     let ic_base = cx.ic_base;
     let barrier_state = cx.barrier_state;
 
-    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。
-    let boxed_bits = cx.builder.ins().band_imm_s(obj, box_base);
-    let is_boxed = cx
-        .builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    // 标签检查：仅 NaN-box 的 TAG_OBJECT 才可解句柄读 entry。boxed 判定并入 SSO
+    // marker 位，避免 inline 字符串（BOX_BASE + 载荷伪造 tag）被误判成对象句柄。
+    let is_boxed = emit_is_boxed_handle(cx.builder, obj);
     let tag = cx.builder.ins().ushr_imm_u(obj, 32);
     let tag = cx.builder.ins().band_imm_u(
         tag,
@@ -8318,11 +8293,12 @@ fn lower_set_prop_ic(
     // miss：宿主完整 [[Set]] + IC 回填；`ic_ptr` 作为回填目标传入。
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
-    let result = cx.call(
-        NativeRuntimeOp::SetPropIc.id(),
-        &[obj, key_value, stored, ic_ptr],
-        None,
-    )?;
+    let set_prop_ic_op = if strict {
+        NativeRuntimeOp::SetPropIcStrict
+    } else {
+        NativeRuntimeOp::SetPropIc
+    };
+    let result = cx.call(set_prop_ic_op.id(), &[obj, key_value, stored, ic_ptr], None)?;
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
@@ -8660,6 +8636,23 @@ pub(crate) fn emit_is_number(builder: &mut FunctionBuilder<'_>, input: ir::Value
         .icmp_imm_s(ir::condcodes::IntCC::NotEqual, boxed_bits, box_base)
 }
 
+/// CLIF 版「是否为规范 boxed tagged handle」：等价于 `value::is_tagged` 的 boxed
+/// 前置判定——要求 `BOX_BASE` 前缀齐全，且 SSO marker 位（48–50）为零。
+///
+/// inline SSO 字符串同样带 `BOX_BASE`，其 7-bit/8-bit 码元载荷可覆盖 tag 位
+/// （32–36），只查 `BOX_BASE` 会把这类字符串误判成 object/array/exception/
+/// runtime-string 句柄，进而去解一个越界句柄索引。标准 tagged handle 的
+/// bits 44–50 恒为零，因此并入 marker 掩码不会漏判任何真实句柄。
+fn emit_is_boxed_handle(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
+    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
+    let boxed_mask =
+        i64::from_ne_bytes((value::BOX_BASE | value::INLINE_STRING_MARKER_MASK).to_ne_bytes());
+    let boxed_bits = builder.ins().band_imm_s(input, boxed_mask);
+    builder
+        .ins()
+        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base)
+}
+
 /// CLIF 版 `value::strip_gc_color`：仅对 handle-backed reference 清除 GC color。
 /// number 与 inline SSO 的 payload 可能占用 bits 38–43，必须原样保留。
 pub(crate) fn emit_strip_gc_color(
@@ -8674,19 +8667,10 @@ pub(crate) fn emit_strip_gc_color(
     builder.ins().select(keep_raw, input, stripped)
 }
 
-/// CLIF 版 `value::is_exception`：与 `value::is_tagged` 一致，boxed 判定必须
-/// 同时要求 SSO marker 位（48–50）为零。inline ASCII 字符串的 7-bit 码元载荷
-/// 可覆盖 bits 32–36（如 `"[2,3]"` 第 5 个码元 `']'` 恰好落成 TAG_EXCEPTION），
-/// 只查 BOX_BASE + tag 会把这类字符串误判为异常哨兵；标准 tagged handle 的
-/// bits 44–50 恒为零，因此并入掩码不会漏判真实异常。
+/// CLIF 版 `value::is_exception`：与 `value::is_tagged` 一致，boxed 判定并入 SSO
+/// marker 位排除 inline 字符串（详见 [`emit_is_boxed_handle`]），再比对 tag。
 fn emit_is_exception(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
-    let box_base = i64::from_ne_bytes(value::BOX_BASE.to_ne_bytes());
-    let boxed_mask =
-        i64::from_ne_bytes((value::BOX_BASE | value::INLINE_STRING_MARKER_MASK).to_ne_bytes());
-    let boxed_bits = builder.ins().band_imm_s(input, boxed_mask);
-    let boxed = builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::Equal, boxed_bits, box_base);
+    let boxed = emit_is_boxed_handle(builder, input);
     let tag = builder.ins().ushr_imm_u(input, 32);
     let tag = builder.ins().band_imm_u(
         tag,
