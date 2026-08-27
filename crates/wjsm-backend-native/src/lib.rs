@@ -10,6 +10,7 @@ pub use template_meta::{IcTemplateHint, ic_template_hints};
 pub(crate) mod root_plan;
 pub(crate) mod specialize;
 pub(crate) mod unwind;
+pub(crate) mod value_repr;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
