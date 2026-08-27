@@ -88,29 +88,29 @@ module {
     c85 = number(2)
     c86 = number(3)
     c87 = number(4)
-    c88 = number(0)
-    c89 = functionref(@4)
-    c90 = undefined
-    c91 = number(6)
-    c92 = number(1)
-    c93 = number(2)
-    c94 = number(7)
-    c95 = number(1)
-    c96 = number(2)
-    c97 = undefined
-    c98 = number(0)
-    c99 = number(1)
-    c100 = number(2)
-    c101 = number(0)
-    c102 = undefined
-    c103 = string("$0.values")
-    c104 = string("callee")
-    c105 = functionref(@4)
-    c106 = number(5)
-    c107 = undefined
-    c108 = number(2)
-    c109 = number(3)
-    c110 = number(4)
+    c88 = number(5)
+    c89 = undefined
+    c90 = number(6)
+    c91 = number(1)
+    c92 = number(2)
+    c93 = number(7)
+    c94 = number(1)
+    c95 = number(2)
+    c96 = undefined
+    c97 = number(0)
+    c98 = number(1)
+    c99 = number(2)
+    c100 = number(0)
+    c101 = undefined
+    c102 = string("$0.values")
+    c103 = string("callee")
+    c104 = functionref(@4)
+    c105 = number(7)
+    c106 = undefined
+    c107 = number(2)
+    c108 = number(3)
+    c109 = number(4)
+    c110 = number(5)
     c111 = functionref(@5)
     c112 = string("generator")
     c113 = undefined
@@ -146,29 +146,29 @@ module {
     c143 = number(2)
     c144 = number(3)
     c145 = number(4)
-    c146 = number(0)
-    c147 = functionref(@8)
-    c148 = undefined
-    c149 = number(10)
-    c150 = number(1)
-    c151 = number(2)
-    c152 = number(11)
-    c153 = number(1)
-    c154 = number(2)
-    c155 = undefined
-    c156 = number(0)
-    c157 = number(1)
-    c158 = number(2)
-    c159 = number(0)
-    c160 = undefined
-    c161 = string("$0.$__wjsm_gen_expr_8")
-    c162 = string("callee")
-    c163 = functionref(@8)
-    c164 = number(5)
-    c165 = undefined
-    c166 = number(2)
-    c167 = number(3)
-    c168 = number(4)
+    c146 = number(5)
+    c147 = undefined
+    c148 = number(10)
+    c149 = number(1)
+    c150 = number(2)
+    c151 = number(11)
+    c152 = number(1)
+    c153 = number(2)
+    c154 = undefined
+    c155 = number(0)
+    c156 = number(1)
+    c157 = number(2)
+    c158 = number(0)
+    c159 = undefined
+    c160 = string("$0.$__wjsm_gen_expr_8")
+    c161 = string("callee")
+    c162 = functionref(@8)
+    c163 = number(7)
+    c164 = undefined
+    c165 = number(2)
+    c166 = number(3)
+    c167 = number(4)
+    c168 = number(5)
     c169 = functionref(@9)
     c170 = string("override")
     c171 = undefined
@@ -283,70 +283,68 @@ module {
       %10 = const c87
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $6.$this, %11
-      %12 = collect_rest_args skip=0
-      %13 = const c88
-      %15 = const c89
-      %14 = call builtin.create_mapped_arguments_object(%12, %13, %15)
-      store var $6.arguments, %14
+      %12 = const c88
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $6.arguments, %13
       jump bb1
     bb1:
-      %16 = const c90
-      store var $6.$shared_env, %16
-      %48 = load var $6.$state
-      switch %48 [case c98 -> bb2, case c99 -> bb3, case c100 -> bb8], default bb13, exit bb14
+      %14 = const c89
+      store var $6.$shared_env, %14
+      %46 = load var $6.$state
+      switch %46 [case c97 -> bb2, case c98 -> bb3, case c99 -> bb8], default bb13, exit bb14
     bb2:
-      %17 = const c91
-      %18 = load var $6.$generator
-      %19 = call builtin.generator.next(%18, %17)
-      generator_suspend %19, state=1
+      %15 = const c90
+      %16 = load var $6.$generator
+      %17 = call builtin.generator.next(%16, %15)
+      generator_suspend %17, state=1
       jump bb5
     bb3:
-      %20 = load var $6.$resume_val
-      %21 = load var $6.$is_rejected
-      %22 = const c92
-      %23 = stricteq %21, %22
-      branch %23, bb4, bb7
+      %18 = load var $6.$resume_val
+      %19 = load var $6.$is_rejected
+      %20 = const c91
+      %21 = stricteq %19, %20
+      branch %21, bb4, bb7
     bb4:
-      %26 = load var $6.$generator
-      %27 = call builtin.generator.throw(%26, %20)
-      return %27
+      %24 = load var $6.$generator
+      %25 = call builtin.generator.throw(%24, %18)
+      return %25
     bb5:
-      %31 = const c94
-      %32 = load var $6.$generator
-      %33 = call builtin.generator.next(%32, %31)
-      generator_suspend %33, state=2
+      %29 = const c93
+      %30 = load var $6.$generator
+      %31 = call builtin.generator.next(%30, %29)
+      generator_suspend %31, state=2
       jump bb10
     bb6:
-      %28 = load var $6.$generator
-      %29 = call builtin.generator.return(%28, %20)
-      return %29
+      %26 = load var $6.$generator
+      %27 = call builtin.generator.return(%26, %18)
+      return %27
     bb7:
-      %24 = const c93
-      %25 = stricteq %21, %24
-      branch %25, bb6, bb5
+      %22 = const c92
+      %23 = stricteq %19, %22
+      branch %23, bb6, bb5
     bb8:
-      %34 = load var $6.$resume_val
-      %35 = load var $6.$is_rejected
-      %36 = const c95
-      %37 = stricteq %35, %36
-      branch %37, bb9, bb12
+      %32 = load var $6.$resume_val
+      %33 = load var $6.$is_rejected
+      %34 = const c94
+      %35 = stricteq %33, %34
+      branch %35, bb9, bb12
     bb9:
-      %40 = load var $6.$generator
-      %41 = call builtin.generator.throw(%40, %34)
-      return %41
+      %38 = load var $6.$generator
+      %39 = call builtin.generator.throw(%38, %32)
+      return %39
     bb10:
-      %45 = load var $6.$generator
-      %46 = const c97
-      %47 = call builtin.generator.return(%45, %46)
-      return %47
+      %43 = load var $6.$generator
+      %44 = const c96
+      %45 = call builtin.generator.return(%43, %44)
+      return %45
     bb11:
-      %42 = load var $6.$generator
-      %43 = call builtin.generator.return(%42, %34)
-      return %43
+      %40 = load var $6.$generator
+      %41 = call builtin.generator.return(%40, %32)
+      return %41
     bb12:
-      %38 = const c96
-      %39 = stricteq %35, %38
-      branch %39, bb11, bb10
+      %36 = const c95
+      %37 = stricteq %33, %36
+      branch %37, bb11, bb10
     bb13:
       return
     bb14:
@@ -355,30 +353,33 @@ module {
   fn @values [needs_prototype] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c101
-      %3 = const c102
+      %1 = const c100
+      %3 = const c101
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $7.arguments, %2
       %4 = load var $env
-      %5 = const c103
+      %5 = const c102
       %6 = get_prop %4, %5
-      %7 = const c104
+      %7 = const c103
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
       branch %9, bb2, bb1
     bb1:
-      %11 = const c105
-      %12 = const c106
-      %13 = const c107
+      %11 = const c104
+      %12 = const c105
+      %13 = const c106
       %14 = call builtin.continuation.create(%11, %13, %12)
       %15 = call builtin.generator.start(%14)
       %16 = load var $7.$this
-      %17 = const c108
+      %17 = const c107
       call builtin.continuation.save_var(%14, %17, %15)
-      %18 = const c109
+      %18 = const c108
       call builtin.continuation.save_var(%14, %18, %13)
-      %19 = const c110
+      %19 = const c109
       call builtin.continuation.save_var(%14, %19, %16)
+      %20 = load var $7.arguments
+      %21 = const c110
+      call builtin.continuation.save_var(%14, %21, %20)
       return %15
     bb2:
       %10 = call builtin.exception_value(%8)
@@ -466,70 +467,68 @@ module {
       %10 = const c145
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $10.$this, %11
-      %12 = collect_rest_args skip=0
-      %13 = const c146
-      %15 = const c147
-      %14 = call builtin.create_mapped_arguments_object(%12, %13, %15)
-      store var $10.arguments, %14
+      %12 = const c146
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $10.arguments, %13
       jump bb1
     bb1:
-      %16 = const c148
-      store var $10.$shared_env, %16
-      %48 = load var $10.$state
-      switch %48 [case c156 -> bb2, case c157 -> bb3, case c158 -> bb8], default bb13, exit bb14
+      %14 = const c147
+      store var $10.$shared_env, %14
+      %46 = load var $10.$state
+      switch %46 [case c155 -> bb2, case c156 -> bb3, case c157 -> bb8], default bb13, exit bb14
     bb2:
-      %17 = const c149
-      %18 = load var $10.$generator
-      %19 = call builtin.generator.next(%18, %17)
-      generator_suspend %19, state=1
+      %15 = const c148
+      %16 = load var $10.$generator
+      %17 = call builtin.generator.next(%16, %15)
+      generator_suspend %17, state=1
       jump bb5
     bb3:
-      %20 = load var $10.$resume_val
-      %21 = load var $10.$is_rejected
-      %22 = const c150
-      %23 = stricteq %21, %22
-      branch %23, bb4, bb7
+      %18 = load var $10.$resume_val
+      %19 = load var $10.$is_rejected
+      %20 = const c149
+      %21 = stricteq %19, %20
+      branch %21, bb4, bb7
     bb4:
-      %26 = load var $10.$generator
-      %27 = call builtin.generator.throw(%26, %20)
-      return %27
+      %24 = load var $10.$generator
+      %25 = call builtin.generator.throw(%24, %18)
+      return %25
     bb5:
-      %31 = const c152
-      %32 = load var $10.$generator
-      %33 = call builtin.generator.next(%32, %31)
-      generator_suspend %33, state=2
+      %29 = const c151
+      %30 = load var $10.$generator
+      %31 = call builtin.generator.next(%30, %29)
+      generator_suspend %31, state=2
       jump bb10
     bb6:
-      %28 = load var $10.$generator
-      %29 = call builtin.generator.return(%28, %20)
-      return %29
+      %26 = load var $10.$generator
+      %27 = call builtin.generator.return(%26, %18)
+      return %27
     bb7:
-      %24 = const c151
-      %25 = stricteq %21, %24
-      branch %25, bb6, bb5
+      %22 = const c150
+      %23 = stricteq %19, %22
+      branch %23, bb6, bb5
     bb8:
-      %34 = load var $10.$resume_val
-      %35 = load var $10.$is_rejected
-      %36 = const c153
-      %37 = stricteq %35, %36
-      branch %37, bb9, bb12
+      %32 = load var $10.$resume_val
+      %33 = load var $10.$is_rejected
+      %34 = const c152
+      %35 = stricteq %33, %34
+      branch %35, bb9, bb12
     bb9:
-      %40 = load var $10.$generator
-      %41 = call builtin.generator.throw(%40, %34)
-      return %41
+      %38 = load var $10.$generator
+      %39 = call builtin.generator.throw(%38, %32)
+      return %39
     bb10:
-      %45 = load var $10.$generator
-      %46 = const c155
-      %47 = call builtin.generator.return(%45, %46)
-      return %47
+      %43 = load var $10.$generator
+      %44 = const c154
+      %45 = call builtin.generator.return(%43, %44)
+      return %45
     bb11:
-      %42 = load var $10.$generator
-      %43 = call builtin.generator.return(%42, %34)
-      return %43
+      %40 = load var $10.$generator
+      %41 = call builtin.generator.return(%40, %32)
+      return %41
     bb12:
-      %38 = const c154
-      %39 = stricteq %35, %38
-      branch %39, bb11, bb10
+      %36 = const c153
+      %37 = stricteq %33, %36
+      branch %37, bb11, bb10
     bb13:
       return
     bb14:
@@ -538,30 +537,33 @@ module {
   fn @$__wjsm_gen_expr_8 [needs_prototype] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c159
-      %3 = const c160
+      %1 = const c158
+      %3 = const c159
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $11.arguments, %2
       %4 = load var $env
-      %5 = const c161
+      %5 = const c160
       %6 = get_prop %4, %5
-      %7 = const c162
+      %7 = const c161
       %8 = set_prop %2, %7, %6
       %9 = is_exception %8
       branch %9, bb2, bb1
     bb1:
-      %11 = const c163
-      %12 = const c164
-      %13 = const c165
+      %11 = const c162
+      %12 = const c163
+      %13 = const c164
       %14 = call builtin.continuation.create(%11, %13, %12)
       %15 = call builtin.generator.start(%14)
       %16 = load var $11.$this
-      %17 = const c166
+      %17 = const c165
       call builtin.continuation.save_var(%14, %17, %15)
-      %18 = const c167
+      %18 = const c166
       call builtin.continuation.save_var(%14, %18, %13)
-      %19 = const c168
+      %19 = const c167
       call builtin.continuation.save_var(%14, %19, %16)
+      %20 = load var $11.arguments
+      %21 = const c168
+      call builtin.continuation.save_var(%14, %21, %20)
       return %15
     bb2:
       %10 = call builtin.exception_value(%8)
