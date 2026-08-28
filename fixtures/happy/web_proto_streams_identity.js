@@ -27,10 +27,11 @@ console.log(s2.locked);
 // --- 品牌不符：同步方法直接抛，promise 形态 rejected ---
 try { ReadableStream.prototype.getReader.call({}); } catch (e) { console.log(e.constructor.name, e.message); }
 try { lockedDesc.get.call({}); } catch (e) { console.log(e.constructor.name, e.message); }
-await ReadableStream.prototype.cancel.call({}).then(
-  () => console.log("unexpected"),
-  (e) => console.log("cancel reject:", e.constructor.name, e.message),
+const cancelReject = await ReadableStream.prototype.cancel.call({}).then(
+  () => "unexpected",
+  (e) => `${e.constructor.name} ${e.message}`,
 );
+console.log("cancel reject:", cancelReject);
 
 // --- WritableStream：方法身份、借用与品牌失败 ---
 console.log(typeof WritableStream.prototype.getWriter);
@@ -43,10 +44,11 @@ writer.releaseLock();
 const wLockedDesc = Object.getOwnPropertyDescriptor(WritableStream.prototype, "locked");
 console.log(wLockedDesc.get.name, typeof wLockedDesc.set);
 try { WritableStream.prototype.getWriter.call({}); } catch (e) { console.log(e.constructor.name, e.message); }
-await WritableStream.prototype.abort.call({}).then(
-  () => console.log("unexpected"),
-  (e) => console.log("abort reject:", e.constructor.name, e.message),
+const abortReject = await WritableStream.prototype.abort.call({}).then(
+  () => "unexpected",
+  (e) => `${e.constructor.name} ${e.message}`,
 );
+console.log("abort reject:", abortReject);
 
 // --- TransformStream：readable/writable 访问器在 prototype 上 ---
 const t1 = new TransformStream();

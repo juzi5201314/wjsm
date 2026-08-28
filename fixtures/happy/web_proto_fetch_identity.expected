@@ -1,0 +1,36 @@
+exit_code: 0
+--- stdout ---
+function function
+true true
+false true
+true
+append true true true append 2
+delete true true true delete 1
+get true true true get 1
+has true true true has 1
+set true true true set 2
+2
+1 3
+TypeError Illegal invocation
+TypeError Illegal invocation
+TypeError Illegal invocation
+true true
+function undefined true true
+get url 0
+https://b.example/
+POST get method
+TypeError Illegal invocation
+true true
+bbb
+get status 200
+text reject: TypeError Illegal invocation
+function
+true true
+true true true abort
+function undefined true true get signal
+true
+false true why
+TypeError
+TypeError
+done fetch proto identity
+--- stderr ---

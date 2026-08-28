@@ -42,13 +42,15 @@ try { urlDesc.get.call({}); } catch (e) { console.log(e.constructor.name, e.mess
 const respA = new Response("aaa");
 const respB = new Response("bbb");
 console.log(respA.text === respB.text, respA.text === Response.prototype.text);
-console.log(await respA.text.call(respB));
+const borrowedText = await respA.text.call(respB);
+console.log(borrowedText);
 const statusDesc = Object.getOwnPropertyDescriptor(Response.prototype, "status");
 console.log(statusDesc.get.name, statusDesc.get.call(respA));
-await Response.prototype.text.call({}).then(
-  () => console.log("unexpected"),
-  (e) => console.log("text reject:", e.constructor.name, e.message),
+const textReject = await Response.prototype.text.call({}).then(
+  () => "unexpected",
+  (e) => `${e.constructor.name} ${e.message}`,
 );
+console.log("text reject:", textReject);
 
 // --- AbortController：signal 访问器 + abort 方法在 prototype 上 ---
 console.log(typeof AbortController.prototype.abort);
