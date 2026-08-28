@@ -111,6 +111,9 @@ impl Lowerer {
         if let Some(span) = self.span_to_source_span(arrow.span()) {
             ir_function.set_source_span(span);
         }
+        if let Some(text) = self.span_source_text(arrow.span()) {
+            ir_function.set_source_text(text);
+        }
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -853,6 +856,9 @@ impl Lowerer {
         wrapper_ir_function.set_js_length(Self::expected_argument_count(&arrow.params));
         if let Some(span) = self.span_to_source_span(arrow.span()) {
             wrapper_ir_function.set_source_span(span);
+        }
+        if let Some(text) = self.span_source_text(arrow.span()) {
+            wrapper_ir_function.set_source_text(text);
         }
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));

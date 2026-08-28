@@ -376,6 +376,11 @@ impl Lowerer {
         {
             ir_function.set_source_span(span);
         }
+        // 类构造器的 [[SourceText]] 是整个 ClassDeclaration / ClassExpression
+        // 文本（ClassDefinitionEvaluation 步骤 "Set F.[[SourceText]] to sourceText"）。
+        if let Some(text) = self.span_source_text(class_span) {
+            ir_function.set_source_text(text);
+        }
         ir_function.set_params(param_ir_names);
         let ctor_captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
@@ -683,6 +688,8 @@ impl Lowerer {
                         None,
                         Self::expected_param_count(&method.function.params),
                     );
+                    let source_text = self.method_definition_source_text(method.span, is_static);
+                    self.set_function_source_text(function.function_id, source_text);
                     self.apply_method_js_name(
                         block,
                         function.function_id,
@@ -725,6 +732,8 @@ impl Lowerer {
                     None,
                     Self::expected_param_count(&method.function.params),
                 );
+                let source_text = self.method_definition_source_text(method.span, is_static);
+                self.set_function_source_text(function.function_id, source_text);
                 self.apply_method_js_name(
                     block,
                     function.function_id,
@@ -777,6 +786,8 @@ impl Lowerer {
                     None,
                     Self::expected_param_count(&method.function.params),
                 );
+                let source_text = self.method_definition_source_text(method.span, is_static);
+                self.set_function_source_text(function.function_id, source_text);
                 self.apply_method_js_name(
                     block,
                     function.function_id,

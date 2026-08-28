@@ -58,6 +58,14 @@ pub(crate) fn construct(
     if !value::is_callable(function) {
         return fail_dispatch(ctx);
     }
+    // §20.2.1.1.1 步骤 16：[[SourceText]] 为 `function anonymous(P\n) {\nbody\n}`
+    // （编译脚本是匿名函数表达式，回写规范文本供 Function.prototype.toString）。
+    if state
+        .set_callable_function_source_text(function, prepared.source_text)
+        .is_none()
+    {
+        return fail_dispatch(ctx);
+    }
     apply_function_metadata(state, function, prepared.expected_length)
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
