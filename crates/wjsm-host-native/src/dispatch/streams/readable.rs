@@ -64,16 +64,33 @@ pub(super) fn construct(
         return super::super::fail_dispatch(ctx);
     };
     if value::is_js_object(source) {
+        // start 的属性读取与调用可再入 JS 触发 GC，此刻流与 controller
+        // 包装对象仅由局部值持有，须钉扎到构造结束。
+        let initial_temp_roots = state.temporary_roots.len();
+        state.temporary_roots.push(stream);
+        state.temporary_roots.push(controller);
         let start = callable_property(ctx, state, source, "start");
         if let Some(start) = start {
             let result = state
                 .invoke_callable(ctx, start, source, &[controller])
                 .unwrap_or_else(|| super::super::fail_dispatch(ctx));
             if value::is_exception(result) {
-                error_stream(state, value::decode_handle(stream), result);
+                let stream_handle = state
+                    .streams
+                    .objects
+                    .get(&value::decode_handle(stream))
+                    .and_then(|kind| match kind {
+                        ObjectKind::Readable(handle) => Some(*handle),
+                        _ => None,
+                    });
+                if let Some(stream_handle) = stream_handle {
+                    error_stream(state, stream_handle, result);
+                }
+                state.temporary_roots.truncate(initial_temp_roots);
                 return result;
             }
         }
+        state.temporary_roots.truncate(initial_temp_roots);
     }
     stream
 }
@@ -97,17 +114,13 @@ pub(super) fn from_bytes(
     else {
         return None;
     };
-    let controller = state
-        .streams
-        .readables
-        .get(stream_handle as usize)?
-        .controller;
+    let controller = state.streams.readables.get(stream_handle)?.controller;
     if !bytes.is_empty() {
         let chunk = super::super::typedarray::create_uint8_array(state, bytes)?;
         state
             .streams
             .controllers
-            .get_mut(controller as usize)?
+            .get_mut(controller)?
             .queue
             .push_back(chunk);
     }
@@ -128,9 +141,10 @@ pub(super) fn create_stream(
         .set_web_instance_prototype(stream_object, wjsm_ir::Builtin::ReadableStreamConstructor)
         .ok()?;
     let controller_object = state.allocate_object(6, false).ok()?;
-    let stream_handle = state.streams.readables.len() as u32;
-    let controller_handle = state.streams.controllers.len() as u32;
-    state.streams.readables.push(ReadableState {
+    // peek 与两次 insert 之间没有其他插入/清扫（普通分配不触发同步 GC），
+    // 交叉下标由此保持一致。
+    let controller_handle = state.streams.controllers.peek_handle()?;
+    let stream_handle = state.streams.readables.insert(ReadableState {
         object: stream_object,
         controller: controller_handle,
         status: ReadableStatus::Readable,
@@ -138,8 +152,8 @@ pub(super) fn create_stream(
         locked: false,
         response: None,
         pipe: None,
-    });
-    state.streams.controllers.push(ControllerState {
+    })?;
+    let inserted = state.streams.controllers.insert(ControllerState {
         object: controller_object,
         readable: stream_handle,
         queue: VecDeque::new(),
@@ -151,7 +165,8 @@ pub(super) fn create_stream(
         cancel,
         active_byob: None,
         pulling: false,
-    });
+    })?;
+    debug_assert_eq!(inserted, controller_handle);
     register_object(state, stream_object, ObjectKind::Readable(stream_handle));
     register_object(
         state,
@@ -166,7 +181,7 @@ pub(super) fn readable_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let stream = state.streams.readables.get(handle as usize)?;
+    let stream = state.streams.readables.get(handle)?;
     let method = match key {
         "cancel" => ReadableMethod::Cancel,
         "getReader" => ReadableMethod::GetReader,
@@ -187,7 +202,7 @@ pub(super) fn reader_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let reader = state.streams.readers.get(handle as usize)?;
+    let reader = state.streams.readers.get(handle)?;
     let method = match key {
         "closed" => {
             return Some(StreamProperty::Value(value::encode_object_handle(
@@ -208,12 +223,12 @@ pub(super) fn controller_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let controller = state.streams.controllers.get(handle as usize)?;
+    let controller = state.streams.controllers.get(handle)?;
     match key {
         "byobRequest" => Some(StreamProperty::Value(
             controller
                 .active_byob
-                .and_then(|request| state.streams.byob_requests.get(request as usize))
+                .and_then(|request| state.streams.byob_requests.get(request))
                 .map_or_else(value::encode_null, |request| request.object),
         )),
         "close" => Some(StreamProperty::Callable(StreamCallable::Controller(
@@ -240,7 +255,7 @@ pub(super) fn byob_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let request = state.streams.byob_requests.get(handle as usize)?;
+    let request = state.streams.byob_requests.get(handle)?;
     match key {
         "respond" => Some(StreamProperty::Callable(StreamCallable::Byob(
             handle,
@@ -306,7 +321,7 @@ pub(super) fn call_controller(
             let stream = state
                 .streams
                 .controllers
-                .get(handle as usize)
+                .get(handle)
                 .map(|controller| controller.readable);
             if let Some(stream) = stream {
                 error_stream(state, stream, error);
@@ -347,10 +362,10 @@ fn get_reader(
             .is_some_and(|mode| mode == "byob")
     });
     let Some((locked, byte_stream, status)) =
-        state.streams.readables.get(stream as usize).map(|entry| {
+        state.streams.readables.get(stream).map(|entry| {
             (
                 entry.locked,
-                state.streams.controllers[entry.controller as usize].byte_stream,
+                state.streams.controllers[entry.controller].byte_stream,
                 entry.status,
             )
         })
@@ -363,7 +378,7 @@ fn get_reader(
     if wants_byob && !byte_stream {
         return type_error(ctx, state, "BYOB reader requires a byte stream");
     }
-    let Some((_, closed_promise)) = new_promise(ctx, state) else {
+    let Some((closed, closed_promise)) = new_promise(ctx, state) else {
         return super::super::fail_dispatch(ctx);
     };
     if status == ReadableStatus::Closed {
@@ -374,11 +389,16 @@ fn get_reader(
             false,
         );
     }
-    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 5, false) else {
+    // reader 对象分配可触发 GC，此刻 closed promise 仅由局部值持有，须钉扎。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(closed);
+    let object = state.allocate_object_with_gc_retry(ctx, 5, false);
+    state.temporary_roots.truncate(initial_temp_roots);
+    let Ok(object) = object else {
         return super::super::fail_dispatch(ctx);
     };
-    let reader = state.streams.readers.len() as u32;
-    state.streams.readers.push(ReaderState {
+    let Some(reader) = state.streams.readers.insert(ReaderState {
+        object,
         stream,
         kind: if wants_byob {
             ReaderKind::Byob
@@ -387,8 +407,10 @@ fn get_reader(
         },
         closed_promise,
         pending: VecDeque::new(),
-    });
-    state.streams.readables[stream as usize].locked = true;
+    }) else {
+        return super::super::fail_dispatch(ctx);
+    };
+    state.streams.readables[stream].locked = true;
     register_object(state, object, ObjectKind::Reader(reader));
     object
 }
@@ -402,12 +424,12 @@ fn read(
     let Some((stream, kind)) = state
         .streams
         .readers
-        .get(reader as usize)
+        .get(reader)
         .map(|reader| (reader.stream, reader.kind))
     else {
         return super::super::fail_dispatch(ctx);
     };
-    if let Some(response) = state.streams.readables[stream as usize].response {
+    if let Some(response) = state.streams.readables[stream].response {
         super::super::fetch::mark_response_used(state, response);
     }
     if kind == ReaderKind::Byob
@@ -418,11 +440,12 @@ fn read(
     let Some((promise, promise_handle)) = new_promise(ctx, state) else {
         return super::super::fail_dispatch(ctx);
     };
-    let controller = state.streams.readables[stream as usize].controller;
-    if let Some(chunk) = state.streams.controllers[controller as usize]
-        .queue
-        .pop_front()
-    {
+    // 后续 result 对象分配可触发 GC，read promise 在挂入 pending 或 settle
+    // 前仅由局部值持有，须钉扎。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(promise);
+    let controller = state.streams.readables[stream].controller;
+    if let Some(chunk) = state.streams.controllers[controller].queue.pop_front() {
         let stored = if let Some(view) = view {
             copy_chunk_to_view(state, controller, chunk, view).unwrap_or(view)
         } else {
@@ -431,43 +454,43 @@ fn read(
         let result = result_object(ctx, state, false, stored);
         super::super::promise::settle_promise(state, promise_handle, result, false);
         close_if_drained(state, stream);
-        if state.streams.readables[stream as usize].status == ReadableStatus::Closed
-            && let Some(response) = state.streams.readables[stream as usize].response
+        if state.streams.readables[stream].status == ReadableStatus::Closed
+            && let Some(response) = state.streams.readables[stream].response
         {
             super::super::fetch::complete_response_body(ctx, state, response);
         }
+        state.temporary_roots.truncate(initial_temp_roots);
         return promise;
     }
-    match state.streams.readables[stream as usize].status {
+    match state.streams.readables[stream].status {
         ReadableStatus::Closed => {
             let result = result_object(ctx, state, true, value::encode_undefined());
             super::super::promise::settle_promise(state, promise_handle, result, false);
-            if let Some(response) = state.streams.readables[stream as usize].response {
+            if let Some(response) = state.streams.readables[stream].response {
                 super::super::fetch::complete_response_body(ctx, state, response);
             }
         }
         ReadableStatus::Errored => {
-            let reason = state.streams.readables[stream as usize]
+            let reason = state.streams.readables[stream]
                 .error
                 .unwrap_or_else(value::encode_undefined);
             super::super::promise::settle_promise(state, promise_handle, reason, true);
-            if let Some(response) = state.streams.readables[stream as usize].response {
+            if let Some(response) = state.streams.readables[stream].response {
                 super::super::fetch::complete_response_body(ctx, state, response);
             }
         }
         ReadableStatus::Readable => {
-            state.streams.readers[reader as usize]
-                .pending
-                .push_back(PendingRead {
-                    promise: promise_handle,
-                    view,
-                });
+            state.streams.readers[reader].pending.push_back(PendingRead {
+                promise: promise_handle,
+                view,
+            });
             if let Some(view) = view {
                 create_byob_request(ctx, state, controller, reader, view, promise_handle);
             }
             schedule_pull(state, controller);
         }
     }
+    state.temporary_roots.truncate(initial_temp_roots);
     promise
 }
 
@@ -484,16 +507,19 @@ fn create_byob_request(
         super::super::promise::settle_promise(state, promise, reason, true);
         return;
     };
-    let handle = state.streams.byob_requests.len() as u32;
-    state.streams.byob_requests.push(ByobState {
+    let Some(handle) = state.streams.byob_requests.insert(ByobState {
         object,
         controller,
         reader,
         view,
         promise,
         responded: false,
-    });
-    state.streams.controllers[controller as usize].active_byob = Some(handle);
+    }) else {
+        let reason = super::super::fail_dispatch(ctx);
+        super::super::promise::settle_promise(state, promise, reason, true);
+        return;
+    };
+    state.streams.controllers[controller].active_byob = Some(handle);
     register_object(state, object, ObjectKind::Byob(handle));
 }
 
@@ -518,7 +544,7 @@ fn respond(
     let Some((controller, reader, view, promise, responded)) = state
         .streams
         .byob_requests
-        .get(request as usize)
+        .get(request)
         .map(|entry| {
             (
                 entry.controller,
@@ -540,20 +566,18 @@ fn respond(
     let Some(result_view) = super::super::typedarray::prefix_view(state, view, count) else {
         return super::super::fail_dispatch(ctx);
     };
-    state.streams.byob_requests[request as usize].responded = true;
-    state.streams.controllers[controller as usize].active_byob = None;
-    if let Some(position) = state.streams.readers[reader as usize]
+    state.streams.byob_requests[request].responded = true;
+    state.streams.controllers[controller].active_byob = None;
+    if let Some(position) = state.streams.readers[reader]
         .pending
         .iter()
         .position(|pending| pending.promise == promise)
     {
-        state.streams.readers[reader as usize]
-            .pending
-            .remove(position);
+        state.streams.readers[reader].pending.remove(position);
     }
     let result = result_object(ctx, state, false, result_view);
     super::super::promise::settle_promise(state, promise, result, false);
-    let stream = state.streams.controllers[controller as usize].readable;
+    let stream = state.streams.controllers[controller].readable;
     close_if_drained(state, stream);
     value::encode_undefined()
 }
@@ -571,13 +595,13 @@ fn enqueue(
     let Some(stream) = state
         .streams
         .controllers
-        .get(controller as usize)
+        .get(controller)
         .map(|controller| controller.readable)
     else {
         return super::super::fail_dispatch(ctx);
     };
-    if state.streams.controllers[controller as usize].close_requested
-        || state.streams.readables[stream as usize].status != ReadableStatus::Readable
+    if state.streams.controllers[controller].close_requested
+        || state.streams.readables[stream].status != ReadableStatus::Readable
     {
         return type_error(ctx, state, "Cannot enqueue into a closed stream");
     }
@@ -585,7 +609,6 @@ fn enqueue(
         .streams
         .readers
         .iter()
-        .enumerate()
         .find(|(_, reader)| reader.stream == stream && !reader.pending.is_empty())
         .map(|(index, _)| index);
     if let Some(reader) = pending_reader {
@@ -598,15 +621,19 @@ fn enqueue(
         } else {
             chunk
         };
-        state.streams.controllers[controller as usize].active_byob = None;
+        state.streams.controllers[controller].active_byob = None;
+        // result 对象分配可触发 GC，弹出后的 read promise 仅由局部值持有。
+        let initial_temp_roots = state.temporary_roots.len();
+        state
+            .temporary_roots
+            .push(value::encode_object_handle(pending.promise));
         let result = result_object(ctx, state, false, stored);
+        state.temporary_roots.truncate(initial_temp_roots);
         super::super::promise::settle_promise(state, pending.promise, result, false);
     } else {
-        state.streams.controllers[controller as usize]
-            .queue
-            .push_back(chunk);
+        state.streams.controllers[controller].queue.push_back(chunk);
     }
-    if state.streams.readables[stream as usize].pipe.is_some() {
+    if state.streams.readables[stream].pipe.is_some() {
         super::super::promise::enqueue_stream_task(state, StreamTask::Pump { readable: stream });
     }
     value::encode_undefined()
@@ -616,40 +643,35 @@ fn close(ctx: &mut NativeVmContext, state: &mut NativeAgentState, controller: u3
     let Some(stream) = state
         .streams
         .controllers
-        .get(controller as usize)
+        .get(controller)
         .map(|controller| controller.readable)
     else {
         return super::super::fail_dispatch(ctx);
     };
-    if state.streams.controllers[controller as usize].close_requested {
+    if state.streams.controllers[controller].close_requested {
         return type_error(ctx, state, "ReadableStream is already closing");
     }
-    state.streams.controllers[controller as usize].close_requested = true;
+    state.streams.controllers[controller].close_requested = true;
     close_if_drained(state, stream);
-    if state.streams.readables[stream as usize].pipe.is_some() {
+    if state.streams.readables[stream].pipe.is_some() {
         super::super::promise::enqueue_stream_task(state, StreamTask::Pump { readable: stream });
     }
     value::encode_undefined()
 }
 
 fn close_if_drained(state: &mut NativeAgentState, stream: u32) {
-    let controller = state.streams.readables[stream as usize].controller;
-    if !state.streams.controllers[controller as usize].close_requested
-        || !state.streams.controllers[controller as usize]
-            .queue
-            .is_empty()
-        || state.streams.controllers[controller as usize]
-            .active_byob
-            .is_some()
+    let controller = state.streams.readables[stream].controller;
+    if !state.streams.controllers[controller].close_requested
+        || !state.streams.controllers[controller].queue.is_empty()
+        || state.streams.controllers[controller].active_byob.is_some()
     {
         return;
     }
-    state.streams.readables[stream as usize].status = ReadableStatus::Closed;
+    state.streams.readables[stream].status = ReadableStatus::Closed;
     let readers: Vec<_> = state
         .streams
         .readers
         .iter()
-        .enumerate()
         .filter(|(_, reader)| reader.stream == stream)
         .map(|(index, _)| index)
         .collect();
@@ -685,7 +707,7 @@ fn closed_result(state: &mut NativeAgentState) -> i64 {
 }
 
 fn error_stream(state: &mut NativeAgentState, stream: u32, reason: i64) {
-    if let Some(stream) = state.streams.readables.get_mut(stream as usize) {
+    if let Some(stream) = state.streams.readables.get_mut(stream) {
         stream.status = ReadableStatus::Errored;
         stream.error = Some(reason);
     }
@@ -693,9 +715,8 @@ fn error_stream(state: &mut NativeAgentState, stream: u32, reason: i64) {
         .streams
         .readers
         .iter()
-        .enumerate()
         .filter(|(_, reader)| reader.stream == stream)
-        .map(|(index, _)| index)
+        .map(|(handle, _)| handle)
         .collect();
     for reader in reader_handles {
         let closed = state.streams.readers[reader].closed_promise;
@@ -724,20 +745,20 @@ fn cancel(
     let Some((controller, response)) = state
         .streams
         .readables
-        .get(stream as usize)
+        .get(stream)
         .map(|stream| (stream.controller, stream.response))
     else {
         return super::super::fail_dispatch(ctx);
     };
-    state.streams.controllers[controller as usize].queue.clear();
-    state.streams.controllers[controller as usize].close_requested = true;
+    state.streams.controllers[controller].queue.clear();
+    state.streams.controllers[controller].close_requested = true;
     close_if_drained(state, stream);
     if let Some(response) = response {
         super::super::fetch::mark_response_used(state, response);
         super::super::fetch::complete_response_body(ctx, state, response);
     }
-    let callback = state.streams.controllers[controller as usize].cancel;
-    let source = state.streams.controllers[controller as usize].source;
+    let callback = state.streams.controllers[controller].cancel;
+    let source = state.streams.controllers[controller].source;
     if let Some(callback) = callback {
         let result = state
             .invoke_callable(ctx, callback, source, &[reason])
@@ -757,9 +778,9 @@ fn release_reader(state: &mut NativeAgentState, reader: u32) -> i64 {
     if let Some(stream) = state
         .streams
         .readers
-        .get(reader as usize)
+        .get(reader)
         .map(|reader| reader.stream)
-        && let Some(stream) = state.streams.readables.get_mut(stream as usize)
+        && let Some(stream) = state.streams.readables.get_mut(stream)
     {
         stream.locked = false;
     }
@@ -786,11 +807,13 @@ pub(super) fn create_async_iterator(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         return super::super::fail_dispatch(ctx);
     };
-    let iterator = state.streams.async_iterators.len() as u32;
-    state
+    let Some(iterator) = state
         .streams
         .async_iterators
-        .push(AsyncIteratorState { object, reader });
+        .insert(AsyncIteratorState { object, reader })
+    else {
+        return super::super::fail_dispatch(ctx);
+    };
     register_object(state, object, ObjectKind::AsyncIterator(iterator));
     object
 }
@@ -803,7 +826,7 @@ pub(super) fn async_iterator_next(
     let Some(reader) = state
         .streams
         .async_iterators
-        .get(iterator as usize)
+        .get(iterator)
         .map(|iterator| iterator.reader)
     else {
         return super::super::fail_dispatch(ctx);
@@ -819,7 +842,7 @@ pub(super) fn async_iterator_return(
     let Some(reader) = state
         .streams
         .async_iterators
-        .get(iterator as usize)
+        .get(iterator)
         .map(|iterator| iterator.reader)
     else {
         return super::super::fail_dispatch(ctx);
@@ -880,16 +903,16 @@ fn pipe_to_object(
     if state
         .streams
         .readables
-        .get(readable as usize)?
+        .get(readable)?
         .pipe
         .is_some()
-        || state.streams.readables[readable as usize].locked
+        || state.streams.readables[readable].locked
     {
         return None;
     }
     let (promise, promise_handle) = new_promise(ctx, state)?;
-    state.streams.readables[readable as usize].locked = true;
-    state.streams.readables[readable as usize].pipe = Some(PipeState {
+    state.streams.readables[readable].locked = true;
+    state.streams.readables[readable].pipe = Some(PipeState {
         destination,
         promise: promise_handle,
         writing: false,
@@ -903,7 +926,7 @@ pub(super) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState, read
     let Some((controller, destination, writing, closing, pipe_promise)) = state
         .streams
         .readables
-        .get(readable as usize)
+        .get(readable)
         .and_then(|stream| {
             stream.pipe.as_ref().map(|pipe| {
                 (
@@ -921,11 +944,11 @@ pub(super) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState, read
     if writing {
         return value::encode_undefined();
     }
-    if let Some(chunk) = state.streams.controllers[controller as usize]
+    if let Some(chunk) = state.streams.controllers[controller]
         .queue
         .pop_front()
     {
-        state.streams.readables[readable as usize]
+        state.streams.readables[readable]
             .pipe
             .as_mut()
             .expect("pipe exists")
@@ -938,17 +961,17 @@ pub(super) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState, read
         );
         return value::encode_undefined();
     }
-    if state.streams.readables[readable as usize].status == ReadableStatus::Errored {
-        let reason = state.streams.readables[readable as usize]
+    if state.streams.readables[readable].status == ReadableStatus::Errored {
+        let reason = state.streams.readables[readable]
             .error
             .unwrap_or_else(value::encode_undefined);
         super::super::promise::settle_promise(state, pipe_promise, reason, true);
-        state.streams.readables[readable as usize].pipe = None;
+        state.streams.readables[readable].pipe = None;
         return value::encode_undefined();
     }
-    let source_closed = state.streams.controllers[controller as usize].close_requested;
+    let source_closed = state.streams.controllers[controller].close_requested;
     if source_closed && !closing {
-        if let Some(pipe) = state.streams.readables[readable as usize].pipe.as_mut() {
+        if let Some(pipe) = state.streams.readables[readable].pipe.as_mut() {
             pipe.writing = true;
             pipe.closing = true;
         }
@@ -967,7 +990,7 @@ pub(super) fn finish_pipe_write(
     let Some((promise, closing)) = state
         .streams
         .readables
-        .get_mut(readable as usize)
+        .get_mut(readable)
         .and_then(|stream| stream.pipe.as_mut())
         .map(|pipe| {
             pipe.writing = false;
@@ -978,10 +1001,10 @@ pub(super) fn finish_pipe_write(
     };
     if rejected {
         super::super::promise::settle_promise(state, promise, stored, true);
-        state.streams.readables[readable as usize].pipe = None;
+        state.streams.readables[readable].pipe = None;
     } else if closing {
         super::super::promise::settle_promise(state, promise, value::encode_undefined(), false);
-        state.streams.readables[readable as usize].pipe = None;
+        state.streams.readables[readable].pipe = None;
     } else {
         super::super::promise::enqueue_stream_task(state, StreamTask::Pump { readable });
     }
@@ -996,7 +1019,7 @@ pub(super) fn run_pull(
     let Some((callback, source, controller_object)) = state
         .streams
         .controllers
-        .get_mut(controller as usize)
+        .get_mut(controller)
         .and_then(|entry| {
             entry.pulling = false;
             entry
@@ -1010,14 +1033,14 @@ pub(super) fn run_pull(
         .invoke_callable(ctx, callback, source, &[controller_object])
         .unwrap_or_else(|| super::super::fail_dispatch(ctx));
     if value::is_exception(result) {
-        let stream = state.streams.controllers[controller as usize].readable;
+        let stream = state.streams.controllers[controller].readable;
         error_stream(state, stream, result);
     }
     result
 }
 
 fn schedule_pull(state: &mut NativeAgentState, controller: u32) {
-    let Some(entry) = state.streams.controllers.get_mut(controller as usize) else {
+    let Some(entry) = state.streams.controllers.get_mut(controller) else {
         return;
     };
     if entry.pull.is_none() || entry.pulling || entry.close_requested {
@@ -1047,7 +1070,7 @@ fn copy_chunk_to_view(
             rest.push(value::decode_f64(stored) as u8);
         }
         let rest = super::super::typedarray::create_uint8_array(state, &rest)?;
-        state.streams.controllers[controller as usize]
+        state.streams.controllers[controller]
             .queue
             .push_front(rest);
     }

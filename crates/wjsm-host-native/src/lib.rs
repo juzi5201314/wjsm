@@ -32,6 +32,7 @@ mod gc;
 mod inspector;
 mod native_exec;
 mod side_tables;
+mod slot_table;
 mod snapshot;
 mod specialization;
 
@@ -5848,6 +5849,11 @@ impl NativeAgentState {
             .retain(|handle, _| is_live(handle));
         self.promise_reactions.retain(|handle, _| is_live(handle));
         self.intl.slots.retain(|handle, _| is_live(handle));
+        // Web 宿主侧表：死包装对象的登记项与槽位一并释放，槽位复用不继承旧
+        // 品牌。先清 streams 再清 fetch——response 槽是否可释放取决于清扫后
+        // 是否仍有存活 body 流引用它。
+        dispatch::streams::sweep_retired(&mut self.streams, retired);
+        dispatch::fetch::sweep_retired(&mut self.fetch, &self.streams, retired);
     }
     fn drain_gc_cycle(&mut self, ctx: &mut NativeVmContext) -> Result<(), NativeRuntimeError> {
         let mut backoff = Backoff::new();
@@ -6865,6 +6871,10 @@ impl NativeRuntime {
             live_strings: self.state.string_ids.len(),
             string_ids: self.state.string_ids.len(),
             scope_records: self.state.scope_records.len(),
+            fetch_objects: self.state.fetch.live_object_count(),
+            fetch_slots: self.state.fetch.live_slot_count(),
+            stream_objects: self.state.streams.live_object_count(),
+            stream_slots: self.state.streams.live_slot_count(),
         }
     }
 

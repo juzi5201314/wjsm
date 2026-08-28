@@ -44,15 +44,23 @@ pub(super) fn construct(
     let Some((stream, controller)) = create_writable(state, sink, write, close, abort, None) else {
         return super::super::fail_dispatch(ctx);
     };
-    if value::is_js_object(sink)
-        && let Some(start) = callable_property(ctx, state, sink, "start")
-    {
-        let result = state
-            .invoke_callable(ctx, start, sink, &[controller])
-            .unwrap_or_else(|| super::super::fail_dispatch(ctx));
-        if value::is_exception(result) {
-            return result;
+    if value::is_js_object(sink) {
+        // start 的属性读取与调用可再入 JS 触发 GC，此刻流与 controller
+        // 包装对象仅由局部值持有，须钉扎到构造结束。
+        let initial_temp_roots = state.temporary_roots.len();
+        state.temporary_roots.push(stream);
+        state.temporary_roots.push(controller);
+        let start = callable_property(ctx, state, sink, "start");
+        if let Some(start) = start {
+            let result = state
+                .invoke_callable(ctx, start, sink, &[controller])
+                .unwrap_or_else(|| super::super::fail_dispatch(ctx));
+            if value::is_exception(result) {
+                state.temporary_roots.truncate(initial_temp_roots);
+                return result;
+            }
         }
+        state.temporary_roots.truncate(initial_temp_roots);
     }
     stream
 }
@@ -91,39 +99,52 @@ pub(super) fn construct_transform(
     else {
         return super::super::fail_dispatch(ctx);
     };
-    let controller = state.streams.readables[readable_handle as usize].controller;
-    let transform_handle = state.streams.transforms.len() as u32;
-    let Some((writable, _)) =
-        create_writable(state, transformer, None, None, None, Some(transform_handle))
-    else {
+    let controller = state.streams.readables[readable_handle].controller;
+    // GC 重试分配与 start 回调可触发 GC，此刻 readable/controller/writable/
+    // transform 包装对象仅由局部值持有，须钉扎到构造结束。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(readable);
+    state.temporary_roots.push(controller_object);
+    let Some((writable, _)) = create_writable(state, transformer, None, None, None, None) else {
+        state.temporary_roots.truncate(initial_temp_roots);
         return super::super::fail_dispatch(ctx);
     };
+    state.temporary_roots.push(writable);
     let Some(ObjectKind::Writable(writable_handle)) = state
         .streams
         .objects
         .get(&value::decode_handle(writable))
         .copied()
     else {
+        state.temporary_roots.truncate(initial_temp_roots);
         return super::super::fail_dispatch(ctx);
     };
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
+        state.temporary_roots.truncate(initial_temp_roots);
         return super::super::fail_dispatch(ctx);
     };
     if state
         .set_web_instance_prototype(object, wjsm_ir::Builtin::TransformStreamConstructor)
         .is_err()
     {
+        state.temporary_roots.truncate(initial_temp_roots);
         return super::super::fail_dispatch(ctx);
     }
-    state.streams.transforms.push(TransformState {
+    let Some(transform_handle) = state.streams.transforms.insert(TransformState {
+        object,
         readable: readable_handle,
         writable: writable_handle,
         controller,
         transformer,
         transform,
         flush,
-    });
+    }) else {
+        state.temporary_roots.truncate(initial_temp_roots);
+        return super::super::fail_dispatch(ctx);
+    };
+    state.streams.writables[writable_handle].transform = Some(transform_handle);
     register_object(state, object, ObjectKind::Transform(transform_handle));
+    state.temporary_roots.push(object);
     if value::is_js_object(transformer)
         && let Some(start) = callable_property(ctx, state, transformer, "start")
     {
@@ -131,9 +152,11 @@ pub(super) fn construct_transform(
             .invoke_callable(ctx, start, transformer, &[controller_object])
             .unwrap_or_else(|| super::super::fail_dispatch(ctx));
         if value::is_exception(result) {
+            state.temporary_roots.truncate(initial_temp_roots);
             return result;
         }
     }
+    state.temporary_roots.truncate(initial_temp_roots);
     object
 }
 
@@ -153,20 +176,21 @@ fn create_writable(
     let signal = state.allocate_object(1, false).ok()?;
     super::super::modules::set_named_property(state, signal, "aborted", value::encode_bool(false))
         .ok()?;
-    let stream = state.streams.writables.len() as u32;
-    let controller = state.streams.writable_controllers.len() as u32;
-    state.streams.writables.push(WritableState {
+    // peek 与两次 insert 之间没有其他插入/清扫（普通分配不触发同步 GC），
+    // 交叉下标由此保持一致。
+    let controller = state.streams.writable_controllers.peek_handle()?;
+    let stream = state.streams.writables.insert(WritableState {
         object,
         controller,
         status: WritableStatus::Writable,
         locked: false,
         transform,
         pipe_source: None,
-    });
-    state
+    })?;
+    let inserted = state
         .streams
         .writable_controllers
-        .push(WritableControllerState {
+        .insert(WritableControllerState {
             object: controller_object,
             stream,
             sink,
@@ -174,7 +198,8 @@ fn create_writable(
             close,
             abort,
             signal,
-        });
+        })?;
+    debug_assert_eq!(inserted, controller);
     register_object(state, object, ObjectKind::Writable(stream));
     register_object(
         state,
@@ -189,7 +214,7 @@ pub(super) fn writable_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let stream = state.streams.writables.get(handle as usize)?;
+    let stream = state.streams.writables.get(handle)?;
     let method = match key {
         "abort" => WritableMethod::Abort,
         "close" => WritableMethod::Close,
@@ -209,7 +234,7 @@ pub(super) fn writer_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let writer = state.streams.writers.get(handle as usize)?;
+    let writer = state.streams.writers.get(handle)?;
     match key {
         "abort" => Some(StreamProperty::Callable(StreamCallable::Writer(
             handle,
@@ -243,7 +268,7 @@ pub(super) fn controller_property(
     handle: u32,
     key: &str,
 ) -> Option<StreamProperty> {
-    let controller = state.streams.writable_controllers.get(handle as usize)?;
+    let controller = state.streams.writable_controllers.get(handle)?;
     match key {
         "error" => Some(StreamProperty::Callable(
             StreamCallable::WritableController(handle, WritableControllerMethod::Error),
@@ -277,7 +302,7 @@ pub(super) fn call_writer(
     let Some(stream) = state
         .streams
         .writers
-        .get(writer as usize)
+        .get(writer)
         .map(|writer| writer.stream)
     else {
         return super::super::fail_dispatch(ctx);
@@ -309,7 +334,7 @@ pub(super) fn call_controller(
     let Some(stream) = state
         .streams
         .writable_controllers
-        .get(controller as usize)
+        .get(controller)
         .map(|controller| controller.stream)
     else {
         return super::super::fail_dispatch(ctx);
@@ -330,7 +355,7 @@ fn get_writer(ctx: &mut NativeVmContext, state: &mut NativeAgentState, stream: u
     let Some(locked) = state
         .streams
         .writables
-        .get(stream as usize)
+        .get(stream)
         .map(|stream| stream.locked)
     else {
         return super::super::fail_dispatch(ctx);
@@ -338,23 +363,33 @@ fn get_writer(ctx: &mut NativeVmContext, state: &mut NativeAgentState, stream: u
     if locked {
         return type_error(ctx, state, "WritableStream is already locked");
     }
-    let Some((_, closed_promise)) = new_promise(ctx, state) else {
+    // 第二个 promise 与 writer 对象的分配可触发 GC，closed/ready promise
+    // 在挂入侧表前仅由局部值持有，须钉扎。
+    let initial_temp_roots = state.temporary_roots.len();
+    let Some((closed, closed_promise)) = new_promise(ctx, state) else {
         return super::super::fail_dispatch(ctx);
     };
+    state.temporary_roots.push(closed);
     let Some((ready, ready_promise)) = new_promise(ctx, state) else {
+        state.temporary_roots.truncate(initial_temp_roots);
         return super::super::fail_dispatch(ctx);
     };
+    state.temporary_roots.push(ready);
     super::super::promise::settle_promise(state, ready_promise, value::encode_undefined(), false);
-    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 8, false) else {
+    let object = state.allocate_object_with_gc_retry(ctx, 8, false);
+    state.temporary_roots.truncate(initial_temp_roots);
+    let Ok(object) = object else {
         return super::super::fail_dispatch(ctx);
     };
-    let writer = state.streams.writers.len() as u32;
-    state.streams.writers.push(WriterState {
+    let Some(writer) = state.streams.writers.insert(WriterState {
+        object,
         stream,
         closed_promise,
-        ready_promise: value::decode_handle(ready),
-    });
-    state.streams.writables[stream as usize].locked = true;
+        ready_promise,
+    }) else {
+        return super::super::fail_dispatch(ctx);
+    };
+    state.streams.writables[stream].locked = true;
     register_object(state, object, ObjectKind::Writer(writer));
     object
 }
@@ -363,9 +398,9 @@ fn release_writer(state: &mut NativeAgentState, writer: u32) {
     if let Some(stream) = state
         .streams
         .writers
-        .get(writer as usize)
+        .get(writer)
         .map(|writer| writer.stream)
-        && let Some(stream) = state.streams.writables.get_mut(stream as usize)
+        && let Some(stream) = state.streams.writables.get_mut(stream)
     {
         stream.locked = false;
     }
@@ -383,7 +418,7 @@ fn start_write(
     if state
         .streams
         .writables
-        .get(stream as usize)
+        .get(stream)
         .is_none_or(|stream| stream.status != WritableStatus::Writable)
     {
         let reason = type_error(ctx, state, "WritableStream is not writable");
@@ -425,7 +460,7 @@ pub(super) fn run_write(
     let Some((controller, transform)) = state
         .streams
         .writables
-        .get(stream as usize)
+        .get(stream)
         .map(|stream| (stream.controller, stream.transform))
     else {
         return super::super::fail_dispatch(ctx);
@@ -434,7 +469,7 @@ pub(super) fn run_write(
         let Some((callback, this_value, readable_controller)) = state
             .streams
             .transforms
-            .get(transform as usize)
+            .get(transform)
             .map(|transform| {
                 (
                     transform.transform,
@@ -446,7 +481,7 @@ pub(super) fn run_write(
             return super::super::fail_dispatch(ctx);
         };
         if let Some(callback) = callback {
-            let controller_object = state.streams.controllers[readable_controller as usize].object;
+            let controller_object = state.streams.controllers[readable_controller].object;
             state
                 .invoke_callable(ctx, callback, this_value, &[chunk, controller_object])
                 .unwrap_or_else(|| super::super::fail_dispatch(ctx))
@@ -460,7 +495,7 @@ pub(super) fn run_write(
             )
         }
     } else {
-        let controller = &state.streams.writable_controllers[controller as usize];
+        let controller = &state.streams.writable_controllers[controller];
         if let Some(callback) = controller.write {
             let callback_this = controller.sink;
             let controller_object = controller.object;
@@ -482,7 +517,7 @@ fn start_close(ctx: &mut NativeVmContext, state: &mut NativeAgentState, stream: 
     let Some(status) = state
         .streams
         .writables
-        .get(stream as usize)
+        .get(stream)
         .map(|stream| stream.status)
     else {
         return super::super::fail_dispatch(ctx);
@@ -497,7 +532,7 @@ fn start_close(ctx: &mut NativeVmContext, state: &mut NativeAgentState, stream: 
         );
         return promise;
     }
-    state.streams.writables[stream as usize].status = WritableStatus::Closing;
+    state.streams.writables[stream].status = WritableStatus::Closing;
     super::super::promise::enqueue_stream_task(
         state,
         StreamTask::CloseWritable {
@@ -514,7 +549,7 @@ pub(super) fn start_pipe_close(
     stream: u32,
     readable: u32,
 ) -> i64 {
-    state.streams.writables[stream as usize].pipe_source = Some(readable);
+    state.streams.writables[stream].pipe_source = Some(readable);
     start_close(ctx, state, stream)
 }
 
@@ -527,7 +562,7 @@ pub(super) fn run_close(
     let Some((controller, transform)) = state
         .streams
         .writables
-        .get(stream as usize)
+        .get(stream)
         .map(|stream| (stream.controller, stream.transform))
     else {
         return super::super::fail_dispatch(ctx);
@@ -536,13 +571,13 @@ pub(super) fn run_close(
         let Some((callback, this_value, readable_controller)) = state
             .streams
             .transforms
-            .get(transform as usize)
+            .get(transform)
             .map(|transform| (transform.flush, transform.transformer, transform.controller))
         else {
             return super::super::fail_dispatch(ctx);
         };
         if let Some(callback) = callback {
-            let controller_object = state.streams.controllers[readable_controller as usize].object;
+            let controller_object = state.streams.controllers[readable_controller].object;
             state
                 .invoke_callable(ctx, callback, this_value, &[controller_object])
                 .unwrap_or_else(|| super::super::fail_dispatch(ctx))
@@ -550,7 +585,7 @@ pub(super) fn run_close(
             value::encode_undefined()
         }
     } else {
-        let controller = &state.streams.writable_controllers[controller as usize];
+        let controller = &state.streams.writable_controllers[controller];
         if let Some(callback) = controller.close {
             let callback_this = controller.sink;
             let controller_object = controller.object;
@@ -588,7 +623,7 @@ pub(super) fn finish_close(
     stored: i64,
     rejected: bool,
 ) -> i64 {
-    let pipe_source = state.streams.writables[stream as usize].pipe_source.take();
+    let pipe_source = state.streams.writables[stream].pipe_source.take();
     if rejected {
         error_writable(state, stream, stored);
         if let Some(readable) = pipe_source {
@@ -597,14 +632,14 @@ pub(super) fn finish_close(
         super::super::promise::settle_promise(state, promise, stored, true);
         return value::encode_undefined();
     }
-    let transform = state.streams.writables[stream as usize].transform;
-    state.streams.writables[stream as usize].status = WritableStatus::Closed;
+    let transform = state.streams.writables[stream].transform;
+    state.streams.writables[stream].status = WritableStatus::Closed;
     let closed_promises: Vec<_> = state
         .streams
         .writers
         .iter()
-        .filter(|writer| writer.stream == stream)
-        .map(|writer| writer.closed_promise)
+        .filter(|(_, writer)| writer.stream == stream)
+        .map(|(_, writer)| writer.closed_promise)
         .collect();
     for promise in closed_promises {
         super::super::promise::settle_promise(state, promise, value::encode_undefined(), false);
@@ -613,7 +648,7 @@ pub(super) fn finish_close(
         super::readable::finish_pipe_write(ctx, state, readable, stored, false);
     }
     if let Some(transform) = transform {
-        let controller = state.streams.transforms[transform as usize].controller;
+        let controller = state.streams.transforms[transform].controller;
         let result = super::readable::call_controller(
             ctx,
             state,
@@ -645,21 +680,21 @@ fn abort(
     let Some(controller) = state
         .streams
         .writables
-        .get(stream as usize)
+        .get(stream)
         .map(|stream| stream.controller)
     else {
         return super::super::fail_dispatch(ctx);
     };
-    let signal = state.streams.writable_controllers[controller as usize].signal;
+    let signal = state.streams.writable_controllers[controller].signal;
     let _ = super::super::modules::set_named_property(
         state,
         signal,
         "aborted",
         value::encode_bool(true),
     );
-    let callback = state.streams.writable_controllers[controller as usize].abort;
-    let sink = state.streams.writable_controllers[controller as usize].sink;
-    state.streams.writables[stream as usize].status = WritableStatus::Errored;
+    let callback = state.streams.writable_controllers[controller].abort;
+    let sink = state.streams.writable_controllers[controller].sink;
+    state.streams.writables[stream].status = WritableStatus::Errored;
     if let Some(callback) = callback {
         let result = state
             .invoke_callable(ctx, callback, sink, &[reason])
@@ -676,7 +711,7 @@ fn abort(
 }
 
 fn error_writable(state: &mut NativeAgentState, stream: u32, reason: i64) {
-    if let Some(stream) = state.streams.writables.get_mut(stream as usize) {
+    if let Some(stream) = state.streams.writables.get_mut(stream) {
         stream.status = WritableStatus::Errored;
         stream.locked = false;
     }
@@ -684,8 +719,8 @@ fn error_writable(state: &mut NativeAgentState, stream: u32, reason: i64) {
         .streams
         .writers
         .iter()
-        .filter(|writer| writer.stream == stream)
-        .map(|writer| writer.closed_promise)
+        .filter(|(_, writer)| writer.stream == stream)
+        .map(|(_, writer)| writer.closed_promise)
         .collect();
     for promise in promises {
         super::super::promise::settle_promise(state, promise, reason, true);
