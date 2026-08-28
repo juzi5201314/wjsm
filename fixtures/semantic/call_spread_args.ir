@@ -290,7 +290,7 @@ module {
       %2 = load var $5.a
       %3 = load var $5.b
       %4 = add %2, %3
-      %5 = set_prop %0, %1, %4
+      %5 = set_prop %0, %1, %4, strict
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
@@ -630,7 +630,7 @@ module {
       %2 = load var $13.a
       %3 = load var $13.b
       %4 = add %2, %3
-      %5 = set_prop %0, %1, %4
+      %5 = set_prop %0, %1, %4, strict
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:

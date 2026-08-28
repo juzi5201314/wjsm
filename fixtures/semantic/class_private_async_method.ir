@@ -1021,7 +1021,7 @@ module {
       store var $13.$shared_env, %2
       %4 = load var $13.$this
       %5 = const c175
-      %6 = set_prop %2, %5, %4
+      %6 = set_prop %2, %5, %4, strict
       %7 = call builtin.create_closure(%0, %2)
       store var $13.read, %7
       %8 = const c176
@@ -1597,12 +1597,12 @@ module {
       %0 = const c343
       %1 = new_object(capacity=4)
       %2 = const c344
-      %3 = set_prop %1, %2, %0
+      %3 = set_prop %1, %2, %0, strict
       %4 = const c345
       %5 = const c347
-      %6 = set_prop %1, %4, %5
+      %6 = set_prop %1, %4, %5, strict
       %7 = const c348
-      %8 = set_prop %0, %7, %1
+      %8 = set_prop %0, %7, %1, strict
       store var $31.Probe, %0
       store var $30.Probe, %0
       %9 = load var $30.Probe
@@ -1751,12 +1751,12 @@ module {
       %68 = const c343
       %69 = new_object(capacity=4)
       %70 = const c344
-      %71 = set_prop %69, %70, %68
+      %71 = set_prop %69, %70, %68, strict
       %72 = const c345
       %73 = const c347
-      %74 = set_prop %69, %72, %73
+      %74 = set_prop %69, %72, %73, strict
       %75 = const c348
-      %76 = set_prop %68, %75, %69
+      %76 = set_prop %68, %75, %69, strict
       store var $31.Probe, %68
       store var $30.Probe, %68
       %77 = load var $30.Probe
