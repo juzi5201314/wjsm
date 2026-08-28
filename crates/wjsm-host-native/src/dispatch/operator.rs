@@ -184,7 +184,15 @@ fn type_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
     let Some(input) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let name = if value::is_undefined(input) {
+    let name = type_of_name(state, input);
+    state
+        .intern_text(name.into(), value::TAG_STRING)
+        .unwrap_or_else(|| fail_dispatch(ctx))
+}
+
+/// §13.5.3 表 37 的 typeof 名称（供 typeof 运算符与错误文案渲染共用）。
+pub(super) fn type_of_name(state: &NativeAgentState, input: i64) -> &'static str {
+    if value::is_undefined(input) {
         "undefined"
     } else if value::is_bool(input) {
         "boolean"
@@ -201,10 +209,7 @@ fn type_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         "object"
     } else {
         "number"
-    };
-    state
-        .intern_text(name.into(), value::TAG_STRING)
-        .unwrap_or_else(|| fail_dispatch(ctx))
+    }
 }
 
 /// ES §13.10.1 `in`：lval（key）先于 rval（object）求值。async 状态机等

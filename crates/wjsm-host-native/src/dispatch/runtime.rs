@@ -1229,6 +1229,51 @@ fn render_key_no_side_effects(state: &NativeAgentState, key: i64) -> Option<Stri
     .then(|| render_value(state, key))
 }
 
+/// V8 BuildDefaultCallSite：`typeof` 前缀加有限值渲染（string 截断 100 单元
+/// 带引号 / null / true / false / number），其余类型（undefined / symbol /
+/// bigint / object / function）只保留 typeof 名。GetIterator 家族无源文本时
+/// 的回退 callsite 渲染（CallPrinter 的源文本渲染未实现）。
+pub(super) fn default_call_site(state: &NativeAgentState, encoded: i64) -> String {
+    let type_name = super::operator::type_of_name(state, encoded);
+    if value::is_string(encoded) {
+        let text = render_value(state, encoded);
+        // V8 kMaxPrintedStringLength = 100：超长字符串截断加省略号。
+        let rendered: String = if text.chars().count() <= 100 {
+            text
+        } else {
+            let mut truncated: String = text.chars().take(100).collect();
+            truncated.push_str("...");
+            truncated
+        };
+        format!("{type_name} \"{rendered}\"")
+    } else if value::is_f64(encoded) {
+        // 数字按 JS Number::toString 精确格式化（-0 渲染为 "0"，与 V8 一致）。
+        format!(
+            "{type_name} {}",
+            wjsm_builtins::number_format::format_number_js(value::decode_f64(encoded))
+        )
+    } else if value::is_null(encoded) || value::is_bool(encoded) {
+        format!("{type_name} {}", render_value(state, encoded))
+    } else {
+        type_name.to_string()
+    }
+}
+
+/// GetIterator（§7.4.3）源缺少可调用 @@iterator 方法时的 TypeError：V8
+/// kNotIterableNoSymbolLoad 回退形态。
+pub(super) fn not_iterable_type_error(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    source: i64,
+) -> i64 {
+    let callsite = default_call_site(state, source);
+    type_error(
+        ctx,
+        state,
+        &format!("{callsite} is not iterable (cannot read property Symbol(Symbol.iterator))"),
+    )
+}
+
 /// PutValue 步骤 3.a：ToObject 对 null/undefined 基座直接抛 TypeError（与
 /// strict 无关），且先于 ToPropertyKey——后者可能执行用户代码，其副作用不得
 /// 在本 TypeError 之前发生。返回 `None` 表示基座不是 null/undefined。
@@ -2828,7 +2873,7 @@ pub(super) fn iterator_from(
         return exception;
     }
     let Ok(method) = get_property(ctx, state, source, symbol) else {
-        return type_error(ctx, state, "value is not iterable");
+        return not_iterable_type_error(ctx, state, source);
     };
     if value::is_exception(method) {
         return method;
@@ -2842,8 +2887,10 @@ pub(super) fn iterator_from_method(
     source: i64,
     method: i64,
 ) -> i64 {
+    // 方法缺失或非可调用：V8 对 sync GetIterator 统一按 kNotIterableNoSymbolLoad
+    // 渲染源值（非「is not a function」形态）。
     if !value::is_callable(method) {
-        return type_error(ctx, state, "value is not iterable");
+        return not_iterable_type_error(ctx, state, source);
     }
     if let Some((source_kind, iterator_kind)) = intrinsic_iterator_source(state, source, method) {
         let Ok(iterator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
@@ -2867,8 +2914,14 @@ pub(super) fn iterator_from_method(
     if value::is_exception(iterator) {
         return iterator;
     }
+    // §7.4.2 GetIteratorFromMethod 步骤 2：调用结果非对象抛 TypeError，
+    // 文案对齐 V8 kSymbolIteratorInvalid。
     if !value::is_js_object(iterator) {
-        return type_error(ctx, state, "iterator method did not return an object");
+        return type_error(
+            ctx,
+            state,
+            "Result of the Symbol.iterator method is not an object",
+        );
     }
     let handle = value::decode_handle(iterator);
     state
