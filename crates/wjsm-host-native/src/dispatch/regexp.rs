@@ -51,6 +51,7 @@ pub(super) fn dispatch_regexp(
         Builtin::RegExpExec => exec(ctx, state, args),
         Builtin::RegExpTest => test(ctx, state, args),
         Builtin::RegExpProtoMatch => regexp_symbol_match(ctx, state, args),
+        Builtin::RegExpProtoMatchAll => regexp_symbol_match_all(ctx, state, args),
         Builtin::RegExpProtoReplace => regexp_symbol_replace(ctx, state, args),
         Builtin::RegExpProtoSearch => regexp_symbol_search(ctx, state, args),
         Builtin::RegExpProtoSplit => regexp_symbol_split(ctx, state, args),
@@ -124,6 +125,7 @@ pub(crate) fn symbol_builtin(key: i64) -> Option<Builtin> {
     }
     match value::decode_handle(key) {
         wk_symbol::MATCH => Some(Builtin::RegExpProtoMatch),
+        wk_symbol::MATCH_ALL => Some(Builtin::RegExpProtoMatchAll),
         wk_symbol::REPLACE => Some(Builtin::RegExpProtoReplace),
         wk_symbol::SEARCH => Some(Builtin::RegExpProtoSearch),
         wk_symbol::SPLIT => Some(Builtin::RegExpProtoSplit),
@@ -360,28 +362,78 @@ pub(super) fn string_match_all(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let [receiver, pattern] = args else {
+    let Some((&receiver, rest)) = args.split_first() else {
         return fail_dispatch(ctx);
     };
-    if value::is_undefined(*pattern) {
-        return fail_dispatch(ctx);
+    let pattern = rest.first().copied().unwrap_or_else(value::encode_undefined);
+    // §22.1.3.14 步骤 2.b：IsRegExp 且 flags 不含 "g" 在取 @@matchAll 之前先抛。
+    if value::is_regexp(pattern)
+        && !state
+            .regexp(pattern)
+            .is_some_and(|entry| entry.flags.contains('g'))
+    {
+        return type_error(
+            ctx,
+            state,
+            "String.prototype.matchAll called with a non-global RegExp argument",
+        );
     }
-    let regexp = if value::is_regexp(*pattern) {
-        *pattern
+    // 步骤 2.c-d：GetMethod(regexp, @@matchAll) 命中即转调——原生 RegExp 命中
+    // 合成的 RegExp.prototype[@@matchAll]，用户自定义方法同路。
+    if let Some(result) =
+        invoke_symbol_method(ctx, state, pattern, wk_symbol::MATCH_ALL, &[receiver])
+    {
+        return result;
+    }
+    // 步骤 3-5：RegExpCreate(pattern, "g") 后建内建迭代器；undefined 模式按
+    // RegExpInitialize 归约为空模式（§22.2.3.1）。
+    let pattern_text = if value::is_undefined(pattern) {
+        String::new()
     } else {
-        let regexp = compile_regexp(ctx, state, subject(state, *pattern), "g".into());
-        if value::is_exception(regexp) {
-            return regexp;
-        }
-        regexp
+        subject(state, pattern)
     };
-    let Some(last_index) = state
-        .regexp(regexp)
-        .and_then(|entry| entry.flags.contains('g').then_some(entry.last_index))
-    else {
+    let regexp = compile_regexp(ctx, state, pattern_text, "g".into());
+    if value::is_exception(regexp) {
+        return regexp;
+    }
+    let input = subject(state, receiver);
+    create_regexp_string_iterator(ctx, state, regexp, input)
+}
+
+/// RegExp.prototype[@@matchAll]（§22.2.6.14）：receiver 必须是原生 RegExp。
+/// 本宿主不做 SpeciesConstructor 克隆——迭代器状态自带 lastIndex 快照，推进
+/// 不回写原对象，观测等价；global 为假时首个匹配后即完成（§22.2.9.2.1）。
+fn regexp_symbol_match_all(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [regexp, input] = args else {
         return fail_dispatch(ctx);
     };
-    let input = subject(state, *receiver);
+    if !value::is_regexp(*regexp) || state.regexp(*regexp).is_none() {
+        let message = format!(
+            "Method RegExp.prototype.@@matchAll called on incompatible receiver {}",
+            super::iterator_prototypes::render_incompatible_receiver(state, *regexp)
+        );
+        return type_error(ctx, state, &message);
+    }
+    let input = subject(state, *input);
+    create_regexp_string_iterator(ctx, state, *regexp, input)
+}
+
+/// CreateRegExpStringIterator（§22.2.9.1）：登记实例状态并接线
+/// %RegExpStringIteratorPrototype% 真实原型，`next` 沿链解析为家族共享函数。
+fn create_regexp_string_iterator(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    regexp: i64,
+    input: String,
+) -> i64 {
+    // matcher.lastIndex = ToLength(R.lastIndex) 的快照；仅 global/sticky 消费。
+    let Some(last_index) = state.regexp(regexp).map(|entry| entry.last_index) else {
+        return fail_dispatch(ctx);
+    };
     let Ok(iterator_id) = u32::try_from(state.regexp_iterators.len()) else {
         return fail_dispatch(ctx);
     };
@@ -391,17 +443,20 @@ pub(super) fn string_match_all(
         last_index,
         done: false,
     });
-    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
+    let family = super::iterator_prototypes::NativeIteratorFamily::RegExpString;
+    if super::iterator_prototypes::ensure_prototype(state, family).is_none() {
+        return fail_dispatch(ctx);
+    }
+    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
-    let Some(next) = state.native_callable(NativeCallableKind::RegExpIteratorNext(iterator_id))
-    else {
-        return fail_dispatch(ctx);
-    };
-    state.iterator_next.insert(
-        value::decode_handle(iterator_object),
-        value::decode_native_callable_idx(next),
-    );
+    if let Err(exception) = super::iterator_prototypes::attach(ctx, state, iterator_object, family)
+    {
+        return exception;
+    }
+    state
+        .regexp_iterator_ids
+        .insert(value::decode_handle(iterator_object), iterator_id);
     iterator_object
 }
 
@@ -431,8 +486,14 @@ pub(crate) fn next_match_all(
     let Some(info) = (|| {
         let entry = state.regexp(regexp)?;
         let sticky = entry.flags.contains('y');
-        let found = entry.compiled.find_from(&input, last_index).next()?;
-        if sticky && found.start() != last_index {
+        let global = entry.flags.contains('g');
+        // 非 global 非 sticky 的 RegExpExec 忽略 lastIndex，从 0 起找（§22.2.7.2）。
+        let start = if global || sticky { last_index } else { 0 };
+        if start > input.len() {
+            return None;
+        }
+        let found = entry.compiled.find_from(&input, start).next()?;
+        if sticky && found.start() != start {
             return None;
         }
         Some(match_info(found))
@@ -442,17 +503,25 @@ pub(crate) fn next_match_all(
         }
         return iterator_result(ctx, state, value::encode_undefined(), true);
     };
-    let next_index = if info.start == info.end && last_index < input.len() {
-        advance(&input, info.end)
-    } else {
-        info.end
-    };
-    if let Some(iterator) = state.regexp_iterators.get_mut(index) {
-        iterator.last_index = next_index;
-    }
-    let has_indices = state
+    let (has_indices, global) = state
         .regexp(regexp)
-        .is_some_and(|entry| entry.flags.contains('d'));
+        .map(|entry| (entry.flags.contains('d'), entry.flags.contains('g')))
+        .unwrap_or((false, false));
+    if global {
+        // 空匹配按 AdvanceStringIndex 无条件前进（越过串尾即自然耗尽），否则
+        // 停在匹配末尾（§22.2.9.2.1 步骤 11.a）。
+        let next_index = if info.start == info.end {
+            advance(&input, info.end)
+        } else {
+            info.end
+        };
+        if let Some(iterator) = state.regexp_iterators.get_mut(index) {
+            iterator.last_index = next_index;
+        }
+    } else if let Some(iterator) = state.regexp_iterators.get_mut(index) {
+        // global 为假：产出首个匹配后 [[Done]] 置真（§22.2.9.2.1 步骤 11.b）。
+        iterator.done = true;
+    }
     let input_value = state
         .intern_text(input.clone(), value::TAG_STRING)
         .unwrap_or_else(|| fail_dispatch(ctx));

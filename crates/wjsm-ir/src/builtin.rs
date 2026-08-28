@@ -503,6 +503,7 @@ pub enum Builtin {
     SymbolProtoValueOf,
     // ── RegExp well-known symbol methods ──
     RegExpProtoMatch,
+    RegExpProtoMatchAll,
     RegExpProtoReplace,
     RegExpProtoSearch,
     RegExpProtoSplit,
@@ -1217,6 +1218,7 @@ impl Builtin {
             Self::SymbolProtoToString => "Symbol.prototype.toString",
             Self::SymbolProtoValueOf => "Symbol.prototype.valueOf",
             Self::RegExpProtoMatch => "RegExp.prototype[@@match]",
+            Self::RegExpProtoMatchAll => "RegExp.prototype[@@matchAll]",
             Self::RegExpProtoReplace => "RegExp.prototype[@@replace]",
             Self::RegExpProtoSearch => "RegExp.prototype[@@search]",
             Self::RegExpProtoSplit => "RegExp.prototype[@@split]",

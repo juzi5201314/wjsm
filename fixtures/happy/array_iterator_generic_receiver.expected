@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+true
+false false
+true
+{"value":"a","done":false} {"value":"b","done":false} {"done":true}
+[0,1]
+{"value":[0,"a"],"done":false}
+true
+a!,b!
+["x","y"]
+[null,"mid",null]
+{"value":"a","done":false}
+{"value":"b","done":false} {"done":true}
+{"done":true}
+["a","b"]
+TypeError
+TypeError
+--- stderr ---

@@ -2826,31 +2826,18 @@ fn intrinsic_iterator_source(
     super::super::NativeIteratorSource,
     super::super::NativeIteratorKind,
 )> {
+    // Array.prototype.{values,keys,entries} / 数组与 arguments 的 @@iterator：
+    // CreateArrayIterator 快速路径，receiver 分类与 array_iterator 一致。
+    if let Some(crate::NativeCallableKind::ArrayIterator(kind)) = state.native_callable_kind(method)
+    {
+        return array_iterator_source(state, source).map(|iterator_source| (iterator_source, kind));
+    }
     let (builtin, _) = state.native_callable_builtin(method)?;
     let handle = value::decode_handle(source);
     match builtin {
-        wjsm_ir::Builtin::IteratorFrom if value::is_array(source) => Some((
-            super::super::NativeIteratorSource::Array(handle),
-            super::super::NativeIteratorKind::Values,
-        )),
-        wjsm_ir::Builtin::IteratorFrom | wjsm_ir::Builtin::StringIterator
-            if let Some(text) = primitive_string(state, source) =>
-        {
+        wjsm_ir::Builtin::StringIterator if let Some(text) = primitive_string(state, source) => {
             Some((
                 super::super::NativeIteratorSource::String(text),
-                super::super::NativeIteratorKind::Values,
-            ))
-        }
-        wjsm_ir::Builtin::IteratorFrom
-            if value::is_js_object(source)
-                && state
-                    .gc
-                    .heap()
-                    .object_type(handle)
-                    .is_ok_and(|kind| kind == u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS)) =>
-        {
-            Some((
-                super::super::NativeIteratorSource::ArrayLike(handle),
                 super::super::NativeIteratorKind::Values,
             ))
         }
@@ -2908,9 +2895,20 @@ pub(super) fn iterator_from_method(
         return not_iterable_type_error(ctx, state, source);
     }
     if let Some((source_kind, iterator_kind)) = intrinsic_iterator_source(state, source, method) {
+        // 家族原型先于实例物化：attach 内部不再有 GC 重试分配，未根化的
+        // 新实例不会被移动。
+        let Some(family) = super::iterator_prototypes::family_of_source(source_kind) else {
+            return fail_dispatch(ctx);
+        };
+        if super::iterator_prototypes::ensure_prototype(state, family).is_none() {
+            return fail_dispatch(ctx);
+        }
         let Ok(iterator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
             return fail_dispatch(ctx);
         };
+        if let Err(exception) = super::iterator_prototypes::attach(ctx, state, iterator, family) {
+            return exception;
+        }
         state.array_iterators.insert(
             value::decode_handle(iterator),
             super::super::NativeArrayIterator {
@@ -2952,22 +2950,53 @@ pub(super) fn iterator_from_method(
     iterator
 }
 
+/// CreateArrayIterator（§23.1.5.1）的 receiver 分类：数组走 exotic 长度，
+/// 字符串（原语与 boxed）保持既有 [[StringData]] 迭代路径，其余对象按
+/// array-like 读 length / 索引属性；nullish 与其余原语按 ToObject 失败拒绝。
+fn array_iterator_source(
+    state: &NativeAgentState,
+    source: i64,
+) -> Option<super::super::NativeIteratorSource> {
+    if value::is_array(source) {
+        Some(super::super::NativeIteratorSource::Array(
+            value::decode_handle(source),
+        ))
+    } else if let Some(text) = primitive_string(state, source) {
+        Some(super::super::NativeIteratorSource::String(text))
+    } else if value::is_js_object(source) {
+        Some(super::super::NativeIteratorSource::ArrayLike(
+            value::decode_handle(source),
+        ))
+    } else {
+        None
+    }
+}
+
 pub(crate) fn array_iterator(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     source: i64,
     kind: super::super::NativeIteratorKind,
 ) -> i64 {
-    if !value::is_array(source) {
+    let Some(iterator_source) = array_iterator_source(state, source) else {
         return type_error(ctx, state, "Array iterator receiver is not an object");
+    };
+    let Some(family) = super::iterator_prototypes::family_of_source(iterator_source) else {
+        return fail_dispatch(ctx);
+    };
+    if super::iterator_prototypes::ensure_prototype(state, family).is_none() {
+        return fail_dispatch(ctx);
     }
     let Ok(iterator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
+    if let Err(exception) = super::iterator_prototypes::attach(ctx, state, iterator, family) {
+        return exception;
+    }
     state.array_iterators.insert(
         value::decode_handle(iterator),
         super::super::NativeArrayIterator {
-            source: super::super::NativeIteratorSource::Array(value::decode_handle(source)),
+            source: iterator_source,
             kind,
             index: 0,
             current: None,
@@ -2991,18 +3020,117 @@ pub(super) fn iterator_done(
     let Some(handle) = args.first().map(|iterator| value::decode_handle(*iterator)) else {
         return fail_dispatch(ctx);
     };
-    if let Err(exception) = ensure_custom_current(ctx, state, handle) {
+    if let Err(exception) = ensure_current(ctx, state, handle) {
         return exception;
     }
     let Some(iterator) = state.array_iterators.get(&handle).copied() else {
         return fail_dispatch(ctx);
     };
-    let done = match iterator.source {
+    value::encode_bool(iterator.done)
+}
+
+pub(super) fn iterator_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    advance: bool,
+) -> i64 {
+    if args
+        .first()
+        .is_some_and(|iterator| value::is_exception(*iterator))
+    {
+        return args[0];
+    }
+    let Some(handle) = args.first().map(|iterator| value::decode_handle(*iterator)) else {
+        return fail_dispatch(ctx);
+    };
+    if let Err(exception) = ensure_current(ctx, state, handle) {
+        return exception;
+    }
+    let Some(iterator) = state.array_iterators.get(&handle).copied() else {
+        return fail_dispatch(ctx);
+    };
+    if let super::super::NativeIteratorSource::Custom(_) = iterator.source {
+        // [[Done]] 为 true 时步进语义（advance = IteratorStepValue，§7.4.8）
+        // 直接返回 DONE（映射为 undefined），不得读取迭代结果的 value 属性
+        // ——done 结果对象的 value getter 不可观察。非步进的 IteratorValue
+        // 是对当前 result 的普通 Get（§7.4.5）：yield* 委托在 done 后仍须
+        // 读取最终 result.value 作为委托表达式的值（§27.5.3.7 步骤 7.a.iii）。
+        if iterator.done && advance {
+            return value::encode_undefined();
+        }
+        let Some(result) = iterator.current else {
+            return fail_dispatch(ctx);
+        };
+        let Some(key) = state.intern_text("value".into(), value::TAG_STRING) else {
+            return fail_dispatch(ctx);
+        };
+        let Ok(stored) = get_property(ctx, state, result, key) else {
+            return fail_dispatch(ctx);
+        };
+        // value 读取抛出（getter）：§7.4.8 步骤 8.b 置 [[Done]] 为 true
+        // 再传播，后续 IteratorClose 不得再调用 return()。
+        if value::is_exception(stored) {
+            return mark_custom_done(state, handle, stored);
+        }
+        if advance {
+            let iterator = state
+                .array_iterators
+                .get_mut(&handle)
+                .expect("iterator entry was resolved above");
+            iterator.index = iterator.index.saturating_add(1);
+            iterator.current = None;
+        }
+        return stored;
+    }
+    // 内建源：预取值在 current（ensure_current 已推进 index）；耗尽一律
+    // 映射为 undefined（IteratorStepValue 的 DONE 哨兵，§7.4.8）。
+    if iterator.done {
+        return value::encode_undefined();
+    }
+    let Some(result) = iterator.current else {
+        return fail_dispatch(ctx);
+    };
+    if advance {
+        state
+            .array_iterators
+            .get_mut(&handle)
+            .expect("iterator entry was resolved above")
+            .current = None;
+    }
+    result
+}
+
+/// 内建源的迭代预取：把规范 next()「推进并取值」的时序前移到 done 检查点
+/// ——`current` 缓存预取结果、`index` 已指向下一位置，语义层 done/value/next
+/// 三段式与真实 next() 的可观察状态因此一致：循环中途退出（break / body
+/// 抛出 / 解构收尾）后实例位置停在已消费元素之后，后续对原型 `next` 的
+/// 手动调用与 Node 一致地续走。Custom 源沿用 `ensure_custom_current`
+/// （用户迭代器的 next() 本就在 done 检查点被调用）。
+fn ensure_current(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    iterator_handle: u32,
+) -> Result<(), i64> {
+    let Some(iterator) = state.array_iterators.get(&iterator_handle).copied() else {
+        return Err(fail_dispatch(ctx));
+    };
+    if matches!(
+        iterator.source,
+        super::super::NativeIteratorSource::Custom(_)
+    ) {
+        return ensure_custom_current(ctx, state, iterator_handle);
+    }
+    if iterator.done || iterator.current.is_some() {
+        return Ok(());
+    }
+    let exhausted = match iterator.source {
         super::super::NativeIteratorSource::Array(source) => state
             .gc
             .heap()
             .array_length(source)
-            .is_ok_and(|length| iterator.index >= length),
+            .map_err(|_| fail_dispatch(ctx))?
+            <= iterator.index,
         super::super::NativeIteratorSource::ArrayLike(source) => {
             iterator.index >= array_like_length(state, source).unwrap_or(0)
         }
@@ -3021,64 +3149,42 @@ pub(super) fn iterator_done(
             .sets
             .get(&source)
             .is_none_or(|values| iterator.index as usize >= values.len()),
-        super::super::NativeIteratorSource::Custom(_) => iterator.done,
+        super::super::NativeIteratorSource::Custom(_) => unreachable!("custom 源已提前分流"),
     };
-    value::encode_bool(done)
-}
-
-pub(super) fn iterator_value(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    args: &[i64],
-    advance: bool,
-) -> i64 {
-    if args
-        .first()
-        .is_some_and(|iterator| value::is_exception(*iterator))
-    {
-        return args[0];
+    if exhausted {
+        // 耗尽后 [[Done]] 粘住（§23.1.5.2.1 步骤 8.a 将 [[IteratedArrayLike]]
+        // 置 undefined）：此后底层集合再增长也不复活。
+        state
+            .array_iterators
+            .get_mut(&iterator_handle)
+            .expect("iterator entry was resolved above")
+            .done = true;
+        return Ok(());
     }
-    let Some(handle) = args.first().map(|iterator| value::decode_handle(*iterator)) else {
-        return fail_dispatch(ctx);
-    };
-    if let Err(exception) = ensure_custom_current(ctx, state, handle) {
-        return exception;
-    }
-    let Some(iterator) = state.array_iterators.get(&handle).copied() else {
-        return fail_dispatch(ctx);
-    };
-    // [[Done]] 为 true 时步进语义（advance = IteratorStepValue，§7.4.8）直接
-    // 返回 DONE（映射为 undefined），不得读取迭代结果的 value 属性——done
-    // 结果对象的 value getter 不可观察。非步进的 IteratorValue 是对当前
-    // result 的普通 Get（§7.4.5）：yield* 委托在 done 后仍须读取最终
-    // result.value 作为委托表达式的值（§27.5.3.7 步骤 7.a.iii）。
-    if iterator.done
-        && (advance
-            || !matches!(
-                iterator.source,
-                super::super::NativeIteratorSource::Custom(_)
-            ))
-    {
-        return value::encode_undefined();
-    }
-    let (result, step) = match iterator.source {
+    // `indexed` 标记索引族（数组/类数组/字符串/TypedArray）：kind 的 index
+    // 包装只对它们生效；Map/Set 是键值集合（§24.1.5.1 CreateMapIterator），
+    // kind 直接选择 key / value / entry，不做 index 包装。
+    let (result, step, indexed) = match iterator.source {
         super::super::NativeIteratorSource::Array(source) => {
             let result = match state.gc.heap().get_element(source, iterator.index) {
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => element as i64,
                 Ok(_) => value::encode_undefined(),
-                Err(_) => return fail_dispatch(ctx),
+                Err(_) => return Err(fail_dispatch(ctx)),
             };
-            (result, 1)
+            (result, 1, true)
         }
         super::super::NativeIteratorSource::ArrayLike(source) => {
             let Some(key) = state.intern_text(iterator.index.to_string(), value::TAG_STRING) else {
-                return fail_dispatch(ctx);
+                return Err(fail_dispatch(ctx));
             };
             let object = value::encode_object_handle(source);
-            let Ok(result) = get_property(ctx, state, object, key) else {
-                return fail_dispatch(ctx);
-            };
-            (result, 1)
+            let result =
+                get_property(ctx, state, object, key).map_err(|()| fail_dispatch(ctx))?;
+            // 属性读取抛出（getter）：不推进不缓存，异常直接传播。
+            if value::is_exception(result) {
+                return Err(result);
+            }
+            (result, 1, true)
         }
         super::super::NativeIteratorSource::String(source) => {
             let index = iterator.index as usize;
@@ -3089,19 +3195,19 @@ pub(super) fn iterator_value(
                 })
                 .flatten()
             else {
-                return value::encode_undefined();
+                return Err(fail_dispatch(ctx));
             };
             let Some(units) =
                 state.with_string_units(source, |units| units[index..index + width].to_vec())
             else {
-                return fail_dispatch(ctx);
+                return Err(fail_dispatch(ctx));
             };
             let result = intern_string_with_gc_retry(
                 ctx,
                 state,
                 wjsm_host::RuntimeString::from_utf16_units(units),
             );
-            (result, width as u32)
+            (result, width as u32, true)
         }
         super::super::NativeIteratorSource::TypedArray(source) => {
             let index = usize::try_from(iterator.index).unwrap_or(usize::MAX);
@@ -3113,6 +3219,7 @@ pub(super) fn iterator_value(
                 )
                 .unwrap_or_else(value::encode_undefined),
                 1,
+                true,
             )
         }
         super::super::NativeIteratorSource::Map(source) => {
@@ -3122,12 +3229,16 @@ pub(super) fn iterator_value(
                 .and_then(|entries| entries.get(iterator.index as usize))
                 .copied()
             else {
-                return value::encode_undefined();
+                return Err(fail_dispatch(ctx));
             };
-            let Ok(entry) = state.allocate_array_values_with_gc_retry(ctx, &[key, stored]) else {
-                return fail_dispatch(ctx);
+            let result = match iterator.kind {
+                super::super::NativeIteratorKind::Keys => key,
+                super::super::NativeIteratorKind::Values => stored,
+                super::super::NativeIteratorKind::Entries => state
+                    .allocate_array_values_with_gc_retry(ctx, &[key, stored])
+                    .map_err(|_| fail_dispatch(ctx))?,
             };
-            (entry, 1)
+            (result, 1, false)
         }
         super::super::NativeIteratorSource::Set(source) => {
             let Some(stored) = state
@@ -3136,55 +3247,41 @@ pub(super) fn iterator_value(
                 .and_then(|values| values.get(iterator.index as usize))
                 .copied()
             else {
-                return value::encode_undefined();
+                return Err(fail_dispatch(ctx));
             };
-            (stored, 1)
+            let result = match iterator.kind {
+                super::super::NativeIteratorKind::Keys
+                | super::super::NativeIteratorKind::Values => stored,
+                // Set entries 的 [v, v] 形态（§24.2.5.1 CreateSetIterator）。
+                super::super::NativeIteratorKind::Entries => state
+                    .allocate_array_values_with_gc_retry(ctx, &[stored, stored])
+                    .map_err(|_| fail_dispatch(ctx))?,
+            };
+            (result, 1, false)
         }
-        super::super::NativeIteratorSource::Custom(_) => {
-            let Some(result) = iterator.current else {
-                return fail_dispatch(ctx);
-            };
-            let Some(key) = state.intern_text("value".into(), value::TAG_STRING) else {
-                return fail_dispatch(ctx);
-            };
-            let Ok(value) = get_property(ctx, state, result, key) else {
-                return fail_dispatch(ctx);
-            };
-            // value 读取抛出（getter）：§7.4.8 步骤 8.b 置 [[Done]] 为 true
-            // 再传播，后续 IteratorClose 不得再调用 return()。
-            if value::is_exception(value) {
-                return mark_custom_done(state, handle, value);
-            }
-            (value, 1)
-        }
+        super::super::NativeIteratorSource::Custom(_) => unreachable!("custom 源已提前分流"),
     };
-    let result = match iterator.kind {
-        super::super::NativeIteratorKind::Values => result,
-        super::super::NativeIteratorKind::Keys => value::encode_f64(f64::from(iterator.index)),
-        super::super::NativeIteratorKind::Entries => {
-            let Ok(entry) = state.allocate_array_values_with_gc_retry(
-                ctx,
-                &[value::encode_f64(f64::from(iterator.index)), result],
-            ) else {
-                return fail_dispatch(ctx);
-            };
-            entry
+    let result = if indexed {
+        match iterator.kind {
+            super::super::NativeIteratorKind::Values => result,
+            super::super::NativeIteratorKind::Keys => value::encode_f64(f64::from(iterator.index)),
+            super::super::NativeIteratorKind::Entries => state
+                .allocate_array_values_with_gc_retry(
+                    ctx,
+                    &[value::encode_f64(f64::from(iterator.index)), result],
+                )
+                .map_err(|_| fail_dispatch(ctx))?,
         }
+    } else {
+        result
     };
-    if advance {
-        let iterator = state
-            .array_iterators
-            .get_mut(&handle)
-            .expect("iterator entry was resolved above");
-        iterator.index = iterator.index.saturating_add(step);
-        if matches!(
-            iterator.source,
-            super::super::NativeIteratorSource::Custom(_)
-        ) {
-            iterator.current = None;
-        }
-    }
-    result
+    let iterator = state
+        .array_iterators
+        .get_mut(&iterator_handle)
+        .expect("iterator entry was resolved above");
+    iterator.current = Some(result);
+    iterator.index = iterator.index.saturating_add(step);
+    Ok(())
 }
 
 pub(super) fn iterator_next(
@@ -3339,12 +3436,20 @@ pub(super) fn iterator_close(
         return *iterator;
     }
     let handle = value::decode_handle(*iterator);
-    let Some(entry) = state.array_iterators.remove(&handle) else {
+    let Some(entry) = state.array_iterators.get_mut(&handle) else {
         return *completion;
     };
+    // 内建家族迭代器（数组/字符串/集合等）无 return 方法，close 是空操作；
+    // 条目必须保留——实例在 for-of break 后仍可经原型 next 继续推进
+    // （§23.1.5.2.1 对 [[IteratedArrayLike]] 的持续消费），死实例由
+    // cleanup_retired_handles 随 GC 清理。预取值已被循环消费（bind 在
+    // close 之前），清掉后位置正好停在已消费元素之后。
     let super::super::NativeIteratorSource::Custom(object) = entry.source else {
+        entry.current = None;
         return *completion;
     };
+    let entry = *entry;
+    state.array_iterators.remove(&handle);
     if entry.done {
         return *completion;
     }

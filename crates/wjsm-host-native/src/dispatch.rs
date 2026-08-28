@@ -27,6 +27,7 @@ pub(crate) mod intl;
 mod intrinsics;
 mod iterator;
 pub(crate) mod iterator_helpers;
+pub(crate) mod iterator_prototypes;
 mod json;
 mod jsx;
 mod math;
@@ -85,8 +86,8 @@ pub(crate) use self::runtime::encoded_property_key;
 use self::runtime::object_handle;
 pub(crate) use self::runtime::to_number as number_value;
 pub(crate) use self::runtime::{
-    array_iterator, array_to_string, error_to_string, fail_dispatch, iterator_next_result,
-    render_value, to_string_coerced,
+    array_iterator, array_to_string, error_to_string, fail_dispatch, render_value,
+    to_string_coerced,
 };
 pub(crate) use self::symbol::well_known_description;
 pub(crate) use self::typedarray_static::{
@@ -517,7 +518,7 @@ pub(super) fn dispatch_builtin(
             object::dispatch_object => Builtin::DefineProperty | Builtin::GetOwnPropDesc | Builtin::ObjectAssign | Builtin::ObjectCreate | Builtin::ObjectDefineProperties | Builtin::ObjectEntries | Builtin::ObjectFreeze | Builtin::ObjectFromEntries | Builtin::ObjectGetOwnPropertyDescriptors | Builtin::ObjectGetOwnPropertyNames | Builtin::ObjectGetOwnPropertySymbols | Builtin::ObjectGetPrototypeOf | Builtin::ObjectGroupBy | Builtin::ObjectIs | Builtin::ObjectIsExtensible | Builtin::ObjectIsFrozen | Builtin::ObjectIsSealed | Builtin::ObjectKeys | Builtin::ObjectPreventExtensions | Builtin::ObjectRest | Builtin::ObjectSeal | Builtin::ObjectSetPrototypeOf | Builtin::ObjectValues | Builtin::ObjectProtoToString | Builtin::ObjectProtoValueOf | Builtin::CreateGlobalObject,
             object_proto::dispatch_object_proto => Builtin::ObjectProtoIsPrototypeOf | Builtin::ObjectProtoToLocaleString | Builtin::ObjectProtoGetProto | Builtin::ObjectProtoSetProto | Builtin::ObjectProtoDefineGetter | Builtin::ObjectProtoDefineSetter | Builtin::ObjectProtoLookupGetter | Builtin::ObjectProtoLookupSetter | Builtin::ObjectHasOwn | Builtin::HasOwnProperty | Builtin::PropertyIsEnumerable,
             private::dispatch_private => Builtin::PrivateAccessorBind | Builtin::PrivateGet | Builtin::PrivateHas | Builtin::PrivateSet,
-            regexp::dispatch_regexp => Builtin::RegExpCreate | Builtin::RegExpExec | Builtin::RegExpProtoMatch | Builtin::RegExpProtoReplace | Builtin::RegExpProtoSearch | Builtin::RegExpProtoSplit | Builtin::RegExpTest,
+            regexp::dispatch_regexp => Builtin::RegExpCreate | Builtin::RegExpExec | Builtin::RegExpProtoMatch | Builtin::RegExpProtoMatchAll | Builtin::RegExpProtoReplace | Builtin::RegExpProtoSearch | Builtin::RegExpProtoSplit | Builtin::RegExpTest,
             proxy::dispatch_proxy => Builtin::ProxyCreate | Builtin::ProxyRevocable | Builtin::ReflectApply | Builtin::ReflectConstruct | Builtin::ReflectDefineProperty | Builtin::ReflectDeleteProperty | Builtin::ReflectGet | Builtin::ReflectGetOwnPropertyDescriptor | Builtin::ReflectGetPrototypeOf | Builtin::ReflectHas | Builtin::ReflectIsExtensible | Builtin::ReflectOwnKeys | Builtin::ReflectPreventExtensions | Builtin::ReflectSet | Builtin::ReflectSetPrototypeOf,
             primitive::dispatch_primitive => Builtin::BooleanConstructor | Builtin::BooleanProtoToString | Builtin::BooleanProtoValueOf | Builtin::GlobalIsFinite | Builtin::GlobalIsNaN | Builtin::NumberConstructor | Builtin::NumberIsFinite | Builtin::NumberIsInteger | Builtin::NumberIsNaN | Builtin::NumberIsSafeInteger | Builtin::NumberParseFloat | Builtin::NumberParseInt | Builtin::NumberProtoToExponential | Builtin::NumberProtoToFixed | Builtin::NumberProtoToPrecision | Builtin::NumberProtoToString | Builtin::NumberProtoValueOf | Builtin::ToBoolean,
             symbol::dispatch_symbol => Builtin::SymbolCreate | Builtin::SymbolFor | Builtin::SymbolKeyFor | Builtin::SymbolProtoToString | Builtin::SymbolProtoValueOf | Builtin::SymbolWellKnown,
