@@ -1,0 +1,31 @@
+exit_code: 0
+--- stdout ---
+optcall value: 42
+receiver evals: 1
+sync cond-test caught: cond
+sync while-test caught: while
+sync dowhile-test caught: dowhile-n1
+sync for-test caught: fortest
+sync for-init caught: forinit
+sync for-update caught: forupdate
+sync call-callee caught: callee
+sync computed-callee caught: computed-callee
+sync opt-callee caught: opt-callee
+sync optcall-callee caught: optcall
+sync tagged-callee caught: tagged
+sync new-callee caught: new-callee
+async cond-test caught: cond
+async while-test caught: while
+async dowhile-test caught: dowhile-n1
+async for-test caught: fortest
+async for-init caught: forinit
+async for-update caught: forupdate
+async call-callee caught: callee
+async computed-callee caught: computed-callee
+async opt-callee caught: opt-callee
+async optcall-callee caught: optcall
+async tagged-callee caught: tagged
+async new-callee caught: new-callee
+async promise rejected: uncaught-loop
+main done
+--- stderr ---

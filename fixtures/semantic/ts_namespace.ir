@@ -92,20 +92,26 @@ module {
       %27 = load var $0.MathUtils
       %28 = const c24
       %29 = get_prop %27, %28
-      %30 = const c25
-      %31 = call %29, this=%27, args=[%30]
-      %32 = is_exception %31
-      branch %32, bb2, bb1
+      %30 = is_exception %29
+      branch %30, bb2, bb1
     bb1:
-      %34 = call builtin.console.log(%31)
-      %35 = is_exception %34
-      branch %35, bb4, bb3
+      %32 = const c25
+      %33 = call %29, this=%27, args=[%32]
+      %34 = is_exception %33
+      branch %34, bb4, bb3
     bb2:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      %31 = call builtin.exception_value(%29)
+      throw %31
     bb3:
-      return
+      %36 = call builtin.console.log(%33)
+      %37 = is_exception %36
+      branch %37, bb6, bb5
     bb4:
-      %36 = call builtin.exception_value(%34)
-      throw %36
+      %35 = call builtin.exception_value(%33)
+      throw %35
+    bb5:
+      return
+    bb6:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

@@ -100,7 +100,11 @@ module {
     bb7:
       unreachable
     bb8:
-      branch %33, bb1, bb3
+      jump bb10
     bb9:
+      unreachable
+    bb10:
+      branch %33, bb1, bb3
+    bb11:
       unreachable
 }
