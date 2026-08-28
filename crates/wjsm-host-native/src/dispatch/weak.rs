@@ -598,6 +598,7 @@ fn root_values(
     for activation in &state.activations {
         queue.push_back(activation.environment);
         queue.push_back(activation.new_target);
+        queue.push_back(activation.callee);
         queue.extend(activation.saved_variables.iter().map(|(_, stored)| *stored));
     }
     // materialized_constants 持有的字符串/闭包下标必须在回收后保持存活，
