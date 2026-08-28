@@ -670,6 +670,22 @@ pub enum Builtin {
     /// 文本段与替换值；template 或其 raw 属性为 undefined/null 时抛
     /// TypeError（ToObject 失败）。args: [template, ...substitutions]。
     StringRaw,
+    /// intrinsic 调用快路径守卫：判定站点对应的 intrinsic 属性仍处于
+    /// 原始（pristine）状态——未被赋值覆盖、未被 delete、未被换成访问器、
+    /// 容器全局名未被运行时遮蔽。守卫为纯查询，无任何可观察副作用，也不
+    /// 新增字符串驻留（属性名由宿主按 wire_id 经 `intrinsic_sites` 反查）；
+    /// 返回 bool，false 时语义层落入通用属性查找 + 动态调用路径。
+    /// args: [family(常量，见 `constants::INTRINSIC_FAMILY_*`), wire_id,
+    /// receiver?(仅 STRING_PROTO / ARRAY_PROTO)]。
+    IntrinsicPristine,
+    /// intrinsic 慢路径的 callee/容器解析：按站点家族以完整属性语义解析
+    /// （全局名经 GlobalEnvGet 语义，缺失抛 ReferenceError；成员经通用
+    /// [[Get]]，getter 生效），返回解析出的值或异常。属性名同样由宿主经
+    /// `intrinsic_sites` 反查，不进制品常量池。
+    /// args: [family, wire_id] 解析全局名（GLOBAL_IDENT 为站点全局名、
+    /// STATIC_MEMBER 为容器全局名）；[family, wire_id, receiver] 解析
+    /// receiver 上的站点属性成员。
+    IntrinsicResolve,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -705,7 +721,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::StringRaw as u16
+        Self::IntrinsicResolve as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1228,6 +1244,8 @@ impl Builtin {
             Self::ObjectProtoLookupGetter => "Object.prototype.__lookupGetter__",
             Self::ObjectProtoLookupSetter => "Object.prototype.__lookupSetter__",
             Self::StringRaw => "string.raw",
+            Self::IntrinsicPristine => "intrinsic_pristine",
+            Self::IntrinsicResolve => "intrinsic_resolve",
         }
     }
 }

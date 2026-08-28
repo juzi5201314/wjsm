@@ -22,524 +22,622 @@ module {
     c19 = undefined
     c20 = object_template([4613128577683030136])
     c21 = number(5)
-    c22 = string("with(o){x}")
-    c23 = number(3)
-    c24 = string("f")
+    c22 = number(1)
+    c23 = number(0)
+    c24 = number(1)
     c25 = number(0)
-    c26 = number(0)
-    c27 = string("o")
-    c28 = number(0)
-    c29 = number(1)
-    c30 = string("shadow")
-    c31 = number(1)
+    c26 = number(1)
+    c27 = number(0)
+    c28 = undefined
+    c29 = string("with(o){x}")
+    c30 = number(3)
+    c31 = string("f")
     c32 = number(0)
     c33 = number(0)
-    c34 = number(0)
-    c35 = number(1)
-    c36 = number(0)
-    c37 = number(2)
-    c38 = string("__wjsm_super_base")
+    c34 = string("o")
+    c35 = number(0)
+    c36 = number(1)
+    c37 = string("shadow")
+    c38 = number(1)
     c39 = number(0)
-    c40 = number(3)
-    c41 = undefined
-    c42 = string("f")
-    c43 = string("o")
-    c44 = string("with(o){ x = 6; x * 2 }")
-    c45 = number(3)
-    c46 = string("f")
-    c47 = number(0)
-    c48 = number(0)
-    c49 = string("o")
-    c50 = number(0)
+    c40 = number(0)
+    c41 = number(0)
+    c42 = number(1)
+    c43 = number(0)
+    c44 = number(2)
+    c45 = string("__wjsm_super_base")
+    c46 = number(0)
+    c47 = number(3)
+    c48 = undefined
+    c49 = string("f")
+    c50 = string("o")
     c51 = number(1)
-    c52 = string("shadow")
+    c52 = number(0)
     c53 = number(1)
     c54 = number(0)
-    c55 = number(0)
+    c55 = number(1)
     c56 = number(0)
-    c57 = number(1)
-    c58 = number(0)
-    c59 = number(2)
-    c60 = string("__wjsm_super_base")
+    c57 = undefined
+    c58 = string("with(o){ x = 6; x * 2 }")
+    c59 = number(3)
+    c60 = string("f")
     c61 = number(0)
-    c62 = number(3)
-    c63 = undefined
-    c64 = string("f")
-    c65 = string("o")
-    c66 = string("x")
-    c67 = string("console")
-    c68 = undefined
-    c69 = undefined
-    c70 = string("console")
-    c71 = string("console")
-    c72 = string("log")
-    c73 = string("eval")
-    c74 = undefined
-    c75 = undefined
-    c76 = string("eval")
-    c77 = string("x")
-    c78 = string("x")
-    c79 = number(3)
-    c80 = string("f")
+    c62 = number(0)
+    c63 = string("o")
+    c64 = number(0)
+    c65 = number(1)
+    c66 = string("shadow")
+    c67 = number(1)
+    c68 = number(0)
+    c69 = number(0)
+    c70 = number(0)
+    c71 = number(1)
+    c72 = number(0)
+    c73 = number(2)
+    c74 = string("__wjsm_super_base")
+    c75 = number(0)
+    c76 = number(3)
+    c77 = undefined
+    c78 = string("f")
+    c79 = string("o")
+    c80 = number(1)
     c81 = number(0)
-    c82 = number(0)
-    c83 = string("o")
-    c84 = number(0)
-    c85 = number(1)
-    c86 = string("shadow")
-    c87 = number(1)
-    c88 = number(0)
-    c89 = string("")
-    c90 = number(0)
-    c91 = number(0)
-    c92 = number(1)
-    c93 = number(0)
-    c94 = number(2)
-    c95 = string("__wjsm_super_base")
-    c96 = number(0)
-    c97 = number(3)
-    c98 = undefined
-    c99 = string("f")
-    c100 = string("o")
-    c101 = string("eval")
-    c102 = undefined
-    c103 = undefined
-    c104 = string("eval")
-    c105 = string("x = 7")
-    c106 = string("x = 7")
-    c107 = number(3)
-    c108 = string("f")
+    c82 = number(1)
+    c83 = number(0)
+    c84 = number(1)
+    c85 = number(0)
+    c86 = undefined
+    c87 = string("x")
+    c88 = string("console")
+    c89 = undefined
+    c90 = undefined
+    c91 = string("console")
+    c92 = string("console")
+    c93 = string("log")
+    c94 = string("eval")
+    c95 = undefined
+    c96 = undefined
+    c97 = string("eval")
+    c98 = string("x")
+    c99 = string("x")
+    c100 = number(3)
+    c101 = string("f")
+    c102 = number(0)
+    c103 = number(0)
+    c104 = string("o")
+    c105 = number(0)
+    c106 = number(1)
+    c107 = string("shadow")
+    c108 = number(1)
     c109 = number(0)
-    c110 = number(0)
-    c111 = string("o")
+    c110 = string("")
+    c111 = number(0)
     c112 = number(0)
     c113 = number(1)
-    c114 = string("shadow")
-    c115 = number(1)
-    c116 = number(0)
-    c117 = string("")
-    c118 = number(0)
-    c119 = number(0)
-    c120 = number(1)
-    c121 = number(0)
-    c122 = number(2)
-    c123 = string("__wjsm_super_base")
-    c124 = number(0)
-    c125 = number(3)
-    c126 = undefined
-    c127 = string("f")
-    c128 = string("o")
-    c129 = string("x")
+    c114 = number(0)
+    c115 = number(2)
+    c116 = string("__wjsm_super_base")
+    c117 = number(0)
+    c118 = number(3)
+    c119 = undefined
+    c120 = string("f")
+    c121 = string("o")
+    c122 = string("eval")
+    c123 = undefined
+    c124 = undefined
+    c125 = string("eval")
+    c126 = string("x = 7")
+    c127 = string("x = 7")
+    c128 = number(3)
+    c129 = string("f")
     c130 = number(0)
-    c131 = object_template([4613128577683030134])
-    c132 = number(1)
-    c133 = string("eval")
-    c134 = undefined
-    c135 = undefined
-    c136 = string("eval")
-    c137 = string("v + 100")
-    c138 = string("v + 100")
-    c139 = number(7)
-    c140 = string("$env")
-    c141 = number(0)
+    c131 = number(0)
+    c132 = string("o")
+    c133 = number(0)
+    c134 = number(1)
+    c135 = string("shadow")
+    c136 = number(1)
+    c137 = number(0)
+    c138 = string("")
+    c139 = number(0)
+    c140 = number(0)
+    c141 = number(1)
     c142 = number(0)
-    c143 = string("$this")
-    c144 = number(0)
+    c143 = number(2)
+    c144 = string("__wjsm_super_base")
     c145 = number(0)
-    c146 = string("arguments")
-    c147 = number(0)
-    c148 = number(0)
-    c149 = string("inner")
-    c150 = number(0)
-    c151 = number(1)
-    c152 = string("f")
-    c153 = string("$0.f")
-    c154 = number(0)
+    c146 = number(3)
+    c147 = undefined
+    c148 = string("f")
+    c149 = string("o")
+    c150 = number(1)
+    c151 = number(0)
+    c152 = number(1)
+    c153 = number(0)
+    c154 = number(1)
     c155 = number(0)
-    c156 = string("o")
-    c157 = string("$0.o")
+    c156 = undefined
+    c157 = string("x")
     c158 = number(0)
-    c159 = number(1)
-    c160 = string("shadow")
-    c161 = string("$0.shadow")
-    c162 = number(0)
-    c163 = number(0)
-    c164 = string("")
-    c165 = number(0)
-    c166 = number(0)
-    c167 = number(1)
-    c168 = number(1)
-    c169 = number(2)
-    c170 = string("__wjsm_super_base")
-    c171 = number(0)
-    c172 = number(3)
-    c173 = undefined
-    c174 = string("$env")
-    c175 = string("$this")
-    c176 = string("arguments")
+    c159 = object_template([4613128577683030134])
+    c160 = number(1)
+    c161 = string("eval")
+    c162 = undefined
+    c163 = undefined
+    c164 = string("eval")
+    c165 = string("v + 100")
+    c166 = string("v + 100")
+    c167 = number(7)
+    c168 = string("$env")
+    c169 = number(0)
+    c170 = number(0)
+    c171 = string("$this")
+    c172 = number(0)
+    c173 = number(0)
+    c174 = string("arguments")
+    c175 = number(0)
+    c176 = number(0)
     c177 = string("inner")
-    c178 = string("f")
-    c179 = string("$0.f")
-    c180 = string("$0.f")
-    c181 = string("o")
-    c182 = string("$0.o")
-    c183 = string("$0.o")
-    c184 = functionref(@0)
-    c185 = undefined
-    c186 = string("$0.f")
-    c187 = string("$0.o")
-    c188 = uninitialized
+    c178 = number(0)
+    c179 = number(1)
+    c180 = string("f")
+    c181 = string("$0.f")
+    c182 = number(0)
+    c183 = number(0)
+    c184 = string("o")
+    c185 = string("$0.o")
+    c186 = number(0)
+    c187 = number(1)
+    c188 = string("shadow")
     c189 = string("$0.shadow")
-    c190 = string("$0.f")
-    c191 = undefined
-    c192 = undefined
-    c193 = string("$0.f")
-    c194 = string("with(o){ 42 }")
-    c195 = number(3)
-    c196 = string("f")
-    c197 = undefined
-    c198 = string("$0.f")
+    c190 = number(0)
+    c191 = number(0)
+    c192 = string("")
+    c193 = number(0)
+    c194 = number(0)
+    c195 = number(1)
+    c196 = number(1)
+    c197 = number(2)
+    c198 = string("__wjsm_super_base")
     c199 = number(0)
-    c200 = number(0)
-    c201 = string("o")
-    c202 = undefined
-    c203 = string("$0.o")
-    c204 = number(0)
-    c205 = number(1)
-    c206 = string("shadow")
-    c207 = undefined
-    c208 = string("$0.shadow")
-    c209 = number(0)
-    c210 = number(0)
-    c211 = number(0)
-    c212 = number(0)
-    c213 = number(1)
-    c214 = number(1)
-    c215 = number(2)
-    c216 = string("__wjsm_super_base")
-    c217 = number(0)
-    c218 = number(3)
-    c219 = undefined
-    c220 = string("f")
-    c221 = string("$0.f")
-    c222 = string("o")
-    c223 = string("$0.o")
-    c224 = string("with(o){ }")
-    c225 = number(3)
-    c226 = string("f")
+    c200 = number(3)
+    c201 = undefined
+    c202 = string("$env")
+    c203 = string("$this")
+    c204 = string("arguments")
+    c205 = string("inner")
+    c206 = string("f")
+    c207 = string("$0.f")
+    c208 = string("$0.f")
+    c209 = string("o")
+    c210 = string("$0.o")
+    c211 = string("$0.o")
+    c212 = functionref(@0)
+    c213 = undefined
+    c214 = string("$0.f")
+    c215 = string("$0.o")
+    c216 = uninitialized
+    c217 = string("$0.shadow")
+    c218 = string("$0.f")
+    c219 = number(1)
+    c220 = number(0)
+    c221 = number(1)
+    c222 = number(0)
+    c223 = number(1)
+    c224 = number(0)
+    c225 = undefined
+    c226 = undefined
     c227 = undefined
     c228 = string("$0.f")
-    c229 = number(0)
+    c229 = number(1)
     c230 = number(0)
-    c231 = string("o")
-    c232 = undefined
-    c233 = string("$0.o")
+    c231 = number(1)
+    c232 = number(0)
+    c233 = number(1)
     c234 = number(0)
-    c235 = number(1)
-    c236 = string("shadow")
-    c237 = undefined
-    c238 = string("$0.shadow")
-    c239 = number(0)
-    c240 = number(0)
+    c235 = undefined
+    c236 = string("with(o){ 42 }")
+    c237 = number(3)
+    c238 = string("f")
+    c239 = undefined
+    c240 = string("$0.f")
     c241 = number(0)
     c242 = number(0)
-    c243 = number(1)
-    c244 = number(1)
-    c245 = number(2)
-    c246 = string("__wjsm_super_base")
-    c247 = number(0)
-    c248 = number(3)
+    c243 = string("o")
+    c244 = undefined
+    c245 = string("$0.o")
+    c246 = number(0)
+    c247 = number(1)
+    c248 = string("shadow")
     c249 = undefined
-    c250 = string("f")
-    c251 = string("$0.f")
-    c252 = string("o")
-    c253 = string("$0.o")
-    c254 = string("1; with(o){ }")
-    c255 = number(3)
-    c256 = string("f")
-    c257 = undefined
-    c258 = string("$0.f")
+    c250 = string("$0.shadow")
+    c251 = number(0)
+    c252 = number(0)
+    c253 = number(0)
+    c254 = number(0)
+    c255 = number(1)
+    c256 = number(1)
+    c257 = number(2)
+    c258 = string("__wjsm_super_base")
     c259 = number(0)
-    c260 = number(0)
-    c261 = string("o")
-    c262 = undefined
-    c263 = string("$0.o")
-    c264 = number(0)
-    c265 = number(1)
-    c266 = string("shadow")
-    c267 = undefined
-    c268 = string("$0.shadow")
+    c260 = number(3)
+    c261 = undefined
+    c262 = string("f")
+    c263 = string("$0.f")
+    c264 = string("o")
+    c265 = string("$0.o")
+    c266 = number(1)
+    c267 = number(0)
+    c268 = number(1)
     c269 = number(0)
-    c270 = number(0)
+    c270 = number(1)
     c271 = number(0)
-    c272 = number(0)
-    c273 = number(1)
-    c274 = number(1)
-    c275 = number(2)
-    c276 = string("__wjsm_super_base")
-    c277 = number(0)
-    c278 = number(3)
-    c279 = undefined
-    c280 = string("f")
-    c281 = string("$0.f")
-    c282 = string("o")
-    c283 = string("$0.o")
-    c284 = string("with(o){ if (x > 5) { 'big' } }")
-    c285 = number(3)
-    c286 = string("f")
-    c287 = undefined
-    c288 = string("$0.f")
+    c272 = undefined
+    c273 = string("with(o){ }")
+    c274 = number(3)
+    c275 = string("f")
+    c276 = undefined
+    c277 = string("$0.f")
+    c278 = number(0)
+    c279 = number(0)
+    c280 = string("o")
+    c281 = undefined
+    c282 = string("$0.o")
+    c283 = number(0)
+    c284 = number(1)
+    c285 = string("shadow")
+    c286 = undefined
+    c287 = string("$0.shadow")
+    c288 = number(0)
     c289 = number(0)
     c290 = number(0)
-    c291 = string("o")
-    c292 = undefined
-    c293 = string("$0.o")
-    c294 = number(0)
-    c295 = number(1)
-    c296 = string("shadow")
-    c297 = undefined
-    c298 = string("$0.shadow")
-    c299 = number(0)
-    c300 = number(0)
-    c301 = number(0)
-    c302 = number(0)
+    c291 = number(0)
+    c292 = number(1)
+    c293 = number(1)
+    c294 = number(2)
+    c295 = string("__wjsm_super_base")
+    c296 = number(0)
+    c297 = number(3)
+    c298 = undefined
+    c299 = string("f")
+    c300 = string("$0.f")
+    c301 = string("o")
+    c302 = string("$0.o")
     c303 = number(1)
-    c304 = number(1)
-    c305 = number(2)
-    c306 = string("__wjsm_super_base")
-    c307 = number(0)
-    c308 = number(3)
+    c304 = number(0)
+    c305 = number(1)
+    c306 = number(0)
+    c307 = number(1)
+    c308 = number(0)
     c309 = undefined
-    c310 = string("f")
-    c311 = string("$0.f")
-    c312 = string("o")
-    c313 = string("$0.o")
-    c314 = string("with(o){ while (false) { 1 } }")
-    c315 = number(3)
-    c316 = string("f")
-    c317 = undefined
-    c318 = string("$0.f")
-    c319 = number(0)
+    c310 = string("1; with(o){ }")
+    c311 = number(3)
+    c312 = string("f")
+    c313 = undefined
+    c314 = string("$0.f")
+    c315 = number(0)
+    c316 = number(0)
+    c317 = string("o")
+    c318 = undefined
+    c319 = string("$0.o")
     c320 = number(0)
-    c321 = string("o")
-    c322 = undefined
-    c323 = string("$0.o")
-    c324 = number(0)
-    c325 = number(1)
-    c326 = string("shadow")
-    c327 = undefined
-    c328 = string("$0.shadow")
-    c329 = number(0)
-    c330 = number(0)
-    c331 = number(0)
-    c332 = number(0)
-    c333 = number(1)
-    c334 = number(1)
-    c335 = number(2)
-    c336 = string("__wjsm_super_base")
-    c337 = number(0)
-    c338 = number(3)
-    c339 = undefined
-    c340 = string("f")
-    c341 = string("$0.f")
-    c342 = string("o")
-    c343 = string("$0.o")
-    c344 = string("label: with(o){ break label; 'skipped' }")
-    c345 = number(3)
-    c346 = string("f")
-    c347 = undefined
-    c348 = string("$0.f")
-    c349 = number(0)
-    c350 = number(0)
-    c351 = string("o")
-    c352 = undefined
-    c353 = string("$0.o")
-    c354 = number(0)
-    c355 = number(1)
-    c356 = string("shadow")
-    c357 = undefined
-    c358 = string("$0.shadow")
-    c359 = number(0)
-    c360 = number(0)
-    c361 = number(0)
+    c321 = number(1)
+    c322 = string("shadow")
+    c323 = undefined
+    c324 = string("$0.shadow")
+    c325 = number(0)
+    c326 = number(0)
+    c327 = number(0)
+    c328 = number(0)
+    c329 = number(1)
+    c330 = number(1)
+    c331 = number(2)
+    c332 = string("__wjsm_super_base")
+    c333 = number(0)
+    c334 = number(3)
+    c335 = undefined
+    c336 = string("f")
+    c337 = string("$0.f")
+    c338 = string("o")
+    c339 = string("$0.o")
+    c340 = number(1)
+    c341 = number(0)
+    c342 = number(1)
+    c343 = number(0)
+    c344 = number(1)
+    c345 = number(0)
+    c346 = undefined
+    c347 = string("with(o){ if (x > 5) { 'big' } }")
+    c348 = number(3)
+    c349 = string("f")
+    c350 = undefined
+    c351 = string("$0.f")
+    c352 = number(0)
+    c353 = number(0)
+    c354 = string("o")
+    c355 = undefined
+    c356 = string("$0.o")
+    c357 = number(0)
+    c358 = number(1)
+    c359 = string("shadow")
+    c360 = undefined
+    c361 = string("$0.shadow")
     c362 = number(0)
-    c363 = number(1)
-    c364 = number(1)
-    c365 = number(2)
-    c366 = string("__wjsm_super_base")
-    c367 = number(0)
-    c368 = number(3)
-    c369 = undefined
-    c370 = string("f")
-    c371 = string("$0.f")
-    c372 = string("o")
-    c373 = string("$0.o")
-    c374 = string("try { with(o){ 'in-try' } } finally { 'in-finally' }")
-    c375 = number(3)
-    c376 = string("f")
-    c377 = undefined
-    c378 = string("$0.f")
-    c379 = number(0)
+    c363 = number(0)
+    c364 = number(0)
+    c365 = number(0)
+    c366 = number(1)
+    c367 = number(1)
+    c368 = number(2)
+    c369 = string("__wjsm_super_base")
+    c370 = number(0)
+    c371 = number(3)
+    c372 = undefined
+    c373 = string("f")
+    c374 = string("$0.f")
+    c375 = string("o")
+    c376 = string("$0.o")
+    c377 = number(1)
+    c378 = number(0)
+    c379 = number(1)
     c380 = number(0)
-    c381 = string("o")
-    c382 = undefined
-    c383 = string("$0.o")
-    c384 = number(0)
-    c385 = number(1)
-    c386 = string("shadow")
+    c381 = number(1)
+    c382 = number(0)
+    c383 = undefined
+    c384 = string("with(o){ while (false) { 1 } }")
+    c385 = number(3)
+    c386 = string("f")
     c387 = undefined
-    c388 = string("$0.shadow")
+    c388 = string("$0.f")
     c389 = number(0)
     c390 = number(0)
-    c391 = number(0)
-    c392 = number(0)
-    c393 = number(1)
-    c394 = number(1)
-    c395 = number(2)
-    c396 = string("__wjsm_super_base")
-    c397 = number(0)
-    c398 = number(3)
-    c399 = undefined
-    c400 = string("f")
-    c401 = string("$0.f")
-    c402 = string("o")
-    c403 = string("$0.o")
-    c404 = string("static")
-    c405 = undefined
-    c406 = string("$0.f")
-    c407 = string("$0.o")
-    c408 = string("$0.shadow")
-    c409 = string("$0.shadow")
-    c410 = object_template([4613308618359993459])
-    c411 = string("object")
-    c412 = string("console")
-    c413 = undefined
-    c414 = undefined
-    c415 = string("console")
-    c416 = string("console")
-    c417 = string("log")
-    c418 = string("eval")
-    c419 = undefined
+    c391 = string("o")
+    c392 = undefined
+    c393 = string("$0.o")
+    c394 = number(0)
+    c395 = number(1)
+    c396 = string("shadow")
+    c397 = undefined
+    c398 = string("$0.shadow")
+    c399 = number(0)
+    c400 = number(0)
+    c401 = number(0)
+    c402 = number(0)
+    c403 = number(1)
+    c404 = number(1)
+    c405 = number(2)
+    c406 = string("__wjsm_super_base")
+    c407 = number(0)
+    c408 = number(3)
+    c409 = undefined
+    c410 = string("f")
+    c411 = string("$0.f")
+    c412 = string("o")
+    c413 = string("$0.o")
+    c414 = number(1)
+    c415 = number(0)
+    c416 = number(1)
+    c417 = number(0)
+    c418 = number(1)
+    c419 = number(0)
     c420 = undefined
-    c421 = string("eval")
-    c422 = string("shadow")
-    c423 = string("shadow")
-    c424 = number(3)
-    c425 = string("f")
-    c426 = undefined
-    c427 = string("$0.f")
-    c428 = number(0)
-    c429 = number(0)
-    c430 = string("o")
-    c431 = undefined
-    c432 = string("$0.o")
-    c433 = number(0)
-    c434 = number(1)
-    c435 = string("shadow")
-    c436 = undefined
-    c437 = string("$0.shadow")
+    c421 = string("label: with(o){ break label; 'skipped' }")
+    c422 = number(3)
+    c423 = string("f")
+    c424 = undefined
+    c425 = string("$0.f")
+    c426 = number(0)
+    c427 = number(0)
+    c428 = string("o")
+    c429 = undefined
+    c430 = string("$0.o")
+    c431 = number(0)
+    c432 = number(1)
+    c433 = string("shadow")
+    c434 = undefined
+    c435 = string("$0.shadow")
+    c436 = number(0)
+    c437 = number(0)
     c438 = number(0)
     c439 = number(0)
-    c440 = string("")
-    c441 = number(0)
-    c442 = number(0)
-    c443 = number(1)
-    c444 = number(1)
-    c445 = number(2)
-    c446 = string("__wjsm_super_base")
-    c447 = number(0)
-    c448 = number(3)
-    c449 = undefined
-    c450 = string("f")
-    c451 = string("$0.f")
-    c452 = string("o")
-    c453 = string("$0.o")
-    c454 = string("shadow")
-    c455 = string("$0.shadow")
-    c456 = string("eval")
+    c440 = number(1)
+    c441 = number(1)
+    c442 = number(2)
+    c443 = string("__wjsm_super_base")
+    c444 = number(0)
+    c445 = number(3)
+    c446 = undefined
+    c447 = string("f")
+    c448 = string("$0.f")
+    c449 = string("o")
+    c450 = string("$0.o")
+    c451 = number(1)
+    c452 = number(0)
+    c453 = number(1)
+    c454 = number(0)
+    c455 = number(1)
+    c456 = number(0)
     c457 = undefined
-    c458 = undefined
-    c459 = string("eval")
-    c460 = string("shadow = 'eval-written'")
-    c461 = string("shadow = 'eval-written'")
-    c462 = number(3)
-    c463 = string("f")
-    c464 = undefined
-    c465 = string("$0.f")
-    c466 = number(0)
-    c467 = number(0)
-    c468 = string("o")
-    c469 = undefined
-    c470 = string("$0.o")
-    c471 = number(0)
-    c472 = number(1)
-    c473 = string("shadow")
-    c474 = undefined
-    c475 = string("$0.shadow")
+    c458 = string("try { with(o){ 'in-try' } } finally { 'in-finally' }")
+    c459 = number(3)
+    c460 = string("f")
+    c461 = undefined
+    c462 = string("$0.f")
+    c463 = number(0)
+    c464 = number(0)
+    c465 = string("o")
+    c466 = undefined
+    c467 = string("$0.o")
+    c468 = number(0)
+    c469 = number(1)
+    c470 = string("shadow")
+    c471 = undefined
+    c472 = string("$0.shadow")
+    c473 = number(0)
+    c474 = number(0)
+    c475 = number(0)
     c476 = number(0)
-    c477 = number(0)
-    c478 = string("")
-    c479 = number(0)
-    c480 = number(0)
-    c481 = number(1)
-    c482 = number(1)
-    c483 = number(2)
-    c484 = string("__wjsm_super_base")
-    c485 = number(0)
-    c486 = number(3)
-    c487 = undefined
-    c488 = string("f")
-    c489 = string("$0.f")
-    c490 = string("o")
+    c477 = number(1)
+    c478 = number(1)
+    c479 = number(2)
+    c480 = string("__wjsm_super_base")
+    c481 = number(0)
+    c482 = number(3)
+    c483 = undefined
+    c484 = string("f")
+    c485 = string("$0.f")
+    c486 = string("o")
+    c487 = string("$0.o")
+    c488 = string("static")
+    c489 = undefined
+    c490 = string("$0.f")
     c491 = string("$0.o")
-    c492 = string("shadow")
+    c492 = string("$0.shadow")
     c493 = string("$0.shadow")
-    c494 = undefined
-    c495 = string("$0.shadow")
-    c496 = string("\"use strict\"; with(o){}")
-    c497 = number(3)
-    c498 = string("f")
-    c499 = undefined
-    c500 = string("$0.f")
-    c501 = number(0)
-    c502 = number(0)
-    c503 = string("o")
+    c494 = object_template([4613308618359993459])
+    c495 = string("object")
+    c496 = string("console")
+    c497 = undefined
+    c498 = undefined
+    c499 = string("console")
+    c500 = string("console")
+    c501 = string("log")
+    c502 = string("eval")
+    c503 = undefined
     c504 = undefined
-    c505 = string("$0.o")
-    c506 = number(0)
-    c507 = number(1)
-    c508 = string("shadow")
-    c509 = undefined
-    c510 = string("$0.shadow")
-    c511 = number(0)
+    c505 = string("eval")
+    c506 = string("shadow")
+    c507 = string("shadow")
+    c508 = number(3)
+    c509 = string("f")
+    c510 = undefined
+    c511 = string("$0.f")
     c512 = number(0)
     c513 = number(0)
-    c514 = number(0)
-    c515 = number(1)
-    c516 = number(1)
-    c517 = number(2)
-    c518 = string("__wjsm_super_base")
-    c519 = number(0)
-    c520 = number(3)
-    c521 = undefined
-    c522 = string("f")
-    c523 = string("$0.f")
-    c524 = string("o")
-    c525 = string("$0.o")
-    c526 = string("shadow")
-    c527 = string("$0.shadow")
-    c528 = string("SyntaxError")
-    c529 = bool(true)
-    c530 = bool(false)
+    c514 = string("o")
+    c515 = undefined
+    c516 = string("$0.o")
+    c517 = number(0)
+    c518 = number(1)
+    c519 = string("shadow")
+    c520 = undefined
+    c521 = string("$0.shadow")
+    c522 = number(0)
+    c523 = number(0)
+    c524 = string("")
+    c525 = number(0)
+    c526 = number(0)
+    c527 = number(1)
+    c528 = number(1)
+    c529 = number(2)
+    c530 = string("__wjsm_super_base")
+    c531 = number(0)
+    c532 = number(3)
+    c533 = undefined
+    c534 = string("f")
+    c535 = string("$0.f")
+    c536 = string("o")
+    c537 = string("$0.o")
+    c538 = string("shadow")
+    c539 = string("$0.shadow")
+    c540 = string("eval")
+    c541 = undefined
+    c542 = undefined
+    c543 = string("eval")
+    c544 = string("shadow = 'eval-written'")
+    c545 = string("shadow = 'eval-written'")
+    c546 = number(3)
+    c547 = string("f")
+    c548 = undefined
+    c549 = string("$0.f")
+    c550 = number(0)
+    c551 = number(0)
+    c552 = string("o")
+    c553 = undefined
+    c554 = string("$0.o")
+    c555 = number(0)
+    c556 = number(1)
+    c557 = string("shadow")
+    c558 = undefined
+    c559 = string("$0.shadow")
+    c560 = number(0)
+    c561 = number(0)
+    c562 = string("")
+    c563 = number(0)
+    c564 = number(0)
+    c565 = number(1)
+    c566 = number(1)
+    c567 = number(2)
+    c568 = string("__wjsm_super_base")
+    c569 = number(0)
+    c570 = number(3)
+    c571 = undefined
+    c572 = string("f")
+    c573 = string("$0.f")
+    c574 = string("o")
+    c575 = string("$0.o")
+    c576 = string("shadow")
+    c577 = string("$0.shadow")
+    c578 = number(1)
+    c579 = number(0)
+    c580 = number(1)
+    c581 = number(0)
+    c582 = number(1)
+    c583 = number(0)
+    c584 = undefined
+    c585 = undefined
+    c586 = string("$0.shadow")
+    c587 = string("\"use strict\"; with(o){}")
+    c588 = number(3)
+    c589 = string("f")
+    c590 = undefined
+    c591 = string("$0.f")
+    c592 = number(0)
+    c593 = number(0)
+    c594 = string("o")
+    c595 = undefined
+    c596 = string("$0.o")
+    c597 = number(0)
+    c598 = number(1)
+    c599 = string("shadow")
+    c600 = undefined
+    c601 = string("$0.shadow")
+    c602 = number(0)
+    c603 = number(0)
+    c604 = number(0)
+    c605 = number(0)
+    c606 = number(1)
+    c607 = number(1)
+    c608 = number(2)
+    c609 = string("__wjsm_super_base")
+    c610 = number(0)
+    c611 = number(3)
+    c612 = undefined
+    c613 = string("f")
+    c614 = string("$0.f")
+    c615 = string("o")
+    c616 = string("$0.o")
+    c617 = string("shadow")
+    c618 = string("$0.shadow")
+    c619 = number(1)
+    c620 = number(0)
+    c621 = number(1)
+    c622 = number(0)
+    c623 = number(1)
+    c624 = number(0)
+    c625 = undefined
+    c626 = string("SyntaxError")
+    c627 = bool(true)
+    c628 = bool(false)
 
   fn @f [has_eval] [needs_prototype] [js_length 0] [captures: $0.f, $0.o, $0.shadow] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c130
+      %1 = const c158
       %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $4.arguments, %2
-      %3 = const c132
-      %4 = init_object_literal(c131, values=[%3])
+      %3 = const c160
+      %4 = init_object_literal(c159, values=[%3])
       store var $4.inner, %4
       %5 = load var $4.inner
       %6 = call builtin.with.to_object(%5)
@@ -548,7 +646,7 @@ module {
     bb1:
       store var $5.%with, %6
       %9 = load var $5.%with
-      %10 = const c133
+      %10 = const c161
       %11 = call builtin.with.has_binding(%9, %10)
       %12 = is_exception %11
       branch %12, bb5, bb4
@@ -566,109 +664,109 @@ module {
     bb6:
       jump bb3
     bb7:
-      %14 = const c134
+      %14 = const c162
       jump bb3
     bb8:
-      %16 = const c135
+      %16 = const c163
       %17 = stricteq %15, %16
       branch %17, bb9, bb10
     bb9:
-      %24 = const c138
-      %25 = const c139
+      %24 = const c166
+      %25 = const c167
       %26 = call builtin.scope_record_create(%25)
       store var $eval_env, %26
-      %27 = const c140
+      %27 = const c168
       %28 = load var $4.$env
-      %29 = const c141
-      %30 = const c142
+      %29 = const c169
+      %30 = const c170
       call builtin.scope_record_add_binding(%26, %27, %28, %29, %30)
-      %31 = const c143
+      %31 = const c171
       %32 = load var $4.$this
-      %33 = const c144
-      %34 = const c145
+      %33 = const c172
+      %34 = const c173
       call builtin.scope_record_add_binding(%26, %31, %32, %33, %34)
-      %35 = const c146
+      %35 = const c174
       %36 = load var $4.arguments
-      %37 = const c147
-      %38 = const c148
+      %37 = const c175
+      %38 = const c176
       call builtin.scope_record_add_binding(%26, %35, %36, %37, %38)
-      %39 = const c149
+      %39 = const c177
       %40 = load var $4.inner
-      %41 = const c150
-      %42 = const c151
+      %41 = const c178
+      %42 = const c179
       call builtin.scope_record_add_binding(%26, %39, %40, %41, %42)
-      %43 = const c152
+      %43 = const c180
       %44 = load var $env
-      %45 = const c153
+      %45 = const c181
       %46 = get_prop %44, %45
-      %47 = const c154
-      %48 = const c155
+      %47 = const c182
+      %48 = const c183
       call builtin.scope_record_add_binding(%26, %43, %46, %47, %48)
-      %49 = const c156
+      %49 = const c184
       %50 = load var $env
-      %51 = const c157
+      %51 = const c185
       %52 = get_prop %50, %51
-      %53 = const c158
-      %54 = const c159
+      %53 = const c186
+      %54 = const c187
       call builtin.scope_record_add_binding(%26, %49, %52, %53, %54)
-      %55 = const c160
+      %55 = const c188
       %56 = load var $env
-      %57 = const c161
+      %57 = const c189
       %58 = get_prop %56, %57
-      %59 = const c162
-      %60 = const c163
+      %59 = const c190
+      %60 = const c191
       call builtin.scope_record_add_binding(%26, %55, %58, %59, %60)
       %61 = load var $5.%with
-      %62 = const c164
+      %62 = const c192
       call builtin.scope_record.add_with_layer(%26, %61, %62)
-      %63 = const c165
-      %64 = const c166
+      %63 = const c193
+      %64 = const c194
       call builtin.scope_record_set_meta(%26, %63, %64)
-      %65 = const c167
-      %66 = const c168
+      %65 = const c195
+      %66 = const c196
       call builtin.scope_record_set_meta(%26, %65, %66)
-      %67 = const c169
+      %67 = const c197
       %68 = get_super_base
-      %69 = const c170
-      %70 = const c171
+      %69 = const c198
+      %70 = const c199
       call builtin.scope_record_add_binding(%26, %69, %68, %70, %70)
       call builtin.scope_record_set_meta(%26, %67, %68)
-      %71 = const c172
-      %73 = const c173
+      %71 = const c200
+      %73 = const c201
       %72 = call builtin.new.target(%73)
       call builtin.scope_record_set_meta(%26, %71, %72)
       %74 = call builtin.eval(%24, %26)
       %75 = is_exception %74
       branch %75, bb14, bb13
     bb10:
-      %18 = const c136
+      %18 = const c164
       %19 = get_prop %15, %18
       %20 = is_exception %19
       branch %20, bb12, bb11
     bb11:
-      %22 = const c137
+      %22 = const c165
       %23 = call %19, this=%15, args=[%22]
       jump bb24
     bb12:
       %21 = call builtin.exception_value(%19)
       throw %21
     bb13:
-      %77 = const c174
+      %77 = const c202
       %78 = call builtin.scope_record.get_binding(%26, %77)
       store var $4.$env, %78
-      %79 = const c175
+      %79 = const c203
       %80 = call builtin.scope_record.get_binding(%26, %79)
       store var $4.$this, %80
-      %81 = const c176
+      %81 = const c204
       %82 = call builtin.scope_record.get_binding(%26, %81)
       store var $4.arguments, %82
-      %83 = const c177
+      %83 = const c205
       %84 = call builtin.scope_record.get_binding(%26, %83)
       store var $4.inner, %84
-      %85 = const c178
+      %85 = const c206
       %86 = call builtin.scope_record.get_binding(%26, %85)
       %87 = load var $env
-      %88 = const c179
+      %88 = const c207
       jump bb15
     bb14:
       %76 = call builtin.exception_value(%74)
@@ -684,12 +782,12 @@ module {
       %92 = is_nullish %91
       branch %92, bb16, bb15
     bb18:
-      %94 = const c180
+      %94 = const c208
       %95 = set_prop %89, %94, %86
-      %96 = const c181
+      %96 = const c209
       %97 = call builtin.scope_record.get_binding(%26, %96)
       %98 = load var $env
-      %99 = const c182
+      %99 = const c210
       jump bb19
     bb19:
       %100 = phi [(bb18, %98), (bb21, %102)]
@@ -702,7 +800,7 @@ module {
       %103 = is_nullish %102
       branch %103, bb20, bb19
     bb22:
-      %105 = const c183
+      %105 = const c211
       %106 = set_prop %100, %105, %97
       call builtin.scope_record_destroy(%26)
       jump bb23
@@ -763,1796 +861,2328 @@ module {
       store var $0.o, %22
       %23 = const c22
       %24 = const c23
-      %25 = call builtin.scope_record_create(%24)
-      store var $eval_env, %25
-      %26 = const c24
-      %27 = load var $0.f
-      %28 = const c25
-      %29 = const c26
-      call builtin.scope_record_add_binding(%25, %26, %27, %28, %29)
-      %30 = const c27
-      %31 = load var $0.o
-      %32 = const c28
-      %33 = const c29
-      call builtin.scope_record_add_binding(%25, %30, %31, %32, %33)
-      %34 = const c30
-      %35 = load var $0.shadow
-      %36 = const c31
-      %37 = const c32
-      call builtin.scope_record_add_binding(%25, %34, %35, %36, %37)
-      %38 = const c33
-      %39 = const c34
-      call builtin.scope_record_set_meta(%25, %38, %39)
-      %40 = const c35
-      %41 = const c36
-      call builtin.scope_record_set_meta(%25, %40, %41)
-      %42 = const c37
-      %43 = get_super_base
-      %44 = const c38
-      %45 = const c39
-      call builtin.scope_record_add_binding(%25, %44, %43, %45, %45)
-      call builtin.scope_record_set_meta(%25, %42, %43)
-      %46 = const c40
-      %48 = const c41
-      %47 = call builtin.new.target(%48)
-      call builtin.scope_record_set_meta(%25, %46, %47)
-      %49 = call builtin.eval(%23, %25)
-      %50 = is_exception %49
-      %248 = const c185
-      store var $0.$shared_env, %248
-      branch %50, bb2, bb1
+      %25 = call builtin.intrinsic_pristine(%23, %24)
+      %320 = const c213
+      store var $0.$shared_env, %320
+      branch %25, bb1, bb2
     bb1:
-      %52 = const c42
-      %53 = call builtin.scope_record.get_binding(%25, %52)
-      store var $0.f, %53
-      %54 = const c43
-      %55 = call builtin.scope_record.get_binding(%25, %54)
-      store var $0.o, %55
-      call builtin.scope_record_destroy(%25)
-      jump bb3
+      %36 = const c28
+      jump bb8
     bb2:
-      %51 = call builtin.exception_value(%49)
-      throw %51
+      %26 = const c24
+      %27 = const c25
+      %28 = call builtin.intrinsic_resolve(%26, %27)
+      %29 = is_exception %28
+      branch %29, bb4, bb3
     bb3:
-      %56 = is_exception %49
-      branch %56, bb5, bb4
+      %31 = const c26
+      %32 = const c27
+      %33 = call builtin.intrinsic_resolve(%31, %32, %28)
+      %34 = is_exception %33
+      branch %34, bb6, bb5
     bb4:
-      %58 = call builtin.console.log(%49)
-      %59 = is_exception %58
-      branch %59, bb7, bb6
+      %30 = call builtin.exception_value(%28)
+      throw %30
     bb5:
-      %57 = call builtin.exception_value(%49)
-      throw %57
+      jump bb8
     bb6:
-      %61 = const c44
-      %62 = const c45
-      %63 = call builtin.scope_record_create(%62)
-      store var $eval_env, %63
-      %64 = const c46
-      %65 = load var $0.f
-      %66 = const c47
-      %67 = const c48
-      call builtin.scope_record_add_binding(%63, %64, %65, %66, %67)
-      %68 = const c49
-      %69 = load var $0.o
-      %70 = const c50
-      %71 = const c51
-      call builtin.scope_record_add_binding(%63, %68, %69, %70, %71)
-      %72 = const c52
-      %73 = load var $0.shadow
-      %74 = const c53
-      %75 = const c54
-      call builtin.scope_record_add_binding(%63, %72, %73, %74, %75)
-      %76 = const c55
-      %77 = const c56
-      call builtin.scope_record_set_meta(%63, %76, %77)
-      %78 = const c57
-      %79 = const c58
-      call builtin.scope_record_set_meta(%63, %78, %79)
-      %80 = const c59
-      %81 = get_super_base
-      %82 = const c60
-      %83 = const c61
-      call builtin.scope_record_add_binding(%63, %82, %81, %83, %83)
-      call builtin.scope_record_set_meta(%63, %80, %81)
-      %84 = const c62
-      %86 = const c63
-      %85 = call builtin.new.target(%86)
-      call builtin.scope_record_set_meta(%63, %84, %85)
-      %87 = call builtin.eval(%61, %63)
-      %88 = is_exception %87
-      branch %88, bb9, bb8
+      %35 = call builtin.exception_value(%33)
+      throw %35
     bb7:
-      %60 = call builtin.exception_value(%58)
-      throw %60
+      %76 = phi [(bb14, %74), (bb15, %75)]
+      %77 = is_exception %76
+      branch %77, bb17, bb16
     bb8:
-      %90 = const c64
-      %91 = call builtin.scope_record.get_binding(%63, %90)
-      store var $0.f, %91
-      %92 = const c65
-      %93 = call builtin.scope_record.get_binding(%63, %92)
-      store var $0.o, %93
-      call builtin.scope_record_destroy(%63)
-      jump bb10
+      %37 = phi [(bb1, %36), (bb5, %33)]
+      %38 = phi [(bb1, %36), (bb5, %28)]
+      %39 = const c29
+      %40 = const c30
+      %41 = call builtin.scope_record_create(%40)
+      store var $eval_env, %41
+      %42 = const c31
+      %43 = load var $0.f
+      %44 = const c32
+      %45 = const c33
+      call builtin.scope_record_add_binding(%41, %42, %43, %44, %45)
+      %46 = const c34
+      %47 = load var $0.o
+      %48 = const c35
+      %49 = const c36
+      call builtin.scope_record_add_binding(%41, %46, %47, %48, %49)
+      %50 = const c37
+      %51 = load var $0.shadow
+      %52 = const c38
+      %53 = const c39
+      call builtin.scope_record_add_binding(%41, %50, %51, %52, %53)
+      %54 = const c40
+      %55 = const c41
+      call builtin.scope_record_set_meta(%41, %54, %55)
+      %56 = const c42
+      %57 = const c43
+      call builtin.scope_record_set_meta(%41, %56, %57)
+      %58 = const c44
+      %59 = get_super_base
+      %60 = const c45
+      %61 = const c46
+      call builtin.scope_record_add_binding(%41, %60, %59, %61, %61)
+      call builtin.scope_record_set_meta(%41, %58, %59)
+      %62 = const c47
+      %64 = const c48
+      %63 = call builtin.new.target(%64)
+      call builtin.scope_record_set_meta(%41, %62, %63)
+      %65 = call builtin.eval(%39, %41)
+      %66 = is_exception %65
+      branch %66, bb10, bb9
     bb9:
-      %89 = call builtin.exception_value(%87)
-      throw %89
+      %68 = const c49
+      %69 = call builtin.scope_record.get_binding(%41, %68)
+      store var $0.f, %69
+      %70 = const c50
+      %71 = call builtin.scope_record.get_binding(%41, %70)
+      store var $0.o, %71
+      call builtin.scope_record_destroy(%41)
+      jump bb11
     bb10:
-      %94 = is_exception %87
-      branch %94, bb12, bb11
+      %67 = call builtin.exception_value(%65)
+      throw %67
     bb11:
-      %96 = call builtin.console.log(%87)
-      %97 = is_exception %96
-      branch %97, bb14, bb13
+      %72 = is_exception %65
+      branch %72, bb13, bb12
     bb12:
-      %95 = call builtin.exception_value(%87)
-      throw %95
+      branch %25, bb14, bb15
     bb13:
-      %99 = load var $0.o
-      %100 = const c66
-      %101 = get_prop %99, %100
-      %102 = is_exception %101
-      branch %102, bb16, bb15
+      %73 = call builtin.exception_value(%65)
+      throw %73
     bb14:
-      %98 = call builtin.exception_value(%96)
-      throw %98
+      %74 = call builtin.console.log(%65)
+      jump bb7
     bb15:
-      %104 = call builtin.console.log(%101)
-      %105 = is_exception %104
-      branch %105, bb18, bb17
+      %75 = call %37, this=%38, args=[%65]
+      jump bb7
     bb16:
-      %103 = call builtin.exception_value(%101)
-      throw %103
+      %79 = const c51
+      %80 = const c52
+      %81 = call builtin.intrinsic_pristine(%79, %80)
+      branch %81, bb18, bb19
     bb17:
-      %107 = load var $0.o
-      %108 = call builtin.with.to_object(%107)
-      %109 = is_exception %108
-      branch %109, bb20, bb19
+      %78 = call builtin.exception_value(%76)
+      throw %78
     bb18:
-      %106 = call builtin.exception_value(%104)
-      throw %106
+      %92 = const c57
+      jump bb25
     bb19:
-      store var $2.%with, %108
-      %111 = load var $2.%with
-      %112 = const c67
-      %113 = call builtin.with.has_binding(%111, %112)
-      %114 = is_exception %113
-      branch %114, bb23, bb22
+      %82 = const c53
+      %83 = const c54
+      %84 = call builtin.intrinsic_resolve(%82, %83)
+      %85 = is_exception %84
+      branch %85, bb21, bb20
     bb20:
-      %110 = call builtin.exception_value(%108)
-      throw %110
+      %87 = const c55
+      %88 = const c56
+      %89 = call builtin.intrinsic_resolve(%87, %88, %84)
+      %90 = is_exception %89
+      branch %90, bb23, bb22
     bb21:
-      %117 = phi [(bb24, %111), (bb25, %116)]
-      jump bb26
+      %86 = call builtin.exception_value(%84)
+      throw %86
     bb22:
-      branch %113, bb24, bb25
+      jump bb25
     bb23:
-      %115 = call builtin.exception_value(%113)
-      throw %115
+      %91 = call builtin.exception_value(%89)
+      throw %91
     bb24:
-      jump bb21
+      %132 = phi [(bb31, %130), (bb32, %131)]
+      %133 = is_exception %132
+      branch %133, bb34, bb33
     bb25:
-      %116 = const c68
-      jump bb21
-    bb26:
-      %118 = const c69
-      %119 = stricteq %117, %118
-      branch %119, bb27, bb28
-    bb27:
-      %124 = load var $0.$global
-      %125 = const c71
-      %126 = get_prop %124, %125
-      jump bb31
-    bb28:
-      %120 = const c70
-      %121 = get_prop %117, %120
+      %93 = phi [(bb18, %92), (bb22, %89)]
+      %94 = phi [(bb18, %92), (bb22, %84)]
+      %95 = const c58
+      %96 = const c59
+      %97 = call builtin.scope_record_create(%96)
+      store var $eval_env, %97
+      %98 = const c60
+      %99 = load var $0.f
+      %100 = const c61
+      %101 = const c62
+      call builtin.scope_record_add_binding(%97, %98, %99, %100, %101)
+      %102 = const c63
+      %103 = load var $0.o
+      %104 = const c64
+      %105 = const c65
+      call builtin.scope_record_add_binding(%97, %102, %103, %104, %105)
+      %106 = const c66
+      %107 = load var $0.shadow
+      %108 = const c67
+      %109 = const c68
+      call builtin.scope_record_add_binding(%97, %106, %107, %108, %109)
+      %110 = const c69
+      %111 = const c70
+      call builtin.scope_record_set_meta(%97, %110, %111)
+      %112 = const c71
+      %113 = const c72
+      call builtin.scope_record_set_meta(%97, %112, %113)
+      %114 = const c73
+      %115 = get_super_base
+      %116 = const c74
+      %117 = const c75
+      call builtin.scope_record_add_binding(%97, %116, %115, %117, %117)
+      call builtin.scope_record_set_meta(%97, %114, %115)
+      %118 = const c76
+      %120 = const c77
+      %119 = call builtin.new.target(%120)
+      call builtin.scope_record_set_meta(%97, %118, %119)
+      %121 = call builtin.eval(%95, %97)
       %122 = is_exception %121
-      branch %122, bb30, bb29
-    bb29:
-      jump bb31
-    bb30:
+      branch %122, bb27, bb26
+    bb26:
+      %124 = const c78
+      %125 = call builtin.scope_record.get_binding(%97, %124)
+      store var $0.f, %125
+      %126 = const c79
+      %127 = call builtin.scope_record.get_binding(%97, %126)
+      store var $0.o, %127
+      call builtin.scope_record_destroy(%97)
+      jump bb28
+    bb27:
       %123 = call builtin.exception_value(%121)
       throw %123
+    bb28:
+      %128 = is_exception %121
+      branch %128, bb30, bb29
+    bb29:
+      branch %81, bb31, bb32
+    bb30:
+      %129 = call builtin.exception_value(%121)
+      throw %129
     bb31:
-      %127 = phi [(bb29, %121), (bb27, %126)]
-      jump bb32
+      %130 = call builtin.console.log(%121)
+      jump bb24
     bb32:
-      %128 = const c72
-      %129 = get_prop %127, %128
-      %130 = is_exception %129
-      branch %130, bb34, bb33
+      %131 = call %93, this=%94, args=[%121]
+      jump bb24
     bb33:
-      %132 = load var $2.%with
-      %133 = const c73
-      %134 = call builtin.with.has_binding(%132, %133)
-      %135 = is_exception %134
-      branch %135, bb37, bb36
+      %135 = const c80
+      %136 = const c81
+      %137 = call builtin.intrinsic_pristine(%135, %136)
+      branch %137, bb35, bb36
     bb34:
-      %131 = call builtin.exception_value(%129)
-      throw %131
+      %134 = call builtin.exception_value(%132)
+      throw %134
     bb35:
-      %138 = phi [(bb38, %132), (bb39, %137)]
-      jump bb40
+      %148 = const c86
+      jump bb42
     bb36:
-      branch %134, bb38, bb39
+      %138 = const c82
+      %139 = const c83
+      %140 = call builtin.intrinsic_resolve(%138, %139)
+      %141 = is_exception %140
+      branch %141, bb38, bb37
     bb37:
-      %136 = call builtin.exception_value(%134)
-      throw %136
+      %143 = const c84
+      %144 = const c85
+      %145 = call builtin.intrinsic_resolve(%143, %144, %140)
+      %146 = is_exception %145
+      branch %146, bb40, bb39
     bb38:
-      jump bb35
+      %142 = call builtin.exception_value(%140)
+      throw %142
     bb39:
-      %137 = const c74
-      jump bb35
+      jump bb42
     bb40:
-      %139 = const c75
-      %140 = stricteq %138, %139
-      branch %140, bb41, bb42
+      %147 = call builtin.exception_value(%145)
+      throw %147
     bb41:
-      %147 = const c78
-      %148 = const c79
-      %149 = call builtin.scope_record_create(%148)
-      store var $eval_env, %149
-      %150 = const c80
-      %151 = load var $0.f
-      %152 = const c81
-      %153 = const c82
-      call builtin.scope_record_add_binding(%149, %150, %151, %152, %153)
-      %154 = const c83
-      %155 = load var $0.o
-      %156 = const c84
-      %157 = const c85
-      call builtin.scope_record_add_binding(%149, %154, %155, %156, %157)
-      %158 = const c86
-      %159 = load var $0.shadow
-      %160 = const c87
-      %161 = const c88
-      call builtin.scope_record_add_binding(%149, %158, %159, %160, %161)
-      %162 = load var $2.%with
-      %163 = const c89
-      call builtin.scope_record.add_with_layer(%149, %162, %163)
-      %164 = const c90
-      %165 = const c91
-      call builtin.scope_record_set_meta(%149, %164, %165)
-      %166 = const c92
-      %167 = const c93
-      call builtin.scope_record_set_meta(%149, %166, %167)
-      %168 = const c94
-      %169 = get_super_base
-      %170 = const c95
-      %171 = const c96
-      call builtin.scope_record_add_binding(%149, %170, %169, %171, %171)
-      call builtin.scope_record_set_meta(%149, %168, %169)
-      %172 = const c97
-      %174 = const c98
-      %173 = call builtin.new.target(%174)
-      call builtin.scope_record_set_meta(%149, %172, %173)
-      %175 = call builtin.eval(%147, %149)
-      %176 = is_exception %175
-      branch %176, bb46, bb45
+      %158 = phi [(bb45, %156), (bb46, %157)]
+      %159 = is_exception %158
+      branch %159, bb48, bb47
     bb42:
-      %141 = const c76
-      %142 = get_prop %138, %141
-      %143 = is_exception %142
-      branch %143, bb44, bb43
+      %149 = phi [(bb35, %148), (bb39, %145)]
+      %150 = phi [(bb35, %148), (bb39, %140)]
+      %151 = load var $0.o
+      %152 = const c87
+      %153 = get_prop %151, %152
+      %154 = is_exception %153
+      branch %154, bb44, bb43
     bb43:
-      %145 = const c77
-      %146 = call %142, this=%138, args=[%145]
-      jump bb48
+      branch %137, bb45, bb46
     bb44:
-      %144 = call builtin.exception_value(%142)
-      throw %144
+      %155 = call builtin.exception_value(%153)
+      throw %155
     bb45:
-      %178 = const c99
-      %179 = call builtin.scope_record.get_binding(%149, %178)
-      store var $0.f, %179
-      %180 = const c100
-      %181 = call builtin.scope_record.get_binding(%149, %180)
-      store var $0.o, %181
-      call builtin.scope_record_destroy(%149)
-      jump bb47
+      %156 = call builtin.console.log(%153)
+      jump bb41
     bb46:
+      %157 = call %149, this=%150, args=[%153]
+      jump bb41
+    bb47:
+      %161 = load var $0.o
+      %162 = call builtin.with.to_object(%161)
+      %163 = is_exception %162
+      branch %163, bb50, bb49
+    bb48:
+      %160 = call builtin.exception_value(%158)
+      throw %160
+    bb49:
+      store var $2.%with, %162
+      %165 = load var $2.%with
+      %166 = const c88
+      %167 = call builtin.with.has_binding(%165, %166)
+      %168 = is_exception %167
+      branch %168, bb53, bb52
+    bb50:
+      %164 = call builtin.exception_value(%162)
+      throw %164
+    bb51:
+      %171 = phi [(bb54, %165), (bb55, %170)]
+      jump bb56
+    bb52:
+      branch %167, bb54, bb55
+    bb53:
+      %169 = call builtin.exception_value(%167)
+      throw %169
+    bb54:
+      jump bb51
+    bb55:
+      %170 = const c89
+      jump bb51
+    bb56:
+      %172 = const c90
+      %173 = stricteq %171, %172
+      branch %173, bb57, bb58
+    bb57:
+      %178 = load var $0.$global
+      %179 = const c92
+      %180 = get_prop %178, %179
+      jump bb61
+    bb58:
+      %174 = const c91
+      %175 = get_prop %171, %174
+      %176 = is_exception %175
+      branch %176, bb60, bb59
+    bb59:
+      jump bb61
+    bb60:
       %177 = call builtin.exception_value(%175)
       throw %177
-    bb47:
-      jump bb48
-    bb48:
-      %182 = phi [(bb43, %146), (bb47, %175)]
-      jump bb49
-    bb49:
-      %183 = is_exception %182
-      branch %183, bb51, bb50
-    bb50:
-      %185 = call %129, this=%127, args=[%182]
-      %186 = is_exception %185
-      branch %186, bb53, bb52
-    bb51:
-      %184 = call builtin.exception_value(%182)
-      throw %184
-    bb52:
-      %188 = load var $2.%with
-      %189 = const c101
-      %190 = call builtin.with.has_binding(%188, %189)
-      %191 = is_exception %190
-      branch %191, bb56, bb55
-    bb53:
-      %187 = call builtin.exception_value(%185)
-      throw %187
-    bb54:
-      %194 = phi [(bb57, %188), (bb58, %193)]
-      jump bb59
-    bb55:
-      branch %190, bb57, bb58
-    bb56:
-      %192 = call builtin.exception_value(%190)
-      throw %192
-    bb57:
-      jump bb54
-    bb58:
-      %193 = const c102
-      jump bb54
-    bb59:
-      %195 = const c103
-      %196 = stricteq %194, %195
-      branch %196, bb60, bb61
-    bb60:
-      %203 = const c106
-      %204 = const c107
-      %205 = call builtin.scope_record_create(%204)
-      store var $eval_env, %205
-      %206 = const c108
-      %207 = load var $0.f
-      %208 = const c109
-      %209 = const c110
-      call builtin.scope_record_add_binding(%205, %206, %207, %208, %209)
-      %210 = const c111
-      %211 = load var $0.o
-      %212 = const c112
-      %213 = const c113
-      call builtin.scope_record_add_binding(%205, %210, %211, %212, %213)
-      %214 = const c114
-      %215 = load var $0.shadow
-      %216 = const c115
-      %217 = const c116
-      call builtin.scope_record_add_binding(%205, %214, %215, %216, %217)
-      %218 = load var $2.%with
-      %219 = const c117
-      call builtin.scope_record.add_with_layer(%205, %218, %219)
-      %220 = const c118
-      %221 = const c119
-      call builtin.scope_record_set_meta(%205, %220, %221)
-      %222 = const c120
-      %223 = const c121
-      call builtin.scope_record_set_meta(%205, %222, %223)
-      %224 = const c122
-      %225 = get_super_base
-      %226 = const c123
-      %227 = const c124
-      call builtin.scope_record_add_binding(%205, %226, %225, %227, %227)
-      call builtin.scope_record_set_meta(%205, %224, %225)
-      %228 = const c125
-      %230 = const c126
-      %229 = call builtin.new.target(%230)
-      call builtin.scope_record_set_meta(%205, %228, %229)
-      %231 = call builtin.eval(%203, %205)
-      %232 = is_exception %231
-      branch %232, bb65, bb64
     bb61:
-      %197 = const c104
-      %198 = get_prop %194, %197
-      %199 = is_exception %198
-      branch %199, bb63, bb62
+      %181 = phi [(bb59, %175), (bb57, %180)]
+      jump bb62
     bb62:
-      %201 = const c105
-      %202 = call %198, this=%194, args=[%201]
-      jump bb67
+      %182 = const c93
+      %183 = get_prop %181, %182
+      %184 = is_exception %183
+      branch %184, bb64, bb63
     bb63:
-      %200 = call builtin.exception_value(%198)
-      throw %200
+      %186 = load var $2.%with
+      %187 = const c94
+      %188 = call builtin.with.has_binding(%186, %187)
+      %189 = is_exception %188
+      branch %189, bb67, bb66
     bb64:
-      %234 = const c127
-      %235 = call builtin.scope_record.get_binding(%205, %234)
-      store var $0.f, %235
-      %236 = const c128
-      %237 = call builtin.scope_record.get_binding(%205, %236)
-      store var $0.o, %237
-      call builtin.scope_record_destroy(%205)
-      jump bb66
+      %185 = call builtin.exception_value(%183)
+      throw %185
     bb65:
-      %233 = call builtin.exception_value(%231)
-      throw %233
+      %192 = phi [(bb68, %186), (bb69, %191)]
+      jump bb70
     bb66:
-      jump bb67
+      branch %188, bb68, bb69
     bb67:
-      jump bb68
+      %190 = call builtin.exception_value(%188)
+      throw %190
     bb68:
-      %239 = load var $0.o
-      %240 = const c129
-      %241 = get_prop %239, %240
-      %242 = is_exception %241
-      branch %242, bb70, bb69
+      jump bb65
     bb69:
-      %244 = call builtin.console.log(%241)
-      %245 = is_exception %244
-      branch %245, bb72, bb71
+      %191 = const c95
+      jump bb65
     bb70:
-      %243 = call builtin.exception_value(%241)
-      throw %243
+      %193 = const c96
+      %194 = stricteq %192, %193
+      branch %194, bb71, bb72
     bb71:
-      %247 = const c184
-      %249 = new_object(capacity=3)
-      %250 = load var $env
-      set_proto %249, %250
-      store var $0.$shared_env, %249
-      %251 = load var $0.f
-      %252 = const c186
-      %253 = set_prop %249, %252, %251
-      %254 = load var $0.o
-      %255 = const c187
-      %256 = set_prop %249, %255, %254
-      %257 = const c188
-      %258 = const c189
-      %259 = set_prop %249, %258, %257
-      %260 = call builtin.create_closure(%247, %249)
-      store var $0.f, %260
-      %261 = const c190
-      %262 = set_prop %249, %261, %260
-      %263 = const c191
-      %264 = load var $0.$shared_env
-      %265 = const c192
-      %266 = stricteq %264, %265
-      %267 = const c193
-      branch %266, bb73, bb74
+      %201 = const c99
+      %202 = const c100
+      %203 = call builtin.scope_record_create(%202)
+      store var $eval_env, %203
+      %204 = const c101
+      %205 = load var $0.f
+      %206 = const c102
+      %207 = const c103
+      call builtin.scope_record_add_binding(%203, %204, %205, %206, %207)
+      %208 = const c104
+      %209 = load var $0.o
+      %210 = const c105
+      %211 = const c106
+      call builtin.scope_record_add_binding(%203, %208, %209, %210, %211)
+      %212 = const c107
+      %213 = load var $0.shadow
+      %214 = const c108
+      %215 = const c109
+      call builtin.scope_record_add_binding(%203, %212, %213, %214, %215)
+      %216 = load var $2.%with
+      %217 = const c110
+      call builtin.scope_record.add_with_layer(%203, %216, %217)
+      %218 = const c111
+      %219 = const c112
+      call builtin.scope_record_set_meta(%203, %218, %219)
+      %220 = const c113
+      %221 = const c114
+      call builtin.scope_record_set_meta(%203, %220, %221)
+      %222 = const c115
+      %223 = get_super_base
+      %224 = const c116
+      %225 = const c117
+      call builtin.scope_record_add_binding(%203, %224, %223, %225, %225)
+      call builtin.scope_record_set_meta(%203, %222, %223)
+      %226 = const c118
+      %228 = const c119
+      %227 = call builtin.new.target(%228)
+      call builtin.scope_record_set_meta(%203, %226, %227)
+      %229 = call builtin.eval(%201, %203)
+      %230 = is_exception %229
+      branch %230, bb76, bb75
     bb72:
+      %195 = const c97
+      %196 = get_prop %192, %195
+      %197 = is_exception %196
+      branch %197, bb74, bb73
+    bb73:
+      %199 = const c98
+      %200 = call %196, this=%192, args=[%199]
+      jump bb78
+    bb74:
+      %198 = call builtin.exception_value(%196)
+      throw %198
+    bb75:
+      %232 = const c120
+      %233 = call builtin.scope_record.get_binding(%203, %232)
+      store var $0.f, %233
+      %234 = const c121
+      %235 = call builtin.scope_record.get_binding(%203, %234)
+      store var $0.o, %235
+      call builtin.scope_record_destroy(%203)
+      jump bb77
+    bb76:
+      %231 = call builtin.exception_value(%229)
+      throw %231
+    bb77:
+      jump bb78
+    bb78:
+      %236 = phi [(bb73, %200), (bb77, %229)]
+      jump bb79
+    bb79:
+      %237 = is_exception %236
+      branch %237, bb81, bb80
+    bb80:
+      %239 = call %183, this=%181, args=[%236]
+      %240 = is_exception %239
+      branch %240, bb83, bb82
+    bb81:
+      %238 = call builtin.exception_value(%236)
+      throw %238
+    bb82:
+      %242 = load var $2.%with
+      %243 = const c122
+      %244 = call builtin.with.has_binding(%242, %243)
+      %245 = is_exception %244
+      branch %245, bb86, bb85
+    bb83:
+      %241 = call builtin.exception_value(%239)
+      throw %241
+    bb84:
+      %248 = phi [(bb87, %242), (bb88, %247)]
+      jump bb89
+    bb85:
+      branch %244, bb87, bb88
+    bb86:
       %246 = call builtin.exception_value(%244)
       throw %246
-    bb73:
-      %269 = load var $0.f
-      jump bb76
-    bb74:
-      %268 = call builtin.object.has_own(%264, %267)
-      branch %268, bb75, bb73
-    bb75:
-      %270 = get_prop %264, %267
-      jump bb76
-    bb76:
-      %271 = phi [(bb73, %269), (bb75, %270)]
-      %272 = call %271, this=%263
-      %273 = is_exception %272
-      branch %273, bb78, bb77
-    bb77:
-      %275 = call builtin.console.log(%272)
-      %276 = is_exception %275
-      branch %276, bb80, bb79
-    bb78:
-      %274 = call builtin.exception_value(%272)
-      throw %274
-    bb79:
-      %278 = const c194
-      %279 = const c195
-      %280 = call builtin.scope_record_create(%279)
-      store var $eval_env, %280
-      %281 = const c196
-      %282 = load var $0.$shared_env
-      %283 = const c197
-      %284 = stricteq %282, %283
-      %285 = const c198
-      branch %284, bb81, bb82
-    bb80:
-      %277 = call builtin.exception_value(%275)
-      throw %277
-    bb81:
-      %287 = load var $0.f
-      jump bb84
-    bb82:
-      %286 = call builtin.object.has_own(%282, %285)
-      branch %286, bb83, bb81
-    bb83:
-      %288 = get_prop %282, %285
-      jump bb84
-    bb84:
-      %289 = phi [(bb81, %287), (bb83, %288)]
-      %290 = const c199
-      %291 = const c200
-      call builtin.scope_record_add_binding(%280, %281, %289, %290, %291)
-      %292 = const c201
-      %293 = load var $0.$shared_env
-      %294 = const c202
-      %295 = stricteq %293, %294
-      %296 = const c203
-      branch %295, bb85, bb86
-    bb85:
-      %298 = load var $0.o
-      jump bb88
-    bb86:
-      %297 = call builtin.object.has_own(%293, %296)
-      branch %297, bb87, bb85
     bb87:
-      %299 = get_prop %293, %296
-      jump bb88
+      jump bb84
     bb88:
-      %300 = phi [(bb85, %298), (bb87, %299)]
-      %301 = const c204
-      %302 = const c205
-      call builtin.scope_record_add_binding(%280, %292, %300, %301, %302)
-      %303 = const c206
-      %304 = load var $0.$shared_env
-      %305 = const c207
-      %306 = stricteq %304, %305
-      %307 = const c208
-      branch %306, bb89, bb90
+      %247 = const c123
+      jump bb84
     bb89:
-      %309 = load var $0.shadow
-      jump bb92
+      %249 = const c124
+      %250 = stricteq %248, %249
+      branch %250, bb90, bb91
     bb90:
-      %308 = call builtin.object.has_own(%304, %307)
-      branch %308, bb91, bb89
+      %257 = const c127
+      %258 = const c128
+      %259 = call builtin.scope_record_create(%258)
+      store var $eval_env, %259
+      %260 = const c129
+      %261 = load var $0.f
+      %262 = const c130
+      %263 = const c131
+      call builtin.scope_record_add_binding(%259, %260, %261, %262, %263)
+      %264 = const c132
+      %265 = load var $0.o
+      %266 = const c133
+      %267 = const c134
+      call builtin.scope_record_add_binding(%259, %264, %265, %266, %267)
+      %268 = const c135
+      %269 = load var $0.shadow
+      %270 = const c136
+      %271 = const c137
+      call builtin.scope_record_add_binding(%259, %268, %269, %270, %271)
+      %272 = load var $2.%with
+      %273 = const c138
+      call builtin.scope_record.add_with_layer(%259, %272, %273)
+      %274 = const c139
+      %275 = const c140
+      call builtin.scope_record_set_meta(%259, %274, %275)
+      %276 = const c141
+      %277 = const c142
+      call builtin.scope_record_set_meta(%259, %276, %277)
+      %278 = const c143
+      %279 = get_super_base
+      %280 = const c144
+      %281 = const c145
+      call builtin.scope_record_add_binding(%259, %280, %279, %281, %281)
+      call builtin.scope_record_set_meta(%259, %278, %279)
+      %282 = const c146
+      %284 = const c147
+      %283 = call builtin.new.target(%284)
+      call builtin.scope_record_set_meta(%259, %282, %283)
+      %285 = call builtin.eval(%257, %259)
+      %286 = is_exception %285
+      branch %286, bb95, bb94
     bb91:
-      %310 = get_prop %304, %307
-      jump bb92
+      %251 = const c125
+      %252 = get_prop %248, %251
+      %253 = is_exception %252
+      branch %253, bb93, bb92
     bb92:
-      %311 = phi [(bb89, %309), (bb91, %310)]
-      %312 = const c209
-      %313 = const c210
-      call builtin.scope_record_add_binding(%280, %303, %311, %312, %313)
-      %314 = const c211
-      %315 = const c212
-      call builtin.scope_record_set_meta(%280, %314, %315)
-      %316 = const c213
-      %317 = const c214
-      call builtin.scope_record_set_meta(%280, %316, %317)
-      %318 = const c215
-      %319 = get_super_base
-      %320 = const c216
-      %321 = const c217
-      call builtin.scope_record_add_binding(%280, %320, %319, %321, %321)
-      call builtin.scope_record_set_meta(%280, %318, %319)
-      %322 = const c218
-      %324 = const c219
-      %323 = call builtin.new.target(%324)
-      call builtin.scope_record_set_meta(%280, %322, %323)
-      %325 = call builtin.eval(%278, %280)
-      %326 = is_exception %325
-      branch %326, bb94, bb93
+      %255 = const c126
+      %256 = call %252, this=%248, args=[%255]
+      jump bb97
     bb93:
-      %328 = const c220
-      %329 = call builtin.scope_record.get_binding(%280, %328)
-      %330 = const c221
-      %331 = set_prop %249, %330, %329
-      %332 = const c222
-      %333 = call builtin.scope_record.get_binding(%280, %332)
-      %334 = const c223
-      %335 = set_prop %249, %334, %333
-      call builtin.scope_record_destroy(%280)
-      jump bb95
+      %254 = call builtin.exception_value(%252)
+      throw %254
     bb94:
-      %327 = call builtin.exception_value(%325)
-      throw %327
+      %288 = const c148
+      %289 = call builtin.scope_record.get_binding(%259, %288)
+      store var $0.f, %289
+      %290 = const c149
+      %291 = call builtin.scope_record.get_binding(%259, %290)
+      store var $0.o, %291
+      call builtin.scope_record_destroy(%259)
+      jump bb96
     bb95:
-      %336 = is_exception %325
-      branch %336, bb97, bb96
+      %287 = call builtin.exception_value(%285)
+      throw %287
     bb96:
-      %338 = call builtin.console.log(%325)
-      %339 = is_exception %338
-      branch %339, bb99, bb98
+      jump bb97
     bb97:
-      %337 = call builtin.exception_value(%325)
-      throw %337
+      jump bb98
     bb98:
-      %341 = const c224
-      %342 = const c225
-      %343 = call builtin.scope_record_create(%342)
-      store var $eval_env, %343
-      %344 = const c226
-      %345 = load var $0.$shared_env
-      %346 = const c227
-      %347 = stricteq %345, %346
-      %348 = const c228
-      branch %347, bb100, bb101
+      %293 = const c150
+      %294 = const c151
+      %295 = call builtin.intrinsic_pristine(%293, %294)
+      branch %295, bb99, bb100
     bb99:
-      %340 = call builtin.exception_value(%338)
-      throw %340
+      %306 = const c156
+      jump bb106
     bb100:
-      %350 = load var $0.f
-      jump bb103
+      %296 = const c152
+      %297 = const c153
+      %298 = call builtin.intrinsic_resolve(%296, %297)
+      %299 = is_exception %298
+      branch %299, bb102, bb101
     bb101:
-      %349 = call builtin.object.has_own(%345, %348)
-      branch %349, bb102, bb100
+      %301 = const c154
+      %302 = const c155
+      %303 = call builtin.intrinsic_resolve(%301, %302, %298)
+      %304 = is_exception %303
+      branch %304, bb104, bb103
     bb102:
-      %351 = get_prop %345, %348
-      jump bb103
+      %300 = call builtin.exception_value(%298)
+      throw %300
     bb103:
-      %352 = phi [(bb100, %350), (bb102, %351)]
-      %353 = const c229
-      %354 = const c230
-      call builtin.scope_record_add_binding(%343, %344, %352, %353, %354)
-      %355 = const c231
-      %356 = load var $0.$shared_env
-      %357 = const c232
-      %358 = stricteq %356, %357
-      %359 = const c233
-      branch %358, bb104, bb105
+      jump bb106
     bb104:
-      %361 = load var $0.o
-      jump bb107
+      %305 = call builtin.exception_value(%303)
+      throw %305
     bb105:
-      %360 = call builtin.object.has_own(%356, %359)
-      branch %360, bb106, bb104
+      %316 = phi [(bb109, %314), (bb110, %315)]
+      %317 = is_exception %316
+      branch %317, bb112, bb111
     bb106:
-      %362 = get_prop %356, %359
-      jump bb107
+      %307 = phi [(bb99, %306), (bb103, %303)]
+      %308 = phi [(bb99, %306), (bb103, %298)]
+      %309 = load var $0.o
+      %310 = const c157
+      %311 = get_prop %309, %310
+      %312 = is_exception %311
+      branch %312, bb108, bb107
     bb107:
-      %363 = phi [(bb104, %361), (bb106, %362)]
-      %364 = const c234
-      %365 = const c235
-      call builtin.scope_record_add_binding(%343, %355, %363, %364, %365)
-      %366 = const c236
-      %367 = load var $0.$shared_env
-      %368 = const c237
-      %369 = stricteq %367, %368
-      %370 = const c238
-      branch %369, bb108, bb109
+      branch %295, bb109, bb110
     bb108:
-      %372 = load var $0.shadow
-      jump bb111
+      %313 = call builtin.exception_value(%311)
+      throw %313
     bb109:
-      %371 = call builtin.object.has_own(%367, %370)
-      branch %371, bb110, bb108
+      %314 = call builtin.console.log(%311)
+      jump bb105
     bb110:
-      %373 = get_prop %367, %370
-      jump bb111
+      %315 = call %307, this=%308, args=[%311]
+      jump bb105
     bb111:
-      %374 = phi [(bb108, %372), (bb110, %373)]
-      %375 = const c239
-      %376 = const c240
-      call builtin.scope_record_add_binding(%343, %366, %374, %375, %376)
-      %377 = const c241
-      %378 = const c242
-      call builtin.scope_record_set_meta(%343, %377, %378)
-      %379 = const c243
-      %380 = const c244
-      call builtin.scope_record_set_meta(%343, %379, %380)
-      %381 = const c245
-      %382 = get_super_base
-      %383 = const c246
-      %384 = const c247
-      call builtin.scope_record_add_binding(%343, %383, %382, %384, %384)
-      call builtin.scope_record_set_meta(%343, %381, %382)
-      %385 = const c248
-      %387 = const c249
-      %386 = call builtin.new.target(%387)
-      call builtin.scope_record_set_meta(%343, %385, %386)
-      %388 = call builtin.eval(%341, %343)
-      %389 = is_exception %388
-      branch %389, bb113, bb112
+      %319 = const c212
+      %321 = new_object(capacity=3)
+      %322 = load var $env
+      set_proto %321, %322
+      store var $0.$shared_env, %321
+      %323 = load var $0.f
+      %324 = const c214
+      %325 = set_prop %321, %324, %323
+      %326 = load var $0.o
+      %327 = const c215
+      %328 = set_prop %321, %327, %326
+      %329 = const c216
+      %330 = const c217
+      %331 = set_prop %321, %330, %329
+      %332 = call builtin.create_closure(%319, %321)
+      store var $0.f, %332
+      %333 = const c218
+      %334 = set_prop %321, %333, %332
+      %335 = const c219
+      %336 = const c220
+      %337 = call builtin.intrinsic_pristine(%335, %336)
+      branch %337, bb113, bb114
     bb112:
-      %391 = const c250
-      %392 = call builtin.scope_record.get_binding(%343, %391)
-      %393 = const c251
-      %394 = set_prop %249, %393, %392
-      %395 = const c252
-      %396 = call builtin.scope_record.get_binding(%343, %395)
-      %397 = const c253
-      %398 = set_prop %249, %397, %396
-      call builtin.scope_record_destroy(%343)
-      jump bb114
+      %318 = call builtin.exception_value(%316)
+      throw %318
     bb113:
-      %390 = call builtin.exception_value(%388)
-      throw %390
+      %348 = const c225
+      jump bb120
     bb114:
-      %399 = is_exception %388
-      branch %399, bb116, bb115
+      %338 = const c221
+      %339 = const c222
+      %340 = call builtin.intrinsic_resolve(%338, %339)
+      %341 = is_exception %340
+      branch %341, bb116, bb115
     bb115:
-      %401 = call builtin.console.log(%388)
-      %402 = is_exception %401
-      branch %402, bb118, bb117
+      %343 = const c223
+      %344 = const c224
+      %345 = call builtin.intrinsic_resolve(%343, %344, %340)
+      %346 = is_exception %345
+      branch %346, bb118, bb117
     bb116:
-      %400 = call builtin.exception_value(%388)
-      throw %400
+      %342 = call builtin.exception_value(%340)
+      throw %342
     bb117:
-      %404 = const c254
-      %405 = const c255
-      %406 = call builtin.scope_record_create(%405)
-      store var $eval_env, %406
-      %407 = const c256
-      %408 = load var $0.$shared_env
-      %409 = const c257
-      %410 = stricteq %408, %409
-      %411 = const c258
-      branch %410, bb119, bb120
+      jump bb120
     bb118:
-      %403 = call builtin.exception_value(%401)
-      throw %403
+      %347 = call builtin.exception_value(%345)
+      throw %347
     bb119:
-      %413 = load var $0.f
-      jump bb122
+      %365 = phi [(bb127, %363), (bb128, %364)]
+      %366 = is_exception %365
+      branch %366, bb130, bb129
     bb120:
-      %412 = call builtin.object.has_own(%408, %411)
-      branch %412, bb121, bb119
+      %349 = phi [(bb113, %348), (bb117, %345)]
+      %350 = phi [(bb113, %348), (bb117, %340)]
+      %351 = const c226
+      %352 = load var $0.$shared_env
+      %353 = const c227
+      %354 = stricteq %352, %353
+      %355 = const c228
+      branch %354, bb121, bb122
     bb121:
-      %414 = get_prop %408, %411
-      jump bb122
+      %357 = load var $0.f
+      jump bb124
     bb122:
-      %415 = phi [(bb119, %413), (bb121, %414)]
-      %416 = const c259
-      %417 = const c260
-      call builtin.scope_record_add_binding(%406, %407, %415, %416, %417)
-      %418 = const c261
-      %419 = load var $0.$shared_env
-      %420 = const c262
-      %421 = stricteq %419, %420
-      %422 = const c263
-      branch %421, bb123, bb124
+      %356 = call builtin.object.has_own(%352, %355)
+      branch %356, bb123, bb121
     bb123:
-      %424 = load var $0.o
-      jump bb126
+      %358 = get_prop %352, %355
+      jump bb124
     bb124:
-      %423 = call builtin.object.has_own(%419, %422)
-      branch %423, bb125, bb123
+      %359 = phi [(bb121, %357), (bb123, %358)]
+      %360 = call %359, this=%351
+      %361 = is_exception %360
+      branch %361, bb126, bb125
     bb125:
-      %425 = get_prop %419, %422
-      jump bb126
+      branch %337, bb127, bb128
     bb126:
-      %426 = phi [(bb123, %424), (bb125, %425)]
-      %427 = const c264
-      %428 = const c265
-      call builtin.scope_record_add_binding(%406, %418, %426, %427, %428)
-      %429 = const c266
-      %430 = load var $0.$shared_env
-      %431 = const c267
-      %432 = stricteq %430, %431
-      %433 = const c268
-      branch %432, bb127, bb128
+      %362 = call builtin.exception_value(%360)
+      throw %362
     bb127:
-      %435 = load var $0.shadow
-      jump bb130
+      %363 = call builtin.console.log(%360)
+      jump bb119
     bb128:
-      %434 = call builtin.object.has_own(%430, %433)
-      branch %434, bb129, bb127
+      %364 = call %349, this=%350, args=[%360]
+      jump bb119
     bb129:
-      %436 = get_prop %430, %433
-      jump bb130
+      %368 = const c229
+      %369 = const c230
+      %370 = call builtin.intrinsic_pristine(%368, %369)
+      branch %370, bb131, bb132
     bb130:
-      %437 = phi [(bb127, %435), (bb129, %436)]
-      %438 = const c269
-      %439 = const c270
-      call builtin.scope_record_add_binding(%406, %429, %437, %438, %439)
-      %440 = const c271
-      %441 = const c272
-      call builtin.scope_record_set_meta(%406, %440, %441)
-      %442 = const c273
-      %443 = const c274
-      call builtin.scope_record_set_meta(%406, %442, %443)
-      %444 = const c275
-      %445 = get_super_base
-      %446 = const c276
-      %447 = const c277
-      call builtin.scope_record_add_binding(%406, %446, %445, %447, %447)
-      call builtin.scope_record_set_meta(%406, %444, %445)
-      %448 = const c278
-      %450 = const c279
-      %449 = call builtin.new.target(%450)
-      call builtin.scope_record_set_meta(%406, %448, %449)
-      %451 = call builtin.eval(%404, %406)
-      %452 = is_exception %451
-      branch %452, bb132, bb131
+      %367 = call builtin.exception_value(%365)
+      throw %367
     bb131:
-      %454 = const c280
-      %455 = call builtin.scope_record.get_binding(%406, %454)
-      %456 = const c281
-      %457 = set_prop %249, %456, %455
-      %458 = const c282
-      %459 = call builtin.scope_record.get_binding(%406, %458)
-      %460 = const c283
-      %461 = set_prop %249, %460, %459
-      call builtin.scope_record_destroy(%406)
-      jump bb133
+      %381 = const c235
+      jump bb138
     bb132:
-      %453 = call builtin.exception_value(%451)
-      throw %453
+      %371 = const c231
+      %372 = const c232
+      %373 = call builtin.intrinsic_resolve(%371, %372)
+      %374 = is_exception %373
+      branch %374, bb134, bb133
     bb133:
-      %462 = is_exception %451
-      branch %462, bb135, bb134
+      %376 = const c233
+      %377 = const c234
+      %378 = call builtin.intrinsic_resolve(%376, %377, %373)
+      %379 = is_exception %378
+      branch %379, bb136, bb135
     bb134:
-      %464 = call builtin.console.log(%451)
-      %465 = is_exception %464
-      branch %465, bb137, bb136
+      %375 = call builtin.exception_value(%373)
+      throw %375
     bb135:
-      %463 = call builtin.exception_value(%451)
-      throw %463
+      jump bb138
     bb136:
-      %467 = const c284
-      %468 = const c285
-      %469 = call builtin.scope_record_create(%468)
-      store var $eval_env, %469
-      %470 = const c286
-      %471 = load var $0.$shared_env
-      %472 = const c287
-      %473 = stricteq %471, %472
-      %474 = const c288
-      branch %473, bb138, bb139
+      %380 = call builtin.exception_value(%378)
+      throw %380
     bb137:
-      %466 = call builtin.exception_value(%464)
-      throw %466
+      %446 = phi [(bb156, %444), (bb157, %445)]
+      %447 = is_exception %446
+      branch %447, bb159, bb158
     bb138:
-      %476 = load var $0.f
-      jump bb141
+      %382 = phi [(bb131, %381), (bb135, %378)]
+      %383 = phi [(bb131, %381), (bb135, %373)]
+      %384 = const c236
+      %385 = const c237
+      %386 = call builtin.scope_record_create(%385)
+      store var $eval_env, %386
+      %387 = const c238
+      %388 = load var $0.$shared_env
+      %389 = const c239
+      %390 = stricteq %388, %389
+      %391 = const c240
+      branch %390, bb139, bb140
     bb139:
-      %475 = call builtin.object.has_own(%471, %474)
-      branch %475, bb140, bb138
+      %393 = load var $0.f
+      jump bb142
     bb140:
-      %477 = get_prop %471, %474
-      jump bb141
+      %392 = call builtin.object.has_own(%388, %391)
+      branch %392, bb141, bb139
     bb141:
-      %478 = phi [(bb138, %476), (bb140, %477)]
-      %479 = const c289
-      %480 = const c290
-      call builtin.scope_record_add_binding(%469, %470, %478, %479, %480)
-      %481 = const c291
-      %482 = load var $0.$shared_env
-      %483 = const c292
-      %484 = stricteq %482, %483
-      %485 = const c293
-      branch %484, bb142, bb143
+      %394 = get_prop %388, %391
+      jump bb142
     bb142:
-      %487 = load var $0.o
-      jump bb145
+      %395 = phi [(bb139, %393), (bb141, %394)]
+      %396 = const c241
+      %397 = const c242
+      call builtin.scope_record_add_binding(%386, %387, %395, %396, %397)
+      %398 = const c243
+      %399 = load var $0.$shared_env
+      %400 = const c244
+      %401 = stricteq %399, %400
+      %402 = const c245
+      branch %401, bb143, bb144
     bb143:
-      %486 = call builtin.object.has_own(%482, %485)
-      branch %486, bb144, bb142
+      %404 = load var $0.o
+      jump bb146
     bb144:
-      %488 = get_prop %482, %485
-      jump bb145
+      %403 = call builtin.object.has_own(%399, %402)
+      branch %403, bb145, bb143
     bb145:
-      %489 = phi [(bb142, %487), (bb144, %488)]
-      %490 = const c294
-      %491 = const c295
-      call builtin.scope_record_add_binding(%469, %481, %489, %490, %491)
-      %492 = const c296
-      %493 = load var $0.$shared_env
-      %494 = const c297
-      %495 = stricteq %493, %494
-      %496 = const c298
-      branch %495, bb146, bb147
+      %405 = get_prop %399, %402
+      jump bb146
     bb146:
-      %498 = load var $0.shadow
-      jump bb149
+      %406 = phi [(bb143, %404), (bb145, %405)]
+      %407 = const c246
+      %408 = const c247
+      call builtin.scope_record_add_binding(%386, %398, %406, %407, %408)
+      %409 = const c248
+      %410 = load var $0.$shared_env
+      %411 = const c249
+      %412 = stricteq %410, %411
+      %413 = const c250
+      branch %412, bb147, bb148
     bb147:
-      %497 = call builtin.object.has_own(%493, %496)
-      branch %497, bb148, bb146
+      %415 = load var $0.shadow
+      jump bb150
     bb148:
-      %499 = get_prop %493, %496
-      jump bb149
+      %414 = call builtin.object.has_own(%410, %413)
+      branch %414, bb149, bb147
     bb149:
-      %500 = phi [(bb146, %498), (bb148, %499)]
-      %501 = const c299
-      %502 = const c300
-      call builtin.scope_record_add_binding(%469, %492, %500, %501, %502)
-      %503 = const c301
-      %504 = const c302
-      call builtin.scope_record_set_meta(%469, %503, %504)
-      %505 = const c303
-      %506 = const c304
-      call builtin.scope_record_set_meta(%469, %505, %506)
-      %507 = const c305
-      %508 = get_super_base
-      %509 = const c306
-      %510 = const c307
-      call builtin.scope_record_add_binding(%469, %509, %508, %510, %510)
-      call builtin.scope_record_set_meta(%469, %507, %508)
-      %511 = const c308
-      %513 = const c309
-      %512 = call builtin.new.target(%513)
-      call builtin.scope_record_set_meta(%469, %511, %512)
-      %514 = call builtin.eval(%467, %469)
-      %515 = is_exception %514
-      branch %515, bb151, bb150
+      %416 = get_prop %410, %413
+      jump bb150
     bb150:
-      %517 = const c310
-      %518 = call builtin.scope_record.get_binding(%469, %517)
-      %519 = const c311
-      %520 = set_prop %249, %519, %518
-      %521 = const c312
-      %522 = call builtin.scope_record.get_binding(%469, %521)
-      %523 = const c313
-      %524 = set_prop %249, %523, %522
-      call builtin.scope_record_destroy(%469)
-      jump bb152
+      %417 = phi [(bb147, %415), (bb149, %416)]
+      %418 = const c251
+      %419 = const c252
+      call builtin.scope_record_add_binding(%386, %409, %417, %418, %419)
+      %420 = const c253
+      %421 = const c254
+      call builtin.scope_record_set_meta(%386, %420, %421)
+      %422 = const c255
+      %423 = const c256
+      call builtin.scope_record_set_meta(%386, %422, %423)
+      %424 = const c257
+      %425 = get_super_base
+      %426 = const c258
+      %427 = const c259
+      call builtin.scope_record_add_binding(%386, %426, %425, %427, %427)
+      call builtin.scope_record_set_meta(%386, %424, %425)
+      %428 = const c260
+      %430 = const c261
+      %429 = call builtin.new.target(%430)
+      call builtin.scope_record_set_meta(%386, %428, %429)
+      %431 = call builtin.eval(%384, %386)
+      %432 = is_exception %431
+      branch %432, bb152, bb151
     bb151:
-      %516 = call builtin.exception_value(%514)
-      throw %516
+      %434 = const c262
+      %435 = call builtin.scope_record.get_binding(%386, %434)
+      %436 = const c263
+      %437 = set_prop %321, %436, %435
+      %438 = const c264
+      %439 = call builtin.scope_record.get_binding(%386, %438)
+      %440 = const c265
+      %441 = set_prop %321, %440, %439
+      call builtin.scope_record_destroy(%386)
+      jump bb153
     bb152:
-      %525 = is_exception %514
-      branch %525, bb154, bb153
+      %433 = call builtin.exception_value(%431)
+      throw %433
     bb153:
-      %527 = call builtin.console.log(%514)
-      %528 = is_exception %527
-      branch %528, bb156, bb155
+      %442 = is_exception %431
+      branch %442, bb155, bb154
     bb154:
-      %526 = call builtin.exception_value(%514)
-      throw %526
+      branch %370, bb156, bb157
     bb155:
-      %530 = const c314
-      %531 = const c315
-      %532 = call builtin.scope_record_create(%531)
-      store var $eval_env, %532
-      %533 = const c316
-      %534 = load var $0.$shared_env
-      %535 = const c317
-      %536 = stricteq %534, %535
-      %537 = const c318
-      branch %536, bb157, bb158
+      %443 = call builtin.exception_value(%431)
+      throw %443
     bb156:
-      %529 = call builtin.exception_value(%527)
-      throw %529
+      %444 = call builtin.console.log(%431)
+      jump bb137
     bb157:
-      %539 = load var $0.f
-      jump bb160
+      %445 = call %382, this=%383, args=[%431]
+      jump bb137
     bb158:
-      %538 = call builtin.object.has_own(%534, %537)
-      branch %538, bb159, bb157
+      %449 = const c266
+      %450 = const c267
+      %451 = call builtin.intrinsic_pristine(%449, %450)
+      branch %451, bb160, bb161
     bb159:
-      %540 = get_prop %534, %537
-      jump bb160
+      %448 = call builtin.exception_value(%446)
+      throw %448
     bb160:
-      %541 = phi [(bb157, %539), (bb159, %540)]
-      %542 = const c319
-      %543 = const c320
-      call builtin.scope_record_add_binding(%532, %533, %541, %542, %543)
-      %544 = const c321
-      %545 = load var $0.$shared_env
-      %546 = const c322
-      %547 = stricteq %545, %546
-      %548 = const c323
-      branch %547, bb161, bb162
+      %462 = const c272
+      jump bb167
     bb161:
-      %550 = load var $0.o
-      jump bb164
+      %452 = const c268
+      %453 = const c269
+      %454 = call builtin.intrinsic_resolve(%452, %453)
+      %455 = is_exception %454
+      branch %455, bb163, bb162
     bb162:
-      %549 = call builtin.object.has_own(%545, %548)
-      branch %549, bb163, bb161
+      %457 = const c270
+      %458 = const c271
+      %459 = call builtin.intrinsic_resolve(%457, %458, %454)
+      %460 = is_exception %459
+      branch %460, bb165, bb164
     bb163:
-      %551 = get_prop %545, %548
-      jump bb164
+      %456 = call builtin.exception_value(%454)
+      throw %456
     bb164:
-      %552 = phi [(bb161, %550), (bb163, %551)]
-      %553 = const c324
-      %554 = const c325
-      call builtin.scope_record_add_binding(%532, %544, %552, %553, %554)
-      %555 = const c326
-      %556 = load var $0.$shared_env
-      %557 = const c327
-      %558 = stricteq %556, %557
-      %559 = const c328
-      branch %558, bb165, bb166
+      jump bb167
     bb165:
-      %561 = load var $0.shadow
-      jump bb168
+      %461 = call builtin.exception_value(%459)
+      throw %461
     bb166:
-      %560 = call builtin.object.has_own(%556, %559)
-      branch %560, bb167, bb165
+      %527 = phi [(bb185, %525), (bb186, %526)]
+      %528 = is_exception %527
+      branch %528, bb188, bb187
     bb167:
-      %562 = get_prop %556, %559
-      jump bb168
+      %463 = phi [(bb160, %462), (bb164, %459)]
+      %464 = phi [(bb160, %462), (bb164, %454)]
+      %465 = const c273
+      %466 = const c274
+      %467 = call builtin.scope_record_create(%466)
+      store var $eval_env, %467
+      %468 = const c275
+      %469 = load var $0.$shared_env
+      %470 = const c276
+      %471 = stricteq %469, %470
+      %472 = const c277
+      branch %471, bb168, bb169
     bb168:
-      %563 = phi [(bb165, %561), (bb167, %562)]
-      %564 = const c329
-      %565 = const c330
-      call builtin.scope_record_add_binding(%532, %555, %563, %564, %565)
-      %566 = const c331
-      %567 = const c332
-      call builtin.scope_record_set_meta(%532, %566, %567)
-      %568 = const c333
-      %569 = const c334
-      call builtin.scope_record_set_meta(%532, %568, %569)
-      %570 = const c335
-      %571 = get_super_base
-      %572 = const c336
-      %573 = const c337
-      call builtin.scope_record_add_binding(%532, %572, %571, %573, %573)
-      call builtin.scope_record_set_meta(%532, %570, %571)
-      %574 = const c338
-      %576 = const c339
-      %575 = call builtin.new.target(%576)
-      call builtin.scope_record_set_meta(%532, %574, %575)
-      %577 = call builtin.eval(%530, %532)
-      %578 = is_exception %577
-      branch %578, bb170, bb169
-    bb169:
-      %580 = const c340
-      %581 = call builtin.scope_record.get_binding(%532, %580)
-      %582 = const c341
-      %583 = set_prop %249, %582, %581
-      %584 = const c342
-      %585 = call builtin.scope_record.get_binding(%532, %584)
-      %586 = const c343
-      %587 = set_prop %249, %586, %585
-      call builtin.scope_record_destroy(%532)
+      %474 = load var $0.f
       jump bb171
+    bb169:
+      %473 = call builtin.object.has_own(%469, %472)
+      branch %473, bb170, bb168
     bb170:
-      %579 = call builtin.exception_value(%577)
-      throw %579
+      %475 = get_prop %469, %472
+      jump bb171
     bb171:
-      %588 = is_exception %577
-      branch %588, bb173, bb172
+      %476 = phi [(bb168, %474), (bb170, %475)]
+      %477 = const c278
+      %478 = const c279
+      call builtin.scope_record_add_binding(%467, %468, %476, %477, %478)
+      %479 = const c280
+      %480 = load var $0.$shared_env
+      %481 = const c281
+      %482 = stricteq %480, %481
+      %483 = const c282
+      branch %482, bb172, bb173
     bb172:
-      %590 = call builtin.console.log(%577)
-      %591 = is_exception %590
-      branch %591, bb175, bb174
+      %485 = load var $0.o
+      jump bb175
     bb173:
-      %589 = call builtin.exception_value(%577)
-      throw %589
+      %484 = call builtin.object.has_own(%480, %483)
+      branch %484, bb174, bb172
     bb174:
-      %593 = const c344
-      %594 = const c345
-      %595 = call builtin.scope_record_create(%594)
-      store var $eval_env, %595
-      %596 = const c346
-      %597 = load var $0.$shared_env
-      %598 = const c347
-      %599 = stricteq %597, %598
-      %600 = const c348
-      branch %599, bb176, bb177
+      %486 = get_prop %480, %483
+      jump bb175
     bb175:
-      %592 = call builtin.exception_value(%590)
-      throw %592
+      %487 = phi [(bb172, %485), (bb174, %486)]
+      %488 = const c283
+      %489 = const c284
+      call builtin.scope_record_add_binding(%467, %479, %487, %488, %489)
+      %490 = const c285
+      %491 = load var $0.$shared_env
+      %492 = const c286
+      %493 = stricteq %491, %492
+      %494 = const c287
+      branch %493, bb176, bb177
     bb176:
-      %602 = load var $0.f
+      %496 = load var $0.shadow
       jump bb179
     bb177:
-      %601 = call builtin.object.has_own(%597, %600)
-      branch %601, bb178, bb176
+      %495 = call builtin.object.has_own(%491, %494)
+      branch %495, bb178, bb176
     bb178:
-      %603 = get_prop %597, %600
+      %497 = get_prop %491, %494
       jump bb179
     bb179:
-      %604 = phi [(bb176, %602), (bb178, %603)]
-      %605 = const c349
-      %606 = const c350
-      call builtin.scope_record_add_binding(%595, %596, %604, %605, %606)
-      %607 = const c351
-      %608 = load var $0.$shared_env
-      %609 = const c352
-      %610 = stricteq %608, %609
-      %611 = const c353
-      branch %610, bb180, bb181
+      %498 = phi [(bb176, %496), (bb178, %497)]
+      %499 = const c288
+      %500 = const c289
+      call builtin.scope_record_add_binding(%467, %490, %498, %499, %500)
+      %501 = const c290
+      %502 = const c291
+      call builtin.scope_record_set_meta(%467, %501, %502)
+      %503 = const c292
+      %504 = const c293
+      call builtin.scope_record_set_meta(%467, %503, %504)
+      %505 = const c294
+      %506 = get_super_base
+      %507 = const c295
+      %508 = const c296
+      call builtin.scope_record_add_binding(%467, %507, %506, %508, %508)
+      call builtin.scope_record_set_meta(%467, %505, %506)
+      %509 = const c297
+      %511 = const c298
+      %510 = call builtin.new.target(%511)
+      call builtin.scope_record_set_meta(%467, %509, %510)
+      %512 = call builtin.eval(%465, %467)
+      %513 = is_exception %512
+      branch %513, bb181, bb180
     bb180:
-      %613 = load var $0.o
-      jump bb183
+      %515 = const c299
+      %516 = call builtin.scope_record.get_binding(%467, %515)
+      %517 = const c300
+      %518 = set_prop %321, %517, %516
+      %519 = const c301
+      %520 = call builtin.scope_record.get_binding(%467, %519)
+      %521 = const c302
+      %522 = set_prop %321, %521, %520
+      call builtin.scope_record_destroy(%467)
+      jump bb182
     bb181:
-      %612 = call builtin.object.has_own(%608, %611)
-      branch %612, bb182, bb180
+      %514 = call builtin.exception_value(%512)
+      throw %514
     bb182:
-      %614 = get_prop %608, %611
-      jump bb183
+      %523 = is_exception %512
+      branch %523, bb184, bb183
     bb183:
-      %615 = phi [(bb180, %613), (bb182, %614)]
-      %616 = const c354
-      %617 = const c355
-      call builtin.scope_record_add_binding(%595, %607, %615, %616, %617)
-      %618 = const c356
-      %619 = load var $0.$shared_env
-      %620 = const c357
-      %621 = stricteq %619, %620
-      %622 = const c358
-      branch %621, bb184, bb185
+      branch %451, bb185, bb186
     bb184:
-      %624 = load var $0.shadow
-      jump bb187
+      %524 = call builtin.exception_value(%512)
+      throw %524
     bb185:
-      %623 = call builtin.object.has_own(%619, %622)
-      branch %623, bb186, bb184
+      %525 = call builtin.console.log(%512)
+      jump bb166
     bb186:
-      %625 = get_prop %619, %622
-      jump bb187
+      %526 = call %463, this=%464, args=[%512]
+      jump bb166
     bb187:
-      %626 = phi [(bb184, %624), (bb186, %625)]
-      %627 = const c359
-      %628 = const c360
-      call builtin.scope_record_add_binding(%595, %618, %626, %627, %628)
-      %629 = const c361
-      %630 = const c362
-      call builtin.scope_record_set_meta(%595, %629, %630)
-      %631 = const c363
-      %632 = const c364
-      call builtin.scope_record_set_meta(%595, %631, %632)
-      %633 = const c365
-      %634 = get_super_base
-      %635 = const c366
-      %636 = const c367
-      call builtin.scope_record_add_binding(%595, %635, %634, %636, %636)
-      call builtin.scope_record_set_meta(%595, %633, %634)
-      %637 = const c368
-      %639 = const c369
-      %638 = call builtin.new.target(%639)
-      call builtin.scope_record_set_meta(%595, %637, %638)
-      %640 = call builtin.eval(%593, %595)
-      %641 = is_exception %640
-      branch %641, bb189, bb188
+      %530 = const c303
+      %531 = const c304
+      %532 = call builtin.intrinsic_pristine(%530, %531)
+      branch %532, bb189, bb190
     bb188:
-      %643 = const c370
-      %644 = call builtin.scope_record.get_binding(%595, %643)
-      %645 = const c371
-      %646 = set_prop %249, %645, %644
-      %647 = const c372
-      %648 = call builtin.scope_record.get_binding(%595, %647)
-      %649 = const c373
-      %650 = set_prop %249, %649, %648
-      call builtin.scope_record_destroy(%595)
-      jump bb190
+      %529 = call builtin.exception_value(%527)
+      throw %529
     bb189:
-      %642 = call builtin.exception_value(%640)
-      throw %642
+      %543 = const c309
+      jump bb196
     bb190:
-      %651 = is_exception %640
-      branch %651, bb192, bb191
+      %533 = const c305
+      %534 = const c306
+      %535 = call builtin.intrinsic_resolve(%533, %534)
+      %536 = is_exception %535
+      branch %536, bb192, bb191
     bb191:
-      %653 = call builtin.console.log(%640)
-      %654 = is_exception %653
-      branch %654, bb194, bb193
+      %538 = const c307
+      %539 = const c308
+      %540 = call builtin.intrinsic_resolve(%538, %539, %535)
+      %541 = is_exception %540
+      branch %541, bb194, bb193
     bb192:
-      %652 = call builtin.exception_value(%640)
-      throw %652
+      %537 = call builtin.exception_value(%535)
+      throw %537
     bb193:
-      %656 = const c374
-      %657 = const c375
-      %658 = call builtin.scope_record_create(%657)
-      store var $eval_env, %658
-      %659 = const c376
-      %660 = load var $0.$shared_env
-      %661 = const c377
-      %662 = stricteq %660, %661
-      %663 = const c378
-      branch %662, bb195, bb196
+      jump bb196
     bb194:
-      %655 = call builtin.exception_value(%653)
-      throw %655
+      %542 = call builtin.exception_value(%540)
+      throw %542
     bb195:
-      %665 = load var $0.f
-      jump bb198
+      %608 = phi [(bb214, %606), (bb215, %607)]
+      %609 = is_exception %608
+      branch %609, bb217, bb216
     bb196:
-      %664 = call builtin.object.has_own(%660, %663)
-      branch %664, bb197, bb195
+      %544 = phi [(bb189, %543), (bb193, %540)]
+      %545 = phi [(bb189, %543), (bb193, %535)]
+      %546 = const c310
+      %547 = const c311
+      %548 = call builtin.scope_record_create(%547)
+      store var $eval_env, %548
+      %549 = const c312
+      %550 = load var $0.$shared_env
+      %551 = const c313
+      %552 = stricteq %550, %551
+      %553 = const c314
+      branch %552, bb197, bb198
     bb197:
-      %666 = get_prop %660, %663
-      jump bb198
+      %555 = load var $0.f
+      jump bb200
     bb198:
-      %667 = phi [(bb195, %665), (bb197, %666)]
-      %668 = const c379
-      %669 = const c380
-      call builtin.scope_record_add_binding(%658, %659, %667, %668, %669)
-      %670 = const c381
-      %671 = load var $0.$shared_env
-      %672 = const c382
-      %673 = stricteq %671, %672
-      %674 = const c383
-      branch %673, bb199, bb200
+      %554 = call builtin.object.has_own(%550, %553)
+      branch %554, bb199, bb197
     bb199:
-      %676 = load var $0.o
-      jump bb202
+      %556 = get_prop %550, %553
+      jump bb200
     bb200:
-      %675 = call builtin.object.has_own(%671, %674)
-      branch %675, bb201, bb199
+      %557 = phi [(bb197, %555), (bb199, %556)]
+      %558 = const c315
+      %559 = const c316
+      call builtin.scope_record_add_binding(%548, %549, %557, %558, %559)
+      %560 = const c317
+      %561 = load var $0.$shared_env
+      %562 = const c318
+      %563 = stricteq %561, %562
+      %564 = const c319
+      branch %563, bb201, bb202
     bb201:
-      %677 = get_prop %671, %674
-      jump bb202
+      %566 = load var $0.o
+      jump bb204
     bb202:
-      %678 = phi [(bb199, %676), (bb201, %677)]
-      %679 = const c384
-      %680 = const c385
-      call builtin.scope_record_add_binding(%658, %670, %678, %679, %680)
-      %681 = const c386
-      %682 = load var $0.$shared_env
-      %683 = const c387
-      %684 = stricteq %682, %683
-      %685 = const c388
-      branch %684, bb203, bb204
+      %565 = call builtin.object.has_own(%561, %564)
+      branch %565, bb203, bb201
     bb203:
-      %687 = load var $0.shadow
-      jump bb206
+      %567 = get_prop %561, %564
+      jump bb204
     bb204:
-      %686 = call builtin.object.has_own(%682, %685)
-      branch %686, bb205, bb203
+      %568 = phi [(bb201, %566), (bb203, %567)]
+      %569 = const c320
+      %570 = const c321
+      call builtin.scope_record_add_binding(%548, %560, %568, %569, %570)
+      %571 = const c322
+      %572 = load var $0.$shared_env
+      %573 = const c323
+      %574 = stricteq %572, %573
+      %575 = const c324
+      branch %574, bb205, bb206
     bb205:
-      %688 = get_prop %682, %685
-      jump bb206
+      %577 = load var $0.shadow
+      jump bb208
     bb206:
-      %689 = phi [(bb203, %687), (bb205, %688)]
-      %690 = const c389
-      %691 = const c390
-      call builtin.scope_record_add_binding(%658, %681, %689, %690, %691)
-      %692 = const c391
-      %693 = const c392
-      call builtin.scope_record_set_meta(%658, %692, %693)
-      %694 = const c393
-      %695 = const c394
-      call builtin.scope_record_set_meta(%658, %694, %695)
-      %696 = const c395
-      %697 = get_super_base
-      %698 = const c396
-      %699 = const c397
-      call builtin.scope_record_add_binding(%658, %698, %697, %699, %699)
-      call builtin.scope_record_set_meta(%658, %696, %697)
-      %700 = const c398
-      %702 = const c399
-      %701 = call builtin.new.target(%702)
-      call builtin.scope_record_set_meta(%658, %700, %701)
-      %703 = call builtin.eval(%656, %658)
-      %704 = is_exception %703
-      branch %704, bb208, bb207
+      %576 = call builtin.object.has_own(%572, %575)
+      branch %576, bb207, bb205
     bb207:
-      %706 = const c400
-      %707 = call builtin.scope_record.get_binding(%658, %706)
-      %708 = const c401
-      %709 = set_prop %249, %708, %707
-      %710 = const c402
-      %711 = call builtin.scope_record.get_binding(%658, %710)
-      %712 = const c403
-      %713 = set_prop %249, %712, %711
-      call builtin.scope_record_destroy(%658)
-      jump bb209
+      %578 = get_prop %572, %575
+      jump bb208
     bb208:
-      %705 = call builtin.exception_value(%703)
-      throw %705
+      %579 = phi [(bb205, %577), (bb207, %578)]
+      %580 = const c325
+      %581 = const c326
+      call builtin.scope_record_add_binding(%548, %571, %579, %580, %581)
+      %582 = const c327
+      %583 = const c328
+      call builtin.scope_record_set_meta(%548, %582, %583)
+      %584 = const c329
+      %585 = const c330
+      call builtin.scope_record_set_meta(%548, %584, %585)
+      %586 = const c331
+      %587 = get_super_base
+      %588 = const c332
+      %589 = const c333
+      call builtin.scope_record_add_binding(%548, %588, %587, %589, %589)
+      call builtin.scope_record_set_meta(%548, %586, %587)
+      %590 = const c334
+      %592 = const c335
+      %591 = call builtin.new.target(%592)
+      call builtin.scope_record_set_meta(%548, %590, %591)
+      %593 = call builtin.eval(%546, %548)
+      %594 = is_exception %593
+      branch %594, bb210, bb209
     bb209:
-      %714 = is_exception %703
-      branch %714, bb211, bb210
+      %596 = const c336
+      %597 = call builtin.scope_record.get_binding(%548, %596)
+      %598 = const c337
+      %599 = set_prop %321, %598, %597
+      %600 = const c338
+      %601 = call builtin.scope_record.get_binding(%548, %600)
+      %602 = const c339
+      %603 = set_prop %321, %602, %601
+      call builtin.scope_record_destroy(%548)
+      jump bb211
     bb210:
-      %716 = call builtin.console.log(%703)
-      %717 = is_exception %716
-      branch %717, bb213, bb212
+      %595 = call builtin.exception_value(%593)
+      throw %595
     bb211:
-      %715 = call builtin.exception_value(%703)
-      throw %715
+      %604 = is_exception %593
+      branch %604, bb213, bb212
     bb212:
-      %719 = const c404
-      store var $0.shadow, %719
-      %720 = load var $0.$shared_env
-      %721 = const c405
-      %722 = stricteq %720, %721
-      branch %722, bb214, bb215
+      branch %532, bb214, bb215
     bb213:
-      %718 = call builtin.exception_value(%716)
-      throw %718
+      %605 = call builtin.exception_value(%593)
+      throw %605
     bb214:
-      %723 = new_object(capacity=3)
-      %724 = load var $env
-      set_proto %723, %724
-      store var $0.$shared_env, %723
-      %725 = load var $0.f
-      %726 = const c406
-      %727 = set_prop %723, %726, %725
-      %728 = load var $0.o
-      %729 = const c407
-      %730 = set_prop %723, %729, %728
-      %731 = load var $0.shadow
-      %732 = const c408
-      %733 = set_prop %723, %732, %731
-      jump bb216
+      %606 = call builtin.console.log(%593)
+      jump bb195
     bb215:
-      jump bb216
+      %607 = call %544, this=%545, args=[%593]
+      jump bb195
     bb216:
-      %734 = phi [(bb214, %723), (bb215, %720)]
-      store var $0.$shared_env, %734
-      %735 = const c409
-      %736 = set_prop %734, %735, %719
-      %737 = const c411
-      %738 = init_object_literal(c410, values=[%737])
-      %739 = call builtin.with.to_object(%738)
-      %740 = is_exception %739
-      branch %740, bb218, bb217
+      %611 = const c340
+      %612 = const c341
+      %613 = call builtin.intrinsic_pristine(%611, %612)
+      branch %613, bb218, bb219
     bb217:
-      store var $7.%with, %739
-      %742 = load var $7.%with
-      %743 = const c412
-      %744 = call builtin.with.has_binding(%742, %743)
-      %745 = is_exception %744
-      branch %745, bb221, bb220
+      %610 = call builtin.exception_value(%608)
+      throw %610
     bb218:
-      %741 = call builtin.exception_value(%739)
-      throw %741
+      %624 = const c346
+      jump bb225
     bb219:
-      %748 = phi [(bb222, %742), (bb223, %747)]
-      jump bb224
+      %614 = const c342
+      %615 = const c343
+      %616 = call builtin.intrinsic_resolve(%614, %615)
+      %617 = is_exception %616
+      branch %617, bb221, bb220
     bb220:
-      branch %744, bb222, bb223
+      %619 = const c344
+      %620 = const c345
+      %621 = call builtin.intrinsic_resolve(%619, %620, %616)
+      %622 = is_exception %621
+      branch %622, bb223, bb222
     bb221:
-      %746 = call builtin.exception_value(%744)
-      throw %746
+      %618 = call builtin.exception_value(%616)
+      throw %618
     bb222:
-      jump bb219
+      jump bb225
     bb223:
-      %747 = const c413
-      jump bb219
+      %623 = call builtin.exception_value(%621)
+      throw %623
     bb224:
-      %749 = const c414
-      %750 = stricteq %748, %749
-      branch %750, bb225, bb226
+      %689 = phi [(bb243, %687), (bb244, %688)]
+      %690 = is_exception %689
+      branch %690, bb246, bb245
     bb225:
-      %755 = load var $0.$global
-      %756 = const c416
-      %757 = get_prop %755, %756
-      jump bb229
+      %625 = phi [(bb218, %624), (bb222, %621)]
+      %626 = phi [(bb218, %624), (bb222, %616)]
+      %627 = const c347
+      %628 = const c348
+      %629 = call builtin.scope_record_create(%628)
+      store var $eval_env, %629
+      %630 = const c349
+      %631 = load var $0.$shared_env
+      %632 = const c350
+      %633 = stricteq %631, %632
+      %634 = const c351
+      branch %633, bb226, bb227
     bb226:
-      %751 = const c415
-      %752 = get_prop %748, %751
-      %753 = is_exception %752
-      branch %753, bb228, bb227
-    bb227:
+      %636 = load var $0.f
       jump bb229
+    bb227:
+      %635 = call builtin.object.has_own(%631, %634)
+      branch %635, bb228, bb226
     bb228:
-      %754 = call builtin.exception_value(%752)
-      throw %754
+      %637 = get_prop %631, %634
+      jump bb229
     bb229:
-      %758 = phi [(bb227, %752), (bb225, %757)]
-      jump bb230
+      %638 = phi [(bb226, %636), (bb228, %637)]
+      %639 = const c352
+      %640 = const c353
+      call builtin.scope_record_add_binding(%629, %630, %638, %639, %640)
+      %641 = const c354
+      %642 = load var $0.$shared_env
+      %643 = const c355
+      %644 = stricteq %642, %643
+      %645 = const c356
+      branch %644, bb230, bb231
     bb230:
-      %759 = const c417
-      %760 = get_prop %758, %759
-      %761 = is_exception %760
-      branch %761, bb232, bb231
+      %647 = load var $0.o
+      jump bb233
     bb231:
-      %763 = load var $7.%with
-      %764 = const c418
-      %765 = call builtin.with.has_binding(%763, %764)
-      %766 = is_exception %765
-      branch %766, bb235, bb234
+      %646 = call builtin.object.has_own(%642, %645)
+      branch %646, bb232, bb230
     bb232:
-      %762 = call builtin.exception_value(%760)
-      throw %762
+      %648 = get_prop %642, %645
+      jump bb233
     bb233:
-      %769 = phi [(bb236, %763), (bb237, %768)]
-      jump bb238
+      %649 = phi [(bb230, %647), (bb232, %648)]
+      %650 = const c357
+      %651 = const c358
+      call builtin.scope_record_add_binding(%629, %641, %649, %650, %651)
+      %652 = const c359
+      %653 = load var $0.$shared_env
+      %654 = const c360
+      %655 = stricteq %653, %654
+      %656 = const c361
+      branch %655, bb234, bb235
     bb234:
-      branch %765, bb236, bb237
+      %658 = load var $0.shadow
+      jump bb237
     bb235:
-      %767 = call builtin.exception_value(%765)
-      throw %767
+      %657 = call builtin.object.has_own(%653, %656)
+      branch %657, bb236, bb234
     bb236:
-      jump bb233
+      %659 = get_prop %653, %656
+      jump bb237
     bb237:
-      %768 = const c419
-      jump bb233
+      %660 = phi [(bb234, %658), (bb236, %659)]
+      %661 = const c362
+      %662 = const c363
+      call builtin.scope_record_add_binding(%629, %652, %660, %661, %662)
+      %663 = const c364
+      %664 = const c365
+      call builtin.scope_record_set_meta(%629, %663, %664)
+      %665 = const c366
+      %666 = const c367
+      call builtin.scope_record_set_meta(%629, %665, %666)
+      %667 = const c368
+      %668 = get_super_base
+      %669 = const c369
+      %670 = const c370
+      call builtin.scope_record_add_binding(%629, %669, %668, %670, %670)
+      call builtin.scope_record_set_meta(%629, %667, %668)
+      %671 = const c371
+      %673 = const c372
+      %672 = call builtin.new.target(%673)
+      call builtin.scope_record_set_meta(%629, %671, %672)
+      %674 = call builtin.eval(%627, %629)
+      %675 = is_exception %674
+      branch %675, bb239, bb238
     bb238:
-      %770 = const c420
-      %771 = stricteq %769, %770
-      branch %771, bb239, bb240
+      %677 = const c373
+      %678 = call builtin.scope_record.get_binding(%629, %677)
+      %679 = const c374
+      %680 = set_prop %321, %679, %678
+      %681 = const c375
+      %682 = call builtin.scope_record.get_binding(%629, %681)
+      %683 = const c376
+      %684 = set_prop %321, %683, %682
+      call builtin.scope_record_destroy(%629)
+      jump bb240
     bb239:
-      %778 = const c423
-      %779 = const c424
-      %780 = call builtin.scope_record_create(%779)
-      store var $eval_env, %780
-      %781 = const c425
-      %782 = load var $0.$shared_env
-      %783 = const c426
-      %784 = stricteq %782, %783
-      %785 = const c427
-      branch %784, bb243, bb244
+      %676 = call builtin.exception_value(%674)
+      throw %676
     bb240:
-      %772 = const c421
-      %773 = get_prop %769, %772
-      %774 = is_exception %773
-      branch %774, bb242, bb241
+      %685 = is_exception %674
+      branch %685, bb242, bb241
     bb241:
-      %776 = const c422
-      %777 = call %773, this=%769, args=[%776]
-      jump bb258
+      branch %613, bb243, bb244
     bb242:
-      %775 = call builtin.exception_value(%773)
-      throw %775
+      %686 = call builtin.exception_value(%674)
+      throw %686
     bb243:
-      %787 = load var $0.f
-      jump bb246
+      %687 = call builtin.console.log(%674)
+      jump bb224
     bb244:
-      %786 = call builtin.object.has_own(%782, %785)
-      branch %786, bb245, bb243
+      %688 = call %625, this=%626, args=[%674]
+      jump bb224
     bb245:
-      %788 = get_prop %782, %785
-      jump bb246
+      %692 = const c377
+      %693 = const c378
+      %694 = call builtin.intrinsic_pristine(%692, %693)
+      branch %694, bb247, bb248
     bb246:
-      %789 = phi [(bb243, %787), (bb245, %788)]
-      %790 = const c428
-      %791 = const c429
-      call builtin.scope_record_add_binding(%780, %781, %789, %790, %791)
-      %792 = const c430
-      %793 = load var $0.$shared_env
-      %794 = const c431
-      %795 = stricteq %793, %794
-      %796 = const c432
-      branch %795, bb247, bb248
+      %691 = call builtin.exception_value(%689)
+      throw %691
     bb247:
-      %798 = load var $0.o
-      jump bb250
+      %705 = const c383
+      jump bb254
     bb248:
-      %797 = call builtin.object.has_own(%793, %796)
-      branch %797, bb249, bb247
+      %695 = const c379
+      %696 = const c380
+      %697 = call builtin.intrinsic_resolve(%695, %696)
+      %698 = is_exception %697
+      branch %698, bb250, bb249
     bb249:
-      %799 = get_prop %793, %796
-      jump bb250
+      %700 = const c381
+      %701 = const c382
+      %702 = call builtin.intrinsic_resolve(%700, %701, %697)
+      %703 = is_exception %702
+      branch %703, bb252, bb251
     bb250:
-      %800 = phi [(bb247, %798), (bb249, %799)]
-      %801 = const c433
-      %802 = const c434
-      call builtin.scope_record_add_binding(%780, %792, %800, %801, %802)
-      %803 = const c435
-      %804 = load var $0.$shared_env
-      %805 = const c436
-      %806 = stricteq %804, %805
-      %807 = const c437
-      branch %806, bb251, bb252
+      %699 = call builtin.exception_value(%697)
+      throw %699
     bb251:
-      %809 = load var $0.shadow
       jump bb254
     bb252:
-      %808 = call builtin.object.has_own(%804, %807)
-      branch %808, bb253, bb251
+      %704 = call builtin.exception_value(%702)
+      throw %704
     bb253:
-      %810 = get_prop %804, %807
-      jump bb254
+      %770 = phi [(bb272, %768), (bb273, %769)]
+      %771 = is_exception %770
+      branch %771, bb275, bb274
     bb254:
-      %811 = phi [(bb251, %809), (bb253, %810)]
-      %812 = const c438
-      %813 = const c439
-      call builtin.scope_record_add_binding(%780, %803, %811, %812, %813)
-      %814 = load var $7.%with
-      %815 = const c440
-      call builtin.scope_record.add_with_layer(%780, %814, %815)
-      %816 = const c441
-      %817 = const c442
-      call builtin.scope_record_set_meta(%780, %816, %817)
-      %818 = const c443
-      %819 = const c444
-      call builtin.scope_record_set_meta(%780, %818, %819)
-      %820 = const c445
-      %821 = get_super_base
-      %822 = const c446
-      %823 = const c447
-      call builtin.scope_record_add_binding(%780, %822, %821, %823, %823)
-      call builtin.scope_record_set_meta(%780, %820, %821)
-      %824 = const c448
-      %826 = const c449
-      %825 = call builtin.new.target(%826)
-      call builtin.scope_record_set_meta(%780, %824, %825)
-      %827 = call builtin.eval(%778, %780)
-      %828 = is_exception %827
-      branch %828, bb256, bb255
+      %706 = phi [(bb247, %705), (bb251, %702)]
+      %707 = phi [(bb247, %705), (bb251, %697)]
+      %708 = const c384
+      %709 = const c385
+      %710 = call builtin.scope_record_create(%709)
+      store var $eval_env, %710
+      %711 = const c386
+      %712 = load var $0.$shared_env
+      %713 = const c387
+      %714 = stricteq %712, %713
+      %715 = const c388
+      branch %714, bb255, bb256
     bb255:
-      %830 = const c450
-      %831 = call builtin.scope_record.get_binding(%780, %830)
-      %832 = const c451
-      %833 = set_prop %734, %832, %831
-      %834 = const c452
-      %835 = call builtin.scope_record.get_binding(%780, %834)
-      %836 = const c453
-      %837 = set_prop %734, %836, %835
-      %838 = const c454
-      %839 = call builtin.scope_record.get_binding(%780, %838)
-      %840 = const c455
-      %841 = set_prop %734, %840, %839
-      call builtin.scope_record_destroy(%780)
-      jump bb257
+      %717 = load var $0.f
+      jump bb258
     bb256:
-      %829 = call builtin.exception_value(%827)
-      throw %829
+      %716 = call builtin.object.has_own(%712, %715)
+      branch %716, bb257, bb255
     bb257:
+      %718 = get_prop %712, %715
       jump bb258
     bb258:
-      %842 = phi [(bb241, %777), (bb257, %827)]
-      jump bb259
+      %719 = phi [(bb255, %717), (bb257, %718)]
+      %720 = const c389
+      %721 = const c390
+      call builtin.scope_record_add_binding(%710, %711, %719, %720, %721)
+      %722 = const c391
+      %723 = load var $0.$shared_env
+      %724 = const c392
+      %725 = stricteq %723, %724
+      %726 = const c393
+      branch %725, bb259, bb260
     bb259:
-      %843 = is_exception %842
-      branch %843, bb261, bb260
+      %728 = load var $0.o
+      jump bb262
     bb260:
-      %845 = call %760, this=%758, args=[%842]
-      %846 = is_exception %845
-      branch %846, bb263, bb262
+      %727 = call builtin.object.has_own(%723, %726)
+      branch %727, bb261, bb259
     bb261:
-      %844 = call builtin.exception_value(%842)
-      throw %844
+      %729 = get_prop %723, %726
+      jump bb262
     bb262:
-      %848 = load var $7.%with
-      %849 = const c456
-      %850 = call builtin.with.has_binding(%848, %849)
-      %851 = is_exception %850
-      branch %851, bb266, bb265
+      %730 = phi [(bb259, %728), (bb261, %729)]
+      %731 = const c394
+      %732 = const c395
+      call builtin.scope_record_add_binding(%710, %722, %730, %731, %732)
+      %733 = const c396
+      %734 = load var $0.$shared_env
+      %735 = const c397
+      %736 = stricteq %734, %735
+      %737 = const c398
+      branch %736, bb263, bb264
     bb263:
-      %847 = call builtin.exception_value(%845)
-      throw %847
+      %739 = load var $0.shadow
+      jump bb266
     bb264:
-      %854 = phi [(bb267, %848), (bb268, %853)]
-      jump bb269
+      %738 = call builtin.object.has_own(%734, %737)
+      branch %738, bb265, bb263
     bb265:
-      branch %850, bb267, bb268
+      %740 = get_prop %734, %737
+      jump bb266
     bb266:
-      %852 = call builtin.exception_value(%850)
-      throw %852
+      %741 = phi [(bb263, %739), (bb265, %740)]
+      %742 = const c399
+      %743 = const c400
+      call builtin.scope_record_add_binding(%710, %733, %741, %742, %743)
+      %744 = const c401
+      %745 = const c402
+      call builtin.scope_record_set_meta(%710, %744, %745)
+      %746 = const c403
+      %747 = const c404
+      call builtin.scope_record_set_meta(%710, %746, %747)
+      %748 = const c405
+      %749 = get_super_base
+      %750 = const c406
+      %751 = const c407
+      call builtin.scope_record_add_binding(%710, %750, %749, %751, %751)
+      call builtin.scope_record_set_meta(%710, %748, %749)
+      %752 = const c408
+      %754 = const c409
+      %753 = call builtin.new.target(%754)
+      call builtin.scope_record_set_meta(%710, %752, %753)
+      %755 = call builtin.eval(%708, %710)
+      %756 = is_exception %755
+      branch %756, bb268, bb267
     bb267:
-      jump bb264
+      %758 = const c410
+      %759 = call builtin.scope_record.get_binding(%710, %758)
+      %760 = const c411
+      %761 = set_prop %321, %760, %759
+      %762 = const c412
+      %763 = call builtin.scope_record.get_binding(%710, %762)
+      %764 = const c413
+      %765 = set_prop %321, %764, %763
+      call builtin.scope_record_destroy(%710)
+      jump bb269
     bb268:
-      %853 = const c457
-      jump bb264
+      %757 = call builtin.exception_value(%755)
+      throw %757
     bb269:
-      %855 = const c458
-      %856 = stricteq %854, %855
-      branch %856, bb270, bb271
+      %766 = is_exception %755
+      branch %766, bb271, bb270
     bb270:
-      %863 = const c461
-      %864 = const c462
-      %865 = call builtin.scope_record_create(%864)
-      store var $eval_env, %865
-      %866 = const c463
-      %867 = load var $0.$shared_env
-      %868 = const c464
-      %869 = stricteq %867, %868
-      %870 = const c465
-      branch %869, bb274, bb275
+      branch %694, bb272, bb273
     bb271:
-      %857 = const c459
-      %858 = get_prop %854, %857
-      %859 = is_exception %858
-      branch %859, bb273, bb272
+      %767 = call builtin.exception_value(%755)
+      throw %767
     bb272:
-      %861 = const c460
-      %862 = call %858, this=%854, args=[%861]
-      jump bb289
+      %768 = call builtin.console.log(%755)
+      jump bb253
     bb273:
-      %860 = call builtin.exception_value(%858)
-      throw %860
+      %769 = call %706, this=%707, args=[%755]
+      jump bb253
     bb274:
-      %872 = load var $0.f
-      jump bb277
+      %773 = const c414
+      %774 = const c415
+      %775 = call builtin.intrinsic_pristine(%773, %774)
+      branch %775, bb276, bb277
     bb275:
-      %871 = call builtin.object.has_own(%867, %870)
-      branch %871, bb276, bb274
+      %772 = call builtin.exception_value(%770)
+      throw %772
     bb276:
-      %873 = get_prop %867, %870
-      jump bb277
+      %786 = const c420
+      jump bb283
     bb277:
-      %874 = phi [(bb274, %872), (bb276, %873)]
-      %875 = const c466
-      %876 = const c467
-      call builtin.scope_record_add_binding(%865, %866, %874, %875, %876)
-      %877 = const c468
-      %878 = load var $0.$shared_env
-      %879 = const c469
-      %880 = stricteq %878, %879
-      %881 = const c470
-      branch %880, bb278, bb279
+      %776 = const c416
+      %777 = const c417
+      %778 = call builtin.intrinsic_resolve(%776, %777)
+      %779 = is_exception %778
+      branch %779, bb279, bb278
     bb278:
-      %883 = load var $0.o
-      jump bb281
+      %781 = const c418
+      %782 = const c419
+      %783 = call builtin.intrinsic_resolve(%781, %782, %778)
+      %784 = is_exception %783
+      branch %784, bb281, bb280
     bb279:
-      %882 = call builtin.object.has_own(%878, %881)
-      branch %882, bb280, bb278
+      %780 = call builtin.exception_value(%778)
+      throw %780
     bb280:
-      %884 = get_prop %878, %881
-      jump bb281
+      jump bb283
     bb281:
-      %885 = phi [(bb278, %883), (bb280, %884)]
-      %886 = const c471
-      %887 = const c472
-      call builtin.scope_record_add_binding(%865, %877, %885, %886, %887)
-      %888 = const c473
-      %889 = load var $0.$shared_env
-      %890 = const c474
-      %891 = stricteq %889, %890
-      %892 = const c475
-      branch %891, bb282, bb283
+      %785 = call builtin.exception_value(%783)
+      throw %785
     bb282:
-      %894 = load var $0.shadow
-      jump bb285
+      %851 = phi [(bb301, %849), (bb302, %850)]
+      %852 = is_exception %851
+      branch %852, bb304, bb303
     bb283:
-      %893 = call builtin.object.has_own(%889, %892)
-      branch %893, bb284, bb282
+      %787 = phi [(bb276, %786), (bb280, %783)]
+      %788 = phi [(bb276, %786), (bb280, %778)]
+      %789 = const c421
+      %790 = const c422
+      %791 = call builtin.scope_record_create(%790)
+      store var $eval_env, %791
+      %792 = const c423
+      %793 = load var $0.$shared_env
+      %794 = const c424
+      %795 = stricteq %793, %794
+      %796 = const c425
+      branch %795, bb284, bb285
     bb284:
-      %895 = get_prop %889, %892
-      jump bb285
+      %798 = load var $0.f
+      jump bb287
     bb285:
-      %896 = phi [(bb282, %894), (bb284, %895)]
-      %897 = const c476
-      %898 = const c477
-      call builtin.scope_record_add_binding(%865, %888, %896, %897, %898)
-      %899 = load var $7.%with
-      %900 = const c478
-      call builtin.scope_record.add_with_layer(%865, %899, %900)
-      %901 = const c479
-      %902 = const c480
-      call builtin.scope_record_set_meta(%865, %901, %902)
-      %903 = const c481
-      %904 = const c482
-      call builtin.scope_record_set_meta(%865, %903, %904)
-      %905 = const c483
-      %906 = get_super_base
-      %907 = const c484
-      %908 = const c485
-      call builtin.scope_record_add_binding(%865, %907, %906, %908, %908)
-      call builtin.scope_record_set_meta(%865, %905, %906)
-      %909 = const c486
-      %911 = const c487
-      %910 = call builtin.new.target(%911)
-      call builtin.scope_record_set_meta(%865, %909, %910)
-      %912 = call builtin.eval(%863, %865)
-      %913 = is_exception %912
-      branch %913, bb287, bb286
+      %797 = call builtin.object.has_own(%793, %796)
+      branch %797, bb286, bb284
     bb286:
-      %915 = const c488
-      %916 = call builtin.scope_record.get_binding(%865, %915)
-      %917 = const c489
-      %918 = set_prop %734, %917, %916
-      %919 = const c490
-      %920 = call builtin.scope_record.get_binding(%865, %919)
-      %921 = const c491
-      %922 = set_prop %734, %921, %920
-      %923 = const c492
-      %924 = call builtin.scope_record.get_binding(%865, %923)
-      %925 = const c493
-      %926 = set_prop %734, %925, %924
-      call builtin.scope_record_destroy(%865)
-      jump bb288
+      %799 = get_prop %793, %796
+      jump bb287
     bb287:
-      %914 = call builtin.exception_value(%912)
-      throw %914
+      %800 = phi [(bb284, %798), (bb286, %799)]
+      %801 = const c426
+      %802 = const c427
+      call builtin.scope_record_add_binding(%791, %792, %800, %801, %802)
+      %803 = const c428
+      %804 = load var $0.$shared_env
+      %805 = const c429
+      %806 = stricteq %804, %805
+      %807 = const c430
+      branch %806, bb288, bb289
     bb288:
-      jump bb289
+      %809 = load var $0.o
+      jump bb291
     bb289:
-      jump bb290
+      %808 = call builtin.object.has_own(%804, %807)
+      branch %808, bb290, bb288
     bb290:
-      %928 = load var $0.$shared_env
-      %929 = const c494
-      %930 = stricteq %928, %929
-      %931 = const c495
-      branch %930, bb291, bb292
+      %810 = get_prop %804, %807
+      jump bb291
     bb291:
-      %933 = load var $0.shadow
-      jump bb294
+      %811 = phi [(bb288, %809), (bb290, %810)]
+      %812 = const c431
+      %813 = const c432
+      call builtin.scope_record_add_binding(%791, %803, %811, %812, %813)
+      %814 = const c433
+      %815 = load var $0.$shared_env
+      %816 = const c434
+      %817 = stricteq %815, %816
+      %818 = const c435
+      branch %817, bb292, bb293
     bb292:
-      %932 = call builtin.object.has_own(%928, %931)
-      branch %932, bb293, bb291
+      %820 = load var $0.shadow
+      jump bb295
     bb293:
-      %934 = get_prop %928, %931
-      jump bb294
+      %819 = call builtin.object.has_own(%815, %818)
+      branch %819, bb294, bb292
     bb294:
-      %935 = phi [(bb291, %933), (bb293, %934)]
-      %936 = call builtin.console.log(%935)
-      %937 = is_exception %936
-      branch %937, bb296, bb295
+      %821 = get_prop %815, %818
+      jump bb295
     bb295:
-      jump bb297
+      %822 = phi [(bb292, %820), (bb294, %821)]
+      %823 = const c436
+      %824 = const c437
+      call builtin.scope_record_add_binding(%791, %814, %822, %823, %824)
+      %825 = const c438
+      %826 = const c439
+      call builtin.scope_record_set_meta(%791, %825, %826)
+      %827 = const c440
+      %828 = const c441
+      call builtin.scope_record_set_meta(%791, %827, %828)
+      %829 = const c442
+      %830 = get_super_base
+      %831 = const c443
+      %832 = const c444
+      call builtin.scope_record_add_binding(%791, %831, %830, %832, %832)
+      call builtin.scope_record_set_meta(%791, %829, %830)
+      %833 = const c445
+      %835 = const c446
+      %834 = call builtin.new.target(%835)
+      call builtin.scope_record_set_meta(%791, %833, %834)
+      %836 = call builtin.eval(%789, %791)
+      %837 = is_exception %836
+      branch %837, bb297, bb296
     bb296:
-      %938 = call builtin.exception_value(%936)
-      throw %938
+      %839 = const c447
+      %840 = call builtin.scope_record.get_binding(%791, %839)
+      %841 = const c448
+      %842 = set_prop %321, %841, %840
+      %843 = const c449
+      %844 = call builtin.scope_record.get_binding(%791, %843)
+      %845 = const c450
+      %846 = set_prop %321, %845, %844
+      call builtin.scope_record_destroy(%791)
+      jump bb298
     bb297:
-      %939 = const c496
-      %940 = const c497
-      %941 = call builtin.scope_record_create(%940)
-      store var $eval_env, %941
-      %942 = const c498
-      %943 = load var $0.$shared_env
-      %944 = const c499
-      %945 = stricteq %943, %944
-      %946 = const c500
-      branch %945, bb300, bb301
+      %838 = call builtin.exception_value(%836)
+      throw %838
     bb298:
-      return
+      %847 = is_exception %836
+      branch %847, bb300, bb299
     bb299:
-      %1001 = load var $tmp.0
-      store var $10.e, %1001
-      %1002 = load var $10.e
-      %1003 = load var $0.$global
-      %1004 = const c528
-      %1005 = get_prop %1003, %1004
-      %1006 = call builtin.op_instanceof(%1002, %1005)
-      %1007 = is_exception %1006
-      branch %1007, bb316, bb315
+      branch %775, bb301, bb302
     bb300:
-      %948 = load var $0.f
-      jump bb303
+      %848 = call builtin.exception_value(%836)
+      throw %848
     bb301:
-      %947 = call builtin.object.has_own(%943, %946)
-      branch %947, bb302, bb300
+      %849 = call builtin.console.log(%836)
+      jump bb282
     bb302:
-      %949 = get_prop %943, %946
-      jump bb303
+      %850 = call %787, this=%788, args=[%836]
+      jump bb282
     bb303:
-      %950 = phi [(bb300, %948), (bb302, %949)]
-      %951 = const c501
-      %952 = const c502
-      call builtin.scope_record_add_binding(%941, %942, %950, %951, %952)
-      %953 = const c503
-      %954 = load var $0.$shared_env
-      %955 = const c504
-      %956 = stricteq %954, %955
-      %957 = const c505
-      branch %956, bb304, bb305
+      %854 = const c451
+      %855 = const c452
+      %856 = call builtin.intrinsic_pristine(%854, %855)
+      branch %856, bb305, bb306
     bb304:
-      %959 = load var $0.o
-      jump bb307
+      %853 = call builtin.exception_value(%851)
+      throw %853
     bb305:
-      %958 = call builtin.object.has_own(%954, %957)
-      branch %958, bb306, bb304
+      %867 = const c457
+      jump bb312
     bb306:
-      %960 = get_prop %954, %957
-      jump bb307
+      %857 = const c453
+      %858 = const c454
+      %859 = call builtin.intrinsic_resolve(%857, %858)
+      %860 = is_exception %859
+      branch %860, bb308, bb307
     bb307:
-      %961 = phi [(bb304, %959), (bb306, %960)]
-      %962 = const c506
-      %963 = const c507
-      call builtin.scope_record_add_binding(%941, %953, %961, %962, %963)
-      %964 = const c508
-      %965 = load var $0.$shared_env
-      %966 = const c509
-      %967 = stricteq %965, %966
-      %968 = const c510
-      branch %967, bb308, bb309
+      %862 = const c455
+      %863 = const c456
+      %864 = call builtin.intrinsic_resolve(%862, %863, %859)
+      %865 = is_exception %864
+      branch %865, bb310, bb309
     bb308:
-      %970 = load var $0.shadow
-      jump bb311
+      %861 = call builtin.exception_value(%859)
+      throw %861
     bb309:
-      %969 = call builtin.object.has_own(%965, %968)
-      branch %969, bb310, bb308
+      jump bb312
     bb310:
-      %971 = get_prop %965, %968
-      jump bb311
+      %866 = call builtin.exception_value(%864)
+      throw %866
     bb311:
-      %972 = phi [(bb308, %970), (bb310, %971)]
-      %973 = const c511
-      %974 = const c512
-      call builtin.scope_record_add_binding(%941, %964, %972, %973, %974)
-      %975 = const c513
-      %976 = const c514
-      call builtin.scope_record_set_meta(%941, %975, %976)
-      %977 = const c515
-      %978 = const c516
-      call builtin.scope_record_set_meta(%941, %977, %978)
-      %979 = const c517
-      %980 = get_super_base
-      %981 = const c518
-      %982 = const c519
-      call builtin.scope_record_add_binding(%941, %981, %980, %982, %982)
-      call builtin.scope_record_set_meta(%941, %979, %980)
-      %983 = const c520
-      %985 = const c521
-      %984 = call builtin.new.target(%985)
-      call builtin.scope_record_set_meta(%941, %983, %984)
-      %986 = call builtin.eval(%939, %941)
-      %987 = is_exception %986
-      branch %987, bb313, bb312
+      %932 = phi [(bb330, %930), (bb331, %931)]
+      %933 = is_exception %932
+      branch %933, bb333, bb332
     bb312:
-      %989 = const c522
-      %990 = call builtin.scope_record.get_binding(%941, %989)
-      %991 = const c523
-      %992 = set_prop %734, %991, %990
-      %993 = const c524
-      %994 = call builtin.scope_record.get_binding(%941, %993)
-      %995 = const c525
-      %996 = set_prop %734, %995, %994
-      %997 = const c526
-      %998 = call builtin.scope_record.get_binding(%941, %997)
-      %999 = const c527
-      %1000 = set_prop %734, %999, %998
-      call builtin.scope_record_destroy(%941)
-      jump bb314
+      %868 = phi [(bb305, %867), (bb309, %864)]
+      %869 = phi [(bb305, %867), (bb309, %859)]
+      %870 = const c458
+      %871 = const c459
+      %872 = call builtin.scope_record_create(%871)
+      store var $eval_env, %872
+      %873 = const c460
+      %874 = load var $0.$shared_env
+      %875 = const c461
+      %876 = stricteq %874, %875
+      %877 = const c462
+      branch %876, bb313, bb314
     bb313:
-      %988 = call builtin.exception_value(%986)
-      store var $tmp.0, %988
-      jump bb299
+      %879 = load var $0.f
+      jump bb316
     bb314:
-      jump bb298
+      %878 = call builtin.object.has_own(%874, %877)
+      branch %878, bb315, bb313
     bb315:
-      %1009 = is_exception %1006
-      branch %1009, bb318, bb317
+      %880 = get_prop %874, %877
+      jump bb316
     bb316:
-      %1008 = call builtin.exception_value(%1006)
-      throw %1008
+      %881 = phi [(bb313, %879), (bb315, %880)]
+      %882 = const c463
+      %883 = const c464
+      call builtin.scope_record_add_binding(%872, %873, %881, %882, %883)
+      %884 = const c465
+      %885 = load var $0.$shared_env
+      %886 = const c466
+      %887 = stricteq %885, %886
+      %888 = const c467
+      branch %887, bb317, bb318
     bb317:
-      %1011 = call builtin.console.log(%1006)
-      %1012 = is_exception %1011
-      branch %1012, bb320, bb319
+      %890 = load var $0.o
+      jump bb320
     bb318:
-      %1010 = call builtin.exception_value(%1006)
-      throw %1010
+      %889 = call builtin.object.has_own(%885, %888)
+      branch %889, bb319, bb317
     bb319:
-      jump bb298
+      %891 = get_prop %885, %888
+      jump bb320
     bb320:
-      %1013 = call builtin.exception_value(%1011)
-      throw %1013
+      %892 = phi [(bb317, %890), (bb319, %891)]
+      %893 = const c468
+      %894 = const c469
+      call builtin.scope_record_add_binding(%872, %884, %892, %893, %894)
+      %895 = const c470
+      %896 = load var $0.$shared_env
+      %897 = const c471
+      %898 = stricteq %896, %897
+      %899 = const c472
+      branch %898, bb321, bb322
+    bb321:
+      %901 = load var $0.shadow
+      jump bb324
+    bb322:
+      %900 = call builtin.object.has_own(%896, %899)
+      branch %900, bb323, bb321
+    bb323:
+      %902 = get_prop %896, %899
+      jump bb324
+    bb324:
+      %903 = phi [(bb321, %901), (bb323, %902)]
+      %904 = const c473
+      %905 = const c474
+      call builtin.scope_record_add_binding(%872, %895, %903, %904, %905)
+      %906 = const c475
+      %907 = const c476
+      call builtin.scope_record_set_meta(%872, %906, %907)
+      %908 = const c477
+      %909 = const c478
+      call builtin.scope_record_set_meta(%872, %908, %909)
+      %910 = const c479
+      %911 = get_super_base
+      %912 = const c480
+      %913 = const c481
+      call builtin.scope_record_add_binding(%872, %912, %911, %913, %913)
+      call builtin.scope_record_set_meta(%872, %910, %911)
+      %914 = const c482
+      %916 = const c483
+      %915 = call builtin.new.target(%916)
+      call builtin.scope_record_set_meta(%872, %914, %915)
+      %917 = call builtin.eval(%870, %872)
+      %918 = is_exception %917
+      branch %918, bb326, bb325
+    bb325:
+      %920 = const c484
+      %921 = call builtin.scope_record.get_binding(%872, %920)
+      %922 = const c485
+      %923 = set_prop %321, %922, %921
+      %924 = const c486
+      %925 = call builtin.scope_record.get_binding(%872, %924)
+      %926 = const c487
+      %927 = set_prop %321, %926, %925
+      call builtin.scope_record_destroy(%872)
+      jump bb327
+    bb326:
+      %919 = call builtin.exception_value(%917)
+      throw %919
+    bb327:
+      %928 = is_exception %917
+      branch %928, bb329, bb328
+    bb328:
+      branch %856, bb330, bb331
+    bb329:
+      %929 = call builtin.exception_value(%917)
+      throw %929
+    bb330:
+      %930 = call builtin.console.log(%917)
+      jump bb311
+    bb331:
+      %931 = call %868, this=%869, args=[%917]
+      jump bb311
+    bb332:
+      %935 = const c488
+      store var $0.shadow, %935
+      %936 = load var $0.$shared_env
+      %937 = const c489
+      %938 = stricteq %936, %937
+      branch %938, bb334, bb335
+    bb333:
+      %934 = call builtin.exception_value(%932)
+      throw %934
+    bb334:
+      %939 = new_object(capacity=3)
+      %940 = load var $env
+      set_proto %939, %940
+      store var $0.$shared_env, %939
+      %941 = load var $0.f
+      %942 = const c490
+      %943 = set_prop %939, %942, %941
+      %944 = load var $0.o
+      %945 = const c491
+      %946 = set_prop %939, %945, %944
+      %947 = load var $0.shadow
+      %948 = const c492
+      %949 = set_prop %939, %948, %947
+      jump bb336
+    bb335:
+      jump bb336
+    bb336:
+      %950 = phi [(bb334, %939), (bb335, %936)]
+      store var $0.$shared_env, %950
+      %951 = const c493
+      %952 = set_prop %950, %951, %935
+      %953 = const c495
+      %954 = init_object_literal(c494, values=[%953])
+      %955 = call builtin.with.to_object(%954)
+      %956 = is_exception %955
+      branch %956, bb338, bb337
+    bb337:
+      store var $7.%with, %955
+      %958 = load var $7.%with
+      %959 = const c496
+      %960 = call builtin.with.has_binding(%958, %959)
+      %961 = is_exception %960
+      branch %961, bb341, bb340
+    bb338:
+      %957 = call builtin.exception_value(%955)
+      throw %957
+    bb339:
+      %964 = phi [(bb342, %958), (bb343, %963)]
+      jump bb344
+    bb340:
+      branch %960, bb342, bb343
+    bb341:
+      %962 = call builtin.exception_value(%960)
+      throw %962
+    bb342:
+      jump bb339
+    bb343:
+      %963 = const c497
+      jump bb339
+    bb344:
+      %965 = const c498
+      %966 = stricteq %964, %965
+      branch %966, bb345, bb346
+    bb345:
+      %971 = load var $0.$global
+      %972 = const c500
+      %973 = get_prop %971, %972
+      jump bb349
+    bb346:
+      %967 = const c499
+      %968 = get_prop %964, %967
+      %969 = is_exception %968
+      branch %969, bb348, bb347
+    bb347:
+      jump bb349
+    bb348:
+      %970 = call builtin.exception_value(%968)
+      throw %970
+    bb349:
+      %974 = phi [(bb347, %968), (bb345, %973)]
+      jump bb350
+    bb350:
+      %975 = const c501
+      %976 = get_prop %974, %975
+      %977 = is_exception %976
+      branch %977, bb352, bb351
+    bb351:
+      %979 = load var $7.%with
+      %980 = const c502
+      %981 = call builtin.with.has_binding(%979, %980)
+      %982 = is_exception %981
+      branch %982, bb355, bb354
+    bb352:
+      %978 = call builtin.exception_value(%976)
+      throw %978
+    bb353:
+      %985 = phi [(bb356, %979), (bb357, %984)]
+      jump bb358
+    bb354:
+      branch %981, bb356, bb357
+    bb355:
+      %983 = call builtin.exception_value(%981)
+      throw %983
+    bb356:
+      jump bb353
+    bb357:
+      %984 = const c503
+      jump bb353
+    bb358:
+      %986 = const c504
+      %987 = stricteq %985, %986
+      branch %987, bb359, bb360
+    bb359:
+      %994 = const c507
+      %995 = const c508
+      %996 = call builtin.scope_record_create(%995)
+      store var $eval_env, %996
+      %997 = const c509
+      %998 = load var $0.$shared_env
+      %999 = const c510
+      %1000 = stricteq %998, %999
+      %1001 = const c511
+      branch %1000, bb363, bb364
+    bb360:
+      %988 = const c505
+      %989 = get_prop %985, %988
+      %990 = is_exception %989
+      branch %990, bb362, bb361
+    bb361:
+      %992 = const c506
+      %993 = call %989, this=%985, args=[%992]
+      jump bb378
+    bb362:
+      %991 = call builtin.exception_value(%989)
+      throw %991
+    bb363:
+      %1003 = load var $0.f
+      jump bb366
+    bb364:
+      %1002 = call builtin.object.has_own(%998, %1001)
+      branch %1002, bb365, bb363
+    bb365:
+      %1004 = get_prop %998, %1001
+      jump bb366
+    bb366:
+      %1005 = phi [(bb363, %1003), (bb365, %1004)]
+      %1006 = const c512
+      %1007 = const c513
+      call builtin.scope_record_add_binding(%996, %997, %1005, %1006, %1007)
+      %1008 = const c514
+      %1009 = load var $0.$shared_env
+      %1010 = const c515
+      %1011 = stricteq %1009, %1010
+      %1012 = const c516
+      branch %1011, bb367, bb368
+    bb367:
+      %1014 = load var $0.o
+      jump bb370
+    bb368:
+      %1013 = call builtin.object.has_own(%1009, %1012)
+      branch %1013, bb369, bb367
+    bb369:
+      %1015 = get_prop %1009, %1012
+      jump bb370
+    bb370:
+      %1016 = phi [(bb367, %1014), (bb369, %1015)]
+      %1017 = const c517
+      %1018 = const c518
+      call builtin.scope_record_add_binding(%996, %1008, %1016, %1017, %1018)
+      %1019 = const c519
+      %1020 = load var $0.$shared_env
+      %1021 = const c520
+      %1022 = stricteq %1020, %1021
+      %1023 = const c521
+      branch %1022, bb371, bb372
+    bb371:
+      %1025 = load var $0.shadow
+      jump bb374
+    bb372:
+      %1024 = call builtin.object.has_own(%1020, %1023)
+      branch %1024, bb373, bb371
+    bb373:
+      %1026 = get_prop %1020, %1023
+      jump bb374
+    bb374:
+      %1027 = phi [(bb371, %1025), (bb373, %1026)]
+      %1028 = const c522
+      %1029 = const c523
+      call builtin.scope_record_add_binding(%996, %1019, %1027, %1028, %1029)
+      %1030 = load var $7.%with
+      %1031 = const c524
+      call builtin.scope_record.add_with_layer(%996, %1030, %1031)
+      %1032 = const c525
+      %1033 = const c526
+      call builtin.scope_record_set_meta(%996, %1032, %1033)
+      %1034 = const c527
+      %1035 = const c528
+      call builtin.scope_record_set_meta(%996, %1034, %1035)
+      %1036 = const c529
+      %1037 = get_super_base
+      %1038 = const c530
+      %1039 = const c531
+      call builtin.scope_record_add_binding(%996, %1038, %1037, %1039, %1039)
+      call builtin.scope_record_set_meta(%996, %1036, %1037)
+      %1040 = const c532
+      %1042 = const c533
+      %1041 = call builtin.new.target(%1042)
+      call builtin.scope_record_set_meta(%996, %1040, %1041)
+      %1043 = call builtin.eval(%994, %996)
+      %1044 = is_exception %1043
+      branch %1044, bb376, bb375
+    bb375:
+      %1046 = const c534
+      %1047 = call builtin.scope_record.get_binding(%996, %1046)
+      %1048 = const c535
+      %1049 = set_prop %950, %1048, %1047
+      %1050 = const c536
+      %1051 = call builtin.scope_record.get_binding(%996, %1050)
+      %1052 = const c537
+      %1053 = set_prop %950, %1052, %1051
+      %1054 = const c538
+      %1055 = call builtin.scope_record.get_binding(%996, %1054)
+      %1056 = const c539
+      %1057 = set_prop %950, %1056, %1055
+      call builtin.scope_record_destroy(%996)
+      jump bb377
+    bb376:
+      %1045 = call builtin.exception_value(%1043)
+      throw %1045
+    bb377:
+      jump bb378
+    bb378:
+      %1058 = phi [(bb361, %993), (bb377, %1043)]
+      jump bb379
+    bb379:
+      %1059 = is_exception %1058
+      branch %1059, bb381, bb380
+    bb380:
+      %1061 = call %976, this=%974, args=[%1058]
+      %1062 = is_exception %1061
+      branch %1062, bb383, bb382
+    bb381:
+      %1060 = call builtin.exception_value(%1058)
+      throw %1060
+    bb382:
+      %1064 = load var $7.%with
+      %1065 = const c540
+      %1066 = call builtin.with.has_binding(%1064, %1065)
+      %1067 = is_exception %1066
+      branch %1067, bb386, bb385
+    bb383:
+      %1063 = call builtin.exception_value(%1061)
+      throw %1063
+    bb384:
+      %1070 = phi [(bb387, %1064), (bb388, %1069)]
+      jump bb389
+    bb385:
+      branch %1066, bb387, bb388
+    bb386:
+      %1068 = call builtin.exception_value(%1066)
+      throw %1068
+    bb387:
+      jump bb384
+    bb388:
+      %1069 = const c541
+      jump bb384
+    bb389:
+      %1071 = const c542
+      %1072 = stricteq %1070, %1071
+      branch %1072, bb390, bb391
+    bb390:
+      %1079 = const c545
+      %1080 = const c546
+      %1081 = call builtin.scope_record_create(%1080)
+      store var $eval_env, %1081
+      %1082 = const c547
+      %1083 = load var $0.$shared_env
+      %1084 = const c548
+      %1085 = stricteq %1083, %1084
+      %1086 = const c549
+      branch %1085, bb394, bb395
+    bb391:
+      %1073 = const c543
+      %1074 = get_prop %1070, %1073
+      %1075 = is_exception %1074
+      branch %1075, bb393, bb392
+    bb392:
+      %1077 = const c544
+      %1078 = call %1074, this=%1070, args=[%1077]
+      jump bb409
+    bb393:
+      %1076 = call builtin.exception_value(%1074)
+      throw %1076
+    bb394:
+      %1088 = load var $0.f
+      jump bb397
+    bb395:
+      %1087 = call builtin.object.has_own(%1083, %1086)
+      branch %1087, bb396, bb394
+    bb396:
+      %1089 = get_prop %1083, %1086
+      jump bb397
+    bb397:
+      %1090 = phi [(bb394, %1088), (bb396, %1089)]
+      %1091 = const c550
+      %1092 = const c551
+      call builtin.scope_record_add_binding(%1081, %1082, %1090, %1091, %1092)
+      %1093 = const c552
+      %1094 = load var $0.$shared_env
+      %1095 = const c553
+      %1096 = stricteq %1094, %1095
+      %1097 = const c554
+      branch %1096, bb398, bb399
+    bb398:
+      %1099 = load var $0.o
+      jump bb401
+    bb399:
+      %1098 = call builtin.object.has_own(%1094, %1097)
+      branch %1098, bb400, bb398
+    bb400:
+      %1100 = get_prop %1094, %1097
+      jump bb401
+    bb401:
+      %1101 = phi [(bb398, %1099), (bb400, %1100)]
+      %1102 = const c555
+      %1103 = const c556
+      call builtin.scope_record_add_binding(%1081, %1093, %1101, %1102, %1103)
+      %1104 = const c557
+      %1105 = load var $0.$shared_env
+      %1106 = const c558
+      %1107 = stricteq %1105, %1106
+      %1108 = const c559
+      branch %1107, bb402, bb403
+    bb402:
+      %1110 = load var $0.shadow
+      jump bb405
+    bb403:
+      %1109 = call builtin.object.has_own(%1105, %1108)
+      branch %1109, bb404, bb402
+    bb404:
+      %1111 = get_prop %1105, %1108
+      jump bb405
+    bb405:
+      %1112 = phi [(bb402, %1110), (bb404, %1111)]
+      %1113 = const c560
+      %1114 = const c561
+      call builtin.scope_record_add_binding(%1081, %1104, %1112, %1113, %1114)
+      %1115 = load var $7.%with
+      %1116 = const c562
+      call builtin.scope_record.add_with_layer(%1081, %1115, %1116)
+      %1117 = const c563
+      %1118 = const c564
+      call builtin.scope_record_set_meta(%1081, %1117, %1118)
+      %1119 = const c565
+      %1120 = const c566
+      call builtin.scope_record_set_meta(%1081, %1119, %1120)
+      %1121 = const c567
+      %1122 = get_super_base
+      %1123 = const c568
+      %1124 = const c569
+      call builtin.scope_record_add_binding(%1081, %1123, %1122, %1124, %1124)
+      call builtin.scope_record_set_meta(%1081, %1121, %1122)
+      %1125 = const c570
+      %1127 = const c571
+      %1126 = call builtin.new.target(%1127)
+      call builtin.scope_record_set_meta(%1081, %1125, %1126)
+      %1128 = call builtin.eval(%1079, %1081)
+      %1129 = is_exception %1128
+      branch %1129, bb407, bb406
+    bb406:
+      %1131 = const c572
+      %1132 = call builtin.scope_record.get_binding(%1081, %1131)
+      %1133 = const c573
+      %1134 = set_prop %950, %1133, %1132
+      %1135 = const c574
+      %1136 = call builtin.scope_record.get_binding(%1081, %1135)
+      %1137 = const c575
+      %1138 = set_prop %950, %1137, %1136
+      %1139 = const c576
+      %1140 = call builtin.scope_record.get_binding(%1081, %1139)
+      %1141 = const c577
+      %1142 = set_prop %950, %1141, %1140
+      call builtin.scope_record_destroy(%1081)
+      jump bb408
+    bb407:
+      %1130 = call builtin.exception_value(%1128)
+      throw %1130
+    bb408:
+      jump bb409
+    bb409:
+      jump bb410
+    bb410:
+      %1144 = const c578
+      %1145 = const c579
+      %1146 = call builtin.intrinsic_pristine(%1144, %1145)
+      branch %1146, bb411, bb412
+    bb411:
+      %1157 = const c584
+      jump bb418
+    bb412:
+      %1147 = const c580
+      %1148 = const c581
+      %1149 = call builtin.intrinsic_resolve(%1147, %1148)
+      %1150 = is_exception %1149
+      branch %1150, bb414, bb413
+    bb413:
+      %1152 = const c582
+      %1153 = const c583
+      %1154 = call builtin.intrinsic_resolve(%1152, %1153, %1149)
+      %1155 = is_exception %1154
+      branch %1155, bb416, bb415
+    bb414:
+      %1151 = call builtin.exception_value(%1149)
+      throw %1151
+    bb415:
+      jump bb418
+    bb416:
+      %1156 = call builtin.exception_value(%1154)
+      throw %1156
+    bb417:
+      %1170 = phi [(bb423, %1168), (bb424, %1169)]
+      %1171 = is_exception %1170
+      branch %1171, bb426, bb425
+    bb418:
+      %1158 = phi [(bb411, %1157), (bb415, %1154)]
+      %1159 = phi [(bb411, %1157), (bb415, %1149)]
+      %1160 = load var $0.$shared_env
+      %1161 = const c585
+      %1162 = stricteq %1160, %1161
+      %1163 = const c586
+      branch %1162, bb419, bb420
+    bb419:
+      %1165 = load var $0.shadow
+      jump bb422
+    bb420:
+      %1164 = call builtin.object.has_own(%1160, %1163)
+      branch %1164, bb421, bb419
+    bb421:
+      %1166 = get_prop %1160, %1163
+      jump bb422
+    bb422:
+      %1167 = phi [(bb419, %1165), (bb421, %1166)]
+      branch %1146, bb423, bb424
+    bb423:
+      %1168 = call builtin.console.log(%1167)
+      jump bb417
+    bb424:
+      %1169 = call %1158, this=%1159, args=[%1167]
+      jump bb417
+    bb425:
+      jump bb427
+    bb426:
+      %1172 = call builtin.exception_value(%1170)
+      throw %1172
+    bb427:
+      %1173 = const c587
+      %1174 = const c588
+      %1175 = call builtin.scope_record_create(%1174)
+      store var $eval_env, %1175
+      %1176 = const c589
+      %1177 = load var $0.$shared_env
+      %1178 = const c590
+      %1179 = stricteq %1177, %1178
+      %1180 = const c591
+      branch %1179, bb430, bb431
+    bb428:
+      return
+    bb429:
+      %1235 = load var $tmp.0
+      store var $10.e, %1235
+      %1236 = const c619
+      %1237 = const c620
+      %1238 = call builtin.intrinsic_pristine(%1236, %1237)
+      branch %1238, bb445, bb446
+    bb430:
+      %1182 = load var $0.f
+      jump bb433
+    bb431:
+      %1181 = call builtin.object.has_own(%1177, %1180)
+      branch %1181, bb432, bb430
+    bb432:
+      %1183 = get_prop %1177, %1180
+      jump bb433
+    bb433:
+      %1184 = phi [(bb430, %1182), (bb432, %1183)]
+      %1185 = const c592
+      %1186 = const c593
+      call builtin.scope_record_add_binding(%1175, %1176, %1184, %1185, %1186)
+      %1187 = const c594
+      %1188 = load var $0.$shared_env
+      %1189 = const c595
+      %1190 = stricteq %1188, %1189
+      %1191 = const c596
+      branch %1190, bb434, bb435
+    bb434:
+      %1193 = load var $0.o
+      jump bb437
+    bb435:
+      %1192 = call builtin.object.has_own(%1188, %1191)
+      branch %1192, bb436, bb434
+    bb436:
+      %1194 = get_prop %1188, %1191
+      jump bb437
+    bb437:
+      %1195 = phi [(bb434, %1193), (bb436, %1194)]
+      %1196 = const c597
+      %1197 = const c598
+      call builtin.scope_record_add_binding(%1175, %1187, %1195, %1196, %1197)
+      %1198 = const c599
+      %1199 = load var $0.$shared_env
+      %1200 = const c600
+      %1201 = stricteq %1199, %1200
+      %1202 = const c601
+      branch %1201, bb438, bb439
+    bb438:
+      %1204 = load var $0.shadow
+      jump bb441
+    bb439:
+      %1203 = call builtin.object.has_own(%1199, %1202)
+      branch %1203, bb440, bb438
+    bb440:
+      %1205 = get_prop %1199, %1202
+      jump bb441
+    bb441:
+      %1206 = phi [(bb438, %1204), (bb440, %1205)]
+      %1207 = const c602
+      %1208 = const c603
+      call builtin.scope_record_add_binding(%1175, %1198, %1206, %1207, %1208)
+      %1209 = const c604
+      %1210 = const c605
+      call builtin.scope_record_set_meta(%1175, %1209, %1210)
+      %1211 = const c606
+      %1212 = const c607
+      call builtin.scope_record_set_meta(%1175, %1211, %1212)
+      %1213 = const c608
+      %1214 = get_super_base
+      %1215 = const c609
+      %1216 = const c610
+      call builtin.scope_record_add_binding(%1175, %1215, %1214, %1216, %1216)
+      call builtin.scope_record_set_meta(%1175, %1213, %1214)
+      %1217 = const c611
+      %1219 = const c612
+      %1218 = call builtin.new.target(%1219)
+      call builtin.scope_record_set_meta(%1175, %1217, %1218)
+      %1220 = call builtin.eval(%1173, %1175)
+      %1221 = is_exception %1220
+      branch %1221, bb443, bb442
+    bb442:
+      %1223 = const c613
+      %1224 = call builtin.scope_record.get_binding(%1175, %1223)
+      %1225 = const c614
+      %1226 = set_prop %950, %1225, %1224
+      %1227 = const c615
+      %1228 = call builtin.scope_record.get_binding(%1175, %1227)
+      %1229 = const c616
+      %1230 = set_prop %950, %1229, %1228
+      %1231 = const c617
+      %1232 = call builtin.scope_record.get_binding(%1175, %1231)
+      %1233 = const c618
+      %1234 = set_prop %950, %1233, %1232
+      call builtin.scope_record_destroy(%1175)
+      jump bb444
+    bb443:
+      %1222 = call builtin.exception_value(%1220)
+      store var $tmp.0, %1222
+      jump bb429
+    bb444:
+      jump bb428
+    bb445:
+      %1249 = const c625
+      jump bb452
+    bb446:
+      %1239 = const c621
+      %1240 = const c622
+      %1241 = call builtin.intrinsic_resolve(%1239, %1240)
+      %1242 = is_exception %1241
+      branch %1242, bb448, bb447
+    bb447:
+      %1244 = const c623
+      %1245 = const c624
+      %1246 = call builtin.intrinsic_resolve(%1244, %1245, %1241)
+      %1247 = is_exception %1246
+      branch %1247, bb450, bb449
+    bb448:
+      %1243 = call builtin.exception_value(%1241)
+      throw %1243
+    bb449:
+      jump bb452
+    bb450:
+      %1248 = call builtin.exception_value(%1246)
+      throw %1248
+    bb451:
+      %1263 = phi [(bb457, %1261), (bb458, %1262)]
+      %1264 = is_exception %1263
+      branch %1264, bb460, bb459
+    bb452:
+      %1250 = phi [(bb445, %1249), (bb449, %1246)]
+      %1251 = phi [(bb445, %1249), (bb449, %1241)]
+      %1252 = load var $10.e
+      %1253 = load var $0.$global
+      %1254 = const c626
+      %1255 = get_prop %1253, %1254
+      %1256 = call builtin.op_instanceof(%1252, %1255)
+      %1257 = is_exception %1256
+      branch %1257, bb454, bb453
+    bb453:
+      %1259 = is_exception %1256
+      branch %1259, bb456, bb455
+    bb454:
+      %1258 = call builtin.exception_value(%1256)
+      throw %1258
+    bb455:
+      branch %1238, bb457, bb458
+    bb456:
+      %1260 = call builtin.exception_value(%1256)
+      throw %1260
+    bb457:
+      %1261 = call builtin.console.log(%1256)
+      jump bb451
+    bb458:
+      %1262 = call %1250, this=%1251, args=[%1256]
+      jump bb451
+    bb459:
+      jump bb428
+    bb460:
+      %1265 = call builtin.exception_value(%1263)
+      throw %1265
 }

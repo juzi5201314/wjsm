@@ -523,3 +523,17 @@ pub const FLAG_ENUMERABLE: i32 = 1 << 1; // bit 1: 可枚举
 pub const FLAG_WRITABLE: i32 = 1 << 2; // bit 2: 可写（数据属性专用）
 pub const FLAG_IS_ACCESSOR: i32 = 1 << 3; // bit 3: 是否为访问器属性
 pub const FLAG_PRIVATE: i32 = 1 << 4; // bit 4: 类私有成员槽（不参与普通属性访问）
+
+// ── IntrinsicPristine / IntrinsicResolve 的站点家族编码（args[0]）──────────
+// 语义层调用降级与宿主共享；args[1] 恒为快路径 builtin 的 wire_id，站点
+// 名字由宿主经 `intrinsic_sites` 反查（属性名不进制品常量池）。其余实参：
+// - GLOBAL_IDENT / STATIC_MEMBER: 无
+// - STRING_PROTO / ARRAY_PROTO:   args[2]=receiver
+/// 裸全局标识符调用（`parseInt(...)`）。
+pub const INTRINSIC_FAMILY_GLOBAL_IDENT: i64 = 0;
+/// 内建容器静态成员调用（`String.raw(...)` / `Math.floor(...)`）。
+pub const INTRINSIC_FAMILY_STATIC_MEMBER: i64 = 1;
+/// %String.prototype% 方法调用（`"x".slice(...)`）。
+pub const INTRINSIC_FAMILY_STRING_PROTO: i64 = 2;
+/// %Array.prototype% 方法调用（`[1].map(...)`）。
+pub const INTRINSIC_FAMILY_ARRAY_PROTO: i64 = 3;

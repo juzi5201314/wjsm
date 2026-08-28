@@ -26,11 +26,18 @@ module {
     c23 = number(1)
     c24 = functionref(@1)
     c25 = undefined
-    c26 = undefined
-    c27 = number(3)
-    c28 = number(4)
-    c29 = bool(true)
-    c30 = bool(false)
+    c26 = number(1)
+    c27 = number(0)
+    c28 = number(1)
+    c29 = number(0)
+    c30 = number(1)
+    c31 = number(0)
+    c32 = undefined
+    c33 = undefined
+    c34 = number(3)
+    c35 = number(4)
+    c36 = bool(true)
+    c37 = bool(false)
 
   fn @target [needs_prototype] [direct_callable] [js_length 2] [params: $1.$env, $1.$this, $1.a, $1.b] [entry=bb0]:
     bb0:
@@ -121,25 +128,63 @@ module {
     bb1:
       store var $0.proxy, %28
       %31 = const c26
-      %32 = load var $0.proxy
-      %33 = const c27
-      %34 = const c28
-      %35 = call %32, this=%31, args=[%33, %34]
-      %36 = is_exception %35
-      branch %36, bb4, bb3
+      %32 = const c27
+      %33 = call builtin.intrinsic_pristine(%31, %32)
+      branch %33, bb3, bb4
     bb2:
       %30 = call builtin.exception_value(%28)
       throw %30
     bb3:
-      %38 = call builtin.console.log(%35)
-      %39 = is_exception %38
-      branch %39, bb6, bb5
+      %44 = const c32
+      jump bb10
     bb4:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %34 = const c28
+      %35 = const c29
+      %36 = call builtin.intrinsic_resolve(%34, %35)
+      %37 = is_exception %36
+      branch %37, bb6, bb5
     bb5:
-      return
+      %39 = const c30
+      %40 = const c31
+      %41 = call builtin.intrinsic_resolve(%39, %40, %36)
+      %42 = is_exception %41
+      branch %42, bb8, bb7
     bb6:
-      %40 = call builtin.exception_value(%38)
-      throw %40
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb7:
+      jump bb10
+    bb8:
+      %43 = call builtin.exception_value(%41)
+      throw %43
+    bb9:
+      %56 = phi [(bb13, %54), (bb14, %55)]
+      %57 = is_exception %56
+      branch %57, bb16, bb15
+    bb10:
+      %45 = phi [(bb3, %44), (bb7, %41)]
+      %46 = phi [(bb3, %44), (bb7, %36)]
+      %47 = const c33
+      %48 = load var $0.proxy
+      %49 = const c34
+      %50 = const c35
+      %51 = call %48, this=%47, args=[%49, %50]
+      %52 = is_exception %51
+      branch %52, bb12, bb11
+    bb11:
+      branch %33, bb13, bb14
+    bb12:
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb13:
+      %54 = call builtin.console.log(%51)
+      jump bb9
+    bb14:
+      %55 = call %45, this=%46, args=[%51]
+      jump bb9
+    bb15:
+      return
+    bb16:
+      %58 = call builtin.exception_value(%56)
+      throw %58
 }

@@ -64,6 +64,11 @@ pub(super) fn dispatch_function(
             let Some((&callee, rest)) = args.split_first() else {
                 return Some(fail_dispatch(ctx));
             };
+            // §20.2.3.3 步骤 1：IsCallable(func) 为 false 抛 TypeError，
+            // 先于实参处理（与 Call 指令的 rejected_call 路径同一文案）。
+            if !state.is_callable_value(callee) {
+                return Some(super::rejected_call_error(ctx, state, callee, false));
+            }
             let (this_value, arguments) = rest.split_first().map_or(
                 (value::encode_undefined(), &[][..]),
                 |(this_value, arguments)| (*this_value, arguments),
@@ -76,6 +81,11 @@ pub(super) fn dispatch_function(
             let Some(callee) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));
             };
+            // §20.2.3.1 步骤 1：IsCallable(func) 为 false 抛 TypeError，
+            // 先于 CreateListFromArrayLike（spread 慢路径依赖该检查）。
+            if !state.is_callable_value(callee) {
+                return Some(super::rejected_call_error(ctx, state, callee, false));
+            }
             let this_value = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             let argument_list = args.get(2).copied().unwrap_or_else(value::encode_undefined);
             let arguments = match create_list_from_array_like(ctx, state, argument_list) {

@@ -106,9 +106,16 @@ module {
     c103 = functionref(@5)
     c104 = string("$0.b")
     c105 = undefined
-    c106 = functionref(@6)
-    c107 = undefined
-    c108 = bool(true)
+    c106 = number(1)
+    c107 = number(0)
+    c108 = number(1)
+    c109 = number(0)
+    c110 = number(1)
+    c111 = number(0)
+    c112 = undefined
+    c113 = functionref(@6)
+    c114 = undefined
+    c115 = bool(true)
 
   fn @c$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -405,9 +412,47 @@ module {
 
   fn @arrow_6 [direct_callable] [js_name ""] [js_length 1] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
     bb0:
-      %0 = load var $7.v
-      %1 = call builtin.console.log(%0)
-      return %1
+      %0 = const c106
+      %1 = const c107
+      %2 = call builtin.intrinsic_pristine(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %13 = const c112
+      jump bb8
+    bb2:
+      %3 = const c108
+      %4 = const c109
+      %5 = call builtin.intrinsic_resolve(%3, %4)
+      %6 = is_exception %5
+      branch %6, bb4, bb3
+    bb3:
+      %8 = const c110
+      %9 = const c111
+      %10 = call builtin.intrinsic_resolve(%8, %9, %5)
+      %11 = is_exception %10
+      branch %11, bb6, bb5
+    bb4:
+      %7 = call builtin.exception_value(%5)
+      throw %7
+    bb5:
+      jump bb8
+    bb6:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb7:
+      %19 = phi [(bb9, %17), (bb10, %18)]
+      return %19
+    bb8:
+      %14 = phi [(bb1, %13), (bb5, %10)]
+      %15 = phi [(bb1, %13), (bb5, %5)]
+      %16 = load var $7.v
+      branch %2, bb9, bb10
+    bb9:
+      %17 = call builtin.console.log(%16)
+      jump bb7
+    bb10:
+      %18 = call %14, this=%15, args=[%16]
+      jump bb7
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -479,8 +524,8 @@ module {
       %38 = is_exception %37
       branch %38, bb2, bb1
     bb1:
-      %40 = const c106
-      %41 = const c107
+      %40 = const c113
+      %41 = const c114
       %42 = call builtin.promise.then(%37, %40, %41)
       %43 = is_exception %42
       branch %43, bb4, bb3

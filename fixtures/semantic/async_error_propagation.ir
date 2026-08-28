@@ -45,8 +45,15 @@ module {
     c42 = bool(false)
     c43 = functionref(@1)
     c44 = undefined
-    c45 = functionref(@2)
-    c46 = bool(true)
+    c45 = number(1)
+    c46 = number(0)
+    c47 = number(1)
+    c48 = number(0)
+    c49 = number(1)
+    c50 = number(0)
+    c51 = undefined
+    c52 = functionref(@2)
+    c53 = bool(true)
 
   fn @boom$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -117,9 +124,47 @@ module {
 
   fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
     bb0:
-      %0 = load var $3.e
-      %1 = call builtin.console.log(%0)
-      return %1
+      %0 = const c45
+      %1 = const c46
+      %2 = call builtin.intrinsic_pristine(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %13 = const c51
+      jump bb8
+    bb2:
+      %3 = const c47
+      %4 = const c48
+      %5 = call builtin.intrinsic_resolve(%3, %4)
+      %6 = is_exception %5
+      branch %6, bb4, bb3
+    bb3:
+      %8 = const c49
+      %9 = const c50
+      %10 = call builtin.intrinsic_resolve(%8, %9, %5)
+      %11 = is_exception %10
+      branch %11, bb6, bb5
+    bb4:
+      %7 = call builtin.exception_value(%5)
+      throw %7
+    bb5:
+      jump bb8
+    bb6:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb7:
+      %19 = phi [(bb9, %17), (bb10, %18)]
+      return %19
+    bb8:
+      %14 = phi [(bb1, %13), (bb5, %10)]
+      %15 = phi [(bb1, %13), (bb5, %5)]
+      %16 = load var $3.e
+      branch %2, bb9, bb10
+    bb9:
+      %17 = call builtin.console.log(%16)
+      jump bb7
+    bb10:
+      %18 = call %14, this=%15, args=[%16]
+      jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -173,7 +218,7 @@ module {
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:
-      %27 = const c45
+      %27 = const c52
       %28 = call builtin.promise.catch(%24, %27)
       %29 = is_exception %28
       branch %29, bb4, bb3

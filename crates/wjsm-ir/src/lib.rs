@@ -1,6 +1,8 @@
 pub mod builtin;
 pub mod cfg;
 pub mod constants;
+pub mod dominators;
+pub mod intrinsic_sites;
 pub mod string_hash;
 pub mod typed_cfg;
 pub mod types;
@@ -10,6 +12,7 @@ pub mod variable_ssa;
 mod verify;
 
 pub use builtin::Builtin;
+pub use dominators::Dominators;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};

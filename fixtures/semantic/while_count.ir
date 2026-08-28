@@ -26,6 +26,13 @@ module {
     c23 = bool(false)
     c24 = bool(false)
     c25 = number(1)
+    c26 = number(0)
+    c27 = number(1)
+    c28 = number(0)
+    c29 = number(1)
+    c30 = number(0)
+    c31 = undefined
+    c32 = number(1)
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -80,10 +87,10 @@ module {
       %25 = lt %23, %24
       jump bb4
     bb2:
-      %32 = load var $0.i
-      %33 = call builtin.console.log(%32)
-      %34 = is_exception %33
-      branch %34, bb9, bb8
+      %32 = const c25
+      %33 = const c26
+      %34 = call builtin.intrinsic_pristine(%32, %33)
+      branch %34, bb8, bb9
     bb3:
       return
     bb4:
@@ -95,16 +102,54 @@ module {
     bb7:
       unreachable
     bb8:
-      %36 = load var $0.i
-      %37 = const c25
-      %38 = add %36, %37
-      store var $0.i, %38
-      jump bb10
+      %45 = const c31
+      jump bb15
     bb9:
-      %35 = call builtin.exception_value(%33)
-      throw %35
+      %35 = const c27
+      %36 = const c28
+      %37 = call builtin.intrinsic_resolve(%35, %36)
+      %38 = is_exception %37
+      branch %38, bb11, bb10
     bb10:
-      jump bb1
+      %40 = const c29
+      %41 = const c30
+      %42 = call builtin.intrinsic_resolve(%40, %41, %37)
+      %43 = is_exception %42
+      branch %43, bb13, bb12
     bb11:
+      %39 = call builtin.exception_value(%37)
+      throw %39
+    bb12:
+      jump bb15
+    bb13:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb14:
+      %51 = phi [(bb16, %49), (bb17, %50)]
+      %52 = is_exception %51
+      branch %52, bb19, bb18
+    bb15:
+      %46 = phi [(bb8, %45), (bb12, %42)]
+      %47 = phi [(bb8, %45), (bb12, %37)]
+      %48 = load var $0.i
+      branch %34, bb16, bb17
+    bb16:
+      %49 = call builtin.console.log(%48)
+      jump bb14
+    bb17:
+      %50 = call %46, this=%47, args=[%48]
+      jump bb14
+    bb18:
+      %54 = load var $0.i
+      %55 = const c32
+      %56 = add %54, %55
+      store var $0.i, %56
+      jump bb20
+    bb19:
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb20:
+      jump bb1
+    bb21:
       unreachable
 }
