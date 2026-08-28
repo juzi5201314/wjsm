@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: Strict mode code may not include a with statement
+ --> errors/with_strict_function.js:5:3
+5 |   with ({}) { }
+  |   ^^^^^^^^^^^^^
+

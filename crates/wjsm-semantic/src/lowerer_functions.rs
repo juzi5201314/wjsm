@@ -100,8 +100,11 @@ impl Lowerer {
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
         }
 
-        let param_ir_names =
-            self.build_param_ir_names(&fn_expr.function.params, env_scope_id, this_scope_id)?;
+        let param_ir_names = self.build_plain_function_param_ir_names(
+            &fn_expr.function,
+            env_scope_id,
+            this_scope_id,
+        )?;
 
         // Predeclare hoisted vars in body.
         if let Some(body) = &fn_expr.function.body {

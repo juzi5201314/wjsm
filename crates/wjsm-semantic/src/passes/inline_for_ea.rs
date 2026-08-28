@@ -709,66 +709,80 @@ fn classify_construct_return(
     }
 }
 
-/// 唯一可达 store 的 must 分析：LoadVar dest → 所有路径一致的 StoreVar 值。
-///
-/// 乐观 Kildall 迭代：meet 为「键交集且值一致」，任一已计算前驱缺失该键或
-/// 值不一致即删除。未计算块视作 ⊤：其作为前驱时不参与 meet；前驱全部未
-/// 计算的块本轮跳过（保持 ⊤），只有入口/不可达块（无前驱）才以 ∅ 物化。
-/// 从 ⊤ 出发单调下降收敛到 gfp；out 首次物化后只允许删键（求交收口）作为
-/// 终止保险。（早先版本把「前驱全未计算」物化成 ∅ 底元素、且合并规则本身
-/// 非单调：纯复制环上「空/满」两波状态互相追逐，特定循环 + 内联 CFG 形态
-/// 下永不收敛。）
 fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
-    let mut block_out: HashMap<BasicBlockId, HashMap<String, ValueId>> = HashMap::new();
-    let mut block_in: HashMap<BasicBlockId, HashMap<String, ValueId>> = HashMap::new();
+    let mut block_out: HashMap<BasicBlockId, HashMap<String, Option<ValueId>>> = HashMap::new();
+    let mut block_in: HashMap<BasicBlockId, HashMap<String, Option<ValueId>>> = HashMap::new();
     let mut load_reaching: HashMap<ValueId, ValueId> = HashMap::new();
 
     let mut changed = true;
     while changed {
         changed = false;
         for block in function.blocks() {
-            let mut in_map: Option<HashMap<String, ValueId>> = None;
-            let mut has_pred = false;
+            let mut in_map: HashMap<String, Option<ValueId>> = HashMap::new();
+            let mut first = true;
             for pred in function
                 .blocks()
                 .iter()
                 .filter(|p| cfg_fold::terminator_successors(p.terminator()).contains(&block.id()))
             {
-                has_pred = true;
-                let Some(pred_out) = block_out.get(&pred.id()) else {
-                    continue;
-                };
-                match &mut in_map {
-                    None => in_map = Some(pred_out.clone()),
-                    Some(acc) => acc.retain(|k, v| pred_out.get(k) == Some(v)),
+                if let Some(pred_out) = block_out.get(&pred.id()) {
+                    if first {
+                        in_map = pred_out.clone();
+                        first = false;
+                    } else {
+                        // 对称 meet：任一 pred 缺失或不一致的键一律降为未知，
+                        // 否则单边保留会把「某路径未定义」误判为确定值。
+                        for (k, v) in pred_out {
+                            match in_map.get_mut(k) {
+                                Some(existing) => {
+                                    if *existing != *v {
+                                        *existing = None;
+                                    }
+                                }
+                                None => {
+                                    in_map.insert(k.clone(), None);
+                                }
+                            }
+                        }
+                        for (k, v) in in_map.iter_mut() {
+                            if !pred_out.contains_key(k) {
+                                *v = None;
+                            }
+                        }
+                    }
                 }
             }
-            let in_map = match in_map {
-                Some(map) => map,
-                // 前驱全部未计算：保持 ⊤，等待前驱物化后再算。
-                None if has_pred => continue,
-                // 入口/不可达块：无前驱，语义上无 store 可达。
-                None => HashMap::new(),
-            };
 
             let mut current = in_map.clone();
             for instr in block.instructions() {
                 if let Instruction::StoreVar { name, value } = instr {
-                    current.insert(name.clone(), *value);
+                    current.insert(name.clone(), Some(*value));
                 }
             }
-            match block_out.get_mut(&block.id()) {
+            // 与旧 out 做只降不升的合并（absent → Some → None 单向）：
+            // in 集每轮从零重建属非单调混沌迭代，环上可能出现 Some/None
+            // 周期振荡永不收敛（with 分派挂在生成器循环头时实际触发）；
+            // 强制下降后每个 (block, key) 至多变更两次，必然到达不动点。
+            let descended = match block_out.get(&block.id()) {
+                None => current,
                 Some(old) => {
-                    let before = old.len();
-                    old.retain(|k, v| current.get(k) == Some(v));
-                    if old.len() != before {
-                        changed = true;
+                    let mut merged = current;
+                    for (k, v) in merged.iter_mut() {
+                        match old.get(k) {
+                            None => {}
+                            Some(old_v) if old_v == v => {}
+                            Some(_) => *v = None,
+                        }
                     }
+                    for k in old.keys() {
+                        merged.entry(k.clone()).or_insert(None);
+                    }
+                    merged
                 }
-                None => {
-                    block_out.insert(block.id(), current);
-                    changed = true;
-                }
+            };
+            if block_out.get(&block.id()) != Some(&descended) {
+                block_out.insert(block.id(), descended);
+                changed = true;
             }
             block_in.insert(block.id(), in_map);
         }
@@ -779,10 +793,10 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
         for instr in block.instructions() {
             match instr {
                 Instruction::StoreVar { name, value } => {
-                    current.insert(name.clone(), *value);
+                    current.insert(name.clone(), Some(*value));
                 }
                 Instruction::LoadVar { dest, name } => {
-                    if let Some(reaching_val) = current.get(name) {
+                    if let Some(Some(reaching_val)) = current.get(name) {
                         load_reaching.insert(*dest, *reaching_val);
                     }
                 }

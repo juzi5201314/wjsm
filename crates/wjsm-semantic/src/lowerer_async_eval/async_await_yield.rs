@@ -628,7 +628,11 @@ impl Lowerer {
         new_expr: &swc_ast::NewExpr,
         block: BasicBlockId,
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
-        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+        // 构造器名解析穿越 with 作用域时禁用全部编译期内建构造器快路径：
+        // with 对象可能提供同名属性，callee 须经通用路径的 with 读分派解析。
+        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+            && self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()
+        {
             if ident.sym == "Promise" && self.scopes.lookup(&ident.sym).is_err() {
                 return self.lower_new_promise(new_expr, block);
             }

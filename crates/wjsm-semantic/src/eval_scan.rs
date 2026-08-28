@@ -228,6 +228,9 @@ fn collect_eval_var_declared_names_from_stmt(stmt: &swc_ast::Stmt, names: &mut V
         swc_ast::Stmt::Labeled(labeled) => {
             collect_eval_var_declared_names_from_stmt(&labeled.body, names);
         }
+        swc_ast::Stmt::With(with_stmt) => {
+            collect_eval_var_declared_names_from_stmt(&with_stmt.body, names);
+        }
         _ => {}
     }
 }

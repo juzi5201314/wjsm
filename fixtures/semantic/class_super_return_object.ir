@@ -25,176 +25,189 @@ module {
     c22 = functionref(@0)
     c23 = string("constructor")
     c24 = string("prototype")
-    c25 = string("explicit in-ctor:")
-    c26 = string("marker")
-    c27 = functionref(@1)
-    c28 = string("prototype")
-    c29 = string("__super_constructor__")
-    c30 = string("constructor")
-    c31 = string("prototype")
-    c32 = string("explicit:")
-    c33 = string("marker")
-    c34 = functionref(@2)
-    c35 = string("prototype")
-    c36 = string("__super_constructor__")
-    c37 = string("constructor")
-    c38 = string("prototype")
-    c39 = string("implicit:")
-    c40 = string("marker")
-    c41 = string("#secret@3")
-    c42 = number(10)
-    c43 = string("field")
-    c44 = number(5)
-    c45 = string("self")
-    c46 = functionref(@3)
-    c47 = string("prototype")
-    c48 = string("__super_constructor__")
-    c49 = string("constructor")
-    c50 = string("readSecret")
-    c51 = string("#secret@3")
-    c52 = functionref(@4)
-    c53 = string("prototype")
-    c54 = string("fields:")
-    c55 = string("field")
-    c56 = string("marker")
-    c57 = string("self")
-    c58 = string("prototype")
-    c59 = string("readSecret")
-    c60 = string("call")
-    c61 = string("proto:")
-    c62 = string("Object")
-    c63 = string("prototype")
-    c64 = number(42)
-    c65 = functionref(@5)
-    c66 = string("constructor")
-    c67 = string("protoMethod")
-    c68 = string("proto")
-    c69 = functionref(@6)
-    c70 = string("prototype")
-    c71 = string("own")
-    c72 = number(7)
-    c73 = functionref(@7)
-    c74 = string("prototype")
-    c75 = string("__super_constructor__")
-    c76 = string("constructor")
+    c25 = uninitialized
+    c26 = string("explicit in-ctor:")
+    c27 = string("marker")
+    c28 = functionref(@1)
+    c29 = string("prototype")
+    c30 = string("__super_constructor__")
+    c31 = string("constructor")
+    c32 = string("prototype")
+    c33 = string("explicit:")
+    c34 = string("marker")
+    c35 = functionref(@2)
+    c36 = string("prototype")
+    c37 = string("__super_constructor__")
+    c38 = string("constructor")
+    c39 = string("prototype")
+    c40 = string("implicit:")
+    c41 = string("marker")
+    c42 = uninitialized
+    c43 = string("#secret@3")
+    c44 = number(10)
+    c45 = string("field")
+    c46 = number(5)
+    c47 = string("self")
+    c48 = functionref(@3)
+    c49 = string("prototype")
+    c50 = string("__super_constructor__")
+    c51 = string("constructor")
+    c52 = string("readSecret")
+    c53 = string("#secret@3")
+    c54 = functionref(@4)
+    c55 = string("prototype")
+    c56 = string("fields:")
+    c57 = string("field")
+    c58 = string("marker")
+    c59 = string("self")
+    c60 = string("prototype")
+    c61 = string("readSecret")
+    c62 = string("call")
+    c63 = string("proto:")
+    c64 = string("Object")
+    c65 = string("prototype")
+    c66 = number(42)
+    c67 = functionref(@5)
+    c68 = string("constructor")
+    c69 = string("protoMethod")
+    c70 = string("proto")
+    c71 = functionref(@6)
+    c72 = string("prototype")
+    c73 = uninitialized
+    c74 = string("own")
+    c75 = number(7)
+    c76 = functionref(@7)
     c77 = string("prototype")
-    c78 = string("non-object:")
-    c79 = string("own")
-    c80 = string("protoMethod")
-    c81 = string("f")
-    c82 = number(9)
-    c83 = string("expr:")
-    c84 = string("f")
-    c85 = string("marker")
-    c86 = functionref(@8)
-    c87 = string("prototype")
-    c88 = string("__super_constructor__")
-    c89 = string("constructor")
-    c90 = string("prototype")
-    c91 = string("tag")
-    c92 = string("b")
-    c93 = string("tag")
-    c94 = string("b")
-    c95 = string("branch:")
+    c78 = string("__super_constructor__")
+    c79 = string("constructor")
+    c80 = string("prototype")
+    c81 = string("non-object:")
+    c82 = string("own")
+    c83 = string("protoMethod")
+    c84 = uninitialized
+    c85 = string("f")
+    c86 = number(9)
+    c87 = string("expr:")
+    c88 = string("f")
+    c89 = string("marker")
+    c90 = functionref(@8)
+    c91 = string("prototype")
+    c92 = string("__super_constructor__")
+    c93 = string("constructor")
+    c94 = string("prototype")
+    c95 = uninitialized
     c96 = string("tag")
-    c97 = string("marker")
-    c98 = functionref(@9)
-    c99 = string("prototype")
-    c100 = string("__super_constructor__")
-    c101 = string("constructor")
-    c102 = string("prototype")
-    c103 = bool(true)
-    c104 = bool(false)
-    c105 = string("g")
-    c106 = number(3)
-    c107 = undefined
-    c108 = string("Derived constructors may only return object or undefined")
-    c109 = functionref(@10)
-    c110 = string("prototype")
-    c111 = string("__super_constructor__")
-    c112 = string("constructor")
-    c113 = string("prototype")
-    c114 = string("return-super:")
-    c115 = string("g")
-    c116 = string("marker")
-    c117 = object_template([4613198946429025263])
-    c118 = string("x")
-    c119 = undefined
-    c120 = string("Derived constructors may only return object or undefined")
-    c121 = functionref(@11)
-    c122 = string("prototype")
-    c123 = string("__super_constructor__")
-    c124 = string("constructor")
-    c125 = string("prototype")
-    c126 = string("return-object:")
-    c127 = string("own")
-    c128 = string("marker")
-    c129 = string("$0.undefined")
-    c130 = undefined
-    c131 = string("Derived constructors may only return object or undefined")
-    c132 = functionref(@12)
-    c133 = undefined
-    c134 = string("$0.undefined")
-    c135 = string("prototype")
-    c136 = string("__super_constructor__")
-    c137 = string("constructor")
-    c138 = string("prototype")
-    c139 = string("return-undefined:")
-    c140 = string("marker")
-    c141 = string("mid")
-    c142 = string("m")
-    c143 = functionref(@13)
-    c144 = string("prototype")
-    c145 = string("__super_constructor__")
-    c146 = string("constructor")
-    c147 = string("prototype")
-    c148 = string("top")
-    c149 = string("t")
-    c150 = functionref(@14)
-    c151 = string("prototype")
-    c152 = string("__super_constructor__")
-    c153 = string("constructor")
-    c154 = string("prototype")
-    c155 = string("chain:")
-    c156 = string("marker")
-    c157 = string("mid")
-    c158 = string("top")
-    c159 = object_template([4613198946429008627])
-    c160 = functionref(@15)
-    c161 = string("constructor")
-    c162 = string("prototype")
-    c163 = number(3)
-    c164 = number(4)
-    c165 = functionref(@16)
-    c166 = string("prototype")
-    c167 = string("__super_constructor__")
-    c168 = string("constructor")
-    c169 = string("prototype")
-    c170 = string("spread:")
-    c171 = string("sum")
-    c172 = string("r")
-    c173 = number(8)
-    c174 = functionref(@17)
-    c175 = string("prototype")
-    c176 = string("__super_constructor__")
-    c177 = string("constructor")
-    c178 = string("prototype")
-    c179 = string("reflect:")
-    c180 = string("marker")
-    c181 = string("r")
-    c182 = string("primitive: finally ran")
-    c183 = number(5)
-    c184 = string("primitive: finally ran")
-    c185 = undefined
-    c186 = string("Derived constructors may only return object or undefined")
-    c187 = string("primitive: finally ran")
-    c188 = functionref(@18)
+    c97 = string("b")
+    c98 = string("tag")
+    c99 = string("b")
+    c100 = string("branch:")
+    c101 = string("tag")
+    c102 = string("marker")
+    c103 = functionref(@9)
+    c104 = string("prototype")
+    c105 = string("__super_constructor__")
+    c106 = string("constructor")
+    c107 = string("prototype")
+    c108 = bool(true)
+    c109 = bool(false)
+    c110 = uninitialized
+    c111 = string("g")
+    c112 = number(3)
+    c113 = undefined
+    c114 = string("Derived constructors may only return object or undefined")
+    c115 = functionref(@10)
+    c116 = string("prototype")
+    c117 = string("__super_constructor__")
+    c118 = string("constructor")
+    c119 = string("prototype")
+    c120 = string("return-super:")
+    c121 = string("g")
+    c122 = string("marker")
+    c123 = uninitialized
+    c124 = object_template([4613198946429025263])
+    c125 = string("x")
+    c126 = undefined
+    c127 = string("Derived constructors may only return object or undefined")
+    c128 = functionref(@11)
+    c129 = string("prototype")
+    c130 = string("__super_constructor__")
+    c131 = string("constructor")
+    c132 = string("prototype")
+    c133 = string("return-object:")
+    c134 = string("own")
+    c135 = string("marker")
+    c136 = uninitialized
+    c137 = string("$0.undefined")
+    c138 = undefined
+    c139 = string("Derived constructors may only return object or undefined")
+    c140 = functionref(@12)
+    c141 = undefined
+    c142 = string("$0.undefined")
+    c143 = string("prototype")
+    c144 = string("__super_constructor__")
+    c145 = string("constructor")
+    c146 = string("prototype")
+    c147 = string("return-undefined:")
+    c148 = string("marker")
+    c149 = uninitialized
+    c150 = string("mid")
+    c151 = string("m")
+    c152 = functionref(@13)
+    c153 = string("prototype")
+    c154 = string("__super_constructor__")
+    c155 = string("constructor")
+    c156 = string("prototype")
+    c157 = string("top")
+    c158 = string("t")
+    c159 = functionref(@14)
+    c160 = string("prototype")
+    c161 = string("__super_constructor__")
+    c162 = string("constructor")
+    c163 = string("prototype")
+    c164 = string("chain:")
+    c165 = string("marker")
+    c166 = string("mid")
+    c167 = string("top")
+    c168 = object_template([4613198946429008627])
+    c169 = functionref(@15)
+    c170 = string("constructor")
+    c171 = string("prototype")
+    c172 = uninitialized
+    c173 = number(3)
+    c174 = number(4)
+    c175 = functionref(@16)
+    c176 = string("prototype")
+    c177 = string("__super_constructor__")
+    c178 = string("constructor")
+    c179 = string("prototype")
+    c180 = string("spread:")
+    c181 = string("sum")
+    c182 = uninitialized
+    c183 = string("r")
+    c184 = number(8)
+    c185 = functionref(@17)
+    c186 = string("prototype")
+    c187 = string("__super_constructor__")
+    c188 = string("constructor")
     c189 = string("prototype")
-    c190 = string("__super_constructor__")
-    c191 = string("constructor")
-    c192 = string("prototype")
-    c193 = string("primitive:")
-    c194 = string("TypeError")
+    c190 = string("reflect:")
+    c191 = string("marker")
+    c192 = string("r")
+    c193 = uninitialized
+    c194 = string("primitive: finally ran")
+    c195 = string("primitive: finally ran")
+    c196 = number(5)
+    c197 = string("primitive: finally ran")
+    c198 = undefined
+    c199 = string("Derived constructors may only return object or undefined")
+    c200 = string("primitive: finally ran")
+    c201 = functionref(@18)
+    c202 = string("prototype")
+    c203 = string("__super_constructor__")
+    c204 = string("constructor")
+    c205 = string("prototype")
+    c206 = string("primitive:")
+    c207 = string("TypeError")
 
   fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
@@ -204,48 +217,78 @@ module {
 
   fn @ExplicitCtor.constructor [home_object=@1.prototype] [needs_prototype] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $5.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $5.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $5.$super_proto#ctor, %1
+      %2 = const c25
       store var $5.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $5.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $5.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c25
-      %9 = load var $5.$this
-      %10 = const c26
-      %11 = get_prop %9, %10
-      %12 = is_exception %11
-      branch %12, bb9, bb8
+      store var $5.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $5.$this, %6
+      jump bb3
     bb8:
-      %14 = call builtin.console.log(%8, %11)
-      %15 = is_exception %14
-      branch %15, bb11, bb10
-    bb9:
-      %13 = call builtin.exception_value(%11)
-      throw %13
-    bb10:
+      %16 = const c26
       %17 = load var $5.$this
-      return %17
+      %18 = call builtin.this_tdz_check(%17)
+      %19 = is_exception %18
+      branch %19, bb11, bb10
+    bb9:
+      %15 = call builtin.exception_value(%13)
+      throw %15
+    bb10:
+      %21 = const c27
+      %22 = get_prop %18, %21
+      %23 = is_exception %22
+      branch %23, bb13, bb12
     bb11:
-      %16 = call builtin.exception_value(%14)
-      throw %16
+      %20 = call builtin.exception_value(%18)
+      throw %20
+    bb12:
+      %25 = call builtin.console.log(%16, %22)
+      %26 = is_exception %25
+      branch %26, bb15, bb14
+    bb13:
+      %24 = call builtin.exception_value(%22)
+      throw %24
+    bb14:
+      %28 = load var $5.$this
+      %29 = call builtin.this_tdz_check(%28)
+      %30 = is_exception %29
+      branch %30, bb16, bb17
+    bb15:
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb16:
+      %31 = call builtin.exception_value(%29)
+      throw %31
+    bb17:
+      return %29
 
   fn @ImplicitCtor.constructor [home_object=@2.prototype] [needs_prototype] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
@@ -277,482 +320,723 @@ module {
 
   fn @WithFields.constructor [home_object=@3.prototype] [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $9.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $9.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $9.$super_proto#ctor, %1
+      %2 = const c42
       store var $9.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $9.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $9.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c41
-      %9 = const c42
-      %10 = load var $9.$this
-      call builtin.private_set(%10, %8, %9)
-      %11 = const c43
-      %12 = const c44
-      %13 = load var $9.$this
-      %14 = create_data_property %13, %11, %12
-      %15 = is_exception %14
-      branch %15, bb9, bb8
+      store var $9.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $9.$this, %6
+      jump bb3
     bb8:
-      %17 = const c45
+      %16 = const c43
+      %17 = const c44
       %18 = load var $9.$this
-      %19 = load var $9.$this
-      %20 = create_data_property %19, %17, %18
-      %21 = is_exception %20
-      branch %21, bb11, bb10
+      call builtin.private_set(%18, %16, %17)
+      %19 = const c45
+      %20 = const c46
+      %21 = load var $9.$this
+      %22 = create_data_property %21, %19, %20
+      %23 = is_exception %22
+      branch %23, bb11, bb10
     bb9:
-      %16 = call builtin.exception_value(%14)
-      throw %16
+      %15 = call builtin.exception_value(%13)
+      throw %15
     bb10:
-      %23 = is_exception %5
-      branch %23, bb13, bb12
+      %25 = const c47
+      %26 = load var $9.$this
+      %27 = call builtin.this_tdz_check(%26)
+      %28 = is_exception %27
+      branch %28, bb13, bb12
     bb11:
-      %22 = call builtin.exception_value(%20)
-      throw %22
-    bb12:
-      %25 = load var $9.$this
-      return %25
-    bb13:
-      %24 = call builtin.exception_value(%5)
+      %24 = call builtin.exception_value(%22)
       throw %24
+    bb12:
+      %30 = load var $9.$this
+      %31 = create_data_property %30, %25, %27
+      %32 = is_exception %31
+      branch %32, bb15, bb14
+    bb13:
+      %29 = call builtin.exception_value(%27)
+      throw %29
+    bb14:
+      %34 = is_exception %13
+      branch %34, bb17, bb16
+    bb15:
+      %33 = call builtin.exception_value(%31)
+      throw %33
+    bb16:
+      %36 = load var $9.$this
+      %37 = call builtin.this_tdz_check(%36)
+      %38 = is_exception %37
+      branch %38, bb18, bb19
+    bb17:
+      %35 = call builtin.exception_value(%13)
+      throw %35
+    bb18:
+      %39 = call builtin.exception_value(%37)
+      throw %39
+    bb19:
+      return %37
 
   fn @WithFields.readSecret [home_object=@3.prototype] [direct_callable] [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = load var $10.$this
-      %1 = const c51
+      %1 = const c53
       %2 = call builtin.private_get(%0, %1)
       return %2
 
   fn @NonObjectBase.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
-      %0 = const c64
+      %0 = const c66
       return %0
 
   fn @NonObjectBase.protoMethod [home_object=@5.prototype] [direct_callable] [params: $13.$env, $13.$this] [entry=bb0]:
     bb0:
-      %0 = const c68
+      %0 = const c70
       return %0
 
   fn @KeepsInstance.constructor [home_object=@7.prototype] [needs_prototype] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $15.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $15.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $15.$super_proto#ctor, %1
+      %2 = const c73
       store var $15.$this, %2
-      jump bb5
-    bb4:
-      jump bb5
-    bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
-    bb6:
-      %8 = load var $15.$this
-      %9 = const c71
-      %10 = const c72
-      %11 = set_prop %8, %9, %10, strict
-      %12 = is_exception %11
-      branch %12, bb9, bb8
-    bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
-    bb8:
-      %14 = load var $15.$this
-      return %14
-    bb9:
-      %13 = call builtin.exception_value(%11)
-      throw %13
-
-  fn @ExprPosition.constructor [home_object=@8.prototype] [needs_prototype] [params: $17.$env, $17.$this] [entry=bb0]:
-    bb0:
-      %0 = get_super_constructor
-      %1 = load var $17.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
+      %3 = get_super_constructor
+      %4 = load var $15.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
     bb1:
-      jump bb5
+      jump bb3
     bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
+      %8 = load var $15.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
     bb3:
-      store var $17.$this, %2
-      jump bb5
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c81
-      %9 = const c82
-      %10 = load var $17.$this
-      %11 = create_data_property %10, %8, %9
-      %12 = is_exception %11
-      branch %12, bb9, bb8
+      store var $15.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $15.$this, %6
+      jump bb3
     bb8:
-      %14 = is_exception %5
-      branch %14, bb11, bb10
+      %16 = load var $15.$this
+      %17 = call builtin.this_tdz_check(%16)
+      %18 = is_exception %17
+      branch %18, bb11, bb10
     bb9:
-      %13 = call builtin.exception_value(%11)
-      throw %13
+      %15 = call builtin.exception_value(%13)
+      throw %15
     bb10:
-      store var $17.r, %5
-      %16 = const c83
-      %17 = load var $17.r
-      %18 = load var $17.$this
-      %19 = call builtin.strict_eq(%17, %18)
-      %20 = load var $17.$this
-      %21 = const c84
-      %22 = get_prop %20, %21
+      %20 = const c74
+      %21 = const c75
+      %22 = set_prop %17, %20, %21, strict
       %23 = is_exception %22
       branch %23, bb13, bb12
     bb11:
-      %15 = call builtin.exception_value(%5)
-      throw %15
+      %19 = call builtin.exception_value(%17)
+      throw %19
     bb12:
-      %25 = load var $17.$this
-      %26 = const c85
-      %27 = get_prop %25, %26
-      %28 = is_exception %27
-      branch %28, bb15, bb14
+      %25 = load var $15.$this
+      %26 = call builtin.this_tdz_check(%25)
+      %27 = is_exception %26
+      branch %27, bb14, bb15
     bb13:
       %24 = call builtin.exception_value(%22)
       throw %24
     bb14:
-      %30 = call builtin.console.log(%16, %19, %22, %27)
-      %31 = is_exception %30
-      branch %31, bb17, bb16
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb15:
+      return %26
+
+  fn @ExprPosition.constructor [home_object=@8.prototype] [needs_prototype] [params: $17.$env, $17.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $17.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $17.$super_proto#ctor, %1
+      %2 = const c84
+      store var $17.$this, %2
+      %3 = get_super_constructor
+      %4 = load var $17.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $17.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
+    bb4:
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
+    bb5:
+      %11 = call builtin.exception_value(%9)
+      throw %11
+    bb6:
+      store var $17.$this, %5
+      jump bb3
+    bb7:
+      store var $17.$this, %6
+      jump bb3
+    bb8:
+      %16 = const c85
+      %17 = const c86
+      %18 = load var $17.$this
+      %19 = create_data_property %18, %16, %17
+      %20 = is_exception %19
+      branch %20, bb11, bb10
+    bb9:
+      %15 = call builtin.exception_value(%13)
+      throw %15
+    bb10:
+      %22 = is_exception %13
+      branch %22, bb13, bb12
+    bb11:
+      %21 = call builtin.exception_value(%19)
+      throw %21
+    bb12:
+      store var $17.r, %13
+      %24 = const c87
+      %25 = load var $17.r
+      %26 = load var $17.$this
+      %27 = call builtin.this_tdz_check(%26)
+      %28 = is_exception %27
+      branch %28, bb15, bb14
+    bb13:
+      %23 = call builtin.exception_value(%13)
+      throw %23
+    bb14:
+      %30 = call builtin.strict_eq(%25, %27)
+      %31 = load var $17.$this
+      %32 = call builtin.this_tdz_check(%31)
+      %33 = is_exception %32
+      branch %33, bb17, bb16
     bb15:
       %29 = call builtin.exception_value(%27)
       throw %29
     bb16:
-      %33 = load var $17.$this
-      return %33
+      %35 = const c88
+      %36 = get_prop %32, %35
+      %37 = is_exception %36
+      branch %37, bb19, bb18
     bb17:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %34 = call builtin.exception_value(%32)
+      throw %34
+    bb18:
+      %39 = load var $17.$this
+      %40 = call builtin.this_tdz_check(%39)
+      %41 = is_exception %40
+      branch %41, bb21, bb20
+    bb19:
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb20:
+      %43 = const c89
+      %44 = get_prop %40, %43
+      %45 = is_exception %44
+      branch %45, bb23, bb22
+    bb21:
+      %42 = call builtin.exception_value(%40)
+      throw %42
+    bb22:
+      %47 = call builtin.console.log(%24, %30, %36, %44)
+      %48 = is_exception %47
+      branch %48, bb25, bb24
+    bb23:
+      %46 = call builtin.exception_value(%44)
+      throw %46
+    bb24:
+      %50 = load var $17.$this
+      %51 = call builtin.this_tdz_check(%50)
+      %52 = is_exception %51
+      branch %52, bb26, bb27
+    bb25:
+      %49 = call builtin.exception_value(%47)
+      throw %49
+    bb26:
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb27:
+      return %51
 
   fn @BranchSuper.constructor [home_object=@9.prototype] [needs_prototype] [params: $19.$env, $19.$this, $19.cond] [entry=bb0]:
     bb0:
-      %0 = load var $19.cond
-      branch %0, bb1, bb2
+      %0 = load var $19.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $19.$super_proto#ctor, %1
+      %2 = const c95
+      store var $19.$this, %2
+      %3 = load var $19.cond
+      branch %3, bb1, bb2
     bb1:
-      %1 = get_super_constructor
-      %2 = load var $19.$this
-      %3 = super_call %1, this=%2
-      %4 = is_exception %3
-      branch %4, bb3, bb4
+      %4 = get_super_constructor
+      %5 = load var $19.$super_proto#ctor
+      %7 = new_object(capacity=4)
+      set_proto %7, %5
+      %6 = super_call %4, this=%7
+      %8 = is_exception %6
+      branch %8, bb3, bb4
     bb2:
-      %17 = get_super_constructor
-      %18 = load var $19.$this
-      %19 = super_call %17, this=%18
-      %20 = is_exception %19
-      branch %20, bb14, bb15
+      %25 = get_super_constructor
+      %26 = load var $19.$super_proto#ctor
+      %28 = new_object(capacity=4)
+      set_proto %28, %26
+      %27 = super_call %25, this=%28
+      %29 = is_exception %27
+      branch %29, bb16, bb17
     bb3:
-      jump bb7
+      jump bb5
     bb4:
-      %5 = call builtin.is_js_object(%3)
-      branch %5, bb5, bb6
+      %9 = load var $19.$this
+      %10 = call builtin.super_call_once_check(%9)
+      %11 = is_exception %10
+      branch %11, bb7, bb6
     bb5:
-      store var $19.$this, %3
-      jump bb7
+      %14 = phi [(bb3, %6), (bb8, %6), (bb9, %7)]
+      %15 = is_exception %14
+      branch %15, bb11, bb10
     bb6:
-      jump bb7
+      %13 = call builtin.is_js_object(%6)
+      branch %13, bb8, bb9
     bb7:
-      %6 = phi [(bb3, %3), (bb5, %3), (bb6, %2)]
-      %7 = is_exception %6
-      branch %7, bb9, bb8
+      %12 = call builtin.exception_value(%10)
+      throw %12
     bb8:
-      %9 = const c91
-      %10 = const c92
-      %11 = load var $19.$this
-      %12 = create_data_property %11, %9, %10
-      %13 = is_exception %12
-      branch %13, bb11, bb10
+      store var $19.$this, %6
+      jump bb5
     bb9:
-      %8 = call builtin.exception_value(%6)
-      throw %8
+      store var $19.$this, %7
+      jump bb5
     bb10:
-      %15 = is_exception %6
-      branch %15, bb13, bb12
+      %17 = const c96
+      %18 = const c97
+      %19 = load var $19.$this
+      %20 = create_data_property %19, %17, %18
+      %21 = is_exception %20
+      branch %21, bb13, bb12
     bb11:
-      %14 = call builtin.exception_value(%12)
-      throw %14
-    bb12:
-      jump bb25
-    bb13:
-      %16 = call builtin.exception_value(%6)
+      %16 = call builtin.exception_value(%14)
       throw %16
+    bb12:
+      %23 = is_exception %14
+      branch %23, bb15, bb14
+    bb13:
+      %22 = call builtin.exception_value(%20)
+      throw %22
     bb14:
-      jump bb18
+      jump bb29
     bb15:
-      %21 = call builtin.is_js_object(%19)
-      branch %21, bb16, bb17
+      %24 = call builtin.exception_value(%14)
+      throw %24
     bb16:
-      store var $19.$this, %19
       jump bb18
     bb17:
-      jump bb18
+      %30 = load var $19.$this
+      %31 = call builtin.super_call_once_check(%30)
+      %32 = is_exception %31
+      branch %32, bb20, bb19
     bb18:
-      %22 = phi [(bb14, %19), (bb16, %19), (bb17, %18)]
-      %23 = is_exception %22
-      branch %23, bb20, bb19
+      %35 = phi [(bb16, %27), (bb21, %27), (bb22, %28)]
+      %36 = is_exception %35
+      branch %36, bb24, bb23
     bb19:
-      %25 = const c93
-      %26 = const c94
-      %27 = load var $19.$this
-      %28 = create_data_property %27, %25, %26
-      %29 = is_exception %28
-      branch %29, bb22, bb21
+      %34 = call builtin.is_js_object(%27)
+      branch %34, bb21, bb22
     bb20:
-      %24 = call builtin.exception_value(%22)
-      throw %24
+      %33 = call builtin.exception_value(%31)
+      throw %33
     bb21:
-      %31 = is_exception %22
-      branch %31, bb24, bb23
+      store var $19.$this, %27
+      jump bb18
     bb22:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      store var $19.$this, %28
+      jump bb18
     bb23:
-      jump bb25
-    bb24:
-      %32 = call builtin.exception_value(%22)
-      throw %32
-    bb25:
-      %33 = const c95
-      %34 = load var $19.$this
-      %35 = const c96
-      %36 = get_prop %34, %35
-      %37 = is_exception %36
-      branch %37, bb27, bb26
-    bb26:
-      %39 = load var $19.$this
-      %40 = const c97
-      %41 = get_prop %39, %40
+      %38 = const c98
+      %39 = const c99
+      %40 = load var $19.$this
+      %41 = create_data_property %40, %38, %39
       %42 = is_exception %41
-      branch %42, bb29, bb28
-    bb27:
-      %38 = call builtin.exception_value(%36)
-      throw %38
-    bb28:
-      %44 = call builtin.console.log(%33, %36, %41)
-      %45 = is_exception %44
-      branch %45, bb31, bb30
-    bb29:
+      branch %42, bb26, bb25
+    bb24:
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb25:
+      %44 = is_exception %35
+      branch %44, bb28, bb27
+    bb26:
       %43 = call builtin.exception_value(%41)
       throw %43
-    bb30:
+    bb27:
+      jump bb29
+    bb28:
+      %45 = call builtin.exception_value(%35)
+      throw %45
+    bb29:
+      %46 = const c100
       %47 = load var $19.$this
-      return %47
+      %48 = call builtin.this_tdz_check(%47)
+      %49 = is_exception %48
+      branch %49, bb31, bb30
+    bb30:
+      %51 = const c101
+      %52 = get_prop %48, %51
+      %53 = is_exception %52
+      branch %53, bb33, bb32
     bb31:
-      %46 = call builtin.exception_value(%44)
-      throw %46
+      %50 = call builtin.exception_value(%48)
+      throw %50
+    bb32:
+      %55 = load var $19.$this
+      %56 = call builtin.this_tdz_check(%55)
+      %57 = is_exception %56
+      branch %57, bb35, bb34
+    bb33:
+      %54 = call builtin.exception_value(%52)
+      throw %54
+    bb34:
+      %59 = const c102
+      %60 = get_prop %56, %59
+      %61 = is_exception %60
+      branch %61, bb37, bb36
+    bb35:
+      %58 = call builtin.exception_value(%56)
+      throw %58
+    bb36:
+      %63 = call builtin.console.log(%46, %52, %60)
+      %64 = is_exception %63
+      branch %64, bb39, bb38
+    bb37:
+      %62 = call builtin.exception_value(%60)
+      throw %62
+    bb38:
+      %66 = load var $19.$this
+      %67 = call builtin.this_tdz_check(%66)
+      %68 = is_exception %67
+      branch %68, bb40, bb41
+    bb39:
+      %65 = call builtin.exception_value(%63)
+      throw %65
+    bb40:
+      %69 = call builtin.exception_value(%67)
+      throw %69
+    bb41:
+      return %67
 
   fn @ReturnSuper.constructor [home_object=@10.prototype] [needs_prototype] [params: $23.$env, $23.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $23.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $23.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $23.$super_proto#ctor, %1
+      %2 = const c110
       store var $23.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $23.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $23.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c105
-      %9 = const c106
-      %10 = load var $23.$this
-      %11 = create_data_property %10, %8, %9
-      %12 = is_exception %11
-      branch %12, bb9, bb8
+      store var $23.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $23.$this, %6
+      jump bb3
     bb8:
-      %14 = call builtin.is_js_object(%5)
-      branch %14, bb10, bb11
+      %16 = const c111
+      %17 = const c112
+      %18 = load var $23.$this
+      %19 = create_data_property %18, %16, %17
+      %20 = is_exception %19
+      branch %20, bb11, bb10
     bb9:
-      %13 = call builtin.exception_value(%11)
-      throw %13
+      %15 = call builtin.exception_value(%13)
+      throw %15
     bb10:
-      return %5
+      %22 = call builtin.is_js_object(%13)
+      branch %22, bb12, bb13
     bb11:
-      %15 = const c107
-      %16 = stricteq %5, %15
-      branch %16, bb12, bb13
+      %21 = call builtin.exception_value(%19)
+      throw %21
     bb12:
-      %17 = load var $23.$this
-      return %17
+      return %13
     bb13:
-      %18 = const c108
-      %19 = call builtin.TypeError(%18)
-      throw %19
+      %23 = const c113
+      %24 = stricteq %13, %23
+      branch %24, bb14, bb15
+    bb14:
+      %25 = load var $23.$this
+      %26 = call builtin.this_tdz_check(%25)
+      %27 = is_exception %26
+      branch %27, bb16, bb17
+    bb15:
+      %29 = const c114
+      %30 = call builtin.TypeError(%29)
+      throw %30
+    bb16:
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb17:
+      return %26
 
   fn @ReturnsObject.constructor [home_object=@11.prototype] [needs_prototype] [params: $25.$env, $25.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $25.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $25.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $25.$super_proto#ctor, %1
+      %2 = const c123
       store var $25.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $25.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $25.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c118
-      %9 = init_object_literal(c117, values=[%8])
-      jump bb8
+      store var $25.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $25.$this, %6
+      jump bb3
     bb8:
-      return %9
+      %16 = const c125
+      %17 = init_object_literal(c124, values=[%16])
+      jump bb10
     bb9:
-      unreachable
+      %15 = call builtin.exception_value(%13)
+      throw %15
     bb10:
-      unreachable
+      return %17
     bb11:
+      unreachable
+    bb12:
+      unreachable
+    bb13:
+      unreachable
+    bb14:
+      unreachable
+    bb15:
       unreachable
 
   fn @ReturnsUndefined.constructor [home_object=@12.prototype] [needs_prototype] [captures: $0.undefined] [params: $27.$env, $27.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $27.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $27.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $27.$super_proto#ctor, %1
+      %2 = const c136
       store var $27.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $27.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $27.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = load var $env
-      %9 = const c129
-      %10 = get_prop %8, %9
-      %11 = call builtin.is_js_object(%10)
-      branch %11, bb8, bb9
+      store var $27.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $27.$this, %6
+      jump bb3
     bb8:
-      return %10
+      %16 = load var $env
+      %17 = const c137
+      %18 = get_prop %16, %17
+      %19 = call builtin.is_js_object(%18)
+      branch %19, bb10, bb11
     bb9:
-      %12 = const c130
-      %13 = stricteq %10, %12
-      branch %13, bb10, bb11
+      %15 = call builtin.exception_value(%13)
+      throw %15
     bb10:
-      %14 = load var $27.$this
-      return %14
+      return %18
     bb11:
-      %15 = const c131
-      %16 = call builtin.TypeError(%15)
-      throw %16
+      %20 = const c138
+      %21 = stricteq %18, %20
+      branch %21, bb12, bb13
+    bb12:
+      %22 = load var $27.$this
+      %23 = call builtin.this_tdz_check(%22)
+      %24 = is_exception %23
+      branch %24, bb14, bb15
+    bb13:
+      %26 = const c139
+      %27 = call builtin.TypeError(%26)
+      throw %27
+    bb14:
+      %25 = call builtin.exception_value(%23)
+      throw %25
+    bb15:
+      return %23
 
   fn @MidLevel.constructor [home_object=@13.prototype] [needs_prototype] [params: $29.$env, $29.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $29.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $29.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $29.$super_proto#ctor, %1
+      %2 = const c149
       store var $29.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $29.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $29.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c141
-      %9 = const c142
-      %10 = load var $29.$this
-      %11 = create_data_property %10, %8, %9
-      %12 = is_exception %11
-      branch %12, bb9, bb8
+      store var $29.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $29.$this, %6
+      jump bb3
     bb8:
-      %14 = is_exception %5
-      branch %14, bb11, bb10
+      %16 = const c150
+      %17 = const c151
+      %18 = load var $29.$this
+      %19 = create_data_property %18, %16, %17
+      %20 = is_exception %19
+      branch %20, bb11, bb10
     bb9:
-      %13 = call builtin.exception_value(%11)
-      throw %13
-    bb10:
-      %16 = load var $29.$this
-      return %16
-    bb11:
-      %15 = call builtin.exception_value(%5)
+      %15 = call builtin.exception_value(%13)
       throw %15
+    bb10:
+      %22 = is_exception %13
+      branch %22, bb13, bb12
+    bb11:
+      %21 = call builtin.exception_value(%19)
+      throw %21
+    bb12:
+      %24 = load var $29.$this
+      %25 = call builtin.this_tdz_check(%24)
+      %26 = is_exception %25
+      branch %26, bb14, bb15
+    bb13:
+      %23 = call builtin.exception_value(%13)
+      throw %23
+    bb14:
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb15:
+      return %25
 
   fn @TopLevel.constructor [home_object=@14.prototype] [needs_prototype] [params: $31.$env, $31.$this] [entry=bb0]:
     bb0:
@@ -776,8 +1060,8 @@ module {
       %6 = is_exception %5
       branch %6, bb7, bb6
     bb6:
-      %8 = const c148
-      %9 = const c149
+      %8 = const c157
+      %9 = const c158
       %10 = load var $31.$this
       %11 = create_data_property %10, %8, %9
       %12 = is_exception %11
@@ -800,7 +1084,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = init_object_literal(c159, values=[%2])
+      %5 = init_object_literal(c168, values=[%2])
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -808,157 +1092,240 @@ module {
 
   fn @SpreadSuper.constructor [home_object=@16.prototype] [needs_prototype] [params: $35.$env, $35.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $35.$this
-      %3 = new_array(capacity=4)
-      %4 = new_array(capacity=4)
-      %5 = const c163
-      call builtin.array.push(%4, %5)
-      %6 = const c164
-      call builtin.array.push(%4, %6)
-      %7 = call builtin.array.push_spread(%3, %4)
-      %8 = is_exception %7
-      branch %8, bb2, bb1
-    bb1:
-      %2 = call builtin.super_apply(%0, %1, %3)
-      %10 = is_exception %2
-      branch %10, bb3, bb4
-    bb2:
-      %9 = call builtin.exception_value(%7)
-      throw %9
-    bb3:
-      jump bb7
-    bb4:
-      %11 = call builtin.is_js_object(%2)
-      branch %11, bb5, bb6
-    bb5:
+      %0 = load var $35.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $35.$super_proto#ctor, %1
+      %2 = const c172
       store var $35.$this, %2
-      jump bb7
-    bb6:
-      jump bb7
-    bb7:
-      %12 = phi [(bb3, %2), (bb5, %2), (bb6, %1)]
-      %13 = is_exception %12
-      branch %13, bb9, bb8
-    bb8:
+      %3 = get_super_constructor
+      %4 = load var $35.$super_proto#ctor
+      %6 = new_array(capacity=4)
+      %7 = new_array(capacity=4)
+      %8 = const c173
+      call builtin.array.push(%7, %8)
+      %9 = const c174
+      call builtin.array.push(%7, %9)
+      %10 = call builtin.array.push_spread(%6, %7)
+      %11 = is_exception %10
+      branch %11, bb2, bb1
+    bb1:
+      %13 = new_object(capacity=4)
+      set_proto %13, %4
+      %5 = call builtin.super_apply(%3, %13, %6)
+      %14 = is_exception %5
+      branch %14, bb3, bb4
+    bb2:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb3:
+      jump bb5
+    bb4:
       %15 = load var $35.$this
-      return %15
+      %16 = call builtin.super_call_once_check(%15)
+      %17 = is_exception %16
+      branch %17, bb7, bb6
+    bb5:
+      %20 = phi [(bb3, %5), (bb8, %5), (bb9, %13)]
+      %21 = is_exception %20
+      branch %21, bb11, bb10
+    bb6:
+      %19 = call builtin.is_js_object(%5)
+      branch %19, bb8, bb9
+    bb7:
+      %18 = call builtin.exception_value(%16)
+      throw %18
+    bb8:
+      store var $35.$this, %5
+      jump bb5
     bb9:
-      %14 = call builtin.exception_value(%12)
-      throw %14
+      store var $35.$this, %13
+      jump bb5
+    bb10:
+      %23 = load var $35.$this
+      %24 = call builtin.this_tdz_check(%23)
+      %25 = is_exception %24
+      branch %25, bb12, bb13
+    bb11:
+      %22 = call builtin.exception_value(%20)
+      throw %22
+    bb12:
+      %26 = call builtin.exception_value(%24)
+      throw %26
+    bb13:
+      return %24
 
   fn @ReflectTarget.constructor [home_object=@17.prototype] [needs_prototype] [params: $37.$env, $37.$this] [entry=bb0]:
     bb0:
-      %0 = get_super_constructor
-      %1 = load var $37.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb1, bb2
-    bb1:
-      jump bb5
-    bb2:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb3, bb4
-    bb3:
+      %0 = load var $37.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $37.$super_proto#ctor, %1
+      %2 = const c182
       store var $37.$this, %2
-      jump bb5
+      %3 = get_super_constructor
+      %4 = load var $37.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb1, bb2
+    bb1:
+      jump bb3
+    bb2:
+      %8 = load var $37.$this
+      %9 = call builtin.super_call_once_check(%8)
+      %10 = is_exception %9
+      branch %10, bb5, bb4
+    bb3:
+      %13 = phi [(bb1, %5), (bb6, %5), (bb7, %6)]
+      %14 = is_exception %13
+      branch %14, bb9, bb8
     bb4:
-      jump bb5
+      %12 = call builtin.is_js_object(%5)
+      branch %12, bb6, bb7
     bb5:
-      %5 = phi [(bb1, %2), (bb3, %2), (bb4, %1)]
-      %6 = is_exception %5
-      branch %6, bb7, bb6
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb6:
-      %8 = const c172
-      %9 = const c173
-      %10 = load var $37.$this
-      %11 = create_data_property %10, %8, %9
-      %12 = is_exception %11
-      branch %12, bb9, bb8
+      store var $37.$this, %5
+      jump bb3
     bb7:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      store var $37.$this, %6
+      jump bb3
     bb8:
-      %14 = is_exception %5
-      branch %14, bb11, bb10
+      %16 = const c183
+      %17 = const c184
+      %18 = load var $37.$this
+      %19 = create_data_property %18, %16, %17
+      %20 = is_exception %19
+      branch %20, bb11, bb10
     bb9:
-      %13 = call builtin.exception_value(%11)
-      throw %13
-    bb10:
-      %16 = load var $37.$this
-      return %16
-    bb11:
-      %15 = call builtin.exception_value(%5)
+      %15 = call builtin.exception_value(%13)
       throw %15
+    bb10:
+      %22 = is_exception %13
+      branch %22, bb13, bb12
+    bb11:
+      %21 = call builtin.exception_value(%19)
+      throw %21
+    bb12:
+      %24 = load var $37.$this
+      %25 = call builtin.this_tdz_check(%24)
+      %26 = is_exception %25
+      branch %26, bb14, bb15
+    bb13:
+      %23 = call builtin.exception_value(%13)
+      throw %23
+    bb14:
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb15:
+      return %25
 
   fn @ReturnsPrimitive.constructor [home_object=@18.prototype] [needs_prototype] [params: $39.$env, $39.$this] [entry=bb0]:
     bb0:
+      %0 = load var $39.$this
+      %1 = call builtin.object.get_prototype_of(%0)
+      store var $39.$super_proto#ctor, %1
+      %2 = const c193
+      store var $39.$this, %2
       jump bb1
     bb1:
-      %0 = get_super_constructor
-      %1 = load var $39.$this
-      %2 = super_call %0, this=%1
-      %3 = is_exception %2
-      branch %3, bb4, bb5
+      %3 = get_super_constructor
+      %4 = load var $39.$super_proto#ctor
+      %6 = new_object(capacity=4)
+      set_proto %6, %4
+      %5 = super_call %3, this=%6
+      %7 = is_exception %5
+      branch %7, bb4, bb5
     bb2:
       unreachable
     bb3:
       unreachable
     bb4:
-      jump bb8
+      jump bb6
     bb5:
-      %4 = call builtin.is_js_object(%2)
-      branch %4, bb6, bb7
-    bb6:
-      store var $39.$this, %2
-      jump bb8
-    bb7:
-      jump bb8
-    bb8:
-      %5 = phi [(bb4, %2), (bb6, %2), (bb7, %1)]
-      %6 = is_exception %5
-      branch %6, bb10, bb9
-    bb9:
-      %13 = const c183
-      %14 = const c184
-      %15 = call builtin.console.log(%14)
-      %16 = is_exception %15
-      branch %16, bb14, bb13
-    bb10:
-      %7 = call builtin.exception_value(%5)
-      store var $40.$abrupt_completion_1, %7
-      %8 = const c182
-      %9 = call builtin.console.log(%8)
+      %8 = load var $39.$this
+      %9 = call builtin.super_call_once_check(%8)
       %10 = is_exception %9
-      branch %10, bb12, bb11
-    bb11:
-      %12 = load var $40.$abrupt_completion_1
-      throw %12
-    bb12:
+      branch %10, bb8, bb7
+    bb6:
+      %18 = phi [(bb4, %5), (bb11, %5), (bb12, %6)]
+      %19 = is_exception %18
+      branch %19, bb14, bb13
+    bb7:
+      %17 = call builtin.is_js_object(%5)
+      branch %17, bb11, bb12
+    bb8:
       %11 = call builtin.exception_value(%9)
-      throw %11
+      store var $40.$abrupt_completion_1, %11
+      %12 = const c194
+      %13 = call builtin.console.log(%12)
+      %14 = is_exception %13
+      branch %14, bb10, bb9
+    bb9:
+      %16 = load var $40.$abrupt_completion_1
+      throw %16
+    bb10:
+      %15 = call builtin.exception_value(%13)
+      throw %15
+    bb11:
+      store var $39.$this, %5
+      jump bb6
+    bb12:
+      store var $39.$this, %6
+      jump bb6
     bb13:
-      %18 = call builtin.is_js_object(%13)
-      branch %18, bb15, bb16
+      %26 = const c196
+      %27 = const c197
+      %28 = call builtin.console.log(%27)
+      %29 = is_exception %28
+      branch %29, bb18, bb17
     bb14:
-      %17 = call builtin.exception_value(%15)
-      throw %17
+      %20 = call builtin.exception_value(%18)
+      store var $40.$abrupt_completion_2, %20
+      %21 = const c195
+      %22 = call builtin.console.log(%21)
+      %23 = is_exception %22
+      branch %23, bb16, bb15
     bb15:
-      return %13
+      %25 = load var $40.$abrupt_completion_2
+      throw %25
     bb16:
-      %19 = const c185
-      %20 = stricteq %13, %19
-      branch %20, bb17, bb18
+      %24 = call builtin.exception_value(%22)
+      throw %24
     bb17:
-      %21 = load var $39.$this
-      return %21
+      %31 = call builtin.is_js_object(%26)
+      branch %31, bb19, bb20
     bb18:
-      %22 = const c186
-      %23 = call builtin.TypeError(%22)
-      throw %23
+      %30 = call builtin.exception_value(%28)
+      throw %30
     bb19:
-      unreachable
+      return %26
     bb20:
+      %32 = const c198
+      %33 = stricteq %26, %32
+      branch %33, bb21, bb22
+    bb21:
+      %34 = load var $39.$this
+      %35 = call builtin.this_tdz_check(%34)
+      %36 = is_exception %35
+      branch %36, bb23, bb24
+    bb22:
+      %38 = const c199
+      %39 = call builtin.TypeError(%38)
+      throw %39
+    bb23:
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb24:
+      return %35
+    bb25:
+      unreachable
+    bb26:
+      unreachable
+    bb27:
+      unreachable
+    bb28:
       unreachable
 
   fn @$module_main [entry=bb0]:
@@ -1013,29 +1380,29 @@ module {
       %26 = set_prop %21, %25, %22
       store var $2.Base, %21
       store var $0.Base, %21
-      %27 = const c27
+      %27 = const c28
       %28 = new_object(capacity=4)
       %29 = const c22
-      %30 = const c28
+      %30 = const c29
       %31 = call builtin.reflect.get(%29, %30, %29)
       set_proto %28, %31
       set_proto %27, %29
-      %32 = const c29
+      %32 = const c30
       %33 = set_prop %27, %32, %29
-      %34 = const c30
+      %34 = const c31
       %35 = set_prop %28, %34, %27
-      %36 = const c31
+      %36 = const c32
       %37 = set_prop %27, %36, %28
       store var $4.ExplicitCtor, %27
       store var $0.ExplicitCtor, %27
-      %38 = const c32
+      %38 = const c33
       %39 = load var $0.ExplicitCtor
       %40 = new_object(capacity=4)
       %41 = call builtin.get_prototype_from_constructor(%39)
       set_proto %40, %41
       %42 = construct_call %39, this=%40
       %43 = is_exception %42
-      %338 = const c133
+      %338 = const c141
       store var $0.$shared_env, %338
       branch %43, bb1, bb2
     bb1:
@@ -1052,7 +1419,7 @@ module {
       %46 = is_exception %45
       branch %46, bb7, bb6
     bb6:
-      %48 = const c33
+      %48 = const c34
       %49 = get_prop %45, %48
       %50 = is_exception %49
       branch %50, bb9, bb8
@@ -1067,22 +1434,22 @@ module {
       %51 = call builtin.exception_value(%49)
       throw %51
     bb10:
-      %55 = const c34
+      %55 = const c35
       %56 = new_object(capacity=4)
       %57 = const c22
-      %58 = const c35
+      %58 = const c36
       %59 = call builtin.reflect.get(%57, %58, %57)
       set_proto %56, %59
       set_proto %55, %57
-      %60 = const c36
+      %60 = const c37
       %61 = set_prop %55, %60, %57
-      %62 = const c37
+      %62 = const c38
       %63 = set_prop %56, %62, %55
-      %64 = const c38
+      %64 = const c39
       %65 = set_prop %55, %64, %56
       store var $6.ImplicitCtor, %55
       store var $0.ImplicitCtor, %55
-      %66 = const c39
+      %66 = const c40
       %67 = load var $0.ImplicitCtor
       %68 = new_object(capacity=4)
       %69 = call builtin.get_prototype_from_constructor(%67)
@@ -1107,7 +1474,7 @@ module {
       %74 = is_exception %73
       branch %74, bb18, bb17
     bb17:
-      %76 = const c40
+      %76 = const c41
       %77 = get_prop %73, %76
       %78 = is_exception %77
       branch %78, bb20, bb19
@@ -1122,21 +1489,21 @@ module {
       %79 = call builtin.exception_value(%77)
       throw %79
     bb21:
-      %83 = const c46
+      %83 = const c48
       %84 = new_object(capacity=4)
       %85 = const c22
-      %86 = const c47
+      %86 = const c49
       %87 = call builtin.reflect.get(%85, %86, %85)
       set_proto %84, %87
       set_proto %83, %85
-      %88 = const c48
+      %88 = const c50
       %89 = set_prop %83, %88, %85
-      %90 = const c49
+      %90 = const c51
       %91 = set_prop %84, %90, %83
-      %92 = const c50
-      %93 = const c52
+      %92 = const c52
+      %93 = const c54
       %94 = set_prop %84, %92, %93
-      %95 = const c53
+      %95 = const c55
       %96 = set_prop %83, %95, %84
       store var $8.WithFields, %83
       store var $0.WithFields, %83
@@ -1171,9 +1538,9 @@ module {
       throw %105
     bb30:
       store var $0.withFields, %103
-      %108 = const c54
+      %108 = const c56
       %109 = load var $0.withFields
-      %110 = const c55
+      %110 = const c57
       %111 = get_prop %109, %110
       %112 = is_exception %111
       branch %112, bb33, bb32
@@ -1182,7 +1549,7 @@ module {
       throw %107
     bb32:
       %114 = load var $0.withFields
-      %115 = const c56
+      %115 = const c58
       %116 = get_prop %114, %115
       %117 = is_exception %116
       branch %117, bb35, bb34
@@ -1191,7 +1558,7 @@ module {
       throw %113
     bb34:
       %119 = load var $0.withFields
-      %120 = const c57
+      %120 = const c59
       %121 = get_prop %119, %120
       %122 = is_exception %121
       branch %122, bb37, bb36
@@ -1208,9 +1575,9 @@ module {
       throw %123
     bb38:
       %128 = load var $0.WithFields
-      %129 = const c58
+      %129 = const c60
       %130 = get_prop %128, %129
-      %131 = const c59
+      %131 = const c61
       %132 = get_prop %130, %131
       %133 = is_exception %132
       branch %133, bb41, bb40
@@ -1218,7 +1585,7 @@ module {
       %127 = call builtin.exception_value(%125)
       throw %127
     bb40:
-      %135 = const c60
+      %135 = const c62
       %136 = get_prop %132, %135
       %137 = load var $0.withFields
       %138 = call %136, this=%132, args=[%137]
@@ -1235,7 +1602,7 @@ module {
       %140 = call builtin.exception_value(%138)
       throw %140
     bb44:
-      %144 = const c61
+      %144 = const c63
       %145 = load var $0.withFields
       %146 = call builtin.object.get_prototype_of(%145)
       %147 = is_exception %146
@@ -1245,9 +1612,9 @@ module {
       throw %143
     bb46:
       %149 = load var $0.$global
-      %150 = const c62
+      %150 = const c64
       %151 = get_prop %149, %150
-      %152 = const c63
+      %152 = const c65
       %153 = get_prop %151, %152
       %154 = is_exception %153
       branch %154, bb49, bb48
@@ -1269,29 +1636,29 @@ module {
       %158 = call builtin.exception_value(%156)
       throw %158
     bb52:
-      %162 = const c65
+      %162 = const c67
       %163 = new_object(capacity=4)
-      %164 = const c66
+      %164 = const c68
       %165 = set_prop %163, %164, %162
-      %166 = const c67
-      %167 = const c69
+      %166 = const c69
+      %167 = const c71
       %168 = set_prop %163, %166, %167
-      %169 = const c70
+      %169 = const c72
       %170 = set_prop %162, %169, %163
       store var $11.NonObjectBase, %162
       store var $0.NonObjectBase, %162
-      %171 = const c73
+      %171 = const c76
       %172 = new_object(capacity=4)
-      %173 = const c65
-      %174 = const c74
+      %173 = const c67
+      %174 = const c77
       %175 = call builtin.reflect.get(%173, %174, %173)
       set_proto %172, %175
       set_proto %171, %173
-      %176 = const c75
+      %176 = const c78
       %177 = set_prop %171, %176, %173
-      %178 = const c76
+      %178 = const c79
       %179 = set_prop %172, %178, %171
-      %180 = const c77
+      %180 = const c80
       %181 = set_prop %171, %180, %172
       store var $14.KeepsInstance, %171
       store var $0.KeepsInstance, %171
@@ -1326,9 +1693,9 @@ module {
       throw %190
     bb61:
       store var $0.kept, %188
-      %193 = const c78
+      %193 = const c81
       %194 = load var $0.kept
-      %195 = const c79
+      %195 = const c82
       %196 = get_prop %194, %195
       %197 = is_exception %196
       branch %197, bb64, bb63
@@ -1337,7 +1704,7 @@ module {
       throw %192
     bb63:
       %199 = load var $0.kept
-      %200 = const c80
+      %200 = const c83
       %201 = get_prop %199, %200
       %202 = call %201, this=%199
       %203 = is_exception %202
@@ -1353,18 +1720,18 @@ module {
       %204 = call builtin.exception_value(%202)
       throw %204
     bb67:
-      %208 = const c86
+      %208 = const c90
       %209 = new_object(capacity=4)
       %210 = const c22
-      %211 = const c87
+      %211 = const c91
       %212 = call builtin.reflect.get(%210, %211, %210)
       set_proto %209, %212
       set_proto %208, %210
-      %213 = const c88
+      %213 = const c92
       %214 = set_prop %208, %213, %210
-      %215 = const c89
+      %215 = const c93
       %216 = set_prop %209, %215, %208
-      %217 = const c90
+      %217 = const c94
       %218 = set_prop %208, %217, %209
       store var $16.ExprPosition, %208
       store var $0.ExprPosition, %208
@@ -1398,18 +1765,18 @@ module {
       %227 = call builtin.exception_value(%225)
       throw %227
     bb76:
-      %230 = const c98
+      %230 = const c103
       %231 = new_object(capacity=4)
       %232 = const c22
-      %233 = const c99
+      %233 = const c104
       %234 = call builtin.reflect.get(%232, %233, %232)
       set_proto %231, %234
       set_proto %230, %232
-      %235 = const c100
+      %235 = const c105
       %236 = set_prop %230, %235, %232
-      %237 = const c101
+      %237 = const c106
       %238 = set_prop %231, %237, %230
-      %239 = const c102
+      %239 = const c107
       %240 = set_prop %230, %239, %231
       store var $18.BranchSuper, %230
       store var $0.BranchSuper, %230
@@ -1417,7 +1784,7 @@ module {
       %242 = new_object(capacity=4)
       %243 = call builtin.get_prototype_from_constructor(%241)
       set_proto %242, %243
-      %244 = const c103
+      %244 = const c108
       %245 = construct_call %241, this=%242, args=[%244]
       %246 = is_exception %245
       branch %246, bb78, bb79
@@ -1448,7 +1815,7 @@ module {
       %254 = new_object(capacity=4)
       %255 = call builtin.get_prototype_from_constructor(%253)
       set_proto %254, %255
-      %256 = const c104
+      %256 = const c109
       %257 = construct_call %253, this=%254, args=[%256]
       %258 = is_exception %257
       branch %258, bb87, bb88
@@ -1475,18 +1842,18 @@ module {
       %262 = call builtin.exception_value(%260)
       throw %262
     bb94:
-      %265 = const c109
+      %265 = const c115
       %266 = new_object(capacity=4)
       %267 = const c22
-      %268 = const c110
+      %268 = const c116
       %269 = call builtin.reflect.get(%267, %268, %267)
       set_proto %266, %269
       set_proto %265, %267
-      %270 = const c111
+      %270 = const c117
       %271 = set_prop %265, %270, %267
-      %272 = const c112
+      %272 = const c118
       %273 = set_prop %266, %272, %265
-      %274 = const c113
+      %274 = const c119
       %275 = set_prop %265, %274, %266
       store var $22.ReturnSuper, %265
       store var $0.ReturnSuper, %265
@@ -1521,9 +1888,9 @@ module {
       throw %284
     bb103:
       store var $0.returned, %282
-      %287 = const c114
+      %287 = const c120
       %288 = load var $0.returned
-      %289 = const c115
+      %289 = const c121
       %290 = get_prop %288, %289
       %291 = is_exception %290
       branch %291, bb106, bb105
@@ -1532,7 +1899,7 @@ module {
       throw %286
     bb105:
       %293 = load var $0.returned
-      %294 = const c116
+      %294 = const c122
       %295 = get_prop %293, %294
       %296 = is_exception %295
       branch %296, bb108, bb107
@@ -1547,18 +1914,18 @@ module {
       %297 = call builtin.exception_value(%295)
       throw %297
     bb109:
-      %301 = const c121
+      %301 = const c128
       %302 = new_object(capacity=4)
       %303 = const c22
-      %304 = const c122
+      %304 = const c129
       %305 = call builtin.reflect.get(%303, %304, %303)
       set_proto %302, %305
       set_proto %301, %303
-      %306 = const c123
+      %306 = const c130
       %307 = set_prop %301, %306, %303
-      %308 = const c124
+      %308 = const c131
       %309 = set_prop %302, %308, %301
-      %310 = const c125
+      %310 = const c132
       %311 = set_prop %301, %310, %302
       store var $24.ReturnsObject, %301
       store var $0.ReturnsObject, %301
@@ -1593,9 +1960,9 @@ module {
       throw %320
     bb118:
       store var $0.overridden, %318
-      %323 = const c126
+      %323 = const c133
       %324 = load var $0.overridden
-      %325 = const c127
+      %325 = const c134
       %326 = get_prop %324, %325
       %327 = is_exception %326
       branch %327, bb121, bb120
@@ -1604,7 +1971,7 @@ module {
       throw %322
     bb120:
       %329 = load var $0.overridden
-      %330 = const c128
+      %330 = const c135
       %331 = get_prop %329, %330
       %332 = is_exception %331
       branch %332, bb123, bb122
@@ -1619,30 +1986,30 @@ module {
       %333 = call builtin.exception_value(%331)
       throw %333
     bb124:
-      %337 = const c132
+      %337 = const c140
       %339 = new_object(capacity=1)
       %340 = load var $env
       set_proto %339, %340
       store var $0.$shared_env, %339
       %341 = load var $0.undefined
-      %342 = const c134
+      %342 = const c142
       %343 = set_prop %339, %342, %341
       %344 = call builtin.create_closure(%337, %339)
       %345 = new_object(capacity=4)
       %346 = const c22
-      %347 = const c135
+      %347 = const c143
       %348 = call builtin.reflect.get(%346, %347, %346)
       set_proto %345, %348
       set_proto %344, %346
-      %349 = const c136
+      %349 = const c144
       %350 = set_prop %344, %349, %346
-      %351 = const c137
+      %351 = const c145
       %352 = set_prop %345, %351, %344
-      %353 = const c138
+      %353 = const c146
       %354 = set_prop %344, %353, %345
       store var $26.ReturnsUndefined, %344
       store var $0.ReturnsUndefined, %344
-      %355 = const c139
+      %355 = const c147
       %356 = load var $0.ReturnsUndefined
       %357 = new_object(capacity=4)
       %358 = call builtin.get_prototype_from_constructor(%356)
@@ -1667,7 +2034,7 @@ module {
       %363 = is_exception %362
       branch %363, bb132, bb131
     bb131:
-      %365 = const c140
+      %365 = const c148
       %366 = get_prop %362, %365
       %367 = is_exception %366
       branch %367, bb134, bb133
@@ -1682,33 +2049,33 @@ module {
       %368 = call builtin.exception_value(%366)
       throw %368
     bb135:
-      %372 = const c143
+      %372 = const c152
       %373 = new_object(capacity=4)
       %374 = const c22
-      %375 = const c144
+      %375 = const c153
       %376 = call builtin.reflect.get(%374, %375, %374)
       set_proto %373, %376
       set_proto %372, %374
-      %377 = const c145
+      %377 = const c154
       %378 = set_prop %372, %377, %374
-      %379 = const c146
+      %379 = const c155
       %380 = set_prop %373, %379, %372
-      %381 = const c147
+      %381 = const c156
       %382 = set_prop %372, %381, %373
       store var $28.MidLevel, %372
       store var $0.MidLevel, %372
-      %383 = const c150
+      %383 = const c159
       %384 = new_object(capacity=4)
       %385 = load var $0.MidLevel
-      %386 = const c151
+      %386 = const c160
       %387 = call builtin.reflect.get(%385, %386, %385)
       set_proto %384, %387
       set_proto %383, %385
-      %388 = const c152
+      %388 = const c161
       %389 = set_prop %383, %388, %385
-      %390 = const c153
+      %390 = const c162
       %391 = set_prop %384, %390, %383
-      %392 = const c154
+      %392 = const c163
       %393 = set_prop %383, %392, %384
       store var $30.TopLevel, %383
       store var $0.TopLevel, %383
@@ -1743,9 +2110,9 @@ module {
       throw %402
     bb144:
       store var $0.chained, %400
-      %405 = const c155
+      %405 = const c164
       %406 = load var $0.chained
-      %407 = const c156
+      %407 = const c165
       %408 = get_prop %406, %407
       %409 = is_exception %408
       branch %409, bb147, bb146
@@ -1754,7 +2121,7 @@ module {
       throw %404
     bb146:
       %411 = load var $0.chained
-      %412 = const c157
+      %412 = const c166
       %413 = get_prop %411, %412
       %414 = is_exception %413
       branch %414, bb149, bb148
@@ -1763,7 +2130,7 @@ module {
       throw %410
     bb148:
       %416 = load var $0.chained
-      %417 = const c158
+      %417 = const c167
       %418 = get_prop %416, %417
       %419 = is_exception %418
       branch %419, bb151, bb150
@@ -1778,30 +2145,30 @@ module {
       %420 = call builtin.exception_value(%418)
       throw %420
     bb152:
-      %424 = const c160
+      %424 = const c169
       %425 = new_object(capacity=4)
-      %426 = const c161
+      %426 = const c170
       %427 = set_prop %425, %426, %424
-      %428 = const c162
+      %428 = const c171
       %429 = set_prop %424, %428, %425
       store var $32.SpreadBase, %424
       store var $0.SpreadBase, %424
-      %430 = const c165
+      %430 = const c175
       %431 = new_object(capacity=4)
-      %432 = const c160
-      %433 = const c166
+      %432 = const c169
+      %433 = const c176
       %434 = call builtin.reflect.get(%432, %433, %432)
       set_proto %431, %434
       set_proto %430, %432
-      %435 = const c167
+      %435 = const c177
       %436 = set_prop %430, %435, %432
-      %437 = const c168
+      %437 = const c178
       %438 = set_prop %431, %437, %430
-      %439 = const c169
+      %439 = const c179
       %440 = set_prop %430, %439, %431
       store var $34.SpreadSuper, %430
       store var $0.SpreadSuper, %430
-      %441 = const c170
+      %441 = const c180
       %442 = load var $0.SpreadSuper
       %443 = new_object(capacity=4)
       %444 = call builtin.get_prototype_from_constructor(%442)
@@ -1826,7 +2193,7 @@ module {
       %449 = is_exception %448
       branch %449, bb160, bb159
     bb159:
-      %451 = const c171
+      %451 = const c181
       %452 = get_prop %448, %451
       %453 = is_exception %452
       branch %453, bb162, bb161
@@ -1841,18 +2208,18 @@ module {
       %454 = call builtin.exception_value(%452)
       throw %454
     bb163:
-      %458 = const c174
+      %458 = const c185
       %459 = new_object(capacity=4)
       %460 = const c22
-      %461 = const c175
+      %461 = const c186
       %462 = call builtin.reflect.get(%460, %461, %460)
       set_proto %459, %462
       set_proto %458, %460
-      %463 = const c176
+      %463 = const c187
       %464 = set_prop %458, %463, %460
-      %465 = const c177
+      %465 = const c188
       %466 = set_prop %459, %465, %458
-      %467 = const c178
+      %467 = const c189
       %468 = set_prop %458, %467, %459
       store var $36.ReflectTarget, %458
       store var $0.ReflectTarget, %458
@@ -1866,9 +2233,9 @@ module {
       throw %457
     bb165:
       store var $0.reflected, %471
-      %474 = const c179
+      %474 = const c190
       %475 = load var $0.reflected
-      %476 = const c180
+      %476 = const c191
       %477 = get_prop %475, %476
       %478 = is_exception %477
       branch %478, bb168, bb167
@@ -1877,7 +2244,7 @@ module {
       throw %473
     bb167:
       %480 = load var $0.reflected
-      %481 = const c181
+      %481 = const c192
       %482 = get_prop %480, %481
       %483 = is_exception %482
       branch %483, bb170, bb169
@@ -1892,18 +2259,18 @@ module {
       %484 = call builtin.exception_value(%482)
       throw %484
     bb171:
-      %488 = const c188
+      %488 = const c201
       %489 = new_object(capacity=4)
       %490 = const c22
-      %491 = const c189
+      %491 = const c202
       %492 = call builtin.reflect.get(%490, %491, %490)
       set_proto %489, %492
       set_proto %488, %490
-      %493 = const c190
+      %493 = const c203
       %494 = set_prop %488, %493, %490
-      %495 = const c191
+      %495 = const c204
       %496 = set_prop %489, %495, %488
-      %497 = const c192
+      %497 = const c205
       %498 = set_prop %488, %497, %489
       store var $38.ReturnsPrimitive, %488
       store var $0.ReturnsPrimitive, %488
@@ -1923,11 +2290,11 @@ module {
       return
     bb175:
       %510 = load var $tmp.0
-      store var $45.error, %510
-      %511 = const c193
-      %512 = load var $45.error
+      store var $46.error, %510
+      %511 = const c206
+      %512 = load var $46.error
       %513 = load var $0.$global
-      %514 = const c194
+      %514 = const c207
       %515 = get_prop %513, %514
       %516 = call builtin.op_instanceof(%512, %515)
       %517 = is_exception %516

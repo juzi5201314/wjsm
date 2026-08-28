@@ -40,8 +40,17 @@ pub(crate) struct NativeScopeBinding {
     pub(crate) constant: bool,
 }
 
+/// with 对象环境层（§9.1.1.2）：`object` 为 with 对象；`inner_names` 为声明于
+/// 该层内侧的静态绑定名——解析这些名字时静态绑定先于该层对象命中。
+struct NativeWithLayer {
+    object: i64,
+    inner_names: std::collections::HashSet<PropertyKey>,
+}
+
 pub(crate) struct NativeScopeRecord {
     bindings: HashMap<PropertyKey, NativeScopeBinding>,
+    /// 由内到外的 with 对象环境层；空表示 eval 站点不在任何 with 体内。
+    with_layers: Vec<NativeWithLayer>,
     outer: i64,
     super_base: Option<i64>,
     new_target: Option<i64>,
@@ -78,6 +87,7 @@ pub(crate) fn create_scope_record(state: &mut NativeAgentState) -> Option<i64> {
         value::decode_handle(record),
         NativeScopeRecord {
             bindings: HashMap::new(),
+            with_layers: Vec::new(),
             outer: state.global_object.unwrap_or_else(value::encode_undefined),
             super_base: None,
             new_target: None,
@@ -188,6 +198,81 @@ pub(crate) fn scope_record_contains(state: &mut NativeAgentState, record: i64, k
         .scope_records
         .get(&record)
         .is_some_and(|scope| scope.bindings.contains_key(&key))
+}
+
+/// 向 ScopeRecord 追加一个 with 对象环境层（语义层按由内到外的解析序发射）。
+/// `names` 为 NUL 分隔的内侧静态绑定名集合。
+pub(crate) fn scope_record_add_with_layer(
+    state: &mut NativeAgentState,
+    record: i64,
+    object: i64,
+    names: i64,
+) -> bool {
+    let Some(record) = object_handle(record) else {
+        return false;
+    };
+    let Some(joined) = state.string_to_utf8(names) else {
+        return false;
+    };
+    let mut inner_names = std::collections::HashSet::new();
+    for name in joined.split('\0').filter(|name| !name.is_empty()) {
+        let Some(key) = state.intern_property_string(name.to_string().into()) else {
+            return false;
+        };
+        inner_names.insert(key);
+    }
+    let Some(scope) = state.scope_records.get_mut(&record) else {
+        return false;
+    };
+    scope.with_layers.push(NativeWithLayer {
+        object,
+        inner_names,
+    });
+    true
+}
+
+/// ScopeRecord 是否携带 with 层：无 with 链时绑定路由零成本走平面路径。
+pub(crate) fn scope_record_has_with_layers(state: &NativeAgentState, record: i64) -> bool {
+    object_handle(record)
+        .and_then(|record| state.scope_records.get(&record))
+        .is_some_and(|scope| !scope.with_layers.is_empty())
+}
+
+/// 名字在 with 层链中的可见性快照：按解析序（由内到外）返回
+/// `(with 对象, 是否被该层内侧静态绑定遮蔽)`。
+pub(crate) fn scope_record_with_layers_for(
+    state: &mut NativeAgentState,
+    record: i64,
+    key: i64,
+) -> Vec<(i64, bool)> {
+    let (Some(record), Some(key)) = (object_handle(record), property_key(state, key)) else {
+        return Vec::new();
+    };
+    let Some(scope) = state.scope_records.get(&record) else {
+        return Vec::new();
+    };
+    scope
+        .with_layers
+        .iter()
+        .map(|layer| (layer.object, layer.inner_names.contains(&key)))
+        .collect()
+}
+
+/// 平面读取 ScopeRecord 自有绑定（不经 with 层与 outer 对象）：eval 结束后的
+/// 回写用它取回静态绑定终值。TDZ 时返回未初始化哨兵——回写哨兵即保持原槽
+/// 的 TDZ 状态（派生构造器 super() 前的 $this 等动态 TDZ 绑定在 eval 后可能
+/// 仍未初始化，返回 undefined 会抹掉哨兵、瓦解 TDZ 与二次 super() 检测）。
+/// 缺失时返回 undefined。
+pub(crate) fn scope_record_get_binding_flat(
+    state: &mut NativeAgentState,
+    record: i64,
+    key: i64,
+) -> i64 {
+    match scope_record_get(state, record, key) {
+        ScopeBindingRead::Value(stored) => stored,
+        ScopeBindingRead::Uninitialized => value::encode_uninitialized(),
+        ScopeBindingRead::Missing => value::encode_undefined(),
+    }
 }
 
 pub(crate) fn scope_record_set_meta(
@@ -364,6 +449,22 @@ pub(super) fn dispatch_scope(
             } else {
                 fail_dispatch(ctx)
             }
+        }
+        Builtin::ScopeRecordAddWithLayer => {
+            let [record, object, names] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            if scope_record_add_with_layer(state, *record, *object, *names) {
+                value::encode_undefined()
+            } else {
+                fail_dispatch(ctx)
+            }
+        }
+        Builtin::ScopeRecordGetBinding => {
+            let [record, key] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            scope_record_get_binding_flat(state, *record, *key)
         }
         Builtin::ScopeRecordDestroy => {
             if let Some(record) = args.first() {

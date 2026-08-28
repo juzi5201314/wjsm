@@ -631,6 +631,17 @@ impl Lowerer {
             swc_ast::ForHead::Pat(pat) => match &**pat {
                 swc_ast::Pat::Ident(binding) => {
                     let name = binding.id.sym.to_string();
+                    // 解析穿越 with 作用域：每次迭代的头部写入按对象环境记录分派。
+                    let crossed = self.with_scopes_for_ident(&name);
+                    if !crossed.is_empty() {
+                        return self.lower_with_bare_write(
+                            &name,
+                            pat.span(),
+                            value,
+                            &crossed,
+                            block,
+                        );
+                    }
                     let (scope_id, _) = self
                         .scopes
                         .lookup(&name)

@@ -30,8 +30,11 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
 
-        let param_ir_names =
-            self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
+        let param_ir_names = self.build_plain_function_param_ir_names(
+            &fn_decl.function,
+            env_scope_id,
+            this_scope_id,
+        )?;
 
         // Predeclare hoisted vars in the function body.
         if let Some(body) = &fn_decl.function.body {

@@ -101,7 +101,7 @@ impl Lowerer {
         }
         let ctor_param_pats: Vec<&swc_ast::Pat> = ctor_param_pats_owned.iter().collect();
         let param_ir_names =
-            self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id)?;
+            self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id, false)?;
         // 形参 IR 名此时才确定，回填成 (形参绑定, 字段名)；绑定携带作用域
         // id，箭头 super() 站点可经捕获链读取外层构造器帧的形参。
         let param_prop_fields: Vec<(CapturedBinding, String)> = param_prop_slots
@@ -113,19 +113,10 @@ impl Lowerer {
                 )
             })
             .collect();
-        if let Some(ctor) = constructor {
-            if class.super_class.is_some()
-                && let Some(body) = &ctor.body
-                && let Some(span) = first_pre_super_this_or_super_span(body)
-            {
-                return Err(self.error(
-                    span,
-                    "derived constructor cannot access this or super before super()",
-                ));
-            }
-            if let Some(body) = &ctor.body {
-                self.predeclare_block_stmts(&body.stmts)?;
-            }
+        if let Some(ctor) = constructor
+            && let Some(body) = &ctor.body
+        {
+            self.predeclare_block_stmts(&body.stmts)?;
         }
 
         let entry = BasicBlockId(0);
@@ -135,10 +126,67 @@ impl Lowerer {
         if let Some(ctor) = constructor
             && is_derived
         {
-            // 箭头 super()（如 `(() => super())()`）：BindThisValue 发生在箭头
-            // 帧，构造器帧必须经共享 env 观察重绑后的 this——入口即把 this
-            // 注册进共享 env，本帧读写与箭头帧的重绑统一走 env。
-            if ctor_has_arrow_super(ctor) {
+            // this TDZ（ES §9.1.1.3.4）：派生显式构造器的 this 绑定在 super()
+            // 前未初始化。规范中 thisArgument 由父 [[Construct]] 按
+            // OrdinaryCreateFromConstructor(newTarget) 每次调用新建；wjsm 的
+            // new 站点预创建实例已持有 newTarget.prototype，入口取其原型转存
+            // `$super_proto#ctor`（名字带 `#`，与任何用户标识符不冲突），
+            // super() 站点据此新建每次 Construct 的 thisArgument。随后将 this
+            // 槽写为未初始化哨兵，this 读取的运行时检查据此抛 ReferenceError。
+            let proto_scope_id = self
+                .scopes
+                .declare(Self::SUPER_PROTO_BINDING, VarKind::Let, true)
+                .map_err(|msg| self.error(class_span, msg))?;
+            let incoming_this = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::LoadVar {
+                    dest: incoming_this,
+                    name: format!("${this_scope_id}.$this"),
+                },
+            );
+            let instance_proto = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::CallBuiltin {
+                    dest: Some(instance_proto),
+                    builtin: Builtin::ObjectGetPrototypeOf,
+                    args: vec![incoming_this],
+                },
+            );
+            self.current_function.append_instruction(
+                entry,
+                Instruction::StoreVar {
+                    name: format!("${proto_scope_id}.{}", Self::SUPER_PROTO_BINDING),
+                    value: instance_proto,
+                },
+            );
+            let sentinel_const = self.module.add_constant(Constant::Uninitialized);
+            let sentinel_val = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: sentinel_val,
+                    constant: sentinel_const,
+                },
+            );
+            self.current_function.append_instruction(
+                entry,
+                Instruction::StoreVar {
+                    name: format!("${this_scope_id}.$this"),
+                    value: sentinel_val,
+                },
+            );
+            self.ctor_super_proto = Some(CapturedBinding::new(
+                Self::SUPER_PROTO_BINDING.to_string(),
+                proto_scope_id,
+            ));
+            // 构造器内箭头观察 this / super 时（如 `(() => super())()` 或
+            // super() 前创建、之后调用的 `() => this`）：TDZ 哨兵与
+            // BindThisValue 重绑都必须对箭头帧可见——入口即把 this 注册进
+            // 共享 env（上方哨兵已写入本地槽，复制进 env 的即哨兵），
+            // 本帧读写与箭头帧统一走 env。
+            if ctor_arrow_observes_this(ctor) {
                 self.ctor_this_via_env = true;
                 self.ensure_shared_env(entry, &[CapturedBinding::lexical_this()], class_span)?;
             }
@@ -275,16 +323,29 @@ impl Lowerer {
 
         if let StmtFlow::Open(b) = inner_flow {
             if is_derived {
-                // [[Construct]] 步骤 13.c：派生构造器体正常完结返回当前 this
-                // 绑定——super() 重绑后即父构造器返回的对象；new 站点与
-                // Reflect.construct 都以该对象为构造结果。
+                // [[Construct]] 步骤 13.c / 15：派生构造器体正常完结返回当前
+                // this 绑定——super() 重绑后即父构造器返回的对象。显式构造器
+                // 完结时 this 可能仍未初始化（super() 未执行），GetThisBinding
+                // 抛 ReferenceError；该异常属于 [[Construct]]，不可被体内
+                // try/catch 捕获（emit_ctor_this_construct_check 用 Throw
+                // 终结子直接向 new 站点传播）。
                 let this_val = self.emit_read_ctor_this(b);
-                self.current_function.set_terminator(
-                    b,
-                    Terminator::Return {
-                        value: Some(this_val),
-                    },
-                );
+                if self.ctor_super_proto.is_some() {
+                    let (checked, ok_block) = self.emit_ctor_this_construct_check(b, this_val);
+                    self.current_function.set_terminator(
+                        ok_block,
+                        Terminator::Return {
+                            value: Some(checked),
+                        },
+                    );
+                } else {
+                    self.current_function.set_terminator(
+                        b,
+                        Terminator::Return {
+                            value: Some(this_val),
+                        },
+                    );
+                }
             } else {
                 self.current_function
                     .set_terminator(b, Terminator::Return { value: None });
@@ -356,8 +417,12 @@ impl Lowerer {
             },
         );
 
+        let mut block = block;
         if let Some(super_class) = &class.super_class {
-            let super_ctor = self.lower_expr(super_class, block)?;
+            // 超类表达式可能引入控制流（如 eval 模式下共享 env 绑定读取的
+            // 分叉合流）：必须推进到延续块，否则后续指令落回分叉前的块，
+            // 使用合流 phi 值将违反支配关系。
+            let super_ctor = self.lower_expr_then_continue(super_class, &mut block)?;
             let proto_key_dest = self.emit_string_const(block, "prototype");
             let super_proto = self.alloc_value();
             self.current_function.append_instruction(

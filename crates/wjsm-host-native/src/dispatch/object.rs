@@ -947,10 +947,25 @@ fn get_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
         return super::proxy::get_prototype(ctx, state, object);
     }
     if value::is_callable(object) {
-        return state
+        if let Some(prototype) = state
             .callable_prototypes
             .get(&value::strip_gc_color(object))
             .copied()
+        {
+            return prototype;
+        }
+        // 无显式原型的普通可调用值：[[Prototype]] 默认为 %Function.prototype%
+        // （§10.2.3）；%Function.prototype% 自身的父原型是 %Object.prototype%。
+        if state.native_callable_kind(object) == Some(crate::NativeCallableKind::FunctionPrototype)
+        {
+            return state
+                .ensure_intrinsic_prototypes()
+                .ok()
+                .and_then(|_| state.object_prototype)
+                .unwrap_or_else(value::encode_null);
+        }
+        return state
+            .native_callable(crate::NativeCallableKind::FunctionPrototype)
             .unwrap_or_else(value::encode_null);
     }
     let Some(handle) = object_handle(object) else {

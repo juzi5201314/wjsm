@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+1 2
+10 2 12 false
+inner
+outer false
+3
+from-proto
+own from-proto true
+in-with
+outer written
+--- stderr ---

@@ -259,6 +259,7 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::AggregateErrorConstructor => Some(("AggregateError", 2)),
         NativeCallableKind::ObjectConstructor => Some(("Object", 1)),
         NativeCallableKind::RealmArrayConstructor(_) => Some(("Array", 1)),
+        NativeCallableKind::FunctionConstructor => Some(("Function", 1)),
         NativeCallableKind::FunctionPrototype => Some(("", 0)),
         NativeCallableKind::TimerConstructor(true) => Some(("Immediate", 0)),
         NativeCallableKind::TimerConstructor(false) => Some(("Timeout", 0)),
@@ -1113,6 +1114,8 @@ struct NativeAgentState {
     global_object: Option<i64>,
     object_prototype: Option<i64>,
     array_prototype: Option<i64>,
+    /// %Array.prototype% 的 `@@unscopables` 对象（§23.1.3.41），懒创建缓存。
+    array_unscopables: Option<i64>,
     regexp_prototype: Option<i64>,
     symbol_prototype: Option<i64>,
     map_prototype: Option<i64>,
@@ -1302,6 +1305,7 @@ impl NativeAgentState {
             global_object: None,
             object_prototype: None,
             array_prototype: None,
+            array_unscopables: None,
             regexp_prototype: None,
             symbol_prototype: None,
             map_prototype: None,
@@ -1545,6 +1549,7 @@ impl NativeAgentState {
         self.fatal_exception = None;
         self.object_prototype = None;
         self.array_prototype = None;
+        self.array_unscopables = None;
         self.regexp_prototype = None;
         self.symbol_prototype = None;
         self.map_prototype = None;
@@ -2158,11 +2163,25 @@ impl NativeAgentState {
                 return true;
             }
             if value::is_callable(current) {
-                let Some(parent) = self
+                let explicit = self
                     .callable_prototypes
                     .get(&value::strip_gc_color(current))
-                    .copied()
-                else {
+                    .copied();
+                // 无显式原型的普通可调用值：[[Prototype]] 默认为
+                // %Function.prototype%（§10.2.3 OrdinaryFunctionCreate），
+                // 使 `f instanceof Function` 成立；%Function.prototype%
+                // 自身的父原型是 %Object.prototype%（§20.2.3）。
+                let Some(parent) = explicit.or_else(|| {
+                    if self.native_callable_kind(current)
+                        == Some(NativeCallableKind::FunctionPrototype)
+                    {
+                        self.object_prototype
+                    } else {
+                        self.native_callable_ids
+                            .get(&NativeCallableKind::FunctionPrototype)
+                            .map(|index| value::encode_native_callable_idx(*index))
+                    }
+                }) else {
                     return false;
                 };
                 current = parent;
@@ -2272,6 +2291,12 @@ impl NativeAgentState {
             && (self.symbol_value(receiver).is_some() || self.symbol_prototype == Some(receiver))
         {
             return self.intern_text("Symbol".into(), value::TAG_STRING);
+        }
+        if value::is_symbol(key)
+            && value::decode_handle(key) == wjsm_ir::wk_symbol::UNSCOPABLES
+            && value::is_array(receiver)
+        {
+            return self.ensure_array_unscopables();
         }
         let key = self.string_owned(key)?.to_utf8()?;
         if let Some(symbol) = self.symbol_value(receiver) {
@@ -2702,6 +2727,46 @@ impl NativeAgentState {
             self.regexp_prototype = Some(prototype);
         }
         Ok(())
+    }
+
+    /// %Array.prototype% 的 `@@unscopables` 对象（§23.1.3.41）：null 原型，
+    /// 数组迭代类方法名全部标记为 true。数组方法经 `primitive_property` 合成，
+    /// 该对象亦按同一惯例在原型读取处合成；with 语句的对象环境记录据此把
+    /// `keys` / `values` 等名字排除在 HasBinding 之外（与 Node 一致）。
+    fn ensure_array_unscopables(&mut self) -> Option<i64> {
+        if let Some(object) = self.array_unscopables {
+            return Some(object);
+        }
+        let object = self
+            .allocate_object_with_prototype(16, false, PROTO_NULL_SENTINEL)
+            .ok()?;
+        let handle = value::decode_handle(object);
+        for name in [
+            "at",
+            "copyWithin",
+            "entries",
+            "fill",
+            "find",
+            "findIndex",
+            "findLast",
+            "findLastIndex",
+            "flat",
+            "flatMap",
+            "includes",
+            "keys",
+            "toReversed",
+            "toSorted",
+            "toSpliced",
+            "values",
+        ] {
+            let key = self.intern_property_string(name.into())?;
+            self.gc
+                .heap()
+                .set_property(handle, key, value::encode_bool(true) as u64)
+                .ok()?;
+        }
+        self.array_unscopables = Some(object);
+        Some(object)
     }
 
     fn ensure_object_constructor(&mut self) -> Option<i64> {
@@ -5454,33 +5519,7 @@ unsafe extern "C" fn native_callable_call(
             dispatch::node_perf_hooks::call(ctx, state, callable, &arguments)
         }
         NativeCallableKind::FunctionConstructor => {
-            let global = dispatch::node_vm::current_context(state);
-            if !dispatch::node_vm::strings_enabled(state, global) {
-                return dispatch::modules::named_error_object(
-                    state,
-                    "EvalError",
-                    "Code generation from strings disallowed for this context".into(),
-                )
-                .and_then(|error| state.create_exception(error))
-                .unwrap_or_else(|| dispatch::fail_dispatch(ctx));
-            }
-            let Some((body, parameters)) = arguments.split_last() else {
-                return dispatch::node_vm::compile_dynamic_function(ctx, state, "", &[], global);
-            };
-            let Some(body) = state.string_owned(*body).and_then(|text| text.to_utf8()) else {
-                return dispatch::fail_dispatch(ctx);
-            };
-            let mut parameter_names = Vec::with_capacity(parameters.len());
-            for parameter in parameters {
-                let Some(parameter) = state
-                    .string_owned(*parameter)
-                    .and_then(|text| text.to_utf8())
-                else {
-                    return dispatch::fail_dispatch(ctx);
-                };
-                parameter_names.push(parameter);
-            }
-            dispatch::node_vm::compile_dynamic_function(ctx, state, &body, &parameter_names, global)
+            dispatch::function_constructor::construct(ctx, state, &arguments)
         }
         NativeCallableKind::StringConstructor => {
             let Some(argument) = arguments.first().copied() else {

@@ -7,6 +7,7 @@ use super::errors::javascript_error;
 use super::modules;
 use super::node_vm;
 use super::runtime::{self, fail_dispatch};
+use super::with_env;
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_eval(
@@ -24,7 +25,10 @@ pub(super) fn dispatch_eval(
             let [environment, key] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            value::encode_bool(eval_binding_exists(ctx, state, *environment, *key))
+            match eval_binding_exists(ctx, state, *environment, *key) {
+                Ok(exists) => value::encode_bool(exists),
+                Err(exception) => exception,
+            }
         }
         Builtin::EvalSuperBase => {
             let [environment] = args else {
@@ -33,8 +37,52 @@ pub(super) fn dispatch_eval(
             modules::scope_record_super_base(state, *environment)
                 .unwrap_or_else(value::encode_undefined)
         }
+        Builtin::EvalWithBase => {
+            let [environment, key] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            match resolve_with_layers(ctx, state, *environment, *key) {
+                WithLayerResolution::Object(object) => object,
+                WithLayerResolution::Static => value::encode_undefined(),
+                WithLayerResolution::Abrupt(exception) => exception,
+            }
+        }
         _ => return None,
     })
+}
+
+/// 名字经 ScopeRecord with 层链（由内到外）的解析结果。
+enum WithLayerResolution {
+    /// 命中某层 with 对象环境记录：读写以该对象为基座。
+    Object(i64),
+    /// 被内侧静态绑定遮蔽或全链未命中：回退平面静态绑定 / outer。
+    Static,
+    /// has 探测（proxy trap / `@@unscopables` getter）抛出。
+    Abrupt(i64),
+}
+
+/// 按 GetIdentifierReference（§9.4.2）的层序在静态绑定与 with 对象之间路由：
+/// 每层先看是否被内侧静态绑定遮蔽，再做对象 HasBinding 探测，命中即短路。
+fn resolve_with_layers(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    environment: i64,
+    key: i64,
+) -> WithLayerResolution {
+    if !modules::scope_record_has_with_layers(state, environment) {
+        return WithLayerResolution::Static;
+    }
+    for (object, shadowed) in modules::scope_record_with_layers_for(state, environment, key) {
+        if shadowed {
+            return WithLayerResolution::Static;
+        }
+        match with_env::with_has_binding(ctx, state, object, key) {
+            Ok(true) => return WithLayerResolution::Object(object),
+            Ok(false) => {}
+            Err(exception) => return WithLayerResolution::Abrupt(exception),
+        }
+    }
+    WithLayerResolution::Static
 }
 
 /// 间接 eval：源码在新建的全局作用域记录中执行。
@@ -96,16 +144,31 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     {
         return new_target;
     }
+    // with 层先于静态绑定按层序路由：声明于 with 体外侧的名字可被对象环境拦截。
+    match resolve_with_layers(ctx, state, *environment, *key) {
+        WithLayerResolution::Object(object) => {
+            let Ok(result) = runtime::get_property(ctx, state, object, *key) else {
+                return fail_dispatch(ctx);
+            };
+            return result;
+        }
+        WithLayerResolution::Abrupt(exception) => return exception,
+        WithLayerResolution::Static => {}
+    }
     match modules::scope_record_get(state, *environment, *key) {
         modules::ScopeBindingRead::Value(result) => return result,
         modules::ScopeBindingRead::Uninitialized => {
             let name = eval_binding_name(state, *key);
-            return javascript_error(
-                ctx,
-                state,
-                "ReferenceError",
-                format!("Cannot access '{name}' before initialization"),
-            );
+            // 派生构造器 this TDZ（`$this` 仅在 super() 前持哨兵）：文案
+            // 对齐 V8 的 super 提示；其余词法绑定用通用 TDZ 文案。
+            let message = if name == "$this" {
+                "Must call super constructor in derived class before accessing 'this' \
+                 or returning from derived constructor"
+                    .to_string()
+            } else {
+                format!("Cannot access '{name}' before initialization")
+            };
+            return javascript_error(ctx, state, "ReferenceError", message);
         }
         modules::ScopeBindingRead::Missing => {}
     }
@@ -113,21 +176,45 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     let Ok(result) = runtime::get_property(ctx, state, outer, *key) else {
         return fail_dispatch(ctx);
     };
-    if !value::is_undefined(result) || eval_binding_exists(ctx, state, *environment, *key) {
+    if !value::is_undefined(result) {
         return result;
     }
-    javascript_error(
-        ctx,
-        state,
-        "ReferenceError",
-        format!("{} is not defined", eval_binding_name(state, *key)),
-    )
+    match eval_binding_exists(ctx, state, *environment, *key) {
+        Ok(true) => result,
+        Ok(false) => javascript_error(
+            ctx,
+            state,
+            "ReferenceError",
+            format!("{} is not defined", eval_binding_name(state, *key)),
+        ),
+        Err(exception) => exception,
+    }
 }
 
 fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [environment, key, stored] = args else {
         return fail_dispatch(ctx);
     };
+    // with 层命中：PutValue → 对象 [[Set]]（record 的 strict 位是 eval 体的
+    // 有效严格性，决定失败写是否抛 TypeError）。
+    match resolve_with_layers(ctx, state, *environment, *key) {
+        WithLayerResolution::Object(object) => {
+            let operation = if modules::scope_record_is_strict(state, *environment) {
+                NativeRuntimeOp::SetPropStrict
+            } else {
+                NativeRuntimeOp::SetProp
+            };
+            return runtime::dispatch_runtime(
+                ctx,
+                state,
+                operation,
+                &[object, *key, *stored],
+                None,
+            );
+        }
+        WithLayerResolution::Abrupt(exception) => return exception,
+        WithLayerResolution::Static => {}
+    }
     match modules::scope_record_set(state, *environment, *key, *stored) {
         modules::ScopeBindingWrite::Updated => return *stored,
         modules::ScopeBindingWrite::Constant => {
@@ -169,19 +256,26 @@ fn eval_binding_exists(
     state: &mut NativeAgentState,
     environment: i64,
     key: i64,
-) -> bool {
+) -> Result<bool, i64> {
     if state.text_matches(key, "__wjsm_new_target")
         && modules::scope_record_new_target(state, environment).is_some()
     {
-        return true;
+        return Ok(true);
+    }
+    match resolve_with_layers(ctx, state, environment, key) {
+        WithLayerResolution::Object(_) => return Ok(true),
+        WithLayerResolution::Abrupt(exception) => return Err(exception),
+        WithLayerResolution::Static => {}
     }
     if modules::scope_record_contains(state, environment, key) {
-        return true;
+        return Ok(true);
     }
     let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
-    runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
-        !value::is_undefined(property) || runtime::has_property(state, outer, key)
-    })
+    Ok(
+        runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
+            !value::is_undefined(property) || runtime::has_property(state, outer, key)
+        }),
+    )
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {
@@ -191,7 +285,7 @@ fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {
         .unwrap_or_else(|| runtime::render_value(state, key))
 }
 
-fn eval_execution_result(
+pub(crate) fn eval_execution_result(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     result: Result<i64, modules::VmExecutionError>,

@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+hello from obj
+undefined undefined 3
+outer-hidden 2
+41 has:q,set:q,get:q
+3 ABC
+42.0
+true
+true
+undefined
+7
+7
+true undefined
+true notDefined is not defined
+--- stderr ---

@@ -1931,9 +1931,17 @@ pub(super) fn get_property_with_receiver(
             }
         }
         Ok(Some(property)) => Ok(property.value as i64),
-        Ok(None) => Ok(state
-            .primitive_property(object, encoded_key)
-            .unwrap_or_else(value::encode_undefined)),
+        Ok(None) => {
+            if let Some(property) = state.primitive_property(object, encoded_key) {
+                return Ok(property);
+            }
+            // 包装对象（boxed primitive）：普通对象链未命中后回退到原语本身
+            // （字符串 length/索引等 exotic own 属性与原语方法）。
+            if let Some(primitive) = boxed_primitive_value(state, object) {
+                return get_property_with_receiver(ctx, state, primitive, encoded_key, receiver);
+            }
+            Ok(value::encode_undefined())
+        }
         Err(wjsm_gc::HeapAccessV2Error::ProxyPrototype { handle }) => Ok(super::proxy::get(
             ctx,
             state,
@@ -2163,6 +2171,37 @@ pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_ke
         .flatten()
         .is_some()
         || state.primitive_property(object, encoded_key).is_some()
+        || boxed_primitive_value(state, object)
+            .is_some_and(|primitive| boxed_primitive_has(state, primitive, encoded_key))
+}
+
+/// 包装对象（boxed primitive）承载的原语值；非包装对象为 None。
+fn boxed_primitive_value(state: &NativeAgentState, object: i64) -> Option<i64> {
+    if !value::is_js_object(object) {
+        return None;
+    }
+    state
+        .boxed_primitives
+        .get(&value::decode_handle(object))
+        .copied()
+}
+
+/// 包装对象在普通对象链未命中后按原语回退的 HasProperty：
+/// 字符串的 length / 有效索引为 exotic own 属性，其余委托原语方法解析。
+fn boxed_primitive_has(state: &mut NativeAgentState, primitive: i64, encoded_key: i64) -> bool {
+    if value::is_string(primitive) {
+        if state.text_matches(encoded_key, "length") {
+            return true;
+        }
+        if let Some(index) = array_index(state, encoded_key)
+            && state
+                .string_len(primitive)
+                .is_some_and(|length| (index as usize) < length)
+        {
+            return true;
+        }
+    }
+    state.primitive_property(primitive, encoded_key).is_some()
 }
 
 fn primitive_string(state: &NativeAgentState, source: i64) -> Option<i64> {

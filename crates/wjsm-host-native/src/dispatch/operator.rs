@@ -105,6 +105,35 @@ pub(super) fn dispatch_operator(
                 Err(exception) => exception,
             }
         }
+        Builtin::ThisTdzCheck => {
+            let [checked] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            // GetThisBinding（ES §9.1.1.3.4）：派生构造器 this 在 super() 前
+            // 处于 TDZ，读取抛 ReferenceError（文案与 V8/Node 对齐）。
+            if value::is_uninitialized(*checked) {
+                reference_error(
+                    ctx,
+                    state,
+                    "Must call super constructor in derived class before accessing 'this' \
+                     or returning from derived constructor",
+                )
+            } else {
+                *checked
+            }
+        }
+        Builtin::SuperCallOnceCheck => {
+            let [current] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            // BindThisValue 步骤 2（ES §9.1.1.3.1）：this 绑定已初始化说明
+            // super() 已成功执行过，再次绑定抛 ReferenceError。
+            if value::is_uninitialized(*current) {
+                *current
+            } else {
+                reference_error(ctx, state, "Super constructor may only be called once")
+            }
+        }
         Builtin::GetPrototypeFromConstructor => {
             let Some(constructor) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));
@@ -288,6 +317,17 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
             state,
             &format!("Function has non-object prototype '{rendered}' in instanceof check"),
         );
+    }
+    // 左操作数是可调用值时，其默认原型链经 %Function.prototype% →
+    // %Object.prototype%（见 prototype_chain_contains_value）；两个 intrinsic
+    // 都是惰性分配，先确保存在，避免链遍历因尚未分配而漏判。
+    if value::is_callable(*object)
+        && (state
+            .native_callable(NativeCallableKind::FunctionPrototype)
+            .is_none()
+            || state.ensure_intrinsic_prototypes().is_err())
+    {
+        return fail_dispatch(ctx);
     }
     value::encode_bool(state.prototype_chain_contains_value(*object, prototype))
 }

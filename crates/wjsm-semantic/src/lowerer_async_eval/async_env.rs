@@ -694,16 +694,35 @@ impl Lowerer {
         super_prop: &swc_ast::SuperPropExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        let mut current = block;
+        // SuperProperty 求值步骤 2：GetThisBinding 先于 MakeSuperPropertyReference，
+        // 派生构造器 this 处于 TDZ 时在此抛 ReferenceError。
+        let this_val = self.lower_this_checked(&mut current)?;
+        let value = self.lower_super_prop_with_this(super_prop, this_val, &mut current)?;
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
+        Ok(value)
+    }
+
+    /// receiver（GetThisBinding 结果）已就绪的 super 属性读取：GetSuperBase +
+    /// ReflectGet。计算键求值可能引入控制流，块经 `block` 就地推进。
+    pub(crate) fn lower_super_prop_with_this(
+        &mut self,
+        super_prop: &swc_ast::SuperPropExpr,
+        this_val: ValueId,
+        block: &mut BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
         if !self.eval_scope_record && !self.super_allowed {
             return Err(self.error(super_prop.span, "super is only valid inside methods"));
         }
 
-        // 1. GetSuperBase: 从 home_object 的 proto 读取基类原型
+        // GetSuperBase: 从 home_object 的 proto 读取基类原型
         let base_val = self.alloc_value();
         if self.eval_scope_record {
-            let env = self.load_eval_scope_env(block);
+            let env = self.load_eval_scope_env(*block);
             self.current_function.append_instruction(
-                block,
+                *block,
                 Instruction::CallBuiltin {
                     dest: Some(base_val),
                     builtin: Builtin::EvalSuperBase,
@@ -712,52 +731,71 @@ impl Lowerer {
             );
         } else {
             self.current_function
-                .append_instruction(block, Instruction::GetSuperBase { dest: base_val });
+                .append_instruction(*block, Instruction::GetSuperBase { dest: base_val });
         }
 
-        // 2. super 属性访问必须以当前 this 作为 receiver（访问器与方法 this 绑定依赖它）。
-        let this_val = self.lower_this(block)?;
-        match &super_prop.prop {
+        let key_val = match &super_prop.prop {
             swc_ast::SuperProp::Ident(ident_name) => {
                 let key_str = ident_name.sym.to_string();
                 let key_const = self.module.add_constant(Constant::String(key_str));
                 let key_dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    *block,
                     Instruction::Const {
                         dest: key_dest,
                         constant: key_const,
                     },
                 );
-                let dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::ReflectGet,
-                        args: vec![base_val, key_dest, this_val],
-                    },
-                );
-                Ok(dest)
+                key_dest
             }
             swc_ast::SuperProp::Computed(computed) => {
-                let key_val = self.lower_expr(&computed.expr, block)?;
-                let dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::ReflectGet,
-                        args: vec![base_val, key_val, this_val],
-                    },
-                );
-                Ok(dest)
+                self.lower_expr_then_continue(&computed.expr, block)?
             }
-        }
+        };
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            *block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::ReflectGet,
+                args: vec![base_val, key_val, this_val],
+            },
+        );
+        Ok(dest)
     }
 
     pub(crate) fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
-        Ok(self.emit_read_ctor_this(block))
+        let mut current = block;
+        let value = self.lower_this_checked(&mut current)?;
+        if current != block {
+            self.expr_merge_block = Some(current);
+        }
+        Ok(value)
+    }
+
+    /// GetThisBinding（ES §9.1.1.3.4）：读取 this 并在可能观察到 TDZ 哨兵的
+    /// 帧（持有实例原型绑定的派生构造器帧及其内层箭头帧）发射运行时检查，
+    /// super() 前读取抛 ReferenceError（体内 try/catch 可捕获，走 handler
+    /// 路由）。其余帧 this 恒已初始化，保持无控制流的裸读取。
+    pub(crate) fn lower_this_checked(
+        &mut self,
+        block: &mut BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let value = self.emit_read_ctor_this(*block);
+        if self.ctor_super_proto.is_none() {
+            return Ok(value);
+        }
+        let checked = self.alloc_value();
+        self.current_function.append_instruction(
+            *block,
+            Instruction::CallBuiltin {
+                dest: Some(checked),
+                builtin: Builtin::ThisTdzCheck,
+                args: vec![value],
+            },
+        );
+        *block = self.lower_value_exception_branch(*block, checked)?;
+        Ok(checked)
     }
 
     /// 读取当前帧可见的 this 绑定，三条路径都不引入控制流：

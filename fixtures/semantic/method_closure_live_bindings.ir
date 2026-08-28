@@ -296,11 +296,10 @@ module {
     bb5:
       %19 = load var $5.$this
       %20 = get_super_base
-      %21 = load var $5.$this
-      %22 = const c83
-      %23 = call builtin.reflect.get(%20, %22, %21)
-      %24 = call %23, this=%19
-      return %24
+      %21 = const c83
+      %22 = call builtin.reflect.get(%20, %21, %19)
+      %23 = call %22, this=%19
+      return %23
     bb6:
       %18 = call builtin.exception_value(%16)
       throw %18

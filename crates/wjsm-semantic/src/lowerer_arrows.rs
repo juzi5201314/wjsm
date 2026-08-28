@@ -30,6 +30,12 @@ impl Lowerer {
             .function_derived_ctor_init_ctx_stack
             .last()
             .and_then(|ctx| ctx.clone());
+        // 实例原型绑定同样词法继承：箭头体内的 super() 据此新建父构造器的
+        // thisArgument，箭头体内的 this 读取沿链观察外层构造器的 TDZ 哨兵。
+        self.ctor_super_proto = self
+            .function_ctor_super_proto_stack
+            .last()
+            .and_then(|binding| binding.clone());
         // 声明 $env（闭包环境对象）
         let env_scope_id = self
             .scopes
@@ -183,6 +189,10 @@ impl Lowerer {
             .function_derived_ctor_init_ctx_stack
             .last()
             .and_then(|ctx| ctx.clone());
+        self.ctor_super_proto = self
+            .function_ctor_super_proto_stack
+            .last()
+            .and_then(|binding| binding.clone());
         let env_scope_id = self
             .scopes
             .declare("$env", VarKind::Let, true)
@@ -422,24 +432,28 @@ impl Lowerer {
                 }
             }
             swc_ast::BlockStmtOrExpr::Expr(expr) => {
-                let val = self.lower_expr(expr, body_entry)?;
+                // 表达式求值可能引入控制流（this TDZ 检查、new/await 续接、
+                // 三元等）：必须在真正的继续块上 resolve/发射，不能盲写
+                // body_entry（会覆盖分叉终结器、把 resolve 落进不可达块）。
+                let mut resolve_block = body_entry;
+                let val = self.lower_expr_then_continue(expr, &mut resolve_block)?;
                 let promise_val = self.alloc_value();
                 self.current_function.append_instruction(
-                    body_entry,
+                    resolve_block,
                     Instruction::LoadVar {
                         dest: promise_val,
                         name: format!("${promise_scope_id}.$promise"),
                     },
                 );
                 self.current_function.append_instruction(
-                    body_entry,
+                    resolve_block,
                     Instruction::PromiseResolve {
                         promise: promise_val,
                         value: val,
                     },
                 );
                 self.current_function
-                    .set_terminator(body_entry, Terminator::Return { value: None });
+                    .set_terminator(resolve_block, Terminator::Return { value: None });
                 inner_flow = StmtFlow::Terminated;
             }
         }
