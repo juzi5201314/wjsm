@@ -116,9 +116,10 @@ fn render_receiver_owner(state: &NativeAgentState, receiver: i64) -> String {
     }
 }
 
-/// GetterOnly / Receiver 消息中的简短渲染：数组 → `[object Array]`，
-/// callable → 函数 toString 文本，其余对象（含 proxy）→ `#<Object>`。
-fn render_receiver_brief(state: &NativeAgentState, receiver: i64) -> String {
+/// GetterOnly / Receiver / strict delete 消息中的简短渲染：数组 →
+/// `[object Array]`，callable → 函数 toString 文本，其余对象（含 proxy）
+/// → `#<Object>`。
+pub(super) fn render_receiver_brief(state: &NativeAgentState, receiver: i64) -> String {
     if value::is_array(receiver) {
         "[object Array]".into()
     } else if value::is_callable(receiver) {

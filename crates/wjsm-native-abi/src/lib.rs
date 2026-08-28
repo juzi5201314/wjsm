@@ -483,6 +483,9 @@ pub enum NativeRuntimeOp {
     SetElemStrict = 0x1_0516,
     /// 严格模式代码里的带 IC 回填 [[Set]]：与 [`Self::SetPropIc`] 同参。
     SetPropIcStrict = 0x1_0517,
+    /// 严格模式代码里的 [[Delete]]：与 [`Self::DeleteProp`] 同参，
+    /// deleteStatus 为 false 时抛 TypeError 而非返回 false（§13.5.5.9 步骤 5.d）。
+    DeletePropStrict = 0x1_0518,
 }
 
 impl NativeRuntimeOp {
@@ -539,6 +542,7 @@ impl NativeRuntimeOp {
             0x1_0515 => Some(Self::SetPropStrict),
             0x1_0516 => Some(Self::SetElemStrict),
             0x1_0517 => Some(Self::SetPropIcStrict),
+            0x1_0518 => Some(Self::DeletePropStrict),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),

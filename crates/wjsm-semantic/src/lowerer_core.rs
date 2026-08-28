@@ -979,10 +979,12 @@ impl Lowerer {
         // 保留 eval 路径预置的继承严格位（direct eval 继承调用方严格性），
         // 与模块自身指令做并集，而非覆盖。
         self.strict_mode = self.strict_mode || module_has_use_strict_directive(module);
-        // 早错误：严格模式代码（含函数级指令与类体）不得包含 with 语句（§14.11.1）。
-        if let Some(span) = crate::lowerer_with::find_with_in_strict_code(module, self.strict_mode)
+        // 早错误：严格模式代码（含函数级指令与类体）不得包含 with 语句
+        // （§14.11.1），也不得以 eval/arguments 为赋值目标（§13.1.3）。
+        if let Some((span, message)) =
+            crate::lowerer_with::find_strict_code_early_error(module, self.strict_mode)
         {
-            return Err(self.error(span, "Strict mode code may not include a with statement"));
+            return Err(self.error(span, message));
         }
         // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
         self.shared_env_stack.push(None);

@@ -920,20 +920,49 @@ fn reflect_delete(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     let [target, key] = args else {
         return fail_dispatch(ctx);
     };
-    if !value::is_proxy(*target) {
-        return delete_property(state, *target, *key)
+    proxy_delete_with_mode(ctx, state, *target, *key, false)
+}
+
+/// delete 操作符（§13.5.5.9）作用于 proxy 的 [[Delete]] 入口：strict 位
+/// 沿 target 链透传，falsish trap 在 strict 下抛 V8 口径的 proxy 专属
+/// TypeError；Reflect.deleteProperty 走 strict=false 的同一核心。
+pub(super) fn delete_for_operator(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    proxy: i64,
+    key: i64,
+    strict: bool,
+) -> i64 {
+    proxy_delete_with_mode(ctx, state, proxy, key, strict)
+}
+
+fn proxy_delete_with_mode(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    target: i64,
+    key: i64,
+    strict: bool,
+) -> i64 {
+    if !value::is_proxy(target) {
+        // 非 proxy 收口：strict 失败升级 TypeError 由 runtime 侧统一渲染。
+        if strict {
+            return super::runtime::delete_property_operator_with_key(
+                ctx, state, target, key, strict,
+            );
+        }
+        return delete_property(state, target, key)
             .map(value::encode_bool)
             .unwrap_or_else(|()| fail_dispatch(ctx));
     }
-    let entry = match require_entry(ctx, state, *target) {
+    let entry = match require_entry(ctx, state, target) {
         Ok(entry) => entry,
         Err(exception) => return exception,
     };
     let trap_result = match trap(ctx, state, entry.handler, "deleteProperty") {
         Ok(Some(trap)) => state
-            .invoke_callable(ctx, trap, entry.handler, &[entry.target, *key])
+            .invoke_callable(ctx, trap, entry.handler, &[entry.target, key])
             .unwrap_or_else(|| fail_dispatch(ctx)),
-        Ok(None) => return reflect_delete(ctx, state, &[entry.target, *key]),
+        Ok(None) => return proxy_delete_with_mode(ctx, state, entry.target, key, strict),
         Err(exception) => return exception,
     };
     if value::is_exception(trap_result) {
@@ -941,7 +970,7 @@ fn reflect_delete(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     }
     let deleted = super::runtime::is_truthy(state, trap_result);
     if deleted {
-        let descriptor = match target_descriptor(ctx, state, entry.target, *key) {
+        let descriptor = match target_descriptor(ctx, state, entry.target, key) {
             Ok(descriptor) => descriptor,
             Err(exception) => return exception,
         };
@@ -958,6 +987,14 @@ fn reflect_delete(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
                 );
             }
         }
+    } else if strict {
+        // §13.5.5.9 步骤 5.d：strict 下 deleteStatus 为 false 抛 TypeError，
+        // trap 返回 falsish 时取 V8 的 proxy 专属消息。
+        let message = format!(
+            "'deleteProperty' on proxy: trap returned falsish for property '{}'",
+            super::runtime::render_value(state, key)
+        );
+        return super::runtime::type_error(ctx, state, &message);
     }
     value::encode_bool(deleted)
 }

@@ -23,7 +23,7 @@ mod with_calls;
 mod with_reads;
 mod with_writes;
 
-pub(crate) use strict_check::find_with_in_strict_code;
+pub(crate) use strict_check::find_strict_code_early_error;
 
 /// With 作用域中保存 with 对象的合成绑定名。
 /// `%` 不是合法标识符字符，用户代码永远无法遮蔽或读取该绑定。

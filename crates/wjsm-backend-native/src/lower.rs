@@ -3803,9 +3803,18 @@ fn lower_instruction(
             &[*object, *key, *value],
             Some(*dest),
         ),
-        Instruction::DeleteProp { dest, object, key } => lower_value_operation(
+        Instruction::DeleteProp {
+            dest,
+            object,
+            key,
+            strict,
+        } => lower_value_operation(
             cx,
-            NativeRuntimeOp::DeleteProp,
+            if *strict {
+                NativeRuntimeOp::DeletePropStrict
+            } else {
+                NativeRuntimeOp::DeleteProp
+            },
             &[*object, *key],
             Some(*dest),
         ),

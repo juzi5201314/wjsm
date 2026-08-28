@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+before
+--- stderr ---
+Runtime error: TypeError: Cannot delete property '0' of #<Object>

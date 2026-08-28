@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: Unexpected eval or arguments in strict mode
+ --> errors/strict_eval_assign.js:4:1
+4 | eval = 1;
+  | ^^^^
+
