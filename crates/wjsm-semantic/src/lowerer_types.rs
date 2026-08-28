@@ -99,7 +99,8 @@ pub(crate) struct Lowerer {
     pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
     /// 派生类显式构造器的实例初始化上下文：super() 站点按 ECMAScript
     /// SuperCall 语义（BindThisValue 后 InitializeInstanceElements）发射
-    /// 参数属性字段与实例字段初始化器。仅构造器帧持有；箭头/嵌套函数帧为 None。
+    /// 参数属性字段与实例字段初始化器。构造器帧持有；箭头帧随词法 super
+    /// 能力克隆继承（箭头体内 super() 同样发射）；普通嵌套函数帧为 None。
     pub(crate) derived_ctor_init_ctx: Option<Box<crate::lowerer_classes_ts::DerivedCtorInitCtx>>,
     pub(crate) function_derived_ctor_init_ctx_stack:
         Vec<Option<Box<crate::lowerer_classes_ts::DerivedCtorInitCtx>>>,

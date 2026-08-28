@@ -911,8 +911,9 @@ impl Lowerer {
                     self.select_super_call_result(call_block, ctor_result, this_val);
                 // InitializeInstanceElements（ES SuperCall 步骤 11）：字段
                 // 初始化属于 super() 求值本身——BindThisValue 之后、表达式
-                // 返回之前发射，任何位置（语句、赋值右值、if 分支）都成立。
-                // 仅构造器帧发射；Construct 异常须先分叉传播，不得触达初始化器。
+                // 返回之前发射，任何位置（语句、赋值右值、if 分支、箭头体内）
+                // 都成立。持有初始化上下文的帧（构造器帧及其内层箭头帧）发射；
+                // Construct 异常须先分叉传播，不得触达初始化器。
                 let continuation = self.emit_super_site_instance_inits(merge_block, result)?;
                 self.expr_merge_block = Some(continuation);
                 return Ok(result);
