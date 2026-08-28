@@ -386,6 +386,7 @@ fn date_regexp_metadata(builtin: Builtin) -> Option<(&'static str, u32)> {
         Builtin::RegExpTest => ("test", 1),
         Builtin::RegExpExec => ("exec", 1),
         Builtin::RegExpProtoMatch => ("[Symbol.match]", 1),
+        Builtin::RegExpProtoMatchAll => ("[Symbol.matchAll]", 1),
         Builtin::RegExpProtoReplace => ("[Symbol.replace]", 2),
         Builtin::RegExpProtoSearch => ("[Symbol.search]", 1),
         Builtin::RegExpProtoSplit => ("[Symbol.split]", 2),

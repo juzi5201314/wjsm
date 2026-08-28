@@ -7,27 +7,6 @@ use super::runtime::{
 };
 use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
-#[derive(Clone, Copy)]
-pub(super) enum CollectionIteratorKind {
-    Entries,
-    Keys,
-    Values,
-}
-
-#[derive(Clone, Copy)]
-pub(super) enum CollectionIteratorSource {
-    Map(u32),
-    Set(u32),
-    TypedArray(u32),
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct CollectionIterator {
-    pub(super) source: CollectionIteratorSource,
-    pub(super) kind: CollectionIteratorKind,
-    pub(super) index: usize,
-}
-
 pub(super) fn dispatch_collection(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -48,9 +27,9 @@ pub(super) fn dispatch_collection(
         Builtin::MapSetClear => map_set_clear(ctx, state, args),
         Builtin::MapSetGetSize => map_set_size(ctx, state, args),
         Builtin::MapSetForEach => map_set_for_each(ctx, state, args),
-        Builtin::MapSetKeys => iterator(ctx, state, args, CollectionIteratorKind::Keys),
-        Builtin::MapSetValues => iterator(ctx, state, args, CollectionIteratorKind::Values),
-        Builtin::MapSetEntries => iterator(ctx, state, args, CollectionIteratorKind::Entries),
+        Builtin::MapSetKeys => iterator(ctx, state, args, crate::NativeIteratorKind::Keys),
+        Builtin::MapSetValues => iterator(ctx, state, args, crate::NativeIteratorKind::Values),
+        Builtin::MapSetEntries => iterator(ctx, state, args, crate::NativeIteratorKind::Entries),
         Builtin::MapSetFirstKey => first_key(ctx, state, args),
         _ => return None,
     })
@@ -145,130 +124,6 @@ pub(crate) fn install_prototype_methods(
             .map_err(|_| ())?;
     }
     Ok(())
-}
-
-pub(crate) fn iterator_property(state: &NativeAgentState, receiver: i64, key: &str) -> Option<i64> {
-    if !value::is_js_object(receiver) || key != "next" {
-        return None;
-    }
-    let handle = value::decode_handle(receiver);
-    state
-        .iterator_next
-        .get(&handle)
-        .copied()
-        .map(value::encode_native_callable_idx)
-}
-
-pub(crate) fn next(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    iterator_id: u32,
-) -> i64 {
-    let Some(iterator) = state
-        .collection_iterators
-        .get(usize::try_from(iterator_id).unwrap_or(usize::MAX))
-        .copied()
-    else {
-        return fail_dispatch(ctx);
-    };
-    let (next_value, done) = match iterator.source {
-        CollectionIteratorSource::Map(handle) => {
-            let Some(entries) = state.maps.get(&handle) else {
-                return fail_dispatch(ctx);
-            };
-            match entries.get(iterator.index).copied() {
-                None => (value::encode_undefined(), true),
-                Some((key, stored)) => match iterator.kind {
-                    CollectionIteratorKind::Keys => (key, false),
-                    CollectionIteratorKind::Values => (stored, false),
-                    CollectionIteratorKind::Entries => {
-                        let Ok(entry) =
-                            state.allocate_array_values_with_gc_retry(ctx, &[key, stored])
-                        else {
-                            return fail_dispatch(ctx);
-                        };
-                        (entry, false)
-                    }
-                },
-            }
-        }
-        CollectionIteratorSource::Set(handle) => {
-            let Some(values) = state.sets.get(&handle) else {
-                return fail_dispatch(ctx);
-            };
-            match values.get(iterator.index).copied() {
-                None => (value::encode_undefined(), true),
-                Some(stored) => match iterator.kind {
-                    CollectionIteratorKind::Keys | CollectionIteratorKind::Values => {
-                        (stored, false)
-                    }
-                    CollectionIteratorKind::Entries => {
-                        let Ok(entry) =
-                            state.allocate_array_values_with_gc_retry(ctx, &[stored, stored])
-                        else {
-                            return fail_dispatch(ctx);
-                        };
-                        (entry, false)
-                    }
-                },
-            }
-        }
-        CollectionIteratorSource::TypedArray(handle) => {
-            let Some(length) = state.typed_arrays.get(&handle).map(|array| array.length) else {
-                return fail_dispatch(ctx);
-            };
-            if iterator.index >= length {
-                (value::encode_undefined(), true)
-            } else {
-                let stored = super::typedarray::get_element_intern(
-                    state,
-                    value::encode_object_handle(handle),
-                    iterator.index,
-                )
-                .unwrap_or_else(value::encode_undefined);
-                match iterator.kind {
-                    CollectionIteratorKind::Keys => {
-                        (value::encode_f64(iterator.index as f64), false)
-                    }
-                    CollectionIteratorKind::Values => (stored, false),
-                    CollectionIteratorKind::Entries => {
-                        let Ok(entry) = state.allocate_array_values_with_gc_retry(
-                            ctx,
-                            &[value::encode_f64(iterator.index as f64), stored],
-                        ) else {
-                            return fail_dispatch(ctx);
-                        };
-                        (entry, false)
-                    }
-                }
-            }
-        }
-    };
-    if !done
-        && let Some(iterator) = state
-            .collection_iterators
-            .get_mut(usize::try_from(iterator_id).unwrap_or(usize::MAX))
-    {
-        iterator.index = iterator.index.saturating_add(1);
-    }
-    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
-        return fail_dispatch(ctx);
-    };
-    let handle = value::decode_handle(result);
-    for (name, stored) in [("value", next_value), ("done", value::encode_bool(done))] {
-        let Some(key) = state.intern_property_string(name.into()) else {
-            return fail_dispatch(ctx);
-        };
-        if state
-            .gc
-            .heap()
-            .set_property(handle, key, stored as u64)
-            .is_err()
-        {
-            return fail_dispatch(ctx);
-        }
-    }
-    result
 }
 
 fn collection_object(
@@ -619,39 +474,52 @@ fn map_set_for_each(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     value::encode_undefined()
 }
 
+/// Map/Set 的 keys / values / entries（§24.1.3.8 / §24.2.3.10 等）：实例进
+/// `array_iterators` 侧表并接线 %MapIteratorPrototype% / %SetIteratorPrototype%
+/// 真实原型，`next` 沿链解析为家族共享函数。
 fn iterator(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
-    kind: CollectionIteratorKind,
+    kind: crate::NativeIteratorKind,
 ) -> i64 {
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let source = if state.maps.contains_key(&value::decode_handle(receiver)) {
-        CollectionIteratorSource::Map(value::decode_handle(receiver))
-    } else if state.sets.contains_key(&value::decode_handle(receiver)) {
-        CollectionIteratorSource::Set(value::decode_handle(receiver))
+    let handle = value::decode_handle(receiver);
+    let (source, family) = if state.maps.contains_key(&handle) {
+        (
+            crate::NativeIteratorSource::Map(handle),
+            super::iterator_prototypes::NativeIteratorFamily::Map,
+        )
+    } else if state.sets.contains_key(&handle) {
+        (
+            crate::NativeIteratorSource::Set(handle),
+            super::iterator_prototypes::NativeIteratorFamily::Set,
+        )
     } else {
         return fail_dispatch(ctx);
     };
-    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
+    // 家族原型先于实例物化，attach 不再有可移动未根化实例的分配。
+    if super::iterator_prototypes::ensure_prototype(state, family).is_none() {
+        return fail_dispatch(ctx);
+    }
+    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
-    let Ok(iterator_id) = u32::try_from(state.collection_iterators.len()) else {
-        return fail_dispatch(ctx);
-    };
-    state.collection_iterators.push(CollectionIterator {
-        source,
-        kind,
-        index: 0,
-    });
-    let Some(next) = state.native_callable(NativeCallableKind::CollectionNext(iterator_id)) else {
-        return fail_dispatch(ctx);
-    };
-    state.iterator_next.insert(
+    if let Err(exception) = super::iterator_prototypes::attach(ctx, state, iterator_object, family)
+    {
+        return exception;
+    }
+    state.array_iterators.insert(
         value::decode_handle(iterator_object),
-        value::decode_native_callable_idx(next),
+        crate::NativeArrayIterator {
+            source,
+            kind,
+            index: 0,
+            current: None,
+            done: false,
+        },
     );
     iterator_object
 }

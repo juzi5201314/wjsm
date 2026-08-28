@@ -1,0 +1,84 @@
+exit_code: 0
+--- stdout ---
+false
+true
+true
+next
+Symbol(Symbol.toStringTag)
+true false true
+Array Iterator false false true
+next 0
+true
+true
+true
+0
+true
+true
+true
+true true
+true
+true
+true
+true
+true
+true
+true
+String Iterator
+Map Iterator
+Set Iterator
+RegExp String Iterator
+[object Array Iterator]
+[object String Iterator]
+[object Map Iterator]
+[object Set Iterator]
+[object RegExp String Iterator]
+true
+true
+true
+true
+true
+true
+true
+true
+true
+10,20
+4
+xy
+true
+true
+patched
+{"value":1,"done":false}
+true
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver #<Object>
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver [object Array]
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver null
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver undefined
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver 1
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver s
+TypeError: Method Array Iterator.prototype.next called on incompatible receiver [object Map Iterator]
+TypeError: Method String Iterator.prototype.next called on incompatible receiver [object Array Iterator]
+TypeError: Method Map Iterator.prototype.next called on incompatible receiver [object Set Iterator]
+TypeError: Method Set Iterator.prototype.next called on incompatible receiver [object Map Iterator]
+TypeError: Method %RegExpStringIterator%.prototype.next called on incompatible receiver #<Object>
+TypeError: Method Map Iterator.prototype.next called on incompatible receiver [object Iterator Helper]
+{"value":5,"done":false}
+{"value":6,"done":false}
+["a",1]
+["b",2]
+a 1
+b 2
+{"value":"a","done":false}
+{"value":1,"done":false}
+{"value":["a",1],"done":false}
+["a","b"]
+[[7,7],[8,8]]
+{"value":7,"done":false}
+[[0,9],[1,10]]
+{"value":2,"done":false}
+10
+10 {"value":20,"done":false}
+{"value":["k2",2],"done":false}
+{"value":1,"done":false} {"done":true}
+{"done":true}
+0,2
+--- stderr ---

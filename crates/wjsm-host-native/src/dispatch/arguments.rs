@@ -102,9 +102,11 @@ pub(super) fn create(
     ) {
         return fail_dispatch(ctx);
     }
-    let Some(iterator) =
-        state.native_callable(NativeCallableKind::Builtin(Builtin::IteratorFrom, true))
-    else {
+    // @@iterator 初值为 %Array.prototype.values%（§10.4.4.6）：与数组的
+    // values / @@iterator 同一函数身份，CreateArrayIterator 对 receiver 通用。
+    let Some(iterator) = state.native_callable(NativeCallableKind::ArrayIterator(
+        crate::NativeIteratorKind::Values,
+    )) else {
         return fail_dispatch(ctx);
     };
     let iterator_key = PropertyKey::symbol(wjsm_ir::wk_symbol::ITERATOR);
