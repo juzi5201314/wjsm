@@ -209,13 +209,13 @@ module {
     c206 = string("primitive:")
     c207 = string("TypeError")
 
-  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = init_object_literal(c20, values=[%0])
       return %1
 
-  fn @ExplicitCtor.constructor [home_object=@1.prototype] [needs_prototype] [params: $5.$env, $5.$this] [entry=bb0]:
+  fn @ExplicitCtor.constructor [home_object=@1.prototype] [needs_prototype] [class_ctor "ExplicitCtor"] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
       %0 = load var $5.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -290,7 +290,7 @@ module {
     bb17:
       return %29
 
-  fn @ImplicitCtor.constructor [home_object=@2.prototype] [needs_prototype] [params: $7.$env, $7.$this] [entry=bb0]:
+  fn @ImplicitCtor.constructor [home_object=@2.prototype] [needs_prototype] [class_ctor "ImplicitCtor"] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       %0 = get_super_constructor
       %1 = load var $7.$this
@@ -318,7 +318,7 @@ module {
       %7 = call builtin.exception_value(%5)
       throw %7
 
-  fn @WithFields.constructor [home_object=@3.prototype] [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @WithFields.constructor [home_object=@3.prototype] [needs_prototype] [class_ctor "WithFields"] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = load var $9.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -413,7 +413,7 @@ module {
       %2 = call builtin.private_get(%0, %1)
       return %2
 
-  fn @NonObjectBase.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @NonObjectBase.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [class_ctor "NonObjectBase"] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = const c66
       return %0
@@ -423,7 +423,7 @@ module {
       %0 = const c70
       return %0
 
-  fn @KeepsInstance.constructor [home_object=@7.prototype] [needs_prototype] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @KeepsInstance.constructor [home_object=@7.prototype] [needs_prototype] [class_ctor "KeepsInstance"] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = load var $15.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -491,7 +491,7 @@ module {
     bb15:
       return %26
 
-  fn @ExprPosition.constructor [home_object=@8.prototype] [needs_prototype] [params: $17.$env, $17.$this] [entry=bb0]:
+  fn @ExprPosition.constructor [home_object=@8.prototype] [needs_prototype] [class_ctor "ExprPosition"] [params: $17.$env, $17.$this] [entry=bb0]:
     bb0:
       %0 = load var $17.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -609,7 +609,7 @@ module {
     bb27:
       return %51
 
-  fn @BranchSuper.constructor [home_object=@9.prototype] [needs_prototype] [params: $19.$env, $19.$this, $19.cond] [entry=bb0]:
+  fn @BranchSuper.constructor [home_object=@9.prototype] [needs_prototype] [class_ctor "BranchSuper"] [params: $19.$env, $19.$this, $19.cond] [entry=bb0]:
     bb0:
       %0 = load var $19.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -773,7 +773,7 @@ module {
     bb41:
       return %67
 
-  fn @ReturnSuper.constructor [home_object=@10.prototype] [needs_prototype] [params: $23.$env, $23.$this] [entry=bb0]:
+  fn @ReturnSuper.constructor [home_object=@10.prototype] [needs_prototype] [class_ctor "ReturnSuper"] [params: $23.$env, $23.$this] [entry=bb0]:
     bb0:
       %0 = load var $23.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -847,7 +847,7 @@ module {
     bb17:
       return %26
 
-  fn @ReturnsObject.constructor [home_object=@11.prototype] [needs_prototype] [params: $25.$env, $25.$this] [entry=bb0]:
+  fn @ReturnsObject.constructor [home_object=@11.prototype] [needs_prototype] [class_ctor "ReturnsObject"] [params: $25.$env, $25.$this] [entry=bb0]:
     bb0:
       %0 = load var $25.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -904,7 +904,7 @@ module {
     bb15:
       unreachable
 
-  fn @ReturnsUndefined.constructor [home_object=@12.prototype] [needs_prototype] [captures: $0.undefined] [params: $27.$env, $27.$this] [entry=bb0]:
+  fn @ReturnsUndefined.constructor [home_object=@12.prototype] [needs_prototype] [class_ctor "ReturnsUndefined"] [captures: $0.undefined] [params: $27.$env, $27.$this] [entry=bb0]:
     bb0:
       %0 = load var $27.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -971,7 +971,7 @@ module {
     bb15:
       return %23
 
-  fn @MidLevel.constructor [home_object=@13.prototype] [needs_prototype] [params: $29.$env, $29.$this] [entry=bb0]:
+  fn @MidLevel.constructor [home_object=@13.prototype] [needs_prototype] [class_ctor "MidLevel"] [params: $29.$env, $29.$this] [entry=bb0]:
     bb0:
       %0 = load var $29.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -1038,7 +1038,7 @@ module {
     bb15:
       return %25
 
-  fn @TopLevel.constructor [home_object=@14.prototype] [needs_prototype] [params: $31.$env, $31.$this] [entry=bb0]:
+  fn @TopLevel.constructor [home_object=@14.prototype] [needs_prototype] [class_ctor "TopLevel"] [params: $31.$env, $31.$this] [entry=bb0]:
     bb0:
       %0 = get_super_constructor
       %1 = load var $31.$this
@@ -1076,7 +1076,7 @@ module {
       %13 = call builtin.exception_value(%11)
       throw %13
 
-  fn @SpreadBase.constructor [home_object=@15.prototype] [needs_prototype] [direct_callable] [params: $33.$env, $33.$this, $33.a, $33.b] [entry=bb0]:
+  fn @SpreadBase.constructor [home_object=@15.prototype] [needs_prototype] [direct_callable] [class_ctor "SpreadBase"] [params: $33.$env, $33.$this, $33.a, $33.b] [entry=bb0]:
     bb0:
       %0 = load var $33.a
       %1 = load var $33.b
@@ -1090,7 +1090,7 @@ module {
       %4 = call builtin.exception_value(%2)
       throw %4
 
-  fn @SpreadSuper.constructor [home_object=@16.prototype] [needs_prototype] [params: $35.$env, $35.$this] [entry=bb0]:
+  fn @SpreadSuper.constructor [home_object=@16.prototype] [needs_prototype] [class_ctor "SpreadSuper"] [params: $35.$env, $35.$this] [entry=bb0]:
     bb0:
       %0 = load var $35.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -1154,7 +1154,7 @@ module {
     bb13:
       return %24
 
-  fn @ReflectTarget.constructor [home_object=@17.prototype] [needs_prototype] [params: $37.$env, $37.$this] [entry=bb0]:
+  fn @ReflectTarget.constructor [home_object=@17.prototype] [needs_prototype] [class_ctor "ReflectTarget"] [params: $37.$env, $37.$this] [entry=bb0]:
     bb0:
       %0 = load var $37.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -1221,7 +1221,7 @@ module {
     bb15:
       return %25
 
-  fn @ReturnsPrimitive.constructor [home_object=@18.prototype] [needs_prototype] [params: $39.$env, $39.$this] [entry=bb0]:
+  fn @ReturnsPrimitive.constructor [home_object=@18.prototype] [needs_prototype] [class_ctor "ReturnsPrimitive"] [params: $39.$env, $39.$this] [entry=bb0]:
     bb0:
       %0 = load var $39.$this
       %1 = call builtin.object.get_prototype_of(%0)

@@ -110,8 +110,7 @@ fn get_property_abrupt(
     object: i64,
     key: i64,
 ) -> Result<i64, i64> {
-    let result =
-        runtime::get_property(ctx, state, object, key).map_err(|()| fail_dispatch(ctx))?;
+    let result = runtime::get_property(ctx, state, object, key).map_err(|()| fail_dispatch(ctx))?;
     if value::is_exception(result) {
         return Err(result);
     }

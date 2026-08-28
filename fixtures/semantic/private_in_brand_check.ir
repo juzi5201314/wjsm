@@ -547,7 +547,7 @@ module {
     bb0:
       return
 
-  fn @P.constructor [home_object=@4.prototype] [needs_prototype] [captures: $4.$private_function#1_0, $4.$private_function#1_1, $4.$private_function#1_2] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @P.constructor [home_object=@4.prototype] [needs_prototype] [class_ctor "P"] [captures: $4.$private_function#1_0, $4.$private_function#1_1, $4.$private_function#1_2] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = const c22
@@ -668,7 +668,7 @@ module {
     bb0:
       return
 
-  fn @Outer.constructor [home_object=@13.prototype] [needs_prototype] [direct_callable] [params: $34.$env, $34.$this] [entry=bb0]:
+  fn @Outer.constructor [home_object=@13.prototype] [needs_prototype] [direct_callable] [class_ctor "Outer"] [params: $34.$env, $34.$this] [entry=bb0]:
     bb0:
       %0 = const c129
       %1 = const c130
@@ -690,7 +690,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @Inner.constructor [home_object=@15.prototype] [needs_prototype] [direct_callable] [params: $38.$env, $38.$this] [entry=bb0]:
+  fn @Inner.constructor [home_object=@15.prototype] [needs_prototype] [direct_callable] [class_ctor "Inner"] [params: $38.$env, $38.$this] [entry=bb0]:
     bb0:
       %0 = const c138
       %1 = const c139
@@ -820,7 +820,7 @@ module {
       call builtin.private_set(%14, %58, %59)
       jump bb27
 
-  fn @Base.constructor [home_object=@18.prototype] [needs_prototype] [direct_callable] [params: $41.$env, $41.$this] [entry=bb0]:
+  fn @Base.constructor [home_object=@18.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [params: $41.$env, $41.$this] [entry=bb0]:
     bb0:
       %0 = const c160
       %1 = const c161
@@ -842,7 +842,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @Sub.constructor [home_object=@20.prototype] [needs_prototype] [params: $44.$env, $44.$this] [entry=bb0]:
+  fn @Sub.constructor [home_object=@20.prototype] [needs_prototype] [class_ctor "Sub"] [params: $44.$env, $44.$this] [entry=bb0]:
     bb0:
       %0 = get_super_constructor
       %1 = load var $44.$this
@@ -888,7 +888,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @S.constructor [home_object=@22.prototype] [needs_prototype] [direct_callable] [params: $47.$env, $47.$this] [entry=bb0]:
+  fn @S.constructor [home_object=@22.prototype] [needs_prototype] [direct_callable] [class_ctor "S"] [params: $47.$env, $47.$this] [entry=bb0]:
     bb0:
       %0 = const c184
       %1 = const c185
@@ -1029,7 +1029,7 @@ module {
       %16 = call builtin.exception_value(%14)
       throw %16
 
-  fn @L.constructor [home_object=@26.prototype] [needs_prototype] [direct_callable] [params: $56.$env, $56.$this] [entry=bb0]:
+  fn @L.constructor [home_object=@26.prototype] [needs_prototype] [direct_callable] [class_ctor "L"] [params: $56.$env, $56.$this] [entry=bb0]:
     bb0:
       %0 = const c219
       %1 = const c220
@@ -1076,7 +1076,7 @@ module {
       %13 = call builtin.exception_value(%11)
       throw %13
 
-  fn @InMethod.constructor [home_object=@28.prototype] [needs_prototype] [direct_callable] [params: $59.$env, $59.$this] [entry=bb0]:
+  fn @InMethod.constructor [home_object=@28.prototype] [needs_prototype] [direct_callable] [class_ctor "InMethod"] [params: $59.$env, $59.$this] [entry=bb0]:
     bb0:
       %0 = const c236
       %1 = const c237
@@ -1122,7 +1122,7 @@ module {
     bb0:
       return
 
-  fn @anon_class_0.constructor [home_object=@31.prototype] [needs_prototype] [captures: $0.$private_function#9_0] [params: $66.$env, $66.$this] [entry=bb0]:
+  fn @anon_class_0.constructor [home_object=@31.prototype] [needs_prototype] [class_ctor ""] [captures: $0.$private_function#9_0] [params: $66.$env, $66.$this] [entry=bb0]:
     bb0:
       %0 = load var $66.$this
       %1 = load var $env
@@ -1162,7 +1162,7 @@ module {
     bb0:
       return
 
-  fn @Y.constructor [home_object=@34.prototype] [needs_prototype] [captures: $72.$private_function#10_0] [params: $74.$env, $74.$this] [entry=bb0]:
+  fn @Y.constructor [home_object=@34.prototype] [needs_prototype] [class_ctor "Y"] [captures: $72.$private_function#10_0] [params: $74.$env, $74.$this] [entry=bb0]:
     bb0:
       %0 = load var $74.$this
       %1 = load var $env
@@ -1198,7 +1198,7 @@ module {
       store var $tmp.0, %5
       jump bb3
 
-  fn @SB.constructor [home_object=@36.prototype] [needs_prototype] [direct_callable] [params: $81.$env, $81.$this] [entry=bb0]:
+  fn @SB.constructor [home_object=@36.prototype] [needs_prototype] [direct_callable] [class_ctor "SB"] [params: $81.$env, $81.$this] [entry=bb0]:
     bb0:
       return
 
@@ -1230,7 +1230,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @A.constructor [home_object=@39.prototype] [needs_prototype] [direct_callable] [params: $85.$env, $85.$this] [entry=bb0]:
+  fn @A.constructor [home_object=@39.prototype] [needs_prototype] [direct_callable] [class_ctor "A"] [params: $85.$env, $85.$this] [entry=bb0]:
     bb0:
       %0 = const c295
       %1 = const c296

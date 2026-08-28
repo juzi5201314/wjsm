@@ -490,7 +490,7 @@ module {
     c487 = string("$0.B")
     c488 = string("$0.derived")
 
-  fn @A.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @A.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "A"] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = load var $2.$this
       %1 = const c20
@@ -526,7 +526,7 @@ module {
       %0 = const c39
       return %0
 
-  fn @B.constructor [home_object=@5.prototype] [needs_prototype] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @B.constructor [home_object=@5.prototype] [needs_prototype] [class_ctor "B"] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = load var $8.$this
       %1 = call builtin.object.get_prototype_of(%0)

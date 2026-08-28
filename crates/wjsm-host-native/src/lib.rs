@@ -3649,7 +3649,7 @@ impl NativeAgentState {
             && let Some(function) = function
             && function.is_class_constructor
         {
-            return Some(self.prepare_class_ctor_rejected_call(ctx, function));
+            return self.prepare_class_ctor_rejected_call(ctx, function, arguments);
         }
         if ctx.js_call_depth >= MAX_JS_CALL_DEPTH {
             return None;
@@ -3779,23 +3779,41 @@ impl NativeAgentState {
     /// 类构造器 [[Call]] 的拒绝入口：显示名在此处（prepare 时）解析并存入
     /// `pending_class_ctor_name`，拒绝 handler 取走后生成 TypeError 文案——
     /// 机器路径与宿主 invoke 路径的 entry 二参含义不同（callee vs
-    /// environment），经 state 传递才对两条路径都正确。
+    /// environment），经 state 传递才对两条路径都正确。实参照常写入
+    /// call arena：prepare_call 成功返回后调用方（机器码与宿主 invoke）都
+    /// 按 `active_len - argc` 反推 args_base，拒绝入口不读实参但协议必须
+    /// 一致，否则实参多于当前 arena 水位时下溢。
     fn prepare_class_ctor_rejected_call(
         &mut self,
         ctx: &mut NativeVmContext,
         function: NativeFunctionRef,
-    ) -> i64 {
+        arguments: &[i64],
+    ) -> Option<i64> {
         if ctx.js_call_depth >= MAX_JS_CALL_DEPTH {
             self.pending_stack_trace = Some(self.native_stack_trace());
             ctx.pending_exception_kind = PendingExceptionKind::StackOverflow;
         }
+        let active_len = ctx.call_arena_active_len;
+        let argument_count = u32::try_from(arguments.len()).ok()?;
+        let end = active_len.checked_add(argument_count)?;
+        if end > ctx.call_arena_capacity {
+            ctx.pending_exception_kind = PendingExceptionKind::CallArenaOverflow;
+            return None;
+        }
+        let base = usize::try_from(active_len).ok()?;
+        self.call_arena
+            .get_mut(base..base + arguments.len())?
+            .copy_from_slice(arguments);
         self.pending_class_ctor_name = self
             .class_ctor_display_name(function)
             .map(str::to_owned)
             .or(Some(String::new()));
         self.push_entry_activation(ctx, self.current_image_id);
-        i64::try_from(dispatch::native_class_ctor_rejected as *const () as usize)
-            .expect("native rejected call address fits i64")
+        ctx.call_arena_active_len = end;
+        Some(
+            i64::try_from(dispatch::native_class_ctor_rejected as *const () as usize)
+                .expect("native rejected call address fits i64"),
+        )
     }
 
     /// 类构造器的错误文案显示名（拒绝冷路径查询）。非类构造器返回 None；

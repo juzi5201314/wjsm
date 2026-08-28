@@ -494,7 +494,7 @@ module {
     c491 = undefined
     c492 = bool(true)
 
-  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       return
 
@@ -1577,7 +1577,7 @@ module {
       call builtin.async_function.resume(%5, %7, %21, %22, %23)
       return %4
 
-  fn @Probe.constructor [home_object=@22.prototype] [needs_prototype] [direct_callable] [params: $32.$env, $32.$this] [entry=bb0]:
+  fn @Probe.constructor [home_object=@22.prototype] [needs_prototype] [direct_callable] [class_ctor "Probe"] [params: $32.$env, $32.$this] [entry=bb0]:
     bb0:
       return
 
@@ -1638,7 +1638,7 @@ module {
     bb14:
       return %25
 
-  fn @Task.constructor [home_object=@25.prototype] [needs_prototype] [captures: $4.$private_function#2_0, $4.$private_function#2_1, $4.$private_function#2_2, $4.$private_function#2_3, $4.$private_function#2_4, $4.$private_function#2_5, $4.$private_function#2_6, $4.$private_function#2_7, $4.$private_function#2_8] [params: $29.$env, $29.$this] [entry=bb0]:
+  fn @Task.constructor [home_object=@25.prototype] [needs_prototype] [class_ctor "Task"] [captures: $4.$private_function#2_0, $4.$private_function#2_1, $4.$private_function#2_2, $4.$private_function#2_3, $4.$private_function#2_4, $4.$private_function#2_5, $4.$private_function#2_6, $4.$private_function#2_7, $4.$private_function#2_8] [params: $29.$env, $29.$this] [entry=bb0]:
     bb0:
       %0 = get_super_constructor
       %1 = load var $29.$this

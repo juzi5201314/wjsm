@@ -153,7 +153,7 @@ module {
     c150 = bool(true)
     c151 = bool(false)
 
-  fn @Counter.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @Counter.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Counter"] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       return
 
@@ -386,7 +386,7 @@ module {
       call builtin.continuation.save_var(%9, %16, %15)
       return %10
 
-  fn @AsyncCounter.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @AsyncCounter.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [class_ctor "AsyncCounter"] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       return
 
