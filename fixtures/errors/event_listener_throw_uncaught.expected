@@ -1,0 +1,8 @@
+exit_code: 2
+--- stdout ---
+second ran
+dispatch returned: true
+abort second ran
+end of script
+--- stderr ---
+Runtime error: Error: listener boom
