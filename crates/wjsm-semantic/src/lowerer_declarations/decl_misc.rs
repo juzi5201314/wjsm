@@ -656,6 +656,12 @@ impl Lowerer {
             return Ok(self.resolve_store_block(block));
         }
 
+        // [[ParameterMap]] 的锚点必须先于 arguments 对象建好：形参一旦搬进共享 env，
+        // 后续对形参的读写就都走 env，创建期即可把映射下标直接建成访问器对，避免
+        // 建成数据属性后再切形态（切形态可能触发 shape 扩容重定位）。
+        let param_map = self.emit_arguments_param_map_operands(block)?;
+        let block = param_map.as_ref().map_or(block, |operands| operands.block);
+
         // 1) Collect all arguments into an array
         let args_array = self.alloc_value();
         self.current_function.append_instruction(
@@ -738,12 +744,17 @@ impl Lowerer {
         };
 
         if needs_mapped {
+            let mut args = vec![args_array, param_count_val, func_ref_val];
+            if let Some(operands) = param_map {
+                args.push(operands.env);
+                args.extend(operands.keys);
+            }
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
                     dest: Some(arguments_obj),
                     builtin: Builtin::CreateMappedArgumentsObject,
-                    args: vec![args_array, param_count_val, func_ref_val],
+                    args,
                 },
             );
         } else {
@@ -768,11 +779,7 @@ impl Lowerer {
         if self.scopes.mark_initialised("arguments").is_err() {
             // Already initialised, that's fine
         }
-        if needs_mapped {
-            let after_map = self.emit_arguments_param_map(store_block, arguments_obj)?;
-            return Ok(self.resolve_store_block(after_map));
-        }
-        Ok(self.resolve_store_block(block))
+        Ok(self.resolve_store_block(store_block))
     }
 
     /// 兑现 generator/async body 延迟登记的 [[ParameterMap]]。调用点必须是状态机
@@ -784,29 +791,43 @@ impl Lowerer {
         let Some(arguments_obj) = self.pending_arguments_param_map.take() else {
             return Ok(block);
         };
-        self.emit_arguments_param_map(block, arguments_obj)
+        let Some(operands) = self.emit_arguments_param_map_operands(block)? else {
+            return Ok(block);
+        };
+        let mut args = Vec::with_capacity(operands.keys.len() + 2);
+        args.push(arguments_obj);
+        args.push(operands.env);
+        args.extend(operands.keys);
+        self.current_function.append_instruction(
+            operands.block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::BindArgumentsParamMap,
+                args,
+            },
+        );
+        Ok(self.resolve_store_block(operands.block))
     }
 
-    /// 为 mapped arguments 对象装上 [[ParameterMap]]（ES §10.4.4）。
+    /// 备好 [[ParameterMap]] 的实参：共享 env 对象与按形参次序排列的 env 键。
     ///
     /// 形参与 `arguments[i]` 的双向 live binding 需要一个「调用帧内稳定、宿主可寻址」
     /// 的形参存储：这里把 simple parameter list 的形参一次性搬进本函数的共享 env
     /// 对象，此后函数体对形参的读写都走 env 的 GetProp/SetProp，宿主再把
     /// `arguments[i]` 建成指向同一 (env, key) 的访问器对。generator/async body 同样
     /// 命中此路径——它们的共享 env 跨 suspend 存活，映射因此在 resume 之间保持有效。
-    fn emit_arguments_param_map(
+    fn emit_arguments_param_map_operands(
         &mut self,
         block: BasicBlockId,
-        arguments_obj: ValueId,
-    ) -> Result<BasicBlockId, LoweringError> {
+    ) -> Result<Option<ArgumentsParamMapOperands>, LoweringError> {
         if self.strict_mode || self.is_arrow || self.is_method {
-            return Ok(block);
+            return Ok(None);
         }
         let Some(names) = self.arguments_simple_params.clone() else {
-            return Ok(block);
+            return Ok(None);
         };
         if names.is_empty() {
-            return Ok(block);
+            return Ok(None);
         }
         // 形参绑定必须都解析得到，否则映射会指向错误的槽位——宁可不建映射。
         //
@@ -821,36 +842,33 @@ impl Lowerer {
                 continue;
             }
             let Ok((scope_id, _)) = self.scopes.lookup(name) else {
-                return Ok(block);
+                return Ok(None);
             };
             bindings.push(Some(CapturedBinding::new(name, scope_id)));
         }
         bindings.reverse();
         let shared: Vec<CapturedBinding> = bindings.iter().flatten().cloned().collect();
         if shared.is_empty() {
-            return Ok(block);
+            return Ok(None);
         }
         let span = swc_core::common::DUMMY_SP;
-        let env_val = self.ensure_shared_env(block, &shared, span)?;
-        let mut block = self.resolve_store_block(block);
-        let mut args = Vec::with_capacity(bindings.len() + 2);
-        args.push(arguments_obj);
-        args.push(env_val);
-        for binding in &bindings {
-            args.push(match binding {
+        let env = self.ensure_shared_env(block, &shared, span)?;
+        let block = self.resolve_store_block(block);
+        let keys = bindings
+            .iter()
+            .map(|binding| match binding {
                 Some(binding) => self.append_env_key_const(block, binding),
                 None => self.alloc_undefined_value(block),
-            });
-        }
-        self.current_function.append_instruction(
-            block,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::BindArgumentsParamMap,
-                args,
-            },
-        );
-        block = self.resolve_store_block(block);
-        Ok(block)
+            })
+            .collect();
+        Ok(Some(ArgumentsParamMapOperands { block, env, keys }))
     }
+}
+
+/// `emit_arguments_param_map_operands` 的产物：发射完共享 env 之后的当前块、
+/// env 对象值，以及按形参次序排列的 env 键（`undefined` 表示该下标不映射）。
+pub(crate) struct ArgumentsParamMapOperands {
+    block: BasicBlockId,
+    env: ValueId,
+    keys: Vec<ValueId>,
 }

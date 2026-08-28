@@ -38,12 +38,12 @@ pub(super) fn dispatch_arguments(
     Some(create(ctx, state, mapped, args))
 }
 
-/// `Builtin::BindArgumentsParamMap`：为落在实参个数内的形参下标装上映射访问器。
+/// `Builtin::BindArgumentsParamMap`：把已有 mapped arguments 对象的
+/// [[ParameterMap]] 改锚到另一个 env。
 ///
-/// 规范只映射 `min(形参个数, 实参个数)` 个下标（§10.2.11 步骤 22 → §10.4.4
-/// CreateMappedArgumentsObject 步骤 20 的 `index < numberOfParameters` 与
-/// `index < len` 双重界）：没有实际传入的形参不进 parameter map，写形参不会
-/// 让 `arguments` 长出新下标。
+/// 只给 generator/async body 用：对象由 wrapper 建好并经续体槽位传入，映射访问器
+/// 已在创建时就位，这里只换侧表里的 (env, keys)——不碰堆对象，因此不会触发
+/// shape 变更或重定位。
 fn bind_param_map(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(([arguments, env], keys)) = args.split_first_chunk::<2>() else {
         return fail_dispatch(ctx);
@@ -53,63 +53,43 @@ fn bind_param_map(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
         return fail_dispatch(ctx);
     }
     let handle = value::decode_handle(arguments);
-    if state
-        .gc
-        .heap()
-        .object_type(handle)
-        .is_ok_and(|kind| kind != u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
-    {
-        return fail_dispatch(ctx);
-    }
-    let Ok(length) = arguments_length(state, handle) else {
-        return fail_dispatch(ctx);
-    };
-    let mapped_count = keys.len().min(length);
-    let mut resolved = Vec::with_capacity(mapped_count);
-    for key in &keys[..mapped_count] {
-        if value::is_undefined(*key) {
-            resolved.push(None);
-            continue;
-        }
-        let Some(key) = super::runtime::property_key(state, *key) else {
-            return fail_dispatch(ctx);
-        };
-        resolved.push(Some(key));
-    }
-    if resolved.iter().all(Option::is_none) {
+    // 映射访问器由创建期安装；对象上没有 [[ParameterMap]]（unmapped、或 wrapper
+    // 当时判定不该映射）时，这里不越权补建，直接放行。
+    if !state.arguments_param_maps.contains_key(&handle) {
         return value::encode_undefined();
     }
+    let Some(resolved) = resolve_param_keys(state, keys) else {
+        return fail_dispatch(ctx);
+    };
     state
         .arguments_param_maps
         .insert(handle, ArgumentsParamMap { env, keys: resolved });
-    for index in 0..mapped_count {
-        let skip = state
-            .arguments_param_maps
-            .get(&handle)
-            .is_none_or(|map| map.keys.get(index).is_none_or(Option::is_none));
-        if skip {
-            continue;
-        }
-        if !install_mapped_accessor(state, handle, index) {
-            state.arguments_param_maps.remove(&handle);
-            return fail_dispatch(ctx);
-        }
-    }
     value::encode_undefined()
 }
 
-/// 把下标 `index` 的数据属性换成映射访问器，保留既有的 enumerable/configurable。
-fn install_mapped_accessor(state: &mut NativeAgentState, handle: u32, index: usize) -> bool {
-    let Ok(index) = u32::try_from(index) else {
-        return false;
-    };
-    let Some(key) = state.intern_property_string(RuntimeString::from(index.to_string())) else {
-        return false;
-    };
-    let flags = match state.gc.heap().get_property_slot(handle, key) {
-        Ok(Some(property)) => property.flags & !(constants::FLAG_WRITABLE as u32),
-        _ => return false,
-    };
+/// 把 env 键实参解析成 [[ParameterMap]] 键序列；`undefined` 占位表示该下标不映射。
+fn resolve_param_keys(
+    state: &mut NativeAgentState,
+    keys: &[i64],
+) -> Option<Vec<Option<PropertyKey>>> {
+    keys.iter()
+        .map(|key| {
+            if value::is_undefined(*key) {
+                Some(None)
+            } else {
+                super::runtime::property_key(state, *key).map(Some)
+            }
+        })
+        .collect()
+}
+
+/// 建下标 `index` 的映射访问器对，特性与普通下标一致（可枚举、可配置）。
+fn define_mapped_accessor(
+    state: &mut NativeAgentState,
+    handle: u32,
+    key: PropertyKey,
+    index: u32,
+) -> bool {
     let Some(getter) = state.native_callable(NativeCallableKind::ArgumentsMapGetter(handle, index))
     else {
         return false;
@@ -121,27 +101,14 @@ fn install_mapped_accessor(state: &mut NativeAgentState, handle: u32, index: usi
     state
         .gc
         .heap()
-        .define_accessor_property_with_flags(handle, key, getter as u64, setter as u64, flags)
+        .define_accessor_property_with_flags(
+            handle,
+            key,
+            getter as u64,
+            setter as u64,
+            DATA_FLAGS & !(constants::FLAG_WRITABLE as u32),
+        )
         .is_ok()
-}
-
-/// arguments 对象的 `length` 自有属性（创建时写死为实参个数）。
-fn arguments_length(state: &mut NativeAgentState, handle: u32) -> Result<usize, ()> {
-    let key = state.intern_property_string("length".into()).ok_or(())?;
-    match state.gc.heap().get_property_slot(handle, key) {
-        Ok(Some(property)) => {
-            let stored = property.value as i64;
-            if !value::is_f64(stored) {
-                return Err(());
-            }
-            let length = value::decode_f64(stored);
-            if !(0.0..=f64::from(u32::MAX)).contains(&length) {
-                return Err(());
-            }
-            Ok(length as usize)
-        }
-        _ => Err(()),
-    }
 }
 
 /// `(env, key)`：下标 `index` 当前映射到的形参绑定，未映射时为 `None`。
@@ -278,24 +245,37 @@ pub(super) fn create(
     let Ok(length) = state.gc.heap().array_length(source_handle) else {
         return fail_dispatch(ctx);
     };
+    // [[ParameterMap]]：args[3] 是形参所在的共享 env，args[4..] 是按形参次序排列的
+    // env 键。规范只映射 `min(形参个数, 实参个数)` 个下标（§10.4.4 步骤 21 的
+    // `index < len` 界）：没有实际传入的形参不进 map，写形参不会让 `arguments`
+    // 长出新下标。
+    let param_map = if mapped {
+        args.get(3)
+            .copied()
+            .filter(|env| value::is_js_object(*env))
+            .and_then(|env| {
+                let keys = args.get(4..).unwrap_or_default();
+                let mapped_count = keys.len().min(length as usize);
+                let keys = resolve_param_keys(state, &keys[..mapped_count])?;
+                keys.iter()
+                    .any(Option::is_some)
+                    .then_some(ArgumentsParamMap { env, keys })
+            })
+    } else {
+        None
+    };
+
     // 固定布局一次分配到位：索引属性 length 个 + "length" + @@iterator +
     // callee（mapped 为数据属性占 1 槽；unmapped 为 accessor 占 getter/setter
     // 2 槽）。容量不足会触发 shape 扩容 relocate，而本对象可能仍在 native
     // TLAB 中未物化，扩容将以 NativeTlabNeedsMaterialization 失败。
     //
-    // mapped 还要为 [[ParameterMap]] 预留：随后的 BindArgumentsParamMap 会把前
-    // `min(形参个数, 实参个数)` 个下标换成访问器对，每个多占 1 槽。
+    // 映射下标是访问器对，比数据属性多占 1 槽，必须一并算进初始容量：创建后再做
+    // 数据属性 → 访问器的形态切换同样可能触发该失败。
     let extra_slots = if mapped { 3 } else { 4 };
-    let mapped_slots = if mapped {
-        args.get(1)
-            .copied()
-            .filter(|count| value::is_f64(*count))
-            .map(value::decode_f64)
-            .filter(|count| (0.0..=f64::from(u32::MAX)).contains(count))
-            .map_or(length, |count| length.min(count as u32))
-    } else {
-        0
-    };
+    let mapped_slots = param_map.as_ref().map_or(0, |map| {
+        u32::try_from(map.keys.iter().filter(|key| key.is_some()).count()).unwrap_or(0)
+    });
     let capacity = length
         .saturating_add(mapped_slots)
         .saturating_add(extra_slots);
@@ -311,7 +291,27 @@ pub(super) fn create(
     {
         return fail_dispatch(ctx);
     }
+    let mapped_keys = param_map.as_ref().map(|map| map.keys.clone());
+    if let Some(map) = param_map {
+        state.arguments_param_maps.insert(handle, map);
+    }
     for index in 0..length {
+        let Some(key) = state.intern_property_string(RuntimeString::from(index.to_string())) else {
+            return fail_dispatch(ctx);
+        };
+        // 映射下标直接建成访问器对（§10.4.4.7 MakeArgGetter / §10.4.4.8
+        // MakeArgSetter），值由形参绑定提供，不在对象上留副本。
+        if mapped_keys
+            .as_ref()
+            .and_then(|keys| keys.get(index as usize))
+            .is_some_and(Option::is_some)
+        {
+            if !define_mapped_accessor(state, handle, key, index) {
+                state.arguments_param_maps.remove(&handle);
+                return fail_dispatch(ctx);
+            }
+            continue;
+        }
         let stored = state
             .gc
             .heap()
@@ -320,9 +320,6 @@ pub(super) fn create(
             .flatten()
             .map(|stored| stored as i64)
             .unwrap_or_else(value::encode_undefined);
-        let Some(key) = state.intern_property_string(RuntimeString::from(index.to_string())) else {
-            return fail_dispatch(ctx);
-        };
         if state
             .gc
             .heap()
