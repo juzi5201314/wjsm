@@ -1109,6 +1109,8 @@ struct NativeAgentState {
     global_object: Option<i64>,
     object_prototype: Option<i64>,
     array_prototype: Option<i64>,
+    /// %Array.prototype% 的 `@@unscopables` 对象（§23.1.3.41），懒创建缓存。
+    array_unscopables: Option<i64>,
     regexp_prototype: Option<i64>,
     symbol_prototype: Option<i64>,
     map_prototype: Option<i64>,
@@ -1296,6 +1298,7 @@ impl NativeAgentState {
             global_object: None,
             object_prototype: None,
             array_prototype: None,
+            array_unscopables: None,
             regexp_prototype: None,
             symbol_prototype: None,
             map_prototype: None,
@@ -1538,6 +1541,7 @@ impl NativeAgentState {
         self.fatal_exception = None;
         self.object_prototype = None;
         self.array_prototype = None;
+        self.array_unscopables = None;
         self.regexp_prototype = None;
         self.symbol_prototype = None;
         self.map_prototype = None;
@@ -2265,6 +2269,12 @@ impl NativeAgentState {
         {
             return self.intern_text("Symbol".into(), value::TAG_STRING);
         }
+        if value::is_symbol(key)
+            && value::decode_handle(key) == wjsm_ir::wk_symbol::UNSCOPABLES
+            && value::is_array(receiver)
+        {
+            return self.ensure_array_unscopables();
+        }
         let key = self.string_owned(key)?.to_utf8()?;
         if let Some(symbol) = self.symbol_value(receiver) {
             return match key.as_str() {
@@ -2694,6 +2704,46 @@ impl NativeAgentState {
             self.regexp_prototype = Some(prototype);
         }
         Ok(())
+    }
+
+    /// %Array.prototype% 的 `@@unscopables` 对象（§23.1.3.41）：null 原型，
+    /// 数组迭代类方法名全部标记为 true。数组方法经 `primitive_property` 合成，
+    /// 该对象亦按同一惯例在原型读取处合成；with 语句的对象环境记录据此把
+    /// `keys` / `values` 等名字排除在 HasBinding 之外（与 Node 一致）。
+    fn ensure_array_unscopables(&mut self) -> Option<i64> {
+        if let Some(object) = self.array_unscopables {
+            return Some(object);
+        }
+        let object = self
+            .allocate_object_with_prototype(16, false, PROTO_NULL_SENTINEL)
+            .ok()?;
+        let handle = value::decode_handle(object);
+        for name in [
+            "at",
+            "copyWithin",
+            "entries",
+            "fill",
+            "find",
+            "findIndex",
+            "findLast",
+            "findLastIndex",
+            "flat",
+            "flatMap",
+            "includes",
+            "keys",
+            "toReversed",
+            "toSorted",
+            "toSpliced",
+            "values",
+        ] {
+            let key = self.intern_property_string(name.into())?;
+            self.gc
+                .heap()
+                .set_property(handle, key, value::encode_bool(true) as u64)
+                .ok()?;
+        }
+        self.array_unscopables = Some(object);
+        Some(object)
     }
 
     fn ensure_object_constructor(&mut self) -> Option<i64> {

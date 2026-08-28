@@ -18,9 +18,12 @@
 
 use super::*;
 
+mod strict_check;
 mod with_calls;
 mod with_reads;
 mod with_writes;
+
+pub(crate) use strict_check::find_with_in_strict_code;
 
 /// With 作用域中保存 with 对象的合成绑定名。
 /// `%` 不是合法标识符字符，用户代码永远无法遮蔽或读取该绑定。
@@ -54,21 +57,13 @@ impl Lowerer {
         result
     }
 
-    /// WithStatement 语句入口。
+    /// WithStatement 语句入口。严格模式 early error（§14.11.1）已由降级前的
+    /// AST 校验 [`validate_with_strict`] 统一覆盖（含函数级指令与类体）。
     pub(crate) fn lower_with(
         &mut self,
         with_stmt: &swc_ast::WithStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        // §14.11.1 early error：严格模式代码不得包含 with 语句。
-        // 函数级 "use strict" 指令与类体的隐式严格在本引擎的严格模式模型
-        // 之外（模块/eval 级指令），与其余严格检查保持同一粒度。
-        if self.strict_mode {
-            return Err(self.error(
-                with_stmt.span,
-                "Strict mode code may not include a with statement",
-            ));
-        }
         let block = self.ensure_open(flow)?;
         let mut current_block = block;
         let obj_val = self.lower_call_operand_then_continue(&with_stmt.obj, &mut current_block)?;
