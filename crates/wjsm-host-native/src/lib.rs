@@ -292,6 +292,7 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::DateMethod(method) => dispatch::date::method_metadata(method),
         NativeCallableKind::Fetch(callable) => dispatch::fetch::metadata(callable),
         NativeCallableKind::Stream(callable) => dispatch::streams::metadata(callable),
+        NativeCallableKind::Events(callable) => dispatch::events::metadata(callable),
         _ => None,
     }
 }
@@ -654,6 +655,7 @@ enum NativeCallableKind {
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
     Intl(dispatch::intl::IntlCallable),
+    Events(dispatch::events::EventsCallable),
 }
 
 /// 按 receiver 家族惰性合成内建方法值。字符串方法不在此合成：它们是
@@ -1189,6 +1191,7 @@ struct NativeAgentState {
     node_worker_threads: dispatch::node_worker_threads::NodeWorkerThreadsState,
     fetch: dispatch::fetch::NativeFetchState,
     streams: dispatch::streams::NativeStreamsState,
+    events: dispatch::events::NativeEventsState,
     /// test262 `$262.agent`：主 agent 侧缓存 `$262` 对象。
     agent_bridge: Option<i64>,
     /// test262 agent 线程内的 `$262.agent` 状态（仅 agent 线程 Some）。
@@ -1387,6 +1390,7 @@ impl NativeAgentState {
             node_worker_threads: dispatch::node_worker_threads::NodeWorkerThreadsState::main(),
             streams: dispatch::streams::NativeStreamsState::default(),
             fetch: dispatch::fetch::NativeFetchState::default(),
+            events: dispatch::events::NativeEventsState::default(),
             agent_bridge: None,
             test262_agent: None,
             node_fs_bridge: None,
@@ -1697,6 +1701,7 @@ impl NativeAgentState {
         self.node_perf_hooks = dispatch::node_perf_hooks::NodePerfHooksState::default();
         self.streams = dispatch::streams::NativeStreamsState::default();
         self.fetch = dispatch::fetch::NativeFetchState::default();
+        self.events = dispatch::events::NativeEventsState::default();
         self.promises.clear();
         self.continuations.clear();
         self.generators.clear();
@@ -2417,9 +2422,6 @@ impl NativeAgentState {
                 )),
                 _ => None,
             };
-        }
-        if let Some(property) = dispatch::fetch::property(self, receiver, &key) {
-            return Some(property);
         }
         if let Some(property) = dispatch::streams::property(self, receiver, &key) {
             return match property {
@@ -3366,6 +3368,9 @@ impl NativeAgentState {
             "WritableStream" => wjsm_ir::Builtin::WritableStreamConstructor,
             "TransformStream" => wjsm_ir::Builtin::TransformStreamConstructor,
             "AbortController" => wjsm_ir::Builtin::AbortControllerConstructor,
+            "AbortSignal" => wjsm_ir::Builtin::AbortSignalConstructor,
+            "EventTarget" => wjsm_ir::Builtin::EventTargetConstructor,
+            "Event" => wjsm_ir::Builtin::EventConstructor,
             "queueMicrotask" => wjsm_ir::Builtin::QueueMicrotask,
             "RangeError" => wjsm_ir::Builtin::RangeErrorConstructor,
             "ReferenceError" => wjsm_ir::Builtin::ReferenceErrorConstructor,
@@ -3457,6 +3462,7 @@ impl NativeAgentState {
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
+            | NativeCallableKind::Events(_)
             | NativeCallableKind::Intl(_) => None,
         }
     }
@@ -4860,8 +4866,25 @@ impl NativeAgentState {
         // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会
         // 回收尚未挂满成员的 prototype 对象。
         self.web_prototypes.insert(builtin, prototype);
+        // Web IDL 继承：AbortSignal.prototype 的 [[Prototype]] 是
+        // EventTarget.prototype（WHATWG DOM `interface AbortSignal : EventTarget`）。
+        if builtin == wjsm_ir::Builtin::AbortSignalConstructor {
+            let parent_constructor = self.native_callable(NativeCallableKind::Builtin(
+                wjsm_ir::Builtin::EventTargetConstructor,
+                false,
+            ))?;
+            let parent = self.ensure_web_prototype(
+                parent_constructor,
+                wjsm_ir::Builtin::EventTargetConstructor,
+            )?;
+            self.gc
+                .heap()
+                .set_prototype(value::decode_handle(prototype), value::decode_handle(parent))
+                .ok()?;
+        }
         dispatch::fetch::install_prototype_members(self, prototype, builtin)?;
         dispatch::streams::install_prototype_members(self, prototype, builtin)?;
+        dispatch::events::install_prototype_members(self, prototype, builtin)?;
         Some(prototype)
     }
 
@@ -4873,17 +4896,25 @@ impl NativeAgentState {
         name: &str,
         kind: NativeCallableKind,
     ) -> Option<()> {
+        self.install_web_prototype_method_with_flags(prototype, name, kind, WEB_IDL_METHOD_FLAGS)
+    }
+
+    /// 同 [`install_web_prototype_method`]，但允许指定属性描述符旗标
+    ///（个别接口成员偏离 Web IDL 缺省，如 AbortSignal 的 throwIfAborted
+    /// 在 Node 中不可枚举）。
+    pub(crate) fn install_web_prototype_method_with_flags(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        kind: NativeCallableKind,
+        flags: u32,
+    ) -> Option<()> {
         let callable = self.native_callable(kind)?;
         self.attach_function_prototype(callable);
         let key = self.intern_property_string(name.to_owned().into())?;
         self.gc
             .heap()
-            .define_data_property(
-                value::decode_handle(prototype),
-                key,
-                callable as u64,
-                WEB_IDL_METHOD_FLAGS,
-            )
+            .define_data_property(value::decode_handle(prototype), key, callable as u64, flags)
             .ok()
     }
 
@@ -4895,8 +4926,35 @@ impl NativeAgentState {
         name: &str,
         kind: NativeCallableKind,
     ) -> Option<()> {
-        let getter = self.native_callable(kind)?;
+        self.install_web_prototype_accessor_with_flags(
+            prototype,
+            name,
+            kind,
+            None,
+            WEB_IDL_ACCESSOR_FLAGS,
+        )
+    }
+
+    /// 把 getter/setter 可调用值按指定旗标安装为 prototype 的自有访问器
+    /// 属性（如 onabort 的 get+set 对、reason/isTrusted 的非缺省旗标）。
+    pub(crate) fn install_web_prototype_accessor_with_flags(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        getter_kind: NativeCallableKind,
+        setter_kind: Option<NativeCallableKind>,
+        flags: u32,
+    ) -> Option<()> {
+        let getter = self.native_callable(getter_kind)?;
         self.attach_function_prototype(getter);
+        let setter = match setter_kind {
+            Some(kind) => {
+                let setter = self.native_callable(kind)?;
+                self.attach_function_prototype(setter);
+                setter
+            }
+            None => value::encode_undefined(),
+        };
         let key = self.intern_property_string(name.to_owned().into())?;
         self.gc
             .heap()
@@ -4904,8 +4962,8 @@ impl NativeAgentState {
                 value::decode_handle(prototype),
                 key,
                 getter as u64,
-                value::encode_undefined() as u64,
-                WEB_IDL_ACCESSOR_FLAGS,
+                setter as u64,
+                flags,
             )
             .ok()
     }
@@ -4919,8 +4977,8 @@ impl NativeAgentState {
         }
     }
 
-    /// builtin 是否为 fetch / Streams / AbortController 家族的全局构造器
-    /// （Web IDL 接口对象，`prototype` 描述符三 false）。
+    /// builtin 是否为 fetch / Streams / AbortController / 事件家族的全局
+    /// 构造器（Web IDL 接口对象，`prototype` 描述符三 false）。
     fn is_web_interface_constructor(builtin: wjsm_ir::Builtin) -> bool {
         matches!(
             builtin,
@@ -4931,6 +4989,9 @@ impl NativeAgentState {
                 | wjsm_ir::Builtin::WritableStreamConstructor
                 | wjsm_ir::Builtin::TransformStreamConstructor
                 | wjsm_ir::Builtin::AbortControllerConstructor
+                | wjsm_ir::Builtin::AbortSignalConstructor
+                | wjsm_ir::Builtin::EventTargetConstructor
+                | wjsm_ir::Builtin::EventConstructor
         )
     }
 
@@ -5918,6 +5979,7 @@ impl NativeAgentState {
         // 是否仍有存活 body 流引用它。
         dispatch::streams::sweep_retired(&mut self.streams, retired);
         dispatch::fetch::sweep_retired(&mut self.fetch, &self.streams, retired);
+        dispatch::events::sweep_retired(&mut self.events, retired);
     }
     fn drain_gc_cycle(&mut self, ctx: &mut NativeVmContext) -> Result<(), NativeRuntimeError> {
         let mut backoff = Backoff::new();
@@ -6140,6 +6202,9 @@ unsafe extern "C" fn native_callable_call(
         }
         NativeCallableKind::Fetch(callable) => {
             dispatch::fetch::call(ctx, state, callable, this_value, &arguments)
+        }
+        NativeCallableKind::Events(callable) => {
+            dispatch::events::call(ctx, state, callable, this_value, &arguments)
         }
         NativeCallableKind::WebEncoding(callable) => {
             dispatch::web_encoding::call(ctx, state, callable, this_value, &arguments)

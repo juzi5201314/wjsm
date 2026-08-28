@@ -660,6 +660,15 @@ pub enum Builtin {
     /// 文本段与替换值；template 或其 raw 属性为 undefined/null 时抛
     /// TypeError（ToObject 失败）。args: [template, ...substitutions]。
     StringRaw,
+    /// 全局 `EventTarget` 构造器（WHATWG DOM §2.7）：创建空监听器列表的
+    /// 事件目标对象。args: []（实参忽略）。
+    EventTargetConstructor,
+    /// 全局 `AbortSignal` 接口对象（WHATWG DOM §3.2）：不可直接构造，
+    /// [[Construct]] 恒抛 TypeError "Illegal constructor"。
+    AbortSignalConstructor,
+    /// 全局 `Event` 构造器（WHATWG DOM §2.5）：type 必选（ToString），
+    /// options 字典读 bubbles / cancelable / composed。args: [type, options?]。
+    EventConstructor,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -695,7 +704,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::StringRaw as u16
+        Self::EventConstructor as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1216,6 +1225,9 @@ impl Builtin {
             Self::ObjectProtoLookupGetter => "Object.prototype.__lookupGetter__",
             Self::ObjectProtoLookupSetter => "Object.prototype.__lookupSetter__",
             Self::StringRaw => "string.raw",
+            Self::EventTargetConstructor => "EventTarget",
+            Self::AbortSignalConstructor => "AbortSignal",
+            Self::EventConstructor => "Event",
         }
     }
 }

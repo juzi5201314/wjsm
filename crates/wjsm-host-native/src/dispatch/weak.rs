@@ -774,6 +774,7 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
     }
     super::streams::extend_gc_edges(&state.streams, |owner, target| add(owner, target));
     super::fetch::extend_gc_edges(&state.fetch, |owner, target| add(owner, target));
+    super::events::extend_gc_edges(&state.events, |owner, target| add(owner, target));
     (edges, ephemerons)
 }
 
