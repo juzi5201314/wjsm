@@ -10,6 +10,7 @@
 use wjsm_ir::{constants, value};
 use wjsm_native_abi::NativeVmContext;
 
+use super::property_write::{SetCompletion, SetFailure, SetResult};
 use super::runtime::{
     assign_data_property_to_receiver, encoded_property_key, fail_dispatch, ordinary_set_key,
 };
@@ -62,8 +63,8 @@ pub(super) fn resolve(
 }
 
 /// callable 目标的 [[Set]]（OrdinarySetWithOwnDescriptor）：链上最近命中决定
-/// 调 setter、按可写性拒绝、或在 receiver 上建自有数据属性。返回 Ok(false)
-/// 表示规范上的写入失败（strict 抛错与否由调用方约定），Err 为异常值。
+/// 调 setter、按可写性拒绝、或在 receiver 上建自有数据属性。写失败返回
+/// `Ok(Failed(..))` 携带规范原因（strict 抛错与否由调用方决定），Err 为异常值。
 ///
 /// 隐式 Function.prototype 的内建成员均为可写数据属性，链尾未命中与显式
 /// null 同样落在 receiver 上建自有属性（primitive_property 合成的属性无
@@ -75,11 +76,11 @@ pub(super) fn set_with_receiver(
     key: PropertyKey,
     stored: i64,
     receiver: i64,
-) -> Result<bool, i64> {
+) -> SetResult {
     match resolve(state, target, key) {
         CallableChainHit::Accessor { setter, .. } => {
             if !value::is_callable(setter) {
-                return Ok(false);
+                return Ok(SetCompletion::Failed(SetFailure::GetterOnly));
             }
             let result = state
                 .invoke_callable(ctx, setter, receiver, &[stored])
@@ -87,18 +88,18 @@ pub(super) fn set_with_receiver(
             if value::is_exception(result) {
                 Err(result)
             } else {
-                Ok(true)
+                Ok(SetCompletion::Written)
             }
         }
         CallableChainHit::Data { writable, .. } => {
             if !writable {
-                return Ok(false);
+                return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
             }
             assign_data_property_to_receiver(ctx, state, receiver, key, stored)
         }
         CallableChainHit::Object { prototype } => {
             if value::is_proxy(prototype) {
-                let result = super::proxy::set(
+                return super::proxy::set(
                     ctx,
                     state,
                     prototype,
@@ -106,11 +107,6 @@ pub(super) fn set_with_receiver(
                     stored,
                     receiver,
                 );
-                return if value::is_exception(result) {
-                    Err(result)
-                } else {
-                    Ok(true)
-                };
             }
             ordinary_set_key(ctx, state, prototype, key, stored, receiver)
         }

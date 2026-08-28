@@ -186,10 +186,8 @@ impl Lowerer {
 
         let (miss_val, miss_end) = self.lower_direct_eval_call(call, miss)?;
 
-        let (result, out) = self.merge_with_dispatch_results(&[
-            (hit_end, hit_val, true),
-            (miss_end, miss_val, true),
-        ]);
+        let (result, out) = self
+            .merge_with_dispatch_results(&[(hit_end, hit_val, true), (miss_end, miss_val, true)]);
         self.expr_merge_block = Some(out);
         Ok(result)
     }

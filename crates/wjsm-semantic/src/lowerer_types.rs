@@ -192,6 +192,8 @@ pub(crate) struct Lowerer {
     pub(crate) async_closure_env_ir_name: Option<String>,
     pub(crate) pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
     pub(crate) strict_mode: bool,
+    /// push_function_context 保存外层严格模式，pop 恢复。
+    pub(crate) function_strict_stack: Vec<bool>,
     pub(crate) is_arrow: bool,
     pub(crate) is_method: bool,
     /// 当前函数形参个数，供 emit_arguments_init 使用。

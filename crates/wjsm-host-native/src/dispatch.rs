@@ -45,6 +45,7 @@ mod operator;
 mod primitive;
 mod private;
 pub(crate) mod promise;
+mod property_write;
 pub(crate) mod proxy;
 pub(crate) mod regexp;
 mod runtime;

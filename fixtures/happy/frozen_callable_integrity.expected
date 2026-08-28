@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+custom TypeError
+added TypeError
+prototype TypeError
+define TypeError
+frozen state 1 2 target
+frozen flags true true false
+pe added TypeError
+pe flags false false false
+seal write 2
+seal delete false 2
+seal flags true false
+--- stderr ---

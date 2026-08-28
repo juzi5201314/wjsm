@@ -10,6 +10,7 @@ use wjsm_native_abi::{
 };
 
 use super::callable_chain::{self, CallableChainHit};
+use super::property_write;
 use crate::PropertyKey;
 use crate::specialization::ValidatedFeedbackSlot;
 use crate::{
@@ -311,13 +312,15 @@ pub(super) fn dispatch_runtime(
                 Ok(key) => key,
                 Err(exception) => return exception,
             };
-            set_property_impl(
-                ctx,
-                state,
-                *object,
-                key,
-                *stored,
-                operation == NativeRuntimeOp::SetPropStrict,
+            let strict = operation == NativeRuntimeOp::SetPropStrict;
+            if let Some(result) =
+                set_on_primitive_receiver(ctx, state, *object, key, *stored, strict)
+            {
+                return result;
+            }
+            let completion = set_property_completion(ctx, state, *object, key, *stored);
+            property_write::finish_property_set(
+                ctx, state, *object, key, *stored, strict, completion,
             )
         }
         NativeRuntimeOp::CreateDataProperty => {
@@ -336,9 +339,21 @@ pub(super) fn dispatch_runtime(
                 return fail_dispatch(ctx);
             };
             let strict = operation == NativeRuntimeOp::SetPropIcStrict;
-            let result = set_property_impl(ctx, state, *object, *key, *stored, strict);
-            backfill_set_prop_ic(state, *object, *key, result, *ic_slot_ptr);
-            result
+            if let Some(result) =
+                set_on_primitive_receiver(ctx, state, *object, *key, *stored, strict)
+            {
+                // 基元接收者不可训练 IC：退化 MEGAMORPHIC 后走宿主完整路径。
+                backfill_set_prop_ic(state, *object, *key, false, *ic_slot_ptr);
+                return result;
+            }
+            let completion = set_property_completion(ctx, state, *object, *key, *stored);
+            // 只有真实写入成功才可训练 OWN_DATA：失败写入（如不可写自有数据
+            // 属性）的槽位命中会让后续快路径绕过可写性检查直接改值。
+            let success = matches!(completion, Ok(property_write::SetCompletion::Written));
+            backfill_set_prop_ic(state, *object, *key, success, *ic_slot_ptr);
+            property_write::finish_property_set(
+                ctx, state, *object, *key, *stored, strict, completion,
+            )
         }
         NativeRuntimeOp::DeleteProp => {
             let [object, key] = args else {
@@ -453,150 +468,18 @@ pub(super) fn dispatch_runtime(
                 Ok(key) => key,
                 Err(exception) => return exception,
             };
+            let strict = operation == NativeRuntimeOp::SetElemStrict;
             // 基元接收者先行短路：decode_handle 对 SSO/基元产出无效句柄，
             // 后续 typed_arrays 等按句柄查表的分支不得先于本判定执行。
-            if let Some(result) = set_on_primitive_receiver(
-                ctx,
-                state,
-                *object,
-                *index,
-                *stored,
-                operation == NativeRuntimeOp::SetElemStrict,
-            ) {
+            if let Some(result) =
+                set_on_primitive_receiver(ctx, state, *object, *index, *stored, strict)
+            {
                 return result;
             }
-            if value::is_proxy(*object) {
-                return super::proxy::set(ctx, state, *object, *index, *stored, *object);
-            }
-            if let Some(array) = state
-                .typed_arrays
-                .get(&value::decode_handle(*object))
-                .cloned()
-            {
-                if let Some(index) = array_index(state, *index) {
-                    if index as usize >= array.length {
-                        return *stored;
-                    }
-                    if array.kind.is_bigint() != value::is_bigint(*stored) {
-                        return type_error(ctx, state, "Cannot convert value to a BigInt");
-                    }
-                    return super::typedarray::set_element(state, *object, index as usize, *stored)
-                        .map_or_else(|| fail_dispatch(ctx), |_| *stored);
-                }
-                if value::is_f64(*index) {
-                    return *stored;
-                }
-            }
-            if value::is_array(*object) && state.text_matches(*index, "length") {
-                let Some(length) = array_length(state, *stored) else {
-                    return range_error(ctx, state, "Invalid array length");
-                };
-                return state
-                    .gc
-                    .heap()
-                    .set_array_length(value::decode_handle(*object), length)
-                    .map(|()| *stored)
-                    .unwrap_or_else(|_| fail_dispatch(ctx));
-            }
-            if value::is_array(*object)
-                && let Some(index) = array_index(state, *index)
-            {
-                let handle = value::decode_handle(*object);
-                if state.gc.heap().array_kind(handle).ok()
-                    == Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
-                {
-                    let Some(key) = property_key(state, value::encode_f64(f64::from(index))) else {
-                        return fail_dispatch(ctx);
-                    };
-                    if let Some((_, setter, _)) = state.array_accessors.get(&(handle, key)).copied()
-                    {
-                        if value::is_callable(setter) {
-                            return state
-                                .invoke_callable(ctx, setter, *object, &[*stored])
-                                .map_or_else(|| fail_dispatch(ctx), |_| *stored);
-                        }
-                        return *stored;
-                    }
-                    if state.array_properties.contains_key(&(handle, key)) {
-                        if state
-                            .array_property_flags
-                            .get(&(handle, key))
-                            .is_none_or(|flags| {
-                                flags & wjsm_ir::constants::FLAG_WRITABLE as u32 != 0
-                            })
-                        {
-                            state.array_properties.insert((handle, key), *stored);
-                        }
-                        return *stored;
-                    }
-                }
-                return state
-                    .gc
-                    .heap()
-                    .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
-                    .map(|()| *stored)
-                    .or_else(|error| match error {
-                        wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. } => {
-                            state
-                                .gc
-                                .flush_native_tlab(ctx)
-                                .map_err(|_| fail_dispatch(ctx))?;
-                            state
-                                .gc
-                                .heap()
-                                .set_element(
-                                    handle,
-                                    index,
-                                    u64::from_ne_bytes(stored.to_ne_bytes()),
-                                )
-                                .map(|()| *stored)
-                                .map_err(|_| fail_dispatch(ctx))
-                        }
-                        _ => Err(fail_dispatch(ctx)),
-                    })
-                    .unwrap_or_else(|_| fail_dispatch(ctx));
-            }
-            let Some(key) = property_key(state, *index) else {
-                return fail_dispatch(ctx);
-            };
-            if value::is_callable(*object) {
-                // callable 接收者的完整 [[Set]]：链上 setter / 可写性拒绝 /
-                // 自有属性写入。写失败静默返回（与其余接收者的现行口径一致）。
-                return match callable_chain::set_with_receiver(
-                    ctx, state, *object, key, *stored, *object,
-                ) {
-                    Ok(_) => *stored,
-                    Err(exception) => exception,
-                };
-            }
-            if value::is_array(*object) {
-                let handle = value::decode_handle(*object);
-                if let Some((_, setter, _)) = state.array_accessors.get(&(handle, key)).copied() {
-                    if value::is_callable(setter) {
-                        let result = state.invoke_callable(ctx, setter, *object, &[*stored]);
-                        return result.map_or_else(|| fail_dispatch(ctx), |_| *stored);
-                    }
-                    return *stored;
-                }
-                state.note_array_property(handle, key);
-                state.array_properties.insert((handle, key), *stored);
-                state
-                    .array_property_flags
-                    .entry((handle, key))
-                    .or_insert(ASSIGNED_PROPERTY_FLAGS);
-                return *stored;
-            }
-            match ordinary_set(
-                ctx,
-                state,
-                *object,
-                encoded_property_key(key),
-                *stored,
-                *object,
-            ) {
-                Ok(_) => *stored,
-                Err(exception) => exception,
-            }
+            let completion = set_element_completion(ctx, state, *object, *index, *stored);
+            property_write::finish_property_set(
+                ctx, state, *object, *index, *stored, strict, completion,
+            )
         }
         NativeRuntimeOp::PrepareCall => state
             .prepare_call(ctx, args, false, feedback_slot)
@@ -978,77 +861,282 @@ fn define_data_property_or_out_of_memory(
     }
 }
 
-/// 完整 [[Set]] 语义：基元接收者 / proxy / 数组 length / regexp lastIndex /
+/// 完整命名属性 [[Set]] 语义：proxy / 数组 length / regexp lastIndex /
 /// 数组命名属性 / callable 命名属性 / 普通对象 `ordinary_set`。
-/// 返回写入后的值或异常。`strict` 来自赋值点所在代码的严格模式。
-fn set_property_impl(
+/// 基元接收者（含 null/undefined）由调用方先行短路。
+fn set_property_completion(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,
     key: i64,
     stored: i64,
-    strict: bool,
-) -> i64 {
-    if let Some(result) = set_on_primitive_receiver(ctx, state, object, key, stored, strict) {
-        return result;
-    }
+) -> property_write::SetResult {
     if value::is_proxy(object) {
         return super::proxy::set(ctx, state, object, key, stored, object);
     }
     if value::is_array(object) && state.text_matches(key, "length") {
-        let Some(length) = array_length(state, stored) else {
-            return range_error(ctx, state, "Invalid array length");
-        };
-        return state
-            .gc
-            .heap()
-            .set_array_length(value::decode_handle(object), length)
-            .map(|()| stored)
-            .unwrap_or_else(|_| fail_dispatch(ctx));
+        return set_array_length_completion(ctx, state, object, stored);
     }
     if value::is_regexp(object) && state.text_matches(key, "lastIndex") {
-        return super::regexp::set_last_index(ctx, state, &[object, stored]);
+        let result = super::regexp::set_last_index(ctx, state, &[object, stored]);
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        return Ok(property_write::SetCompletion::Written);
     }
     let Some(key) = property_key(state, key) else {
-        return fail_dispatch(ctx);
+        return Err(fail_dispatch(ctx));
     };
     if value::is_array(object) {
-        let handle = value::decode_handle(object);
-        if let Some((_, setter, _)) = state.array_accessors.get(&(handle, key)).copied() {
-            if value::is_callable(setter) {
-                return state
-                    .invoke_callable(ctx, setter, object, &[stored])
-                    .map_or_else(|| fail_dispatch(ctx), |_| stored);
-            }
-            return stored;
-        }
-        state.note_array_property(handle, key);
-        state.array_properties.insert((handle, key), stored);
-        state
-            .array_property_flags
-            .entry((handle, key))
-            .or_insert(ASSIGNED_PROPERTY_FLAGS);
-        return stored;
+        return property_write::set_array_named_property(ctx, state, object, key, stored);
     }
     if value::is_callable(object) {
-        // callable 接收者的完整 [[Set]]：链上 setter / 可写性拒绝 / 自有属性
-        // 写入。写失败静默返回（与其余接收者的现行口径一致）。
-        return match callable_chain::set_with_receiver(ctx, state, object, key, stored, object) {
-            Ok(_) => stored,
-            Err(exception) => exception,
-        };
+        // callable 接收者的完整 [[Set]]：链上 setter / 可写性拒绝 / 自有属性写入。
+        return callable_chain::set_with_receiver(ctx, state, object, key, stored, object);
     }
     let receiver = object;
-    match ordinary_set(
+    ordinary_set(
         ctx,
         state,
         receiver,
         encoded_property_key(key),
         stored,
         receiver,
-    ) {
-        Ok(_) => stored,
-        Err(exception) => exception,
+    )
+}
+
+/// 完整按键（含数字下标）[[Set]] 语义：proxy / typed array / 数组 length /
+/// 字典数组下标覆盖 / 数组元素 / callable / 数组命名属性 / 普通对象。
+/// 基元接收者（含 null/undefined）由调用方先行短路。
+fn set_element_completion(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    index: i64,
+    stored: i64,
+) -> property_write::SetResult {
+    use property_write::{SetCompletion, SetFailure};
+    if value::is_proxy(object) {
+        return super::proxy::set(ctx, state, object, index, stored, object);
+    }
+    if let Some(array) = state
+        .typed_arrays
+        .get(&value::decode_handle(object))
+        .cloned()
+    {
+        if let Some(index) = array_index(state, index) {
+            if index as usize >= array.length {
+                // IntegerIndexedElementSet：越界写入静默成功（strict 亦不抛）。
+                return Ok(SetCompletion::Written);
+            }
+            if array.kind.is_bigint() != value::is_bigint(stored) {
+                return Err(type_error(ctx, state, "Cannot convert value to a BigInt"));
+            }
+            return super::typedarray::set_element(state, object, index as usize, stored)
+                .map(|_| SetCompletion::Written)
+                .ok_or_else(|| fail_dispatch(ctx));
+        }
+        if value::is_f64(index) {
+            return Ok(SetCompletion::Written);
+        }
+    }
+    if value::is_array(object) && state.text_matches(index, "length") {
+        return set_array_length_completion(ctx, state, object, stored);
+    }
+    if value::is_array(object)
+        && let Some(index) = array_index(state, index)
+    {
+        let handle = value::decode_handle(object);
+        if state.gc.heap().array_kind(handle).ok()
+            == Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+        {
+            let Some(key) = property_key(state, value::encode_f64(f64::from(index))) else {
+                return Err(fail_dispatch(ctx));
+            };
+            if let Some((_, setter, _)) = state.array_accessors.get(&(handle, key)).copied() {
+                if !value::is_callable(setter) {
+                    return Ok(SetCompletion::Failed(SetFailure::GetterOnly));
+                }
+                let result = state
+                    .invoke_callable(ctx, setter, object, &[stored])
+                    .ok_or_else(|| fail_dispatch(ctx))?;
+                if value::is_exception(result) {
+                    return Err(result);
+                }
+                return Ok(SetCompletion::Written);
+            }
+            // flags 条目独立于覆盖层取值存在（seal/freeze 只迁移特性，
+            // 元素值仍以元素存储为准），可写性检查先于取值条目。
+            if state
+                .array_property_flags
+                .get(&(handle, key))
+                .is_some_and(|flags| flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0)
+            {
+                return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
+            }
+            if state.array_properties.contains_key(&(handle, key)) {
+                state.array_properties.insert((handle, key), stored);
+                // 覆盖层写入成功后同步在范围内的元素存储，保持 render /
+                // 迭代等直读元素的路径与 [[Get]] 一致。
+                if state
+                    .gc
+                    .heap()
+                    .array_length(handle)
+                    .is_ok_and(|length| index < length)
+                {
+                    let _ = state.gc.heap().set_element(
+                        handle,
+                        index,
+                        u64::from_ne_bytes(stored.to_ne_bytes()),
+                    );
+                }
+                return Ok(SetCompletion::Written);
+            }
+        }
+        // OrdinarySet 步骤 2–3：元素不存在（越界或 hole）且数组不可扩展时
+        // 拒绝创建；已有元素的更新不受 [[PreventExtensions]] 影响。
+        if state.non_extensible_objects.contains(&handle) {
+            let length = state
+                .gc
+                .heap()
+                .array_length(handle)
+                .map_err(|_| fail_dispatch(ctx))?;
+            let exists = index < length
+                && matches!(
+                    state.gc.heap().get_element(handle, index),
+                    Ok(Some(element)) if !value::is_array_hole(element as i64)
+                );
+            if !exists {
+                return Ok(SetCompletion::Failed(SetFailure::NotExtensible));
+            }
+        }
+        return state
+            .gc
+            .heap()
+            .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
+            .map(|()| SetCompletion::Written)
+            .or_else(|error| match error {
+                wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. } => {
+                    state
+                        .gc
+                        .flush_native_tlab(ctx)
+                        .map_err(|_| fail_dispatch(ctx))?;
+                    state
+                        .gc
+                        .heap()
+                        .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()))
+                        .map(|()| SetCompletion::Written)
+                        .map_err(|_| fail_dispatch(ctx))
+                }
+                _ => Err(fail_dispatch(ctx)),
+            });
+    }
+    let Some(key) = property_key(state, index) else {
+        return Err(fail_dispatch(ctx));
+    };
+    if value::is_callable(object) {
+        // callable 接收者的完整 [[Set]]：链上 setter / 可写性拒绝 / 自有属性写入。
+        return callable_chain::set_with_receiver(ctx, state, object, key, stored, object);
+    }
+    if value::is_array(object) {
+        return property_write::set_array_named_property(ctx, state, object, key, stored);
+    }
+    ordinary_set(
+        ctx,
+        state,
+        object,
+        encoded_property_key(key),
+        stored,
+        object,
+    )
+}
+
+/// 数组 length 赋值的 [[Set]]（OrdinarySet → ArraySetLength）：
+/// 不可写 length 先于取值比较拒绝（写相同值也失败，与 V8 一致）；收缩遇
+/// 不可配置元素时按 ArraySetLength 步骤 19 停在最高被阻塞下标 + 1 并报告
+/// 失败（strict 抛 "Cannot delete property"）。收缩同步清除被删下标的字典
+/// 覆盖层条目，保持覆盖层与元素存储一致。
+pub(super) fn set_array_length_completion(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    array: i64,
+    stored: i64,
+) -> property_write::SetResult {
+    use property_write::{SetCompletion, SetFailure};
+    let Some(new_length) = array_length(state, stored) else {
+        return Err(range_error(ctx, state, "Invalid array length"));
+    };
+    let handle = value::decode_handle(array);
+    if state.array_fixed_length.contains(&handle) {
+        return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
+    }
+    let mut final_length = new_length;
+    let mut blocked = None;
+    let shrinking = state
+        .gc
+        .heap()
+        .array_length(handle)
+        .is_ok_and(|old_length| new_length < old_length);
+    if shrinking
+        && state.gc.heap().array_kind(handle).ok()
+            == Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+    {
+        if let Some(index) = highest_non_configurable_element(state, handle, new_length) {
+            final_length = index + 1;
+            blocked = Some(SetFailure::NonDeletableElement(index));
+        }
+        remove_overlay_elements_from(state, handle, final_length);
+    }
+    state
+        .gc
+        .heap()
+        .set_array_length(handle, final_length)
+        .map_err(|_| fail_dispatch(ctx))?;
+    match blocked {
+        Some(failure) => Ok(SetCompletion::Failed(failure)),
+        None => Ok(SetCompletion::Written),
+    }
+}
+
+/// 字典覆盖层中下标 ≥ `from` 且不可配置的最大元素下标（数据或访问器条目）。
+fn highest_non_configurable_element(
+    state: &NativeAgentState,
+    handle: u32,
+    from: u32,
+) -> Option<u32> {
+    let configurable = constants::FLAG_CONFIGURABLE as u32;
+    let data = state
+        .array_property_flags
+        .iter()
+        .filter(|((owner, _), flags)| *owner == handle && *flags & configurable == 0)
+        .filter_map(|((_, key), _)| array_index(state, encoded_property_key(*key)));
+    let accessors = state
+        .array_accessors
+        .iter()
+        .filter(|((owner, _), (_, _, flags))| *owner == handle && *flags & configurable == 0)
+        .filter_map(|((_, key), _)| array_index(state, encoded_property_key(*key)));
+    data.chain(accessors).filter(|index| *index >= from).max()
+}
+
+/// 移除字典覆盖层中下标 ≥ `from` 的全部元素条目（值 / 特性 / 访问器 /
+/// 枚举顺序），配合 length 收缩防止覆盖层残留已删除下标的旧值。
+fn remove_overlay_elements_from(state: &mut NativeAgentState, handle: u32, from: u32) {
+    let removed: Vec<PropertyKey> = state
+        .array_property_flags
+        .keys()
+        .chain(state.array_properties.keys())
+        .chain(state.array_accessors.keys())
+        .filter(|(owner, _)| *owner == handle)
+        .map(|(_, key)| *key)
+        .filter(|key| {
+            array_index(state, encoded_property_key(*key)).is_some_and(|index| index >= from)
+        })
+        .collect();
+    for key in removed {
+        state.array_properties.remove(&(handle, key));
+        state.array_property_flags.remove(&(handle, key));
+        state.array_accessors.remove(&(handle, key));
+        state.forget_array_property(handle, key);
     }
 }
 
@@ -1230,19 +1318,21 @@ fn backfill_trio_ic_slot(state: &mut NativeAgentState, handle: u32, slot: *mut u
     true
 }
 
-/// SetPropIc 的 miss 回填：写入成功后，若属性已成为接收者自己的数据属性，回填
-/// `(shape_id, value_index)`（shape 迁移由 heap 在 `set_property` 内完成，这里
-/// 读的是写入后的新 shape）；accessor / proxy / 数组 / 字典 shape / 异常一律
-/// 永久退化 MEGAMORPHIC，此后每次写入都走宿主完整 [[Set]]。
+/// SetPropIc 的 miss 回填：仅在写入真实成功后，若属性已成为接收者自己的数据
+/// 属性，回填 `(shape_id, value_index)`（shape 迁移由 heap 在 `set_property`
+/// 内完成，这里读的是写入后的新 shape）；写失败（如不可写自有数据属性——
+/// 其 own_data_property_index 仍可命中，训练后快路径会绕过可写性检查直接改
+/// 值）/ accessor / proxy / 数组 / 字典 shape / 异常一律永久退化
+/// MEGAMORPHIC，此后每次写入都走宿主完整 [[Set]]。
 fn backfill_set_prop_ic(
     state: &mut NativeAgentState,
     object: i64,
     key: i64,
-    result: i64,
+    success: bool,
     ic_slot_ptr: i64,
 ) {
     let ic_slot_ptr = ic_slot_ptr as *mut u32;
-    if value::is_exception(result) || !value::is_object(object) {
+    if !success || !value::is_object(object) {
         // SAFETY: ic_slot_ptr 由生成代码以 `ic_slots_base + slot * 32` 计算。
         unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
         return;
@@ -1385,7 +1475,7 @@ pub(super) fn ordinary_set(
     key: i64,
     stored: i64,
     receiver: i64,
-) -> Result<bool, i64> {
+) -> property_write::SetResult {
     let key = property_key(state, key).ok_or_else(|| fail_dispatch(ctx))?;
     ordinary_set_key(ctx, state, target, key, stored, receiver)
 }
@@ -1397,7 +1487,8 @@ pub(super) fn ordinary_set_key(
     key: PropertyKey,
     stored: i64,
     receiver: i64,
-) -> Result<bool, i64> {
+) -> property_write::SetResult {
+    use property_write::{SetCompletion, SetFailure};
     // callable 目标（如 Reflect.set 直接传函数、或对象链上出现 callable
     // 原型）：自有属性在宿主侧表，链行走走 callable 语义。
     if value::is_callable(target) {
@@ -1417,7 +1508,7 @@ pub(super) fn ordinary_set_key(
             .map_err(|_| fail_dispatch(ctx))?;
         if prototype != wjsm_gc::PROTO_NULL_SENTINEL {
             if prototype & 0x8000_0000 != 0 {
-                let result = super::proxy::set(
+                return super::proxy::set(
                     ctx,
                     state,
                     value::encode_proxy_handle(prototype & 0x7fff_ffff),
@@ -1425,11 +1516,6 @@ pub(super) fn ordinary_set_key(
                     stored,
                     receiver,
                 );
-                return if value::is_exception(result) {
-                    Err(result)
-                } else {
-                    Ok(true)
-                };
             }
             return ordinary_set_key(
                 ctx,
@@ -1445,7 +1531,7 @@ pub(super) fn ordinary_set_key(
         if descriptor.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
             let setter = descriptor.setter as i64;
             if !value::is_callable(setter) {
-                return Ok(false);
+                return Ok(SetCompletion::Failed(SetFailure::GetterOnly));
             }
             let result = state
                 .invoke_callable(ctx, setter, receiver, &[stored])
@@ -1453,11 +1539,11 @@ pub(super) fn ordinary_set_key(
             return if value::is_exception(result) {
                 Err(result)
             } else {
-                Ok(true)
+                Ok(SetCompletion::Written)
             };
         }
         if descriptor.flags & constants::FLAG_WRITABLE as u32 == 0 {
-            return Ok(false);
+            return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
         }
     }
     assign_data_property_to_receiver(ctx, state, receiver, key, stored)
@@ -1876,7 +1962,8 @@ pub(super) fn assign_data_property_to_receiver(
     receiver: i64,
     key: PropertyKey,
     stored: i64,
-) -> Result<bool, i64> {
+) -> property_write::SetResult {
+    use property_write::{SetCompletion, SetFailure};
     if value::is_proxy(receiver) {
         return super::proxy::set_receiver_value(
             ctx,
@@ -1892,7 +1979,7 @@ pub(super) fn assign_data_property_to_receiver(
     // OrdinarySetWithOwnDescriptor 步骤 3.d.iv：Receiver 为基元（如
     // Reflect.set 显式传入基元 receiver）时数据属性写入返回 false。
     if is_primitive_value(receiver) {
-        return Ok(false);
+        return Ok(SetCompletion::Failed(SetFailure::Receiver));
     }
     let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
     if let Some(receiver_descriptor) = state
@@ -1901,16 +1988,17 @@ pub(super) fn assign_data_property_to_receiver(
         .get_property_slot(receiver_handle, key)
         .map_err(|_| fail_dispatch(ctx))?
     {
-        if receiver_descriptor.flags & constants::FLAG_IS_ACCESSOR as u32 != 0
-            || receiver_descriptor.flags & constants::FLAG_WRITABLE as u32 == 0
-        {
-            return Ok(false);
+        if receiver_descriptor.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
+            return Ok(SetCompletion::Failed(SetFailure::GetterOnly));
+        }
+        if receiver_descriptor.flags & constants::FLAG_WRITABLE as u32 == 0 {
+            return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
         }
     } else if state.non_extensible_objects.contains(&receiver_handle) {
-        return Ok(false);
+        return Ok(SetCompletion::Failed(SetFailure::NotExtensible));
     }
     set_property_or_out_of_memory(ctx, state, receiver_handle, key, stored as u64)?;
-    Ok(true)
+    Ok(SetCompletion::Written)
 }
 
 /// callable receiver 上的自有数据属性写入：自有访问器或不可写自有数据属性
@@ -1921,10 +2009,11 @@ fn assign_to_callable_receiver(
     receiver: i64,
     key: PropertyKey,
     stored: i64,
-) -> bool {
+) -> property_write::SetCompletion {
+    use property_write::{SetCompletion, SetFailure};
     let receiver = value::strip_gc_color(receiver);
     if state.callable_accessors.contains_key(&(receiver, key)) {
-        return false;
+        return SetCompletion::Failed(SetFailure::GetterOnly);
     }
     let _ = state.callable_property(receiver, key);
     if state
@@ -1932,14 +2021,19 @@ fn assign_to_callable_receiver(
         .get(&(receiver, key))
         .is_some_and(|flags| flags & constants::FLAG_WRITABLE as u32 == 0)
     {
-        return false;
+        return SetCompletion::Failed(SetFailure::ReadOnly);
+    }
+    if !state.callable_properties.contains_key(&(receiver, key))
+        && state.non_extensible_callables.contains(&receiver)
+    {
+        return SetCompletion::Failed(SetFailure::NotExtensible);
     }
     state.callable_properties.insert((receiver, key), stored);
     state
         .callable_property_flags
         .entry((receiver, key))
         .or_insert(ASSIGNED_PROPERTY_FLAGS);
-    true
+    SetCompletion::Written
 }
 
 pub(super) fn delete_property(
@@ -1970,6 +2064,28 @@ pub(super) fn delete_property(
         }
         let handle = value::decode_handle(object);
         if let Some(index) = array_index(state, encoded_key) {
+            // 字典数组的下标条目携带特性：不可配置（seal/freeze 或
+            // defineProperty 设置）按 [[Delete]] 拒绝，删除成功则同步清除
+            // 覆盖层条目，防止残留旧值。
+            if state.gc.heap().array_kind(handle).ok() == Some(constants::ARRAY_KIND_DICTIONARY) {
+                let element_key =
+                    property_key(state, value::encode_f64(f64::from(index))).ok_or(())?;
+                if state
+                    .array_property_flags
+                    .get(&(handle, element_key))
+                    .is_some_and(|flags| flags & configurable == 0)
+                    || state
+                        .array_accessors
+                        .get(&(handle, element_key))
+                        .is_some_and(|(_, _, flags)| flags & configurable == 0)
+                {
+                    return Ok(false);
+                }
+                state.array_properties.remove(&(handle, element_key));
+                state.array_property_flags.remove(&(handle, element_key));
+                state.array_accessors.remove(&(handle, element_key));
+                state.forget_array_property(handle, element_key);
+            }
             let length = state.gc.heap().array_length(handle).map_err(|_| ())?;
             if index < length {
                 state
@@ -2849,7 +2965,7 @@ pub(super) fn array_index(state: &NativeAgentState, encoded: i64) -> Option<u32>
     (index != u32::MAX).then_some(index)
 }
 
-fn array_length(state: &NativeAgentState, encoded: i64) -> Option<u32> {
+pub(super) fn array_length(state: &NativeAgentState, encoded: i64) -> Option<u32> {
     let number = to_number(state, encoded)?;
     (number.is_finite() && number >= 0.0 && number.fract() == 0.0 && number <= u32::MAX as f64)
         .then_some(number as u32)

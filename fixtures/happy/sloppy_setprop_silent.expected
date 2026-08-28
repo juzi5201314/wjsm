@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+frozen-prop NO-THROW
+frozen-unchanged 1
+getter-only NO-THROW
+getter-unchanged 1
+non-writable NO-THROW
+non-writable-unchanged 1
+non-extensible NO-THROW
+non-extensible-has false
+proxy-falsish NO-THROW
+proxy-x undefined
+array-non-writable NO-THROW
+array-nw-unchanged 1
+array-elem-non-writable NO-THROW
+array-elem-unchanged 10
+ic-frozen-unchanged 100
+destructure-targets 11 22 42
+--- stderr ---

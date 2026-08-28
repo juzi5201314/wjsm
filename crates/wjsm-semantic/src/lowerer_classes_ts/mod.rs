@@ -766,6 +766,8 @@ impl Lowerer {
                     .map_err(|msg| self.error(pm.span, msg))?;
             }
             self.push_function_context(&fn_name, BasicBlockId(0));
+            // 类体代码恒为严格模式（ClassDefinitionEvaluation）。
+            self.strict_mode = true;
             self.is_method = true;
             self.super_allowed = true;
             self.set_lexical_home_object_for_enclosing_method(

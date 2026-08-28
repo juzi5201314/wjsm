@@ -10,6 +10,7 @@ impl Lowerer {
         let async_name = format!("{name}$async");
 
         self.push_function_context(&async_name, BasicBlockId(0));
+        self.apply_function_strictness(fn_decl.function.body.as_ref());
         self.is_async_fn = true;
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
@@ -333,6 +334,8 @@ impl Lowerer {
 
         // ── 构建 wrapper 函数 ──
         self.push_function_context(&name, BasicBlockId(0));
+        // wrapper 侧的形参默认值等用户代码与 body 同严格性。
+        self.apply_function_strictness(fn_decl.function.body.as_ref());
 
         let wrapper_env_scope_id = self
             .scopes

@@ -471,7 +471,7 @@ module {
     bb10:
       %20 = const c74
       %21 = const c75
-      %22 = set_prop %17, %20, %21
+      %22 = set_prop %17, %20, %21, strict
       %23 = is_exception %22
       branch %23, bb13, bb12
     bb11:

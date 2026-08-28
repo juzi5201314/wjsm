@@ -717,12 +717,12 @@ module {
       %0 = const c140
       %1 = new_object(capacity=4)
       %2 = const c141
-      %3 = set_prop %1, %2, %0
+      %3 = set_prop %1, %2, %0, strict
       %4 = const c142
       %5 = const c145
-      %6 = set_prop %0, %4, %5
+      %6 = set_prop %0, %4, %5, strict
       %7 = const c146
-      %8 = set_prop %0, %7, %1
+      %8 = set_prop %0, %7, %1, strict
       store var $37.Inner, %0
       store var $36.Inner, %0
       %9 = new_array(capacity=4)
@@ -1218,7 +1218,7 @@ module {
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = set_prop %0, %1, %5
+      %8 = set_prop %0, %1, %5, strict
       %9 = is_exception %8
       branch %9, bb4, bb3
     bb2:
@@ -3396,7 +3396,7 @@ module {
       %849 = is_exception %848
       branch %849, bb276, bb275
     bb275:
-      %851 = set_prop %670, %844, %848
+      %851 = set_prop %670, %844, %848, strict
       %852 = is_exception %851
       branch %852, bb278, bb277
     bb276:
