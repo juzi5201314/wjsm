@@ -911,7 +911,7 @@ fn set_property_completion(
 /// 完整按键（含数字下标）[[Set]] 语义：proxy / typed array / 数组 length /
 /// 字典数组下标覆盖 / 数组元素 / callable / 数组命名属性 / 普通对象。
 /// 基元接收者（含 null/undefined）由调用方先行短路。
-fn set_element_completion(
+pub(super) fn set_element_completion(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,

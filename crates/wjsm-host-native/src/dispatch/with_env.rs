@@ -26,7 +26,7 @@ pub(super) fn dispatch_with(
             let [input] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            with_to_object(ctx, state, *input)
+            to_object(ctx, state, *input)
         }
         _ => return None,
     })
@@ -53,9 +53,14 @@ pub(crate) fn with_has_binding(
     Ok(!runtime::is_truthy(state, blocked))
 }
 
-/// with 头部的 ToObject（§7.1.18）：null/undefined 抛 TypeError；对象 /
-/// callable / Proxy 原样返回；原语装箱为携带对应原型的包装对象。
-fn with_to_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState, input: i64) -> i64 {
+/// ToObject（§7.1.18）：null/undefined 抛 TypeError；对象 / callable /
+/// Proxy 原样返回；原语装箱为携带对应原型的包装对象。with 头部与
+/// Array 迭代方法族的 generic 接收者共用本入口。
+pub(super) fn to_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    input: i64,
+) -> i64 {
     if value::is_null(input) || value::is_undefined(input) {
         return type_error(ctx, state, "Cannot convert undefined or null to object");
     }
