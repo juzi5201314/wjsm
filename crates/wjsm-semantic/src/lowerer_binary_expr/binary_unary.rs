@@ -801,6 +801,8 @@ impl Lowerer {
                         Ok(dest)
                     }
                     // delete x：绑定不可删除时返回 false，其余沿用既有恒 true。
+                    // 严格代码中 delete 标识符是 early error（§13.5.1.1），
+                    // 已在降级前由 strict_check 拒绝，此处只剩 sloppy 路径。
                     swc_ast::Expr::Ident(ident) => {
                         // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。
                         let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
