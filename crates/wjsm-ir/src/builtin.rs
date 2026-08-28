@@ -569,6 +569,11 @@ pub enum Builtin {
     /// 匿名函数定义在键求值后设置 `name`。args: [function, key(ToPropertyKey
     /// 后的字符串或 symbol), prefix(0=无 1="get " 2="set ")]。无返回值。
     FunctionSetName,
+    /// `Function.prototype.toString`（ES §20.2.3.5）：有 [[SourceText]] 的
+    /// 用户函数返回原始源码片段，内建/bound/proxy 返回 NativeFunction 形态
+    /// `function <name>() { [native code] }`，非 callable this 抛 TypeError。
+    /// args: [this]。
+    FunctionToString,
     // ── 全局环境记录（ES §9.1.1.4，脚本模式 GlobalDeclarationInstantiation）──
     /// GlobalDeclarationInstantiation（§16.1.7）步骤 1–6 的声明冲突预检：
     /// kind=0（词法名）检查 HasVarDeclaration / HasLexicalDeclaration /
@@ -1133,6 +1138,7 @@ impl Builtin {
             Self::ThisTdzCheck => "this_tdz_check",
             Self::SuperCallOnceCheck => "super_call_once_check",
             Self::FunctionSetName => "function.set_name",
+            Self::FunctionToString => "function.to_string",
             Self::GlobalEnvCheck => "global_env.check",
             Self::GlobalEnvDeclareVar => "global_env.declare_var",
             Self::GlobalEnvDeclareFunc => "global_env.declare_func",

@@ -841,6 +841,9 @@ impl Lowerer {
             if let Some(span) = self.span_to_source_span(pm.span()) {
                 m_ir_function.set_source_span(span);
             }
+            if let Some(text) = self.method_definition_source_text(pm.span(), pm.is_static) {
+                m_ir_function.set_source_text(text);
+            }
             m_ir_function.set_params(param_ir_names);
             let m_captured = self.captured_names_stack.last().unwrap().clone();
             m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
@@ -948,6 +951,9 @@ impl Lowerer {
             let _ = self.scopes.set_initialised(sid, class_name, false);
         }
         let (function_id, captured) = lowered?;
+        // [[SourceText]] 取 MethodDefinition 文本（含 `#名`，剥离 `static`）。
+        let source_text = self.method_definition_source_text(pm.span(), is_static);
+        self.set_function_source_text(function_id, source_text);
         let instance_binding =
             self.declare_private_instance_binding(is_static, pm.span, next_function_index)?;
         Ok(PrivateMemberMeta {
@@ -1008,6 +1014,9 @@ impl Lowerer {
             let _ = self.scopes.set_initialised(sid, class_name, false);
         }
         let (function_id, captured) = lowered?;
+        // [[SourceText]] 取 MethodDefinition 文本（含 `#名`，剥离 `static`）。
+        let source_text = self.method_definition_source_text(pm.span(), is_static);
+        self.set_function_source_text(function_id, source_text);
         let instance_binding =
             self.declare_private_instance_binding(is_static, pm.span, next_function_index)?;
         Ok(PrivateMemberMeta {

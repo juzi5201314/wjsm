@@ -22,7 +22,10 @@ pub(super) fn dispatch_iterator(
             async_generator::iterator_next_async(ctx, state, args)
         }
         Builtin::IteratorNext => iterator_next(ctx, state, args),
-        Builtin::IteratorFrom => iterator_from(ctx, state, args),
+        // StringIterator 与 IteratorFrom 共享实现：仅 JS 可见 name 不同
+        // （String.prototype[Symbol.iterator] 的固有 name 为 "[Symbol.iterator]"，
+        // Array.prototype.values 为 "values"，见 builtin_metadata）。
+        Builtin::IteratorFrom | Builtin::StringIterator => iterator_from(ctx, state, args),
         Builtin::IteratorDone => iterator_done(ctx, state, args),
         Builtin::IteratorValue => iterator_value(ctx, state, args, false),
         Builtin::IteratorStepValue => iterator_value(ctx, state, args, true),

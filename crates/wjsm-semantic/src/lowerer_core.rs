@@ -1533,4 +1533,47 @@ impl Lowerer {
     pub(crate) fn span_to_source_span(&self, span: swc_core::common::Span) -> Option<SourceSpan> {
         self.byte_pos_to_source_span(span.lo)
     }
+
+    /// 按 SWC Span 切片当前模块源码，作为函数 [[SourceText]]（ES §10.2 表 30）。
+    /// BytePos 为 1-indexed（0 是 DUMMY_SP）；无源码上下文或 span 越界时返回 None
+    /// （HostHasSourceTextAvailable=false，toString 回退 NativeFunction 形态）。
+    pub(crate) fn span_source_text(&self, span: swc_core::common::Span) -> Option<&str> {
+        let source = self.diagnostic_source.as_ref()?;
+        let (lo, hi) = (span.lo.0 as usize, span.hi.0 as usize);
+        if lo == 0 || hi < lo || hi - 1 > source.len() {
+            return None;
+        }
+        source.get(lo - 1..hi - 1)
+    }
+
+    /// 类元素 MethodDefinition 的 [[SourceText]]：ClassElement 产生式为
+    /// `static MethodDefinition`，SWC 的 ClassMethod span 含 `static` 修饰符，
+    /// 而 [[SourceText]] 只匹配 MethodDefinition 本体（Node/V8 同），需剥离
+    /// 前导 `static` 及其后的空白与注释。
+    pub(crate) fn method_definition_source_text(
+        &self,
+        span: swc_core::common::Span,
+        is_static: bool,
+    ) -> Option<String> {
+        let text = self.span_source_text(span)?;
+        if !is_static {
+            return Some(text.to_owned());
+        }
+        let rest = text.strip_prefix("static")?;
+        Some(skip_leading_trivia(rest).to_owned())
+    }
+}
+
+/// 跳过 JS 空白与注释（`//…` 与 `/*…*/`），返回首个语法 token 起始处的切片。
+fn skip_leading_trivia(mut text: &str) -> &str {
+    loop {
+        let trimmed = text.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("//") {
+            text = rest.split_once('\n').map_or("", |(_, tail)| tail);
+        } else if let Some(rest) = trimmed.strip_prefix("/*") {
+            text = rest.split_once("*/").map_or("", |(_, tail)| tail);
+        } else {
+            return trimmed;
+        }
+    }
 }

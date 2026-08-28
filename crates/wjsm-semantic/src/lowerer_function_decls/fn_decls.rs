@@ -87,6 +87,9 @@ impl Lowerer {
         if let Some(span) = self.span_to_source_span(fn_decl.span()) {
             ir_function.set_source_span(span);
         }
+        if let Some(text) = self.span_source_text(fn_decl.span()) {
+            ir_function.set_source_text(text);
+        }
         ir_function.set_params(param_ir_names);
         // 设置捕获变量列表（逃逸分析结果）
         let captured = self.captured_names_stack.last().unwrap().clone();

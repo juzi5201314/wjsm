@@ -81,19 +81,30 @@ pub fn lower_eval_module_with_scope(
     has_scope_bridge: bool,
     var_writes_to_scope: bool,
 ) -> Result<Program, LoweringError> {
-    lower_eval_module_with_scope_and_strict(module, has_scope_bridge, var_writes_to_scope, false)
+    lower_eval_module_with_scope_and_strict(
+        module,
+        has_scope_bridge,
+        var_writes_to_scope,
+        false,
+        None,
+    )
 }
 
+/// `source` 为 eval 源文本：提供时 eval 内定义的函数携带 [[SourceText]]，
+/// `Function.prototype.toString` 返回原始片段（Node/V8 对 eval 函数同样返回
+/// 源文本）；None 时回退 NativeFunction 形态。
 pub fn lower_eval_module_with_scope_and_strict(
     module: swc_ast::Module,
     has_scope_bridge: bool,
     var_writes_to_scope: bool,
     inherited_strict: bool,
+    source: Option<std::sync::Arc<str>>,
 ) -> Result<Program, LoweringError> {
     let mut lowerer = Lowerer::new();
     lowerer.eval_mode = true;
     lowerer.eval_has_scope_bridge = has_scope_bridge;
     lowerer.eval_scope_record = true;
+    lowerer.diagnostic_source = source;
     lowerer.strict_mode = inherited_strict || module_has_use_strict_directive(&module);
     lowerer.eval_var_writes_to_scope = var_writes_to_scope && !lowerer.strict_mode;
     lowerer.lower_module(&module)

@@ -26,6 +26,7 @@ use wjsm_native_abi::{
     NativeRuntimeOp, NativeSlowEntry, NativeVmContext, PendingExceptionKind,
     encode_feedback_tag_signature, native_variable_names, native_variable_slots_for_segments,
 };
+mod builtin_metadata;
 mod dispatch;
 mod gc;
 mod inspector;
@@ -226,43 +227,48 @@ pub(crate) fn whole_program_slots(program: &wjsm_ir::Program) -> HashMap<String,
         .collect()
 }
 
+/// NativeFunction 文法形态（ES §20.2.3.5 NativeFunction）：
+/// `function <name>() { [native code] }`，无名（或空名）时省略名字段。
+fn native_function_form(name: Option<&str>) -> String {
+    match name {
+        Some(name) if !name.is_empty() => format!("function {name}() {{ [native code] }}"),
+        _ => "function () { [native code] }".into(),
+    }
+}
+
 fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u32)> {
     match kind {
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::ArraySlice, _) => Some(("slice", 2)),
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::FuncCall, _) => Some(("call", 1)),
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::PropertyIsEnumerable, _) => {
-            Some(("propertyIsEnumerable", 1))
+        NativeCallableKind::Builtin(builtin, _) => {
+            builtin_metadata::builtin_function_metadata(builtin)
         }
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, _) => Some(("Error", 1)),
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::EvalErrorConstructor, _) => {
-            Some(("EvalError", 1))
-        }
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::RangeErrorConstructor, _) => {
-            Some(("RangeError", 1))
-        }
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::ReferenceErrorConstructor, _) => {
-            Some(("ReferenceError", 1))
-        }
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::SyntaxErrorConstructor, _) => {
-            Some(("SyntaxError", 1))
-        }
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::TypeErrorConstructor, _) => {
-            Some(("TypeError", 1))
-        }
-        NativeCallableKind::Builtin(wjsm_ir::Builtin::URIErrorConstructor, _) => {
-            Some(("URIError", 1))
-        }
-        NativeCallableKind::ArrayToString | NativeCallableKind::RegExpToString => {
-            Some(("toString", 0))
-        }
-        NativeCallableKind::ErrorToString => Some(("toString", 0)),
+        NativeCallableKind::ArrayToString
+        | NativeCallableKind::RegExpToString
+        | NativeCallableKind::ErrorToString => Some(("toString", 0)),
         NativeCallableKind::AggregateErrorConstructor => Some(("AggregateError", 2)),
         NativeCallableKind::ObjectConstructor => Some(("Object", 1)),
-        NativeCallableKind::RealmArrayConstructor(_) => Some(("Array", 1)),
+        NativeCallableKind::ArrayConstructor | NativeCallableKind::RealmArrayConstructor(_) => {
+            Some(("Array", 1))
+        }
+        NativeCallableKind::StringConstructor => Some(("String", 1)),
         NativeCallableKind::FunctionConstructor => Some(("Function", 1)),
         NativeCallableKind::FunctionPrototype => Some(("", 0)),
+        NativeCallableKind::ArrayIterator(NativeIteratorKind::Keys) => Some(("keys", 0)),
+        NativeCallableKind::ArrayIterator(NativeIteratorKind::Values) => Some(("values", 0)),
+        NativeCallableKind::ArrayIterator(NativeIteratorKind::Entries) => Some(("entries", 0)),
+        // 迭代器对象的 next 方法（%ArrayIteratorPrototype%.next 等，§27.5.1）。
+        NativeCallableKind::CollectionNext(_)
+        | NativeCallableKind::IteratorNext(_)
+        | NativeCallableKind::RegExpIteratorNext(_) => Some(("next", 0)),
+        // Promise executor 的 resolve/reject 函数（§27.2.1.3）：匿名、length 1。
+        NativeCallableKind::PromiseResolve(_) | NativeCallableKind::PromiseReject(_) => {
+            Some(("", 1))
+        }
+        // Proxy.revocable 的 revoke 函数（§28.2.2.1）：匿名、length 0。
+        NativeCallableKind::ProxyRevoke(_) => Some(("", 0)),
+        NativeCallableKind::SetImmediate => Some(("setImmediate", 4)),
         NativeCallableKind::TimerConstructor(true) => Some(("Immediate", 0)),
         NativeCallableKind::TimerConstructor(false) => Some(("Timeout", 0)),
+        NativeCallableKind::Gc => Some(("gc", 0)),
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
@@ -742,7 +748,9 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             "call" => Builtin::FuncCall,
             "hasOwnProperty" => Builtin::HasOwnProperty,
             "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
-            "toString" => Builtin::ObjectProtoToString,
+            // Function.prototype.toString 遮蔽 Object.prototype.toString
+            // （ES §20.2.3.5：源文本 / NativeFunction 形态）。
+            "toString" => Builtin::FunctionToString,
             "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
         }
@@ -969,6 +977,9 @@ struct NativeProgramState {
     function_names: Vec<String>,
     /// JS 可见的 `name` 属性值（SetFunctionName 结果；内部名仅供诊断）。
     function_js_names: Vec<String>,
+    /// [[SourceText]]（ES §10.2 表 30）：`Function.prototype.toString` 返回值；
+    /// None = 宿主无源文本，toString 回退 NativeFunction 形态。
+    function_source_texts: Vec<Option<String>>,
     function_source_spans: Vec<Option<wjsm_ir::SourceSpan>>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     function_needs_prototype: Vec<bool>,
@@ -1029,6 +1040,8 @@ struct NativeAgentState {
     function_names: Vec<String>,
     /// 当前 image 的 JS 可见 `name` 属性值（见 `NativeProgramState::function_js_names`）。
     function_js_names: Vec<String>,
+    /// 当前 image 的函数 [[SourceText]]（见 `NativeProgramState::function_source_texts`）。
+    function_source_texts: Vec<Option<String>>,
     function_source_spans: Vec<Option<wjsm_ir::SourceSpan>>,
     images: HashMap<u64, Arc<CompiledImage>>,
     image_source_files: HashMap<u64, String>,
@@ -1245,6 +1258,7 @@ impl NativeAgentState {
             retained_images: HashMap::new(),
             function_names: Vec::new(),
             function_js_names: Vec::new(),
+            function_source_texts: Vec::new(),
             function_source_spans: Vec::new(),
             image_source_files: HashMap::new(),
             functions: Vec::new(),
@@ -1430,6 +1444,11 @@ impl NativeAgentState {
                         .to_owned()
                 })
                 .collect(),
+            function_source_texts: program
+                .functions()
+                .iter()
+                .map(|function| function.source_text().map(str::to_owned))
+                .collect(),
             function_source_spans: program
                 .functions()
                 .iter()
@@ -1548,6 +1567,7 @@ impl NativeAgentState {
         self.function_lengths.clear();
         self.function_names.clear();
         self.function_js_names.clear();
+        self.function_source_texts.clear();
         self.function_source_spans.clear();
         self.current_image_id = 0;
         self.current_feedback_region = (0, 0);
@@ -1693,6 +1713,7 @@ impl NativeAgentState {
             function_lengths: std::mem::take(&mut self.function_lengths),
             function_names: std::mem::take(&mut self.function_names),
             function_js_names: std::mem::take(&mut self.function_js_names),
+            function_source_texts: std::mem::take(&mut self.function_source_texts),
             function_source_spans: std::mem::take(&mut self.function_source_spans),
             materialized_constants: std::mem::take(&mut self.materialized_constants),
             string_constants: std::mem::take(&mut self.string_constants),
@@ -1713,6 +1734,7 @@ impl NativeAgentState {
         self.function_lengths = state.function_lengths;
         self.function_names = state.function_names;
         self.function_js_names = state.function_js_names;
+        self.function_source_texts = state.function_source_texts;
         self.function_source_spans = state.function_source_spans;
         self.function_needs_prototype = state.function_needs_prototype;
         self.function_class_ctor_names = state.function_class_ctor_names;
@@ -2326,8 +2348,11 @@ impl NativeAgentState {
                 wjsm_ir::Builtin::MapSetValues
             } else if value::is_js_object(receiver) && self.typed_arrays.contains_key(&handle) {
                 wjsm_ir::Builtin::TypedArrayProtoValues
+            } else if value::is_string(receiver) {
+                // 字符串迭代器与 IteratorFrom 行为一致，但 JS 可见 name 为
+                // "[Symbol.iterator]"（§22.1.3.36），与数组的 "values" 区分。
+                wjsm_ir::Builtin::StringIterator
             } else if value::is_array(receiver)
-                || value::is_string(receiver)
                 || value::is_js_object(receiver)
                     && self
                         .gc
@@ -4117,6 +4142,66 @@ impl NativeAgentState {
             native_function_metadata(self.native_callable_kind(callable)?)
                 .map(|(name, _)| name.to_owned())
         }
+    }
+
+    /// `Function.prototype.toString`（ES §20.2.3.5）的返回文本：
+    /// 步骤 2——有 [[SourceText]] 的用户函数返回原始源码片段；
+    /// 步骤 3/4——内建（含 [[InitialName]]）/bound/callable Proxy 返回
+    /// NativeFunction 形态。调用方须先保证 this 是 callable（步骤 5 的
+    /// TypeError 在分派层抛出）。
+    pub(crate) fn callable_to_string_source(&self, callable: i64) -> Option<String> {
+        let callable = value::strip_gc_color(callable);
+        if let Some(function) = self.callable_function(callable) {
+            let index = usize::try_from(function.function_index).ok()?;
+            let source = if function.image_id == self.current_image_id {
+                self.function_source_texts.get(index)?
+            } else {
+                self.programs
+                    .get(&function.image_id)?
+                    .function_source_texts
+                    .get(index)?
+            };
+            if let Some(text) = source {
+                return Some(text.clone());
+            }
+            // 无源文本（如 eval 编译路径）：HostHasSourceTextAvailable=false，
+            // 按步骤 4 回退 NativeFunction 形态，名字取 JS 可见 `name`。
+            return Some(native_function_form(
+                self.callable_js_name(callable).as_deref(),
+            ));
+        }
+        match self.native_callable_kind(callable) {
+            // bound 函数不展示目标名（V8 恒为匿名 NativeFunction 形态）。
+            Some(NativeCallableKind::Bound(_)) => Some(native_function_form(None)),
+            Some(kind) => Some(native_function_form(
+                native_function_metadata(kind).map(|(name, _)| name),
+            )),
+            // callable Proxy 等非 native-callable 的 callable 值。
+            None => Some(native_function_form(None)),
+        }
+    }
+
+    /// 覆盖用户函数的 [[SourceText]]：动态 Function（§20.2.1.1.1 步骤 16）的
+    /// sourceText 是 `function anonymous(P\n) {\nbody\n}`，与实际编译脚本
+    /// （匿名函数表达式）不同，构造完成后回写规范文本。
+    pub(crate) fn set_callable_function_source_text(
+        &mut self,
+        callable: i64,
+        text: String,
+    ) -> Option<()> {
+        let callable = value::strip_gc_color(callable);
+        let function = self.callable_function(callable)?;
+        let index = usize::try_from(function.function_index).ok()?;
+        let slot = if function.image_id == self.current_image_id {
+            self.function_source_texts.get_mut(index)?
+        } else {
+            self.programs
+                .get_mut(&function.image_id)?
+                .function_source_texts
+                .get_mut(index)?
+        };
+        *slot = Some(text);
+        Some(())
     }
 
     fn callable_property(&mut self, callable: i64, key: PropertyKey) -> Option<i64> {
