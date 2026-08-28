@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+typeof: true
+call: 255
+bind: 255
+apply: 255
+meta: getUint8 1 setFloat64 2
+constructor: true
+bigint: -2 18446744073709551614 -1 18446744073709551615
+wrap: 7
+type error: true
+--- stderr ---

@@ -606,6 +606,19 @@ pub enum Builtin {
     /// 全局环境 DeleteBinding：声明式记录绑定不可删除（false）；否则按全局
     /// 对象 [[Delete]] 返回结果，属性缺失返回 true。args: [global, name]。
     GlobalEnvDelete,
+    /// `DataView.prototype.getBigInt64`（ES §25.3.4）：按字节序读取 8 字节
+    /// 有符号 64 位整数，返回 BigInt。args: [view, byteOffset, littleEndian?]。
+    DataViewProtoGetBigInt64,
+    /// `DataView.prototype.getBigUint64`（ES §25.3.4）：按字节序读取 8 字节
+    /// 无符号 64 位整数，返回 BigInt。args: [view, byteOffset, littleEndian?]。
+    DataViewProtoGetBigUint64,
+    /// `DataView.prototype.setBigInt64`（ES §25.3.4）：把 BigInt 按 2^64 取模
+    /// 写入 8 字节。args: [view, byteOffset, value, littleEndian?]。
+    DataViewProtoSetBigInt64,
+    /// `DataView.prototype.setBigUint64`（ES §25.3.4）：与 setBigInt64 写入
+    /// 相同位型（ToBigUint64 与 ToBigInt64 的字节表示一致）。
+    /// args: [view, byteOffset, value, littleEndian?]。
+    DataViewProtoSetBigUint64,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -641,7 +654,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::GlobalEnvDelete as u16
+        Self::DataViewProtoSetBigUint64 as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1147,6 +1160,10 @@ impl Builtin {
             Self::GlobalEnvGet => "global_env.get",
             Self::GlobalEnvSet => "global_env.set",
             Self::GlobalEnvDelete => "global_env.delete",
+            Self::DataViewProtoGetBigInt64 => "DataView.prototype.getBigInt64",
+            Self::DataViewProtoGetBigUint64 => "DataView.prototype.getBigUint64",
+            Self::DataViewProtoSetBigInt64 => "DataView.prototype.setBigInt64",
+            Self::DataViewProtoSetBigUint64 => "DataView.prototype.setBigUint64",
         }
     }
 }

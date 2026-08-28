@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+typeof: function
+call: 2
+bind: 1
+apply: 1,2
+proto slice: 1
+proto typeof: function function
+constructor: true
+meta: subarray 2 sort 1
+reflect: true
+destructure: true 2,3
+iterator: 1,2,3
+in: true true
+source: function subarray() { [native code] }
+--- stderr ---

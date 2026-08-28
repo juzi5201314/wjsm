@@ -542,6 +542,8 @@ pub(crate) fn builtin_from_dataview_proto_method(name: &str) -> Option<Builtin> 
         "getUint16" => Some(DataViewProtoGetUint16),
         "getInt8" => Some(DataViewProtoGetInt8),
         "getUint8" => Some(DataViewProtoGetUint8),
+        "getBigInt64" => Some(DataViewProtoGetBigInt64),
+        "getBigUint64" => Some(DataViewProtoGetBigUint64),
         "setFloat64" => Some(DataViewProtoSetFloat64),
         "setFloat32" => Some(DataViewProtoSetFloat32),
         "setInt32" => Some(DataViewProtoSetInt32),
@@ -550,6 +552,8 @@ pub(crate) fn builtin_from_dataview_proto_method(name: &str) -> Option<Builtin> 
         "setUint16" => Some(DataViewProtoSetUint16),
         "setInt8" => Some(DataViewProtoSetInt8),
         "setUint8" => Some(DataViewProtoSetUint8),
+        "setBigInt64" => Some(DataViewProtoSetBigInt64),
+        "setBigUint64" => Some(DataViewProtoSetBigUint64),
         _ => None,
     }
 }
