@@ -597,6 +597,7 @@ fn root_values(
     queue.extend(state.iterator_helpers.prototype);
     queue.extend(state.iterator_helpers.helper_prototype);
     queue.extend(state.iterator_helpers.wrap_prototype);
+    queue.extend(state.iterator_prototypes.roots());
     queue.extend(state.error_prototypes.values().copied());
     queue.extend(state.out_of_memory_error);
     queue.extend(state.out_of_memory_exception);

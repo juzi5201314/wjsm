@@ -323,24 +323,13 @@ pub(super) fn dispatch_typed_array(
         Builtin::TypedArrayProtoSome => callback_iterate(ctx, state, args, CallbackKind::Some),
         Builtin::TypedArrayProtoEvery => callback_iterate(ctx, state, args, CallbackKind::Every),
         Builtin::TypedArrayProtoSort => sort(ctx, state, args),
-        Builtin::TypedArrayProtoEntries => iterator(
-            ctx,
-            state,
-            args,
-            super::collections::CollectionIteratorKind::Entries,
-        ),
-        Builtin::TypedArrayProtoKeys => iterator(
-            ctx,
-            state,
-            args,
-            super::collections::CollectionIteratorKind::Keys,
-        ),
-        Builtin::TypedArrayProtoValues => iterator(
-            ctx,
-            state,
-            args,
-            super::collections::CollectionIteratorKind::Values,
-        ),
+        Builtin::TypedArrayProtoEntries => {
+            iterator(ctx, state, args, crate::NativeIteratorKind::Entries)
+        }
+        Builtin::TypedArrayProtoKeys => iterator(ctx, state, args, crate::NativeIteratorKind::Keys),
+        Builtin::TypedArrayProtoValues => {
+            iterator(ctx, state, args, crate::NativeIteratorKind::Values)
+        }
         _ => return None,
     })
 }
@@ -1610,11 +1599,14 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     receiver
 }
 
+/// %TypedArray%.prototype 的 keys / values / entries（§23.2.3.16 等按
+/// CreateArrayIterator）：实例进 `array_iterators` 侧表并接线
+/// %ArrayIteratorPrototype% 真实原型。
 fn iterator(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
-    kind: super::collections::CollectionIteratorKind,
+    kind: crate::NativeIteratorKind,
 ) -> i64 {
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
@@ -1623,26 +1615,26 @@ fn iterator(
     if !state.typed_arrays.contains_key(&handle) {
         return fail_dispatch(ctx);
     }
-    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
+    let family = super::iterator_prototypes::NativeIteratorFamily::Array;
+    if super::iterator_prototypes::ensure_prototype(state, family).is_none() {
+        return fail_dispatch(ctx);
+    }
+    let Ok(iterator_object) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
         return fail_dispatch(ctx);
     };
-    let Ok(iterator_id) = u32::try_from(state.collection_iterators.len()) else {
-        return fail_dispatch(ctx);
-    };
-    state
-        .collection_iterators
-        .push(super::collections::CollectionIterator {
-            source: super::collections::CollectionIteratorSource::TypedArray(handle),
+    if let Err(exception) = super::iterator_prototypes::attach(ctx, state, iterator_object, family)
+    {
+        return exception;
+    }
+    state.array_iterators.insert(
+        value::decode_handle(iterator_object),
+        crate::NativeArrayIterator {
+            source: crate::NativeIteratorSource::TypedArray(handle),
             kind,
             index: 0,
-        });
-    let Some(next) = state.native_callable(crate::NativeCallableKind::CollectionNext(iterator_id))
-    else {
-        return fail_dispatch(ctx);
-    };
-    state.iterator_next.insert(
-        value::decode_handle(iterator_object),
-        value::decode_native_callable_idx(next),
+            current: None,
+            done: false,
+        },
     );
     iterator_object
 }

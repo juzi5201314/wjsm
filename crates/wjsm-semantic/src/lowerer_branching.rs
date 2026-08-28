@@ -9,6 +9,16 @@ enum UnwindStep {
     },
 }
 
+/// finalizer 纳入 abrupt 展开序列的边界条件。
+enum FinalizerBound {
+    /// label_depth > exit_below：break/continue/return 越过的 try 全部退出。
+    Depth,
+    /// active_finalizers 栈索引 >= keep_len：throw 路由到本地 catch 时，catch
+    /// 内、外的 try-finally 可能共享同一 label_depth（无循环相隔），只能按
+    /// finalizer_keep_len_for_try_context 给出的栈索引切分。
+    KeepLen(usize),
+}
+
 impl Lowerer {
     pub(crate) fn lower_break(
         &mut self,
@@ -135,22 +145,75 @@ impl Lowerer {
         self.iterator_cleanups_from_depth(0)
     }
 
-    /// 按嵌套深度（内层优先）发射 abrupt completion 的清理序列，交错 finally 块与
-    /// IteratorClose。`exit_below`：label_stack 索引 > exit_below 的迭代器、try 的
-    /// label_depth > exit_below 的 finalizer 视为正在退出；return/throw 传 -1（全部退出）。
-    /// `include_target_iterator`：break 时传 true，将 exit_below 处的循环自身迭代器也
-    /// 纳入关闭序列（取代 lower_for_of/for_in 中的 close 中间块）。
-    /// 位置 key：迭代器(索引 i) = 2i，finalizer(label_depth d) = 2d-1，二者奇偶不同不会冲突，
-    /// 降序排列即得内层优先；同深度 finally 以 finalizer_index 降序（内层 try 先执行）。
-    /// `completion`：IteratorClose 的完成值；`None` 时按 break/continue 语义在首个
-    /// IteratorClose 处惰性分配 undefined（无迭代器关闭则不产生多余指令）。
-    fn emit_unwind_for_abrupt(
+    /// break/continue/return 完成的清理序列（见 emit_unwind_sequence）：
+    /// finalizer 按 label_depth > exit_below 纳入，IteratorClose 用非 throw
+    /// completion 语义（close 抛出按 §7.4.11 步骤 6/7 取代原 completion）。
+    pub(crate) fn emit_unwind_for_abrupt(
         &mut self,
         block: BasicBlockId,
         exit_below: isize,
         completion: Option<ValueId>,
         include_target_iterator: bool,
         completion_slot: Option<&str>,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.emit_unwind_sequence(
+            block,
+            exit_below,
+            completion,
+            include_target_iterator,
+            completion_slot,
+            FinalizerBound::Depth,
+            false,
+        )
+    }
+
+    /// throw completion 的清理序列（见 emit_unwind_sequence）：与 return 路径
+    /// 同构地按嵌套深度内层优先交错，而非先跑全部 finalizer 再统一关迭代器
+    /// （后者与 Node/规范相反——`try { for-of {...} } finally` 中 close 必须
+    /// 先于外层 finally）。IteratorClose 用 throw completion 语义（§7.4.11
+    /// 步骤 5：close 过程的 JS 层错误吞咽，原始异常胜出）；finalizer 按栈
+    /// 索引 >= keep_len 纳入。
+    fn emit_unwind_for_throw(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+        exit_below: isize,
+        finalizer_keep_len: usize,
+        completion_slot: Option<&str>,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.emit_unwind_sequence(
+            block,
+            exit_below,
+            Some(value),
+            false,
+            completion_slot,
+            FinalizerBound::KeepLen(finalizer_keep_len),
+            true,
+        )
+    }
+
+    /// 按嵌套深度（内层优先）发射 abrupt completion 的清理序列，交错 finally 块与
+    /// IteratorClose。`exit_below`：label_stack 索引 > exit_below 的迭代器视为正在
+    /// 退出；return/throw 传 -1（全部退出）。`include_target_iterator`：break 时传
+    /// true，将 exit_below 处的循环自身迭代器也纳入关闭序列（取代 lower_for_of/
+    /// for_in 中的 close 中间块）。`finalizer_bound`：finalizer 的纳入条件（见
+    /// FinalizerBound）。位置 key：迭代器(索引 i) = 2i，finalizer(label_depth d)
+    /// = 2d-1，二者奇偶不同不会冲突，降序排列即得内层优先；同深度 finally 以
+    /// finalizer_index 降序（内层 try 先执行）。`completion`：IteratorClose 的
+    /// 完成值；`None` 时按 break/continue 语义在首个 IteratorClose 处惰性分配
+    /// undefined（无迭代器关闭则不产生多余指令）。`completion_is_throw`：throw
+    /// completion 时 close 错误吞咽（§7.4.11 步骤 5），否则 close 抛出取代原
+    /// completion（步骤 6/7）。
+    #[allow(clippy::too_many_arguments)]
+    fn emit_unwind_sequence(
+        &mut self,
+        block: BasicBlockId,
+        exit_below: isize,
+        completion: Option<ValueId>,
+        include_target_iterator: bool,
+        completion_slot: Option<&str>,
+        finalizer_bound: FinalizerBound,
+        completion_is_throw: bool,
     ) -> Result<StmtFlow, LoweringError> {
         let mut items: Vec<(i64, i64, UnwindStep)> = Vec::new();
         for (i, ctx) in self.label_stack.iter().enumerate() {
@@ -165,7 +228,10 @@ impl Lowerer {
             .active_finalizers
             .iter()
             .enumerate()
-            .filter(|(_, f)| (f.label_depth as isize) > exit_below)
+            .filter(|(fi, f)| match finalizer_bound {
+                FinalizerBound::Depth => (f.label_depth as isize) > exit_below,
+                FinalizerBound::KeepLen(keep_len) => *fi >= keep_len,
+            })
             .map(|(fi, f)| (f.label_depth, fi))
             .collect();
         for (depth, fi) in fin_meta {
@@ -192,13 +258,13 @@ impl Lowerer {
                             v
                         }
                     };
-                    // break/continue/return 均非 throw completion：close 过程的
-                    // 错误按 §7.4.6 步骤 6/7 传播。
+                    // throw completion 时 close 错误吞咽（§7.4.11 步骤 5），
+                    // 否则按步骤 6/7 传播。
                     current = self.emit_iterator_closes(
                         current,
                         std::slice::from_ref(&handle),
                         comp,
-                        false,
+                        completion_is_throw,
                     )?;
                 }
                 UnwindStep::Finalizer { fin_block, fi } => {
@@ -898,26 +964,32 @@ impl Lowerer {
             return Ok(false);
         };
         let keep_len = self.finalizer_keep_len_for_try_context(target_index);
-        match self.lower_pending_finalizers_after(block, keep_len)? {
-            StmtFlow::Open(after_finally) => {
-                let value =
-                    self.reload_suspending_completion(after_finally, value, completion_slot);
+        let flow = if close_iterators {
+            // throw 路由到本地 catch：迭代器保护区（label_stack 索引 >= label_depth）
+            // 与 finalizer（栈索引 >= keep_len）按嵌套深度内层优先交错展开。
+            self.emit_unwind_for_throw(
+                block,
+                value,
+                label_depth as isize - 1,
+                keep_len,
+                completion_slot,
+            )?
+        } else {
+            // IteratorClose 自身失败的传播：只展开 finalizer，不再嵌套 close。
+            self.lower_pending_finalizers_after(block, keep_len)?
+        };
+        match flow {
+            StmtFlow::Open(after_unwind) => {
+                let value = self.reload_suspending_completion(after_unwind, value, completion_slot);
                 self.current_function.append_instruction(
-                    after_finally,
+                    after_unwind,
                     Instruction::StoreVar {
                         name: exc_var,
                         value,
                     },
                 );
-                let target_block = if close_iterators {
-                    let iterator_cleanups = self.iterator_cleanups_from_depth(label_depth);
-                    // throw completion 路由到本地 catch：close 错误吞咽，原始异常胜出。
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value, true)?
-                } else {
-                    after_finally
-                };
                 self.current_function.set_terminator(
-                    target_block,
+                    after_unwind,
                     Terminator::Jump {
                         target: catch_entry,
                     },
@@ -939,17 +1011,15 @@ impl Lowerer {
             return Ok(StmtFlow::Terminated);
         }
 
-        match self.lower_pending_finalizers(throw_block)? {
-            StmtFlow::Open(after_finally) => {
+        // throw completion 向外传播（无本地 catch）：全部迭代器保护区与
+        // finalizer 交错展开（内层优先），close 错误吞咽（§7.4.11 步骤 5）。
+        match self.emit_unwind_for_throw(throw_block, value, -1, 0, completion_slot.as_deref())? {
+            StmtFlow::Open(after_close) => {
                 let value = self.reload_suspending_completion(
-                    after_finally,
+                    after_close,
                     value,
                     completion_slot.as_deref(),
                 );
-                let iterator_cleanups = self.active_iterator_cleanups();
-                // throw completion 向外传播：close 错误吞咽（§7.4.6 步骤 5）。
-                let after_close =
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value, true)?;
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
                     self.current_function.append_instruction(

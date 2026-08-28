@@ -1,0 +1,23 @@
+exit_code: 0
+--- stdout ---
+s1 {"value":11,"done":false}
+inner closed
+outer closed
+s1 {"value":7,"done":true}
+s2 {"value":1,"done":false}
+inner finally
+loop2 closed
+s2 {"value":8,"done":true}
+s3 {"value":1,"done":false}
+g3 finally
+s3 {"value":"from-finally","done":false}
+g3-iter closed
+s3 {"value":13,"done":true}
+s4 {"value":1,"done":false}
+bad return called
+s4 caught: close boom
+s4 {"done":true}
+s5 {"value":"need-default","done":false}
+destr closed, arg=undefined
+s5 {"value":11,"done":true}
+--- stderr ---

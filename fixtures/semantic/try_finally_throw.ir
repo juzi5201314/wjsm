@@ -135,8 +135,8 @@ module {
       %40 = call %36, this=%37, args=[%38]
       jump bb10
     bb14:
-      %44 = load var $1.$abrupt_completion_1
-      throw %44
+      %45 = load var $1.$abrupt_completion_1
+      throw %45
     bb15:
       %43 = call builtin.exception_value(%41)
       throw %43

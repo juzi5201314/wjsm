@@ -1532,12 +1532,12 @@ module {
       %10 = is_exception %9
       branch %10, bb8, bb7
     bb6:
-      %36 = phi [(bb4, %5), (bb21, %5), (bb22, %6)]
-      %37 = is_exception %36
-      branch %37, bb24, bb23
+      %37 = phi [(bb4, %5), (bb21, %5), (bb22, %6)]
+      %38 = is_exception %37
+      branch %38, bb24, bb23
     bb7:
-      %35 = call builtin.is_js_object(%5)
-      branch %35, bb21, bb22
+      %36 = call builtin.is_js_object(%5)
+      branch %36, bb21, bb22
     bb8:
       %11 = call builtin.exception_value(%9)
       store var $40.$abrupt_completion_1, %11
@@ -1584,8 +1584,8 @@ module {
       %30 = call %26, this=%27, args=[%28]
       jump bb15
     bb19:
-      %34 = load var $40.$abrupt_completion_1
-      throw %34
+      %35 = load var $40.$abrupt_completion_1
+      throw %35
     bb20:
       %33 = call builtin.exception_value(%31)
       throw %33
@@ -1596,126 +1596,126 @@ module {
       store var $39.$this, %6
       jump bb6
     bb23:
-      %62 = const c337
-      %63 = const c338
-      %64 = const c339
-      %65 = call builtin.intrinsic_pristine(%63, %64)
-      branch %65, bb37, bb38
+      %64 = const c337
+      %65 = const c338
+      %66 = const c339
+      %67 = call builtin.intrinsic_pristine(%65, %66)
+      branch %67, bb37, bb38
     bb24:
-      %38 = call builtin.exception_value(%36)
-      store var $40.$abrupt_completion_2, %38
-      %39 = const c329
-      %40 = const c330
-      %41 = call builtin.intrinsic_pristine(%39, %40)
-      branch %41, bb25, bb26
+      %39 = call builtin.exception_value(%37)
+      store var $40.$abrupt_completion_2, %39
+      %40 = const c329
+      %41 = const c330
+      %42 = call builtin.intrinsic_pristine(%40, %41)
+      branch %42, bb25, bb26
     bb25:
-      %52 = const c335
+      %53 = const c335
       jump bb32
     bb26:
-      %42 = const c331
-      %43 = const c332
-      %44 = call builtin.intrinsic_resolve(%42, %43)
-      %45 = is_exception %44
-      branch %45, bb28, bb27
+      %43 = const c331
+      %44 = const c332
+      %45 = call builtin.intrinsic_resolve(%43, %44)
+      %46 = is_exception %45
+      branch %46, bb28, bb27
     bb27:
-      %47 = const c333
-      %48 = const c334
-      %49 = call builtin.intrinsic_resolve(%47, %48, %44)
-      %50 = is_exception %49
-      branch %50, bb30, bb29
+      %48 = const c333
+      %49 = const c334
+      %50 = call builtin.intrinsic_resolve(%48, %49, %45)
+      %51 = is_exception %50
+      branch %51, bb30, bb29
     bb28:
-      %46 = call builtin.exception_value(%44)
-      throw %46
+      %47 = call builtin.exception_value(%45)
+      throw %47
     bb29:
       jump bb32
     bb30:
-      %51 = call builtin.exception_value(%49)
-      throw %51
+      %52 = call builtin.exception_value(%50)
+      throw %52
     bb31:
-      %58 = phi [(bb33, %56), (bb34, %57)]
-      %59 = is_exception %58
-      branch %59, bb36, bb35
+      %59 = phi [(bb33, %57), (bb34, %58)]
+      %60 = is_exception %59
+      branch %60, bb36, bb35
     bb32:
-      %53 = phi [(bb25, %52), (bb29, %49)]
-      %54 = phi [(bb25, %52), (bb29, %44)]
-      %55 = const c336
-      branch %41, bb33, bb34
+      %54 = phi [(bb25, %53), (bb29, %50)]
+      %55 = phi [(bb25, %53), (bb29, %45)]
+      %56 = const c336
+      branch %42, bb33, bb34
     bb33:
-      %56 = call builtin.console.log(%55)
+      %57 = call builtin.console.log(%56)
       jump bb31
     bb34:
-      %57 = call %53, this=%54, args=[%55]
+      %58 = call %54, this=%55, args=[%56]
       jump bb31
     bb35:
-      %61 = load var $40.$abrupt_completion_2
-      throw %61
+      %63 = load var $40.$abrupt_completion_2
+      throw %63
     bb36:
-      %60 = call builtin.exception_value(%58)
-      throw %60
+      %61 = call builtin.exception_value(%59)
+      throw %61
     bb37:
-      %76 = const c344
+      %78 = const c344
       jump bb44
     bb38:
-      %66 = const c340
-      %67 = const c341
-      %68 = call builtin.intrinsic_resolve(%66, %67)
-      %69 = is_exception %68
-      branch %69, bb40, bb39
+      %68 = const c340
+      %69 = const c341
+      %70 = call builtin.intrinsic_resolve(%68, %69)
+      %71 = is_exception %70
+      branch %71, bb40, bb39
     bb39:
-      %71 = const c342
-      %72 = const c343
-      %73 = call builtin.intrinsic_resolve(%71, %72, %68)
-      %74 = is_exception %73
-      branch %74, bb42, bb41
+      %73 = const c342
+      %74 = const c343
+      %75 = call builtin.intrinsic_resolve(%73, %74, %70)
+      %76 = is_exception %75
+      branch %76, bb42, bb41
     bb40:
-      %70 = call builtin.exception_value(%68)
-      throw %70
+      %72 = call builtin.exception_value(%70)
+      throw %72
     bb41:
       jump bb44
     bb42:
-      %75 = call builtin.exception_value(%73)
-      throw %75
+      %77 = call builtin.exception_value(%75)
+      throw %77
     bb43:
-      %82 = phi [(bb45, %80), (bb46, %81)]
-      %83 = is_exception %82
-      branch %83, bb48, bb47
+      %84 = phi [(bb45, %82), (bb46, %83)]
+      %85 = is_exception %84
+      branch %85, bb48, bb47
     bb44:
-      %77 = phi [(bb37, %76), (bb41, %73)]
-      %78 = phi [(bb37, %76), (bb41, %68)]
-      %79 = const c345
-      branch %65, bb45, bb46
+      %79 = phi [(bb37, %78), (bb41, %75)]
+      %80 = phi [(bb37, %78), (bb41, %70)]
+      %81 = const c345
+      branch %67, bb45, bb46
     bb45:
-      %80 = call builtin.console.log(%79)
+      %82 = call builtin.console.log(%81)
       jump bb43
     bb46:
-      %81 = call %77, this=%78, args=[%79]
+      %83 = call %79, this=%80, args=[%81]
       jump bb43
     bb47:
-      %85 = call builtin.is_js_object(%62)
-      branch %85, bb49, bb50
+      %87 = call builtin.is_js_object(%64)
+      branch %87, bb49, bb50
     bb48:
-      %84 = call builtin.exception_value(%82)
-      throw %84
+      %86 = call builtin.exception_value(%84)
+      throw %86
     bb49:
-      return %62
+      return %64
     bb50:
-      %86 = const c346
-      %87 = stricteq %62, %86
-      branch %87, bb51, bb52
+      %88 = const c346
+      %89 = stricteq %64, %88
+      branch %89, bb51, bb52
     bb51:
-      %88 = load var $39.$this
-      %89 = call builtin.this_tdz_check(%88)
-      %90 = is_exception %89
-      branch %90, bb53, bb54
+      %90 = load var $39.$this
+      %91 = call builtin.this_tdz_check(%90)
+      %92 = is_exception %91
+      branch %92, bb53, bb54
     bb52:
-      %92 = const c347
-      %93 = call builtin.TypeError(%92)
-      throw %93
+      %94 = const c347
+      %95 = call builtin.TypeError(%94)
+      throw %95
     bb53:
-      %91 = call builtin.exception_value(%89)
-      throw %91
+      %93 = call builtin.exception_value(%91)
+      throw %93
     bb54:
-      return %89
+      return %91
     bb55:
       unreachable
     bb56:

@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+function [Symbol.matchAll] 1
+true
+a 0 false true
+b true 2
+ok:1:k,o:4:undefined
+0,1,2
+["","","",""]
+1
+TypeError: String.prototype.matchAll called with a non-global RegExp argument
+TypeError: Method RegExp.prototype.@@matchAll called on incompatible receiver null
+got:xy:true
+true
+1,3
+2,4 2
+--- stderr ---
