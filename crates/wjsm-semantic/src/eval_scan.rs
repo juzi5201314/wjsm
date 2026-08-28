@@ -105,7 +105,7 @@ pub(crate) fn module_has_use_strict_directive(module: &swc_ast::Module) -> bool 
         let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr_stmt.expr.as_ref() else {
             break;
         };
-        if string.value.as_str() == Some("use strict") {
+        if is_use_strict_directive(string) {
             found = true;
         }
     }
@@ -123,11 +123,21 @@ pub(crate) fn stmts_have_use_strict_directive(stmts: &[swc_ast::Stmt]) -> bool {
         let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr_stmt.expr.as_ref() else {
             break;
         };
-        if string.value.as_str() == Some("use strict") {
+        if is_use_strict_directive(string) {
             found = true;
         }
     }
     found
+}
+
+/// Use Strict Directive 判定：源码字面量须逐字为 `"use strict"` 或
+/// `'use strict'`（Directive Prologue 定义排除任何转义序列与续行）。
+fn is_use_strict_directive(string: &swc_ast::Str) -> bool {
+    match string.raw.as_deref() {
+        Some(raw) => raw == "\"use strict\"" || raw == "'use strict'",
+        // 合成 AST（无 raw 文本）退回按值比较。
+        None => string.value.as_str() == Some("use strict"),
+    }
 }
 
 pub fn eval_literal_binding_names(code: &str) -> Vec<String> {

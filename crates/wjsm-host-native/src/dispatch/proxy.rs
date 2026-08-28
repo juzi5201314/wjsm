@@ -6,7 +6,7 @@ use super::runtime::{
     delete_property, fail_dispatch, get_property, get_property_with_receiver, has_property,
     is_constructor_value, object_handle, ordinary_set, property_key,
 };
-use crate::{ASSIGNED_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind, NativeProxy};
+use crate::{NativeAgentState, NativeCallableKind, NativeProxy};
 
 pub(super) fn dispatch_proxy(
     ctx: &mut NativeVmContext,
@@ -726,7 +726,7 @@ pub(super) fn set(
         Ok(None) if value::is_object(entry.target) => {
             ordinary_set(ctx, state, entry.target, key, stored, receiver)
         }
-        Ok(None) => set_plain(ctx, state, entry.target, key, stored),
+        Ok(None) => set_plain(ctx, state, entry.target, key, stored, receiver),
         Err(exception) => Err(exception),
     }
 }
@@ -737,26 +737,23 @@ fn set_plain(
     target: i64,
     key: i64,
     stored: i64,
+    receiver: i64,
 ) -> SetResult {
     if value::is_proxy(target) {
-        return set(ctx, state, target, key, stored, target);
+        return set(ctx, state, target, key, stored, receiver);
     }
     let Some(key_id) = property_key(state, key) else {
         return Err(fail_dispatch(ctx));
     };
     if value::is_callable(target) {
-        state.callable_properties.insert((target, key_id), stored);
-        state
-            .callable_property_flags
-            .entry((target, key_id))
-            .or_insert(ASSIGNED_PROPERTY_FLAGS);
-        return Ok(SetCompletion::Written);
+        // callable target 的完整 [[Set]]：链上 setter / 可写性与可扩展性
+        // 拒绝均需生效（frozen 函数经无 trap proxy 赋值不得绕过）。
+        return super::callable_chain::set_with_receiver(
+            ctx, state, target, key_id, stored, receiver,
+        );
     }
     if value::is_array(target) {
-        let handle = value::decode_handle(target);
-        state.note_array_property(handle, key_id);
-        state.array_properties.insert((handle, key_id), stored);
-        return Ok(SetCompletion::Written);
+        return super::property_write::set_array_named_property(ctx, state, target, key_id, stored);
     }
     let Some(handle) = object_handle(target) else {
         return Err(fail_dispatch(ctx));
