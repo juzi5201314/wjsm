@@ -1,0 +1,58 @@
+exit_code: 0
+--- stdout ---
+true
+true true
+"ll"
+["l","l"]
+"2026"
+bcd
+2345
+cd
+UP
+match 1
+at true false true function at 1
+charAt true false true function charAt 1
+concat true false true function concat 1
+endsWith true false true function endsWith 1
+includes true false true function includes 1
+indexOf true false true function indexOf 1
+localeCompare true false true function localeCompare 1
+match true false true function match 1
+matchAll true false true function matchAll 1
+normalize true false true function normalize 0
+padStart true false true function padStart 1
+repeat true false true function repeat 1
+replace true false true function replace 2
+replaceAll true false true function replaceAll 2
+search true false true function search 1
+slice true false true function slice 2
+split true false true function split 2
+substring true false true function substring 2
+startsWith true false true function startsWith 1
+toString true false true function toString 0
+trim true false true function trim 0
+trimStart true false true function trimStart 0
+trimEnd true false true function trimEnd 0
+toLowerCase true false true function toLowerCase 0
+toUpperCase true false true function toUpperCase 0
+valueOf true false true function valueOf 0
+0 false false false
+true true false true
+true
+true true
+[]
+"" ""
+[object String]
+0
+true
+function i true false
+2 b
+true
+function true false true
+[Symbol.iterator] 0
+a|b
+function function
+function true
+function patched patched
+undefined false
+--- stderr ---

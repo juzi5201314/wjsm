@@ -1,0 +1,21 @@
+exit_code: 0
+--- stdout ---
+a\nb2c\t
+\u00e9 x \x41
+
+123
+a1b2c
+x-y+z
+LmidR
+
+
+
+"undefinedsnull"
+TypeError Cannot convert undefined or null to object
+TypeError Cannot convert undefined or null to object
+TypeError Cannot convert undefined or null to object
+raw 1 function
+p0q
+r|s
+嵌套inner\n!外
+--- stderr ---
