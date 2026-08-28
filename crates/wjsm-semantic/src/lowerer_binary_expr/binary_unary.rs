@@ -823,13 +823,6 @@ impl Lowerer {
                     // 严格代码中 delete 标识符是 early error（§13.5.1.1），
                     // 已在降级前由 strict_check 拒绝，此处只剩 sloppy 路径。
                     swc_ast::Expr::Ident(ident) => {
-                        // §13.5.1.1 早期错误：严格模式下 delete 无限定标识符。
-                        if self.strict_mode {
-                            return Err(self.error(
-                                unary.span(),
-                                "Delete of an unqualified identifier in strict mode.".to_string(),
-                            ));
-                        }
                         // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。
                         let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
                         if !crossed.is_empty() {
