@@ -103,9 +103,18 @@ impl Lowerer {
                             ));
                         }
                     }
+                    // eval/vm 代码内定义的普通函数（或其内的箭头）拥有自己的
+                    // new.target：最近的非箭头函数上下文在本次降级内时走静态
+                    // Builtin::NewTarget（运行时 activation），与非 eval 代码
+                    // 一致；只有纯箭头链穿透到 eval 顶层时才引用调用方的
+                    // new.target（经 ScopeRecord）。
+                    let has_non_arrow_function = self
+                        .is_arrow_fn_stack
+                        .iter()
+                        .any(|is_arrow| !*is_arrow);
                     // In eval mode: only valid if eval is inside a non-arrow function
                     if self.eval_mode
-                        && !self.function_stack.is_empty()
+                        && !has_non_arrow_function
                         && self.is_arrow_fn_stack.last().copied() == Some(true)
                     {
                         return Err(self.error(
@@ -113,7 +122,7 @@ impl Lowerer {
                             "SyntaxError: new.target is not valid in arrow function eval",
                         ));
                     }
-                    if self.eval_scope_record {
+                    if self.eval_scope_record && !has_non_arrow_function {
                         let env = self.load_eval_scope_env(block);
                         let name_const = self
                             .module

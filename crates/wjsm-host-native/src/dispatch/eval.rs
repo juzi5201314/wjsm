@@ -273,7 +273,7 @@ fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {
         .unwrap_or_else(|| runtime::render_value(state, key))
 }
 
-fn eval_execution_result(
+pub(crate) fn eval_execution_result(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     result: Result<i64, modules::VmExecutionError>,

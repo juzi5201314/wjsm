@@ -17,6 +17,7 @@ mod errors;
 mod eval;
 pub(crate) mod fetch;
 mod function;
+pub(crate) mod function_constructor;
 pub(crate) mod generator;
 pub(crate) mod idna;
 pub(crate) mod intl;

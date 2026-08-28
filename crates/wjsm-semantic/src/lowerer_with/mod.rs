@@ -18,7 +18,7 @@
 
 use super::*;
 
-mod strict_check;
+pub(crate) mod strict_check;
 mod with_calls;
 mod with_reads;
 mod with_writes;
