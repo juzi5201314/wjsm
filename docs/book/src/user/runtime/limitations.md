@@ -13,7 +13,7 @@ wjsm 在语义层拦截内置方法调用，生成专用的 `CallBuiltin` 指令
 ```js
 typeof [].map        // "function"
 typeof "abc".slice   // "function"
-typeof fetch         // "undefined"，但 fetch(url) 正常工作
+typeof fetch         // "function"
 ```
 
 仍有少数名字只在调用点可用，取值得到 `undefined`，下文逐条说明。
@@ -44,17 +44,6 @@ Uint8Array.prototype.slice.call(buf, 0, 1);  // Uint8Array(1) [1]
 ```
 
 已知差异：实例的原型链未挂接到 `Constructor.prototype`——`Object.getPrototypeOf(new Uint8Array(0)) !== Uint8Array.prototype`；`length` / `byteLength` / `byteOffset` 是实例上的可读值，`Constructor.prototype` 上不暴露对应访问器。
-
-## fetch 与 Streams 构造器
-
-`fetch`、`Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController` 在全局名单中，但只能直接调用：
-
-```js
-fetch("https://example.com")           // 可用
-const f = fetch                         // undefined
-new Response("body")                   // 可用
-const R = Response                      // undefined
-```
 
 ## TDZ 混合判定
 

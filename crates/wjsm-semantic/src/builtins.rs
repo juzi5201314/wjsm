@@ -69,6 +69,7 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "atob",
     "btoa",
     "performance",
+    "fetch",
     "Headers",
     "Request",
     "Response",
