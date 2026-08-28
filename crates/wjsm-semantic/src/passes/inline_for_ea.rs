@@ -730,6 +730,8 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
                         in_map = pred_out.clone();
                         first = false;
                     } else {
+                        // 对称 meet：任一 pred 缺失或不一致的键一律降为未知，
+                        // 否则单边保留会把「某路径未定义」误判为确定值。
                         for (k, v) in pred_out {
                             match in_map.get_mut(k) {
                                 Some(existing) => {
@@ -742,6 +744,11 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
                                 }
                             }
                         }
+                        for (k, v) in in_map.iter_mut() {
+                            if !pred_out.contains_key(k) {
+                                *v = None;
+                            }
+                        }
                     }
                 }
             }
@@ -752,8 +759,29 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
                     current.insert(name.clone(), Some(*value));
                 }
             }
-            if block_out.get(&block.id()) != Some(&current) {
-                block_out.insert(block.id(), current);
+            // 与旧 out 做只降不升的合并（absent → Some → None 单向）：
+            // in 集每轮从零重建属非单调混沌迭代，环上可能出现 Some/None
+            // 周期振荡永不收敛（with 分派挂在生成器循环头时实际触发）；
+            // 强制下降后每个 (block, key) 至多变更两次，必然到达不动点。
+            let descended = match block_out.get(&block.id()) {
+                None => current,
+                Some(old) => {
+                    let mut merged = current;
+                    for (k, v) in merged.iter_mut() {
+                        match old.get(k) {
+                            None => {}
+                            Some(old_v) if old_v == v => {}
+                            Some(_) => *v = None,
+                        }
+                    }
+                    for k in old.keys() {
+                        merged.entry(k.clone()).or_insert(None);
+                    }
+                    merged
+                }
+            };
+            if block_out.get(&block.id()) != Some(&descended) {
+                block_out.insert(block.id(), descended);
                 changed = true;
             }
             block_in.insert(block.id(), in_map);

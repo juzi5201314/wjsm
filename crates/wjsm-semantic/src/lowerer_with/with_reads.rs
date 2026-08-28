@@ -174,7 +174,7 @@ impl Lowerer {
                 key,
             },
         );
-        let hit_end = self.fork_or_defer_exception_branch(hit, hit_val)?;
+        let hit_end = self.fork_with_dispatch_exception(hit, hit_val)?;
 
         // 未命中：静态回退、运行时全局回退或运行时 ReferenceError。
         let mut miss_end = miss;
@@ -229,7 +229,7 @@ impl Lowerer {
                 key,
             },
         );
-        let hit_end = self.fork_or_defer_exception_branch(hit, loaded)?;
+        let hit_end = self.fork_with_dispatch_exception(hit, loaded)?;
         let hit_val = self.alloc_value();
         self.current_function.append_instruction(
             hit_end,
@@ -319,7 +319,7 @@ impl Lowerer {
                 key,
             },
         );
-        let hit_end = self.fork_or_defer_exception_branch(hit, deleted)?;
+        let hit_end = self.fork_with_dispatch_exception(hit, deleted)?;
 
         // 未命中：未声明名对隐式全局属性执行 [[Delete]]（缺失属性也返回 true），
         // 静态绑定沿用引擎既有裸标识符 delete 语义（恒 true）。

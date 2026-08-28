@@ -550,7 +550,7 @@ module {
       %30 = const c23
       %31 = set_prop %28, %30, %29
       store var $1.$iteration_env.0, %28
-      jump bb306
+      jump bb304
     bb1:
       %32 = load var $1.$iteration_env.0
       %33 = const c24
@@ -642,7 +642,7 @@ module {
       %86 = load var $0.j
       %87 = const c40
       %88 = set_prop %85, %87, %86
-      jump bb309
+      jump bb307
     bb19:
       %82 = call builtin.exception_value(%80)
       throw %82
@@ -869,7 +869,7 @@ module {
       %206 = load var $0.closureWrite
       %207 = const c75
       %208 = set_prop %205, %207, %206
-      jump bb308
+      jump bb306
     bb72:
       %203 = call builtin.exception_value(%201)
       throw %203
@@ -881,7 +881,7 @@ module {
       branch %212, bb76, bb77
     bb74:
       %226 = load var $0.$shared_env
-      jump bb298
+      jump bb296
     bb75:
       %231 = const c86
       %232 = load var $0.$shared_env
@@ -973,7 +973,7 @@ module {
       %265 = const c111
       %266 = set_prop %263, %265, %264
       store var $17.$iteration_env.1, %263
-      jump bb310
+      jump bb308
     bb97:
       %258 = call builtin.exception_value(%256)
       throw %258
@@ -997,7 +997,7 @@ module {
       %280 = const c117
       %281 = set_prop %278, %280, %279
       store var $19.$iteration_env.2, %278
-      jump bb307
+      jump bb305
     bb100:
       %319 = load var $17.$iteration_env.1
       %320 = load var $0.$shared_env
@@ -1148,7 +1148,11 @@ module {
       branch %374, bb138, bb139
     bb131:
       %392 = const c152
-      jump bb296
+      %393 = const c153
+      %394 = load var $0.readCreatedBefore
+      %395 = call %394, this=%393
+      %396 = is_exception %395
+      branch %396, bb148, bb147
     bb132:
       %363 = load var $0.createdBefore
       jump bb135
@@ -1208,11 +1212,11 @@ module {
       %390 = call builtin.exception_value(%388)
       throw %390
     bb147:
-      %398 = add %392, %686
+      %398 = add %392, %395
       %399 = is_exception %398
       branch %399, bb150, bb149
     bb148:
-      %397 = call builtin.exception_value(%686)
+      %397 = call builtin.exception_value(%395)
       throw %397
     bb149:
       %401 = call builtin.console.log(%398)
@@ -1232,7 +1236,7 @@ module {
       %408 = load var $0.nonLoopValue
       %409 = const c156
       %410 = set_prop %407, %409, %408
-      jump bb305
+      jump bb303
     bb152:
       %403 = call builtin.exception_value(%401)
       throw %403
@@ -1296,7 +1300,7 @@ module {
       %447 = const c170
       %448 = init_object_literal(c168, values=[%446, %447])
       %449 = call builtin.enumerator.from(%448)
-      jump bb303
+      jump bb301
     bb168:
       %444 = call builtin.exception_value(%442)
       throw %444
@@ -1381,7 +1385,7 @@ module {
       %489 = call builtin.exception_value(%487)
       throw %489
     bb185:
-      jump bb304
+      jump bb302
     bb186:
       %496 = call builtin.exception_value(%494)
       throw %496
@@ -1775,55 +1779,48 @@ module {
       store var $36.read, %679
       jump bb293
     bb295:
-      %396 = is_exception %686
-      branch %396, bb148, bb147
-    bb296:
-      %685 = const c140
-      %686 = get_prop %353, %685
-      jump bb295
-    bb297:
       jump bb82
+    bb296:
+      %685 = const c83
+      %686 = get_prop %226, %685
+      %687 = pos %686
+      %688 = is_exception %687
+      branch %688, bb298, bb297
+    bb297:
+      %690 = const c84
+      %691 = add %687, %690
+      %692 = set_prop %226, %685, %691
+      %693 = is_exception %692
+      branch %693, bb300, bb299
     bb298:
-      %689 = const c83
-      %690 = get_prop %226, %689
-      %691 = pos %690
-      %692 = is_exception %691
-      branch %692, bb300, bb299
+      %689 = call builtin.exception_value(%687)
+      throw %689
     bb299:
-      %694 = const c84
-      %695 = add %691, %694
-      %696 = set_prop %226, %689, %695
-      %697 = is_exception %696
-      branch %697, bb302, bb301
+      jump bb295
     bb300:
-      %693 = call builtin.exception_value(%691)
-      throw %693
+      %694 = call builtin.exception_value(%692)
+      throw %694
     bb301:
-      jump bb297
-    bb302:
-      %698 = call builtin.exception_value(%696)
-      throw %698
-    bb303:
       %459 = load var $0.keys
       jump bb169
-    bb304:
+    bb302:
       %508 = load var $0.values
       jump bb187
-    bb305:
+    bb303:
       %418 = load var $0.nonLoopReads
       jump bb153
-    bb306:
+    bb304:
       %41 = load var $0.letClosures
       jump bb1
-    bb307:
+    bb305:
       jump bb105
-    bb308:
+    bb306:
       %215 = load var $0.closureWrite
       jump bb73
-    bb309:
+    bb307:
       %103 = load var $0.varClosures
       jump bb20
-    bb310:
+    bb308:
       %291 = load var $0.nestedClosures
       jump bb98
 }

@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+0,1,2
+await-in-with
+3
+has-trap
+getter
+true null-to-object
+--- stderr ---

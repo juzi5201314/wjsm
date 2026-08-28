@@ -57,6 +57,23 @@ impl Lowerer {
         result
     }
 
+    /// with 分派链的异常检查分叉：async / async-generator 状态机体内同样
+    /// 立即分叉——分派链自身不含 await/yield，块结构与
+    /// `async_await_yield` 中宿主 builtin 调用后的 IsException 分支模式一致，
+    /// 经 `emit_throw_value` 走 promise rejection 路径；否则 Branch 会把
+    /// TAG_EXCEPTION 哨兵当作 has 结果消费，异常被静默吞掉。
+    /// 规范拥有者（动态 import 等）压制期间仍延迟交拥有者处理。
+    pub(crate) fn fork_with_dispatch_exception(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        if self.exception_fork_suppressed() {
+            return self.fork_or_defer_exception_branch(block, value);
+        }
+        self.lower_value_exception_branch(block, value)
+    }
+
     /// WithStatement 语句入口。严格模式 early error（§14.11.1）已由降级前的
     /// AST 校验 [`validate_with_strict`] 统一覆盖（含函数级指令与类体）。
     pub(crate) fn lower_with(
@@ -79,7 +96,7 @@ impl Lowerer {
                 args: vec![obj_val],
             },
         );
-        current_block = self.fork_or_defer_exception_branch(current_block, coerced)?;
+        current_block = self.fork_with_dispatch_exception(current_block, coerced)?;
 
         // 对象环境记录：合成绑定保存 with 对象，嵌套闭包按常规捕获协议访问。
         self.with_scope_count += 1;
@@ -172,7 +189,7 @@ impl Lowerer {
                     args: vec![object, key],
                 },
             );
-            cursor = self.fork_or_defer_exception_branch(cursor, has)?;
+            cursor = self.fork_with_dispatch_exception(cursor, has)?;
             let hit = self.current_function.new_block();
             let next = self.current_function.new_block();
             self.current_function.set_terminator(

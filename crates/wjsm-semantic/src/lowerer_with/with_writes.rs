@@ -123,7 +123,7 @@ impl Lowerer {
                 );
                 let key = self.append_string_const(block, name);
                 let result = self.emit_set_prop(block, global_obj, key, value);
-                let cont = self.fork_or_defer_exception_branch(block, result)?;
+                let cont = self.fork_with_dispatch_exception(block, result)?;
                 Ok((cont, true))
             }
             WithWriteFallback::ConstViolation => {
@@ -160,7 +160,7 @@ impl Lowerer {
         // 命中：PutValue → [[Set]]（setter / proxy set 异常传播；with 恒 sloppy）。
         let key = self.append_string_const(hit, name);
         let set_result = self.emit_set_prop(hit, base, key, value);
-        let hit_end = self.fork_or_defer_exception_branch(hit, set_result)?;
+        let hit_end = self.fork_with_dispatch_exception(hit, set_result)?;
 
         let (miss_end, miss_open) = self.lower_with_static_write(name, span, value, miss)?;
 

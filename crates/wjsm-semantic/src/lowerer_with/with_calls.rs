@@ -45,7 +45,7 @@ impl Lowerer {
                 key,
             },
         );
-        let hit_end = self.fork_or_defer_exception_branch(hit, hit_callee)?;
+        let hit_end = self.fork_with_dispatch_exception(hit, hit_callee)?;
 
         // 未命中：静态解析 callee，this = undefined。
         let mut miss_end = miss;
@@ -181,7 +181,7 @@ impl Lowerer {
                 key,
             },
         );
-        let hit_entry = self.fork_or_defer_exception_branch(hit, hit_callee)?;
+        let hit_entry = self.fork_with_dispatch_exception(hit, hit_callee)?;
         let (hit_val, hit_end) = self.emit_with_dynamic_call(call, hit_callee, base, hit_entry)?;
 
         let (miss_val, miss_end) = self.lower_direct_eval_call(call, miss)?;

@@ -938,6 +938,25 @@ fn with_in_sloppy_function_inside_strict_free_module_lowers() {
     );
 }
 
+#[test]
+fn with_dispatch_in_generator_loop_header_lowering_terminates() {
+    // 回归：with 分派挂在生成器/async 循环头（回边目标）时，
+    // inline_for_ea 的 reaching 数据流曾因非单调混沌迭代进入
+    // Some/None 周期振荡而永不收敛（编译死循环）。
+    let sources = [
+        "function* g() { with ({ n: 2 }) { let i = 0; while (i < n) { yield i; i++; } } }\n",
+        "async function a() { with ({ n: 2 }) { let i = 0; while (i < n) { await 0; i++; } } }\n",
+    ];
+    for source in sources {
+        let program = lower_module(parse_module(source).expect("parse should succeed"), false)
+            .unwrap_or_else(|error| panic!("lowering should terminate for {source:?}: {error:?}"));
+        assert!(
+            program.dump_text().contains("with.has_binding"),
+            "generator/async with dispatch should survive lowering: {source:?}"
+        );
+    }
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));
