@@ -2030,6 +2030,19 @@ pub(super) fn get_property_with_receiver(
         };
     }
     let handle = object_handle(object).ok_or(())?;
+    // String exotic 包装对象的自有 "length" 与在界索引（§10.4.3）先于原型
+    // 链解析：%String.prototype% 的自有 "length"（+0）不得遮蔽实例值。
+    if let Some(primitive) = boxed_primitive_value(state, object)
+        && value::is_string(primitive)
+        && (state.text_matches(encoded_key, "length")
+            || array_index(state, encoded_key).is_some_and(|index| {
+                state
+                    .string_len(primitive)
+                    .is_some_and(|length| (index as usize) < length)
+            }))
+    {
+        return get_property_with_receiver(ctx, state, primitive, encoded_key, receiver);
+    }
     let lookup = state
         .gc
         .heap()
