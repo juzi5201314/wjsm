@@ -7,7 +7,7 @@ use wjsm_native_abi::NativeVmContext;
 use super::super::runtime::{create_iterator_result, fail_dispatch, is_truthy, type_error};
 use super::{
     HelperKind, HelperRunState, IteratorHelper, IteratorRecord, PrimitiveHandling, close_iterator,
-    ensure_helper_prototype, get_iterator_flattenable, render_receiver, step_value,
+    ensure_helper_prototype, get_iterator_flattenable, render_receiver, step_has_value, step_value,
 };
 use crate::NativeAgentState;
 
@@ -317,10 +317,11 @@ fn step(ctx: &mut NativeVmContext, state: &mut NativeAgentState, handle: u32) ->
                     {
                         slot.kind = HelperKind::Drop(remaining - 1.0);
                     }
-                    match step_value(ctx, state, &underlying) {
+                    // 跳过阶段按 IteratorStep 只读 done：不触发 value getter。
+                    match step_has_value(ctx, state, &underlying) {
                         Err(exception) => return finish_throw(state, handle, exception),
-                        Ok(None) => return finish_done(ctx, state, handle),
-                        Ok(Some(_)) => {}
+                        Ok(false) => return finish_done(ctx, state, handle),
+                        Ok(true) => {}
                     }
                     continue;
                 }

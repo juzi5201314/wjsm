@@ -62,7 +62,10 @@ pub(crate) fn eager_method(
             "string \"Iterator.prototype.{}\" is not a function",
             method.name()
         );
-        return type_error(ctx, state, &message);
+        let error = type_error(ctx, state, &message);
+        // 校验失败对临时 record（NextMethod=undefined）做 throw 完成的
+        // IteratorClose：只读 return 不读 next（§27.1.4 各方法步骤 3–4）。
+        return close_iterator(ctx, state, receiver, error, true);
     }
     let record = match get_iterator_direct(ctx, state, receiver) {
         Ok(record) => record,

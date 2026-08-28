@@ -447,9 +447,10 @@ pub(crate) fn called_non_callable(
     type_error(ctx, state, &message)
 }
 
-/// IteratorStepValue(iteratorRecord)（§7.4.8）：调用 next、校验结果对象、
-/// 读取 done / value。`Ok(None)` 表示迭代完成；异常经 `Err` 传播。
-pub(crate) fn step_value(
+/// IteratorStep(iteratorRecord)（§7.4.9）的公共部分：调用 next、校验结果
+/// 对象、读取 done。`Ok(None)` 表示迭代完成，`Ok(Some(result))` 返回结果对象
+/// 供调用方决定是否读取 value。
+fn step_result(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     record: &IteratorRecord,
@@ -480,6 +481,19 @@ pub(crate) fn step_value(
     if is_truthy(state, done) {
         return Ok(None);
     }
+    Ok(Some(result))
+}
+
+/// IteratorStepValue(iteratorRecord)（§7.4.8）：调用 next、校验结果对象、
+/// 读取 done / value。`Ok(None)` 表示迭代完成；异常经 `Err` 传播。
+pub(crate) fn step_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    record: &IteratorRecord,
+) -> Result<Option<i64>, i64> {
+    let Some(result) = step_result(ctx, state, record)? else {
+        return Ok(None);
+    };
     let Some(value_key) = state.intern_text("value".into(), value::TAG_STRING) else {
         return Err(fail_dispatch(ctx));
     };
@@ -488,6 +502,16 @@ pub(crate) fn step_value(
         return Err(stepped);
     }
     Ok(Some(stepped))
+}
+
+/// IteratorStep(iteratorRecord)（§7.4.9）：只读 done 不读 value。drop 的
+/// 跳过循环用它避免触发结果对象 value getter 的副作用（§27.1.4.5 步骤 ii.2）。
+pub(crate) fn step_has_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    record: &IteratorRecord,
+) -> Result<bool, i64> {
+    Ok(step_result(ctx, state, record)?.is_some())
 }
 
 /// IteratorClose(iterator, completion)（§7.4.11）的对象版：throw 完成吞掉
@@ -876,7 +900,10 @@ pub(crate) fn proto_method(
                         method.name()
                     )
                 };
-                return type_error(ctx, state, &message);
+                let error = type_error(ctx, state, &message);
+                // 校验失败对临时 record（NextMethod=undefined）做 throw 完成的
+                // IteratorClose：只读 return 不读 next（§27.1.4 各方法步骤 3–4）。
+                return close_iterator(ctx, state, receiver, error, true);
             }
             let record = match get_iterator_direct(ctx, state, receiver) {
                 Ok(record) => record,
@@ -891,13 +918,16 @@ pub(crate) fn proto_method(
         }
         IteratorProtoMethod::Take | IteratorProtoMethod::Drop => {
             let limit = args.first().copied().unwrap_or_else(value::encode_undefined);
+            // limit 校验异常（ToNumber 抛出 / NaN / 负数）同样先对 this 做
+            // throw 完成的 IteratorClose 再传播（§27.1.4.11 / §27.1.4.5 步骤 3–8）。
             let number = match to_number_coerced(ctx, state, limit) {
                 Ok(number) => number,
-                Err(exception) => return exception,
+                Err(exception) => return close_iterator(ctx, state, receiver, exception, true),
             };
             if number.is_nan() {
                 let message = format!("{} must be positive", render_receiver(state, limit));
-                return super::runtime::range_error(ctx, state, &message);
+                let error = super::runtime::range_error(ctx, state, &message);
+                return close_iterator(ctx, state, receiver, error, true);
             }
             // ToIntegerOrInfinity（§7.1.5）：±∞ 保留，其余向零截断。
             let integer = if number.is_infinite() {
@@ -907,7 +937,8 @@ pub(crate) fn proto_method(
             };
             if integer < 0.0 {
                 let message = format!("{} must be positive", render_receiver(state, limit));
-                return super::runtime::range_error(ctx, state, &message);
+                let error = super::runtime::range_error(ctx, state, &message);
+                return close_iterator(ctx, state, receiver, error, true);
             }
             let record = match get_iterator_direct(ctx, state, receiver) {
                 Ok(record) => record,

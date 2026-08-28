@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+map|TypeError|filter|TypeError|flatMap|TypeError|take-nan|RangeError:undefined must be positive|take-neg|RangeError|drop-throw|custom|reduce|TypeError|forEach|TypeError|some|TypeError|every|TypeError|find|TypeError
+throwing return: TypeError
+valid limit: {"done":true} 0
+drop skip: 3 steps 3 value reads 1
+--- stderr ---
