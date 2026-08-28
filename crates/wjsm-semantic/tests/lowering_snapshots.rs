@@ -814,6 +814,11 @@ fn sync_generator_yield_star_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn generator_forof_return_close_fixture_matches_ir_snapshot() {
+    assert_snapshot("generator_forof_return_close");
+}
+
+#[test]
 fn async_generator_yield_star_fixture_matches_ir_snapshot() {
     assert_snapshot("async_generator_yield_star");
 }

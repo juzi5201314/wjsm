@@ -651,23 +651,32 @@ impl Lowerer {
             self.emit_throw_value(reject_block, resume_val)?;
             let return_slot = self.preserve_suspending_completion(return_block, resume_val);
 
-            match self.lower_pending_finalizers(return_block)? {
-                StmtFlow::Open(after_finally) => {
+            // yield 恢复为 return completion 时按 return 语义全量展开：迭代器
+            // 保护区（ForIn/OfBodyEvaluation 与解构 §8.6.2 的 IteratorClose）
+            // 与 finally 按嵌套深度内层优先交错，不能只跑 finalizer。
+            match self.emit_unwind_for_abrupt(
+                return_block,
+                -1,
+                Some(resume_val),
+                false,
+                return_slot.as_deref(),
+            )? {
+                StmtFlow::Open(after_unwind) => {
                     let gen_val2 = self.alloc_value();
                     self.current_function.append_instruction(
-                        after_finally,
+                        after_unwind,
                         Instruction::LoadVar {
                             dest: gen_val2,
                             name: format!("${}.$generator", self.async_generator_scope_id),
                         },
                     );
                     let return_value = self.reload_suspending_completion(
-                        after_finally,
+                        after_unwind,
                         resume_val,
                         return_slot.as_deref(),
                     );
                     self.current_function.append_instruction(
-                        after_finally,
+                        after_unwind,
                         Instruction::CallBuiltin {
                             dest: None,
                             builtin: Builtin::AsyncGeneratorReturn,
@@ -675,7 +684,7 @@ impl Lowerer {
                         },
                     );
                     self.current_function
-                        .set_terminator(after_finally, Terminator::Return { value: None });
+                        .set_terminator(after_unwind, Terminator::Return { value: None });
                 }
                 StmtFlow::Terminated => {}
             }
@@ -808,24 +817,33 @@ impl Lowerer {
             self.emit_throw_value(reject_block, resume_val)?;
             let return_slot = self.preserve_suspending_completion(return_block, resume_val);
 
-            match self.lower_pending_finalizers(return_block)? {
-                StmtFlow::Open(after_finally) => {
+            // yield 恢复为 return completion 时按 return 语义全量展开：迭代器
+            // 保护区（ForIn/OfBodyEvaluation 与解构 §8.6.2 的 IteratorClose）
+            // 与 finally 按嵌套深度内层优先交错，不能只跑 finalizer。
+            match self.emit_unwind_for_abrupt(
+                return_block,
+                -1,
+                Some(resume_val),
+                false,
+                return_slot.as_deref(),
+            )? {
+                StmtFlow::Open(after_unwind) => {
                     let gen_val2 = self.alloc_value();
                     self.current_function.append_instruction(
-                        after_finally,
+                        after_unwind,
                         Instruction::LoadVar {
                             dest: gen_val2,
                             name: format!("${}.$generator", self.async_generator_scope_id),
                         },
                     );
                     let return_value = self.reload_suspending_completion(
-                        after_finally,
+                        after_unwind,
                         resume_val,
                         return_slot.as_deref(),
                     );
                     let final_result = self.alloc_value();
                     self.current_function.append_instruction(
-                        after_finally,
+                        after_unwind,
                         Instruction::CallBuiltin {
                             dest: Some(final_result),
                             builtin: Builtin::GeneratorReturn,
@@ -833,7 +851,7 @@ impl Lowerer {
                         },
                     );
                     self.current_function.set_terminator(
-                        after_finally,
+                        after_unwind,
                         Terminator::Return {
                             value: Some(final_result),
                         },
