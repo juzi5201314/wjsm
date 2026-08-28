@@ -125,13 +125,15 @@ impl Lowerer {
             && is_derived
         {
             // this TDZ（ES §9.1.1.3.4）：派生显式构造器的 this 绑定在 super()
-            // 前未初始化。入口把 `new` 传入的预创建实例转存 `$pending_this#ctor`
-            // （名字带 `#`，与任何用户标识符不冲突；super() 站点作为父构造器
-            // this 实参并在 BindThisValue 回绑），随后将 this 槽写为未初始化
-            // 哨兵，this 读取的运行时检查据此抛 ReferenceError。
-            let pending_scope_id = self
+            // 前未初始化。规范中 thisArgument 由父 [[Construct]] 按
+            // OrdinaryCreateFromConstructor(newTarget) 每次调用新建；wjsm 的
+            // new 站点预创建实例已持有 newTarget.prototype，入口取其原型转存
+            // `$super_proto#ctor`（名字带 `#`，与任何用户标识符不冲突），
+            // super() 站点据此新建每次 Construct 的 thisArgument。随后将 this
+            // 槽写为未初始化哨兵，this 读取的运行时检查据此抛 ReferenceError。
+            let proto_scope_id = self
                 .scopes
-                .declare(Self::PENDING_THIS_BINDING, VarKind::Let, true)
+                .declare(Self::SUPER_PROTO_BINDING, VarKind::Let, true)
                 .map_err(|msg| self.error(class_span, msg))?;
             let incoming_this = self.alloc_value();
             self.current_function.append_instruction(
@@ -141,11 +143,20 @@ impl Lowerer {
                     name: format!("${this_scope_id}.$this"),
                 },
             );
+            let instance_proto = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::CallBuiltin {
+                    dest: Some(instance_proto),
+                    builtin: Builtin::ObjectGetPrototypeOf,
+                    args: vec![incoming_this],
+                },
+            );
             self.current_function.append_instruction(
                 entry,
                 Instruction::StoreVar {
-                    name: format!("${pending_scope_id}.{}", Self::PENDING_THIS_BINDING),
-                    value: incoming_this,
+                    name: format!("${proto_scope_id}.{}", Self::SUPER_PROTO_BINDING),
+                    value: instance_proto,
                 },
             );
             let sentinel_const = self.module.add_constant(Constant::Uninitialized);
@@ -164,9 +175,9 @@ impl Lowerer {
                     value: sentinel_val,
                 },
             );
-            self.ctor_pending_this = Some(CapturedBinding::new(
-                Self::PENDING_THIS_BINDING.to_string(),
-                pending_scope_id,
+            self.ctor_super_proto = Some(CapturedBinding::new(
+                Self::SUPER_PROTO_BINDING.to_string(),
+                proto_scope_id,
             ));
             // 构造器内箭头观察 this / super 时（如 `(() => super())()` 或
             // super() 前创建、之后调用的 `() => this`）：TDZ 哨兵与
@@ -317,7 +328,7 @@ impl Lowerer {
                 // try/catch 捕获（emit_ctor_this_construct_check 用 Throw
                 // 终结子直接向 new 站点传播）。
                 let this_val = self.emit_read_ctor_this(b);
-                if self.ctor_pending_this.is_some() {
+                if self.ctor_super_proto.is_some() {
                     let (checked, ok_block) = self.emit_ctor_this_construct_check(b, this_val);
                     self.current_function.set_terminator(
                         ok_block,

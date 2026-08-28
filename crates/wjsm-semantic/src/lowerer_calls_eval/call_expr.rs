@@ -872,24 +872,26 @@ impl Lowerer {
                         "super() is only valid inside derived constructors",
                     ));
                 }
-                // super() 只在显式派生构造器（含其内层箭头）持有预创建实例
+                // super() 只在显式派生构造器（含其内层箭头）持有实例原型
                 // 绑定；字段初始化器等其余位置按早错误拒绝（对齐 V8 文案）。
-                let Some(pending_binding) = self.ctor_pending_this.clone() else {
+                let Some(proto_binding) = self.ctor_super_proto.clone() else {
                     return Err(self.error(super_token.span, "'super' keyword unexpected here"));
                 };
                 let callee = self.alloc_value();
                 self.current_function
                     .append_instruction(block, Instruction::GetSuperConstructor { dest: callee });
-                // 父构造器的 this 实参是预创建实例（[[Construct]] 的
-                // thisArgument），不读当前 this 绑定——它在 super() 前是
-                // TDZ 哨兵，本就不可读。
-                let this_val = self.emit_read_pending_ctor_this(block, &pending_binding)?;
+                // 原型读取可能经捕获链引入控制流（箭头帧），先解析到延续块；
+                // thisArgument 本身须在实参求值之后新建（规范 [[Construct]]
+                // 顺序），故此处只读原型值。
+                let proto_val = self.emit_read_ctor_super_proto(block, &proto_binding)?;
                 let mut call_block = self.resolve_store_block(block);
                 let ctor_result = self.alloc_value();
+                let this_val;
                 if Self::call_args_have_spread(&call.args) {
                     let (args_array, end_block) =
                         self.lower_call_args_to_array(&call.args, call_block)?;
                     call_block = end_block;
+                    this_val = self.emit_super_this_argument(call_block, proto_val);
                     self.current_function.append_instruction(
                         call_block,
                         Instruction::CallBuiltin {
@@ -905,6 +907,7 @@ impl Lowerer {
                             self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?,
                         );
                     }
+                    this_val = self.emit_super_this_argument(call_block, proto_val);
                     self.current_function.append_instruction(
                         call_block,
                         Instruction::SuperCall {

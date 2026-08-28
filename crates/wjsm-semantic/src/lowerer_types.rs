@@ -110,13 +110,15 @@ pub(crate) struct Lowerer {
     /// 重绑结果对全部帧同步可见。
     pub(crate) ctor_this_via_env: bool,
     pub(crate) function_ctor_this_via_env_stack: Vec<bool>,
-    /// 派生类显式构造器的预创建实例绑定（`$pending_this`）：入口把 `new`
-    /// 传入的实例存入该绑定并将 this 绑定置为未初始化哨兵（this TDZ）。
-    /// super() 站点以它作为父构造器的 this 实参并在 BindThisValue 时回绑。
+    /// 派生类显式构造器的实例原型绑定（`$super_proto#ctor`）：入口取 `new`
+    /// 传入预创建实例的原型（即 newTarget.prototype）存入该绑定，并将 this
+    /// 绑定置为未初始化哨兵（this TDZ）。super() 站点据此为**每次** Construct
+    /// 新建 thisArgument（规范 OrdinaryCreateFromConstructor 语义——二次
+    /// super() 的父构造器副作用落在随后被丢弃的新对象上）。
     /// Some 同时标记「this 可能处于 TDZ」——this 读取须发射运行时检查。
     /// 箭头帧随词法 super 能力克隆继承；普通嵌套函数帧为 None。
-    pub(crate) ctor_pending_this: Option<CapturedBinding>,
-    pub(crate) function_ctor_pending_this_stack: Vec<Option<CapturedBinding>>,
+    pub(crate) ctor_super_proto: Option<CapturedBinding>,
+    pub(crate) function_ctor_super_proto_stack: Vec<Option<CapturedBinding>>,
     /// 模块/外层作用域 `const X = <字面量>` 绑定 → 字面量常量（IR 变量名
     /// `$<scope_id>.<name>` 为键）。闭包捕获读取时若命中则直接折叠为常量，
     /// 避免每次读取都经 env `obj_get` host 调用（基准：算术循环读模块 const

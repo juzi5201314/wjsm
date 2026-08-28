@@ -27,10 +27,10 @@ impl Lowerer {
             .function_derived_ctor_init_ctx_stack
             .last()
             .and_then(|ctx| ctx.clone());
-        // 预创建实例绑定同样词法继承：箭头体内的 super() 以它作为父构造器
-        // this 实参，箭头体内的 this 读取沿链观察外层构造器的 TDZ 哨兵。
-        self.ctor_pending_this = self
-            .function_ctor_pending_this_stack
+        // 实例原型绑定同样词法继承：箭头体内的 super() 据此新建父构造器的
+        // thisArgument，箭头体内的 this 读取沿链观察外层构造器的 TDZ 哨兵。
+        self.ctor_super_proto = self
+            .function_ctor_super_proto_stack
             .last()
             .and_then(|binding| binding.clone());
         // 声明 $env（闭包环境对象）
@@ -183,8 +183,8 @@ impl Lowerer {
             .function_derived_ctor_init_ctx_stack
             .last()
             .and_then(|ctx| ctx.clone());
-        self.ctor_pending_this = self
-            .function_ctor_pending_this_stack
+        self.ctor_super_proto = self
+            .function_ctor_super_proto_stack
             .last()
             .and_then(|binding| binding.clone());
         let env_scope_id = self

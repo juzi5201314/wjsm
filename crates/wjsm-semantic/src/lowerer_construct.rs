@@ -1,9 +1,10 @@
 use super::*;
 
 impl Lowerer {
-    /// 派生显式构造器预创建实例的合成绑定名：入口转存 `new` 传入的实例，
-    /// super() 站点读取。名字带 `#`（非法标识符字符），与用户绑定不冲突。
-    pub(crate) const PENDING_THIS_BINDING: &'static str = "$pending_this#ctor";
+    /// 派生显式构造器实例原型的合成绑定名：入口转存 `new` 站点预创建实例的
+    /// 原型（= newTarget.prototype），super() 站点据此为每次 Construct 新建
+    /// thisArgument。名字带 `#`（非法标识符字符），与用户绑定不冲突。
+    pub(crate) const SUPER_PROTO_BINDING: &'static str = "$super_proto#ctor";
 
     /// 按求值顺序降低 `new` 参数，并推进到可能的异常继续块。
     /// 实参抛出时必须在 [[Construct]] 前中止并传播，不得作为实参值流入构造器。
@@ -196,15 +197,17 @@ impl Lowerer {
     /// §9.1.1.3.1 BindThisValue）：
     /// - Construct 异常原样进入合流，由调用方分叉传播（后续步骤不执行）；
     /// - 当前 this 绑定已初始化 → super() 已调用过，抛 ReferenceError
-    ///   （BindThisValue 步骤 2；构造器体内 try/catch 可捕获，走 handler 路由）；
+    ///   （BindThisValue 步骤 2；构造器体内 try/catch 可捕获，走 handler 路由；
+    ///   规范中父构造器先于该检查执行，其副作用落在本次新建、随后被丢弃的
+    ///   thisArgument 上）；
     /// - 父构造器返回对象 → 该对象即 Construct 结果，重绑 this；
-    /// - 返回非对象 → Construct 结果为传入的预创建实例，重绑 this
+    /// - 返回非对象 → Construct 结果为本次新建的 thisArgument，重绑 this
     ///   （当前绑定持 TDZ 哨兵，重绑不可省略）。
     pub(crate) fn emit_super_call_result_bind(
         &mut self,
         block: BasicBlockId,
         ctor_result: ValueId,
-        pending_this: ValueId,
+        this_argument: ValueId,
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
         let is_exception = self.alloc_value();
         self.current_function.append_instruction(
@@ -260,7 +263,7 @@ impl Lowerer {
             },
         );
         let bind_result_end = self.emit_bind_this_value(bind_result_block, ctor_result);
-        let bind_pending_end = self.emit_bind_this_value(bind_pending_block, pending_this);
+        let bind_pending_end = self.emit_bind_this_value(bind_pending_block, this_argument);
         self.current_function
             .set_terminator(bind_result_end, Terminator::Jump { target: merge });
         self.current_function
@@ -282,7 +285,7 @@ impl Lowerer {
                     },
                     PhiSource {
                         predecessor: bind_pending_end,
-                        value: pending_this,
+                        value: this_argument,
                     },
                 ],
             },
@@ -290,12 +293,12 @@ impl Lowerer {
         Ok((result, merge))
     }
 
-    /// 读取派生显式构造器的预创建实例绑定（`$pending_this`）。
+    /// 读取派生显式构造器的实例原型绑定（`$super_proto#ctor`）。
     ///
     /// 与 `emit_param_prop_fields` 的形参读取同判定：属于本帧且未进共享 env
     /// 时直接 LoadVar；箭头帧或已入 env 时走捕获链读取（可能引入控制流，
     /// 调用方须以 `resolve_store_block` 推进）。
-    pub(crate) fn emit_read_pending_ctor_this(
+    pub(crate) fn emit_read_ctor_super_proto(
         &mut self,
         block: BasicBlockId,
         binding: &CapturedBinding,
@@ -312,6 +315,35 @@ impl Lowerer {
             },
         );
         Ok(value)
+    }
+
+    /// 为一次 super() 调用新建父构造器的 thisArgument（[[Construct]] base
+    /// 分支的 OrdinaryCreateFromConstructor(newTarget)）：空对象 + 实例原型。
+    /// 规范中该对象在实参求值之后、父构造器体执行之前创建且每次调用独立，
+    /// 因此必须在实参降低完成后的块上发射，且不得复用 new 站点的预创建实例
+    /// ——二次 super() 时父构造器的副作用只能落在本次新对象上（随后
+    /// BindThisValue 拒绝并丢弃），已绑定的 this 不受影响。
+    pub(crate) fn emit_super_this_argument(
+        &mut self,
+        block: BasicBlockId,
+        proto_val: ValueId,
+    ) -> ValueId {
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: this_val,
+                capacity: 4,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProto {
+                object: this_val,
+                value: proto_val,
+            },
+        );
+        this_val
     }
 
     /// [[Construct]] 层的 this 绑定检查（步骤 15 GetThisBinding）：值仍为
@@ -375,7 +407,7 @@ impl Lowerer {
     pub(crate) fn emit_derived_ctor_return(&mut self, block: BasicBlockId, value: Option<ValueId>) {
         let Some(value) = value else {
             let this_val = self.emit_read_ctor_this(block);
-            let (this_val, block) = if self.ctor_pending_this.is_some() {
+            let (this_val, block) = if self.ctor_super_proto.is_some() {
                 self.emit_ctor_this_construct_check(block, this_val)
             } else {
                 (this_val, block)
@@ -444,7 +476,7 @@ impl Lowerer {
         );
 
         let this_val = self.emit_read_ctor_this(return_this_block);
-        let (this_val, return_this_block) = if self.ctor_pending_this.is_some() {
+        let (this_val, return_this_block) = if self.ctor_super_proto.is_some() {
             self.emit_ctor_this_construct_check(return_this_block, this_val)
         } else {
             (this_val, return_this_block)

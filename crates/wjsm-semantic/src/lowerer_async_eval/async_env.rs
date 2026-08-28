@@ -774,7 +774,7 @@ impl Lowerer {
     }
 
     /// GetThisBinding（ES §9.1.1.3.4）：读取 this 并在可能观察到 TDZ 哨兵的
-    /// 帧（持有预创建实例绑定的派生构造器帧及其内层箭头帧）发射运行时检查，
+    /// 帧（持有实例原型绑定的派生构造器帧及其内层箭头帧）发射运行时检查，
     /// super() 前读取抛 ReferenceError（体内 try/catch 可捕获，走 handler
     /// 路由）。其余帧 this 恒已初始化，保持无控制流的裸读取。
     pub(crate) fn lower_this_checked(
@@ -782,7 +782,7 @@ impl Lowerer {
         block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let value = self.emit_read_ctor_this(*block);
-        if self.ctor_pending_this.is_none() {
+        if self.ctor_super_proto.is_none() {
             return Ok(value);
         }
         let checked = self.alloc_value();
