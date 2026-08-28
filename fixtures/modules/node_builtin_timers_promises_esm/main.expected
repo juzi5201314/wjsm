@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+true
+true
+waited
+yielded
+scheduler.wait done
+scheduler.yield done
+tick 1
+tick 2
+--- stderr ---

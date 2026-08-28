@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+true
+function
+cjs timeout ok
+cjs interval tick
+--- stderr ---

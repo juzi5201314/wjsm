@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+true
+true
+sub got payload
+false cjs:direct
+--- stderr ---

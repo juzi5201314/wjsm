@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+true
+utf8
+""
+"你"
+""
+"�"
+""
+"YWJj"
+"ZA=="
+--- stderr ---

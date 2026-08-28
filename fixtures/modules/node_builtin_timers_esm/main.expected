@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+true
+immediate first
+timeout x 42
+interval tick
+--- stderr ---

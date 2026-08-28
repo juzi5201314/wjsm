@@ -1,0 +1,11 @@
+import punycode, { encode, decode, toASCII, toUnicode, ucs2 } from 'node:punycode';
+import punycodeBare from 'punycode';
+console.log(punycode === punycodeBare);
+console.log(encode('mañana'), encode('☃-⌘'));
+console.log(decode('maana-pta'), decode('--dqo34k'));
+console.log(toASCII('mañana.com'), toASCII('中文.中国'), toASCII('plain.example'));
+console.log(toUnicode('xn--maana-pta.com'), toUnicode('xn--fiq228c.xn--fiqs8s'));
+console.log(toASCII('user@bücher.example'));
+console.log(JSON.stringify(ucs2.decode('a\u{10437}')));
+console.log(ucs2.encode([97, 0x10437]));
+console.log(typeof punycode.version);

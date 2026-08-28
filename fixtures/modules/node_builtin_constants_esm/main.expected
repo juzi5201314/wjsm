@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+true
+0 4 2 1
+2 15 9
+1
+true true
+number
+--- stderr ---

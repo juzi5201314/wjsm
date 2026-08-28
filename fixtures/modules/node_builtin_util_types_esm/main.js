@@ -1,0 +1,11 @@
+import types, { isDate, isMap, isSet, isRegExp, isPromise, isNativeError, isWeakMap, isWeakSet, isProxy } from 'node:util/types';
+import typesBare from 'util/types';
+import util from 'node:util';
+console.log(types === typesBare);
+console.log(util.types === types);
+console.log(isDate(new Date()), isDate(0));
+console.log(isMap(new Map()), isSet(new Set()), isWeakMap(new WeakMap()), isWeakSet(new WeakSet()));
+console.log(isRegExp(/a/), isRegExp('a'));
+console.log(isPromise(Promise.resolve()), isPromise({ then() {} }));
+console.log(isNativeError(new TypeError('x')), isNativeError({ name: 'TypeError' }));
+console.log(isProxy({}));

@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+function function function function
+sync end
+immediate imm
+then first
+--- stderr ---

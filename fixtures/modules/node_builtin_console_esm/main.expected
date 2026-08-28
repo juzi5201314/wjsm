@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+true
+true
+named log fmt 7
+custom stdout line
+warn falls back to stdout
+true
+--- stderr ---
+custom stderr line

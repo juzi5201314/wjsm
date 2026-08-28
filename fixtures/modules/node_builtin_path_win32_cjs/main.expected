@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+true
+true
+b.js
+a\b
+--- stderr ---

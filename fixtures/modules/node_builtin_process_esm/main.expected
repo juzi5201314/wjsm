@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+true
+true true
+true string
+string
+string true
+sync end
+nextTick ran
+--- stderr ---
