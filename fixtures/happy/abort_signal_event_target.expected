@@ -1,0 +1,26 @@
+exit_code: 0
+--- stdout ---
+function function function
+true true
+AbortSignal 0 EventTarget 0 Event 1
+true
+true
+true
+true true
+true true
+[object AbortSignal] [object EventTarget]
+[object AbortSignal]
+function function function
+true
+true
+TypeError: Illegal constructor
+function
+["listener:abort:true:true:true","onabort:abort"] true first reason
+["listener:abort:true:true:true","onabort:abort"] first reason
+["listener:abort:true:true:true","onabort:abort"]
+["kept"] AbortError This operation was aborted
+null
+10 true
+undefined
+threw: boom reason
+--- stderr ---
