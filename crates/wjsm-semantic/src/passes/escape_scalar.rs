@@ -16,45 +16,143 @@ use wjsm_ir::{
     ValueId, is_host_shared_variable,
 };
 
-/// 计算函数的支配集（迭代数据流，O(n²) 可接受，块数 ≤512）。
-///
-/// `dom[b]` = 支配块 b 的块集合（含 b 自身）。入口块的支配集为 {entry}。
-fn compute_dominators(function: &wjsm_ir::Function) -> Vec<HashSet<BasicBlockId>> {
-    let n = function.blocks().len();
-    let all: HashSet<BasicBlockId> = (0..n as u32).map(BasicBlockId).collect();
-    let mut dom: Vec<HashSet<BasicBlockId>> = vec![all; n];
-    let entry = function.entry();
-    dom[entry.0 as usize] = HashSet::from([entry]);
+/// 支配关系查询：CHK（Cooper–Harvey–Kennedy）idom 不动点 + 支配树 DFS 区间，
+/// 构建 O(边数 × 少量轮次)，`dominates` 查询 O(1)。旧的显式支配集算法在每轮
+/// 内重扫全部终止器求前驱，块数上千时（intrinsic 守卫分叉展开后常见）呈立方
+/// 级爆炸。不可达块沿用旧约定：被任何块支配（其支配集从未收缩），自身不支配
+/// 任何可达块。
+struct Dominators {
+    /// 支配树 DFS 进入序（按块 id 索引；不可达块无意义）。
+    tin: Vec<u32>,
+    /// 支配树 DFS 离开序。
+    tout: Vec<u32>,
+    reachable: Vec<bool>,
+}
 
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for b in 0..n {
-            if b == entry.0 as usize {
+impl Dominators {
+    fn compute(function: &wjsm_ir::Function) -> Self {
+        let n = function.blocks().len();
+        let entry = function.entry().0 as usize;
+        // 迭代 DFS 求后序；逆序即 RPO。
+        let mut postorder = Vec::with_capacity(n);
+        let mut reachable = vec![false; n];
+        let mut stack = vec![(entry, false)];
+        while let Some((block, expanded)) = stack.pop() {
+            if expanded {
+                postorder.push(block);
                 continue;
             }
-            // 前驱集合。
-            let preds: Vec<usize> = (0..n)
-                .filter(|&p| {
-                    terminator_successors(function.blocks()[p].terminator())
-                        .contains(&BasicBlockId(b as u32))
-                })
-                .collect();
-            if preds.is_empty() {
+            if reachable[block] {
                 continue;
             }
-            let mut new_dom = dom[preds[0]].clone();
-            for &p in &preds[1..] {
-                new_dom.retain(|x| dom[p].contains(x));
-            }
-            new_dom.insert(BasicBlockId(b as u32));
-            if new_dom != dom[b] {
-                dom[b] = new_dom;
-                changed = true;
+            reachable[block] = true;
+            stack.push((block, true));
+            for succ in terminator_successors(function.blocks()[block].terminator()) {
+                let succ = succ.0 as usize;
+                if succ < n && !reachable[succ] {
+                    stack.push((succ, false));
+                }
             }
         }
+        let mut rpo_index = vec![u32::MAX; n];
+        for (index, &block) in postorder.iter().rev().enumerate() {
+            rpo_index[block] = index as u32;
+        }
+        // 前驱表只建一次（仅可达块出边）。
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (block, block_reachable) in reachable.iter().enumerate() {
+            if !*block_reachable {
+                continue;
+            }
+            for succ in terminator_successors(function.blocks()[block].terminator()) {
+                let succ = succ.0 as usize;
+                if succ < n {
+                    preds[succ].push(block);
+                }
+            }
+        }
+        // CHK idom 不动点（RPO 序处理，可归约 CFG 常数轮收敛）。
+        let mut idom: Vec<Option<usize>> = vec![None; n];
+        idom[entry] = Some(entry);
+        let intersect = |idom: &[Option<usize>], rpo_index: &[u32], a: usize, b: usize| {
+            let (mut a, mut b) = (a, b);
+            while a != b {
+                while rpo_index[a] > rpo_index[b] {
+                    a = idom[a].expect("已处理块必有 idom");
+                }
+                while rpo_index[b] > rpo_index[a] {
+                    b = idom[b].expect("已处理块必有 idom");
+                }
+            }
+            a
+        };
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block in postorder.iter().rev() {
+                if block == entry {
+                    continue;
+                }
+                let mut new_idom = None;
+                for &pred in &preds[block] {
+                    if idom[pred].is_none() {
+                        continue;
+                    }
+                    new_idom = Some(match new_idom {
+                        None => pred,
+                        Some(current) => intersect(&idom, &rpo_index, pred, current),
+                    });
+                }
+                if new_idom.is_some() && idom[block] != new_idom {
+                    idom[block] = new_idom;
+                    changed = true;
+                }
+            }
+        }
+        // 支配树 DFS 区间（a 支配 b ⇔ tin[a] ≤ tin[b] ∧ tout[b] ≤ tout[a]）。
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); n];
+        for (block, parent) in idom.iter().enumerate() {
+            if let Some(parent) = *parent
+                && parent != block
+            {
+                children[parent].push(block);
+            }
+        }
+        let mut tin = vec![0u32; n];
+        let mut tout = vec![0u32; n];
+        let mut clock = 0u32;
+        let mut stack = vec![(entry, false)];
+        while let Some((block, expanded)) = stack.pop() {
+            if expanded {
+                tout[block] = clock;
+                clock += 1;
+                continue;
+            }
+            tin[block] = clock;
+            clock += 1;
+            stack.push((block, true));
+            for &child in &children[block] {
+                stack.push((child, false));
+            }
+        }
+        Self {
+            tin,
+            tout,
+            reachable,
+        }
     }
-    dom
+
+    /// a 是否支配 b（含 a == b）。
+    fn dominates(&self, a: BasicBlockId, b: BasicBlockId) -> bool {
+        let (a, b) = (a.0 as usize, b.0 as usize);
+        if !self.reachable[b] {
+            return true;
+        }
+        if !self.reachable[a] {
+            return false;
+        }
+        self.tin[a] <= self.tin[b] && self.tout[b] <= self.tout[a]
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -101,7 +199,7 @@ fn try_forward_store(
     name: &str,
     store_block: BasicBlockId,
     store_idx: usize,
-    dom: &[HashSet<BasicBlockId>],
+    dom: &Dominators,
     family: &mut HashSet<ValueId>,
     delete_targets: &mut Vec<(BasicBlockId, usize)>,
 ) -> bool {
@@ -125,7 +223,7 @@ fn try_forward_store(
         if block.id() == store_block {
             continue;
         }
-        if dom[block.id().0 as usize].contains(&store_block) {
+        if dom.dominates(store_block, block.id()) {
             for (idx, ins) in block.instructions().iter().enumerate() {
                 match ins {
                     Instruction::StoreVar { name: n, .. } if n == name => {
@@ -151,7 +249,7 @@ fn try_forward_store(
 fn collect_object_family(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
-    dom: &[HashSet<BasicBlockId>],
+    dom: &Dominators,
 ) -> Option<ObjectFamily> {
     let mut family = HashSet::from([candidate_dest]);
     let forwarded_vars = HashSet::new();
@@ -214,7 +312,7 @@ fn analyze_candidate(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
     const_strings: &HashMap<ValueId, String>,
-    dom: &[HashSet<BasicBlockId>],
+    dom: &Dominators,
 ) -> CandidateAnalysis {
     let Some((family, _, mut delete_targets)) =
         collect_object_family(function, candidate_dest, dom)
@@ -629,7 +727,7 @@ pub(crate) fn run(module: &mut Module) {
                         }
                     }
                 }
-                let dom = compute_dominators(function);
+                let dom = Dominators::compute(function);
                 for block in function.blocks() {
                     for instruction in block.instructions() {
                         if let Instruction::NewObject { dest, .. } = instruction
@@ -1100,7 +1198,7 @@ fn eliminate_array_templates(module: &mut Module) -> bool {
         {
             let function = &module.functions()[function_index];
             next_val = next_value_id(function);
-            let dom = compute_dominators(function);
+            let dom = Dominators::compute(function);
 
             let mut candidates = Vec::new();
             for block in function.blocks() {
@@ -1379,7 +1477,7 @@ fn eliminate_dead_string_computations(module: &mut Module) -> bool {
             {
                 let function = &module.functions()[function_index];
                 next_val = next_value_id(function);
-                let dom = compute_dominators(function);
+                let dom = Dominators::compute(function);
 
                 let mut candidates: Vec<(ValueId, Option<f64>)> = Vec::new();
 

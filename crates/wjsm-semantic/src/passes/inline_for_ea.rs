@@ -720,95 +720,110 @@ fn classify_construct_return(
     }
 }
 
+/// 变量到达值格：`Absent` = 任何路径尚无 Store（区别于冲突）；`Known` =
+/// 所有已计算路径写入同一值；`Unknown` = 路径缺失或值冲突。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReachSlot {
+    Absent,
+    Known(ValueId),
+    Unknown,
+}
+
 fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
-    let mut block_out: HashMap<BasicBlockId, HashMap<String, Option<ValueId>>> = HashMap::new();
-    let mut block_in: HashMap<BasicBlockId, HashMap<String, Option<ValueId>>> = HashMap::new();
     let mut load_reaching: HashMap<ValueId, ValueId> = HashMap::new();
 
+    // 名字先统一编号成下标：旧实现的 out/in 集是 String 键 HashMap，每轮
+    // 每块整表克隆导致海量字符串分配；改为定长 Copy 槽向量后每轮只剩
+    // memcpy。只需为出现过 StoreVar 的名字建槽（从未写入的名字恒 Absent）。
+    let mut name_index: HashMap<&str, usize> = HashMap::new();
+    for block in function.blocks() {
+        for instr in block.instructions() {
+            if let Instruction::StoreVar { name, .. } = instr {
+                let next = name_index.len();
+                name_index.entry(name.as_str()).or_insert(next);
+            }
+        }
+    }
+    let name_count = name_index.len();
+
+    // 前驱表只建一次：不动点每轮内重扫全部终止器求前驱是 O(块数²) 且每次
+    // 判定都要临时分配后继 Vec，块数上千时（intrinsic 守卫分叉展开后常见）
+    // 成为整个 pass 的主导成本。
+    let block_count = function.blocks().len();
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); block_count];
+    for block in function.blocks() {
+        for succ in cfg_fold::terminator_successors(block.terminator()) {
+            if (succ.0 as usize) < block_count {
+                preds[succ.0 as usize].push(block.id().0 as usize);
+            }
+        }
+    }
+
+    let mut block_out: Vec<Option<Vec<ReachSlot>>> = vec![None; block_count];
+    let mut block_in: Vec<Vec<ReachSlot>> = vec![vec![ReachSlot::Absent; name_count]; block_count];
     let mut changed = true;
     while changed {
         changed = false;
         for block in function.blocks() {
-            let mut in_map: HashMap<String, Option<ValueId>> = HashMap::new();
+            let block_idx = block.id().0 as usize;
+            let mut in_slots = vec![ReachSlot::Absent; name_count];
             let mut first = true;
-            for pred in function
-                .blocks()
-                .iter()
-                .filter(|p| cfg_fold::terminator_successors(p.terminator()).contains(&block.id()))
-            {
-                if let Some(pred_out) = block_out.get(&pred.id()) {
-                    if first {
-                        in_map = pred_out.clone();
-                        first = false;
-                    } else {
-                        // 对称 meet：任一 pred 缺失或不一致的键一律降为未知，
-                        // 否则单边保留会把「某路径未定义」误判为确定值。
-                        for (k, v) in pred_out {
-                            match in_map.get_mut(k) {
-                                Some(existing) => {
-                                    if *existing != *v {
-                                        *existing = None;
-                                    }
-                                }
-                                None => {
-                                    in_map.insert(k.clone(), None);
-                                }
-                            }
-                        }
-                        for (k, v) in in_map.iter_mut() {
-                            if !pred_out.contains_key(k) {
-                                *v = None;
-                            }
+            for &pred in &preds[block_idx] {
+                let Some(pred_out) = block_out[pred].as_ref() else {
+                    continue;
+                };
+                if first {
+                    in_slots.copy_from_slice(pred_out);
+                    first = false;
+                } else {
+                    // 对称 meet：任一 pred 缺失（Absent 对非 Absent）或值不
+                    // 一致的槽一律降为 Unknown，否则单边保留会把「某路径未
+                    // 定义」误判为确定值。
+                    for (slot, other) in in_slots.iter_mut().zip(pred_out) {
+                        if *slot != *other {
+                            *slot = ReachSlot::Unknown;
                         }
                     }
                 }
             }
 
-            let mut current = in_map.clone();
+            let mut current = in_slots.clone();
             for instr in block.instructions() {
                 if let Instruction::StoreVar { name, value } = instr {
-                    current.insert(name.clone(), Some(*value));
+                    current[name_index[name.as_str()]] = ReachSlot::Known(*value);
                 }
             }
-            // 与旧 out 做只降不升的合并（absent → Some → None 单向）：
-            // in 集每轮从零重建属非单调混沌迭代，环上可能出现 Some/None
-            // 周期振荡永不收敛（with 分派挂在生成器循环头时实际触发）；
-            // 强制下降后每个 (block, key) 至多变更两次，必然到达不动点。
-            let descended = match block_out.get(&block.id()) {
-                None => current,
-                Some(old) => {
-                    let mut merged = current;
-                    for (k, v) in merged.iter_mut() {
-                        match old.get(k) {
-                            None => {}
-                            Some(old_v) if old_v == v => {}
-                            Some(_) => *v = None,
-                        }
+            // 与旧 out 做只降不升的合并（Absent → Known → Unknown 单向）：
+            // in 集每轮从零重建属非单调混沌迭代，环上可能出现值周期振荡永不
+            // 收敛（with 分派挂在生成器循环头时实际触发）；强制下降后每个
+            // (block, slot) 至多变更两次，必然到达不动点。
+            if let Some(old) = block_out[block_idx].as_ref() {
+                for (slot, old_slot) in current.iter_mut().zip(old) {
+                    if *slot != *old_slot && *old_slot != ReachSlot::Absent {
+                        *slot = ReachSlot::Unknown;
                     }
-                    for k in old.keys() {
-                        merged.entry(k.clone()).or_insert(None);
-                    }
-                    merged
                 }
-            };
-            if block_out.get(&block.id()) != Some(&descended) {
-                block_out.insert(block.id(), descended);
+            }
+            if block_out[block_idx].as_ref() != Some(&current) {
+                block_out[block_idx] = Some(current);
                 changed = true;
             }
-            block_in.insert(block.id(), in_map);
+            block_in[block_idx] = in_slots;
         }
     }
 
     for block in function.blocks() {
-        let mut current = block_in.get(&block.id()).cloned().unwrap_or_default();
+        let mut current = block_in[block.id().0 as usize].clone();
         for instr in block.instructions() {
             match instr {
                 Instruction::StoreVar { name, value } => {
-                    current.insert(name.clone(), Some(*value));
+                    current[name_index[name.as_str()]] = ReachSlot::Known(*value);
                 }
                 Instruction::LoadVar { dest, name } => {
-                    if let Some(Some(reaching_val)) = current.get(name) {
-                        load_reaching.insert(*dest, *reaching_val);
+                    if let Some(&index) = name_index.get(name.as_str())
+                        && let ReachSlot::Known(reaching_val) = current[index]
+                    {
+                        load_reaching.insert(*dest, reaching_val);
                     }
                 }
                 _ => {}
