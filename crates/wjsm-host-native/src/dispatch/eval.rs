@@ -363,9 +363,11 @@ fn eval_binding_exists(
 
 /// direct/indirect eval 自由名的 DeleteBinding（§13.5.1.2 步骤 3–6）。
 /// 层序与 `eval_binding_exists` 一致：with 对象环境记录命中即按 [[Delete]]
-/// 裁决（§9.1.1.2.7）；调用方声明式绑定（含 arguments）不可删除返回 false
-/// （§9.1.1.1.8）；全局词法绑定与受限全局名返回 false；其余交由全局对象
-/// 属性 [[Delete]]（可配置属性删除返回 true，缺失名即不可解析引用亦 true）。
+/// 裁决（§9.1.1.2.7）；调用方声明式绑定（scope record 快照，含 arguments）
+/// 不可删除返回 false（§9.1.1.1.8）；全局词法绑定与受限全局名返回 false；
+/// 其余交由全局对象属性 [[Delete]]（可配置属性删除返回 true，缺失名即
+/// 不可解析引用亦 true）。嵌套闭包传入的是 env 对象链而非 record：链上
+/// 命中同为声明式绑定（false，绝不从 env 对象删属性），未命中回退全局。
 /// delete 标识符在严格代码是 early error，本 builtin 只会从 sloppy 站点发射。
 fn eval_delete_binding(
     ctx: &mut NativeVmContext,
@@ -380,22 +382,34 @@ fn eval_delete_binding(
         WithLayerResolution::Abrupt(exception) => return exception,
         WithLayerResolution::Static => {}
     }
-    if modules::scope_record_contains(state, environment, key)
-        || (state.text_matches(key, "arguments")
-            && modules::scope_record_has_arguments(state, environment))
-    {
-        return value::encode_bool(false);
-    }
-    let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+    let global = if modules::is_scope_record(state, environment) {
+        if modules::scope_record_contains(state, environment, key)
+            || (state.text_matches(key, "arguments")
+                && modules::scope_record_has_arguments(state, environment))
+        {
+            return value::encode_bool(false);
+        }
+        modules::scope_record_outer(state, environment).unwrap_or(environment)
+    } else {
+        match runtime::has_property(ctx, state, environment, key) {
+            Ok(true) => return value::encode_bool(false),
+            Ok(false) => {}
+            Err(exception) => return exception,
+        }
+        let Some(global) = state.global_object else {
+            return value::encode_bool(true);
+        };
+        global
+    };
     if let Some(env_key) = runtime::property_key(state, key)
-        && global_env::lexical_has(state, outer, env_key)
+        && global_env::lexical_has(state, global, env_key)
     {
         return value::encode_bool(false);
     }
     if global_env::is_restricted_global_name(state, key) {
         return value::encode_bool(false);
     }
-    runtime::delete_property_operator(ctx, state, outer, key, false)
+    runtime::delete_property_operator(ctx, state, global, key, false)
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {

@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+indirect var: true
+indirect let: false
+indirect fn: true
+indirect class: false
+indirect undeclared: true
+direct outer: false false false
+outer intact: 1 2 3
+direct eval var: true
+direct undeclared: true
+direct arguments: false
+nested bridge: false true
+keep intact: 1
+eval restricted: false false
+--- stderr ---

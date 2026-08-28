@@ -337,6 +337,11 @@ pub(crate) fn scope_record_has_arguments(state: &NativeAgentState, record: i64) 
         .is_some_and(|scope| scope.has_arguments_binding)
 }
 
+/// 句柄是否为登记在册的 ScopeRecord（嵌套闭包会以普通 env 对象充当环境）。
+pub(crate) fn is_scope_record(state: &NativeAgentState, record: i64) -> bool {
+    object_handle(record).is_some_and(|record| state.scope_records.contains_key(&record))
+}
+
 pub(crate) fn scope_record_super_base(state: &NativeAgentState, record: i64) -> Option<i64> {
     object_handle(record)
         .and_then(|record| state.scope_records.get(&record))

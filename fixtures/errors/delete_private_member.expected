@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: Private fields can not be deleted
+ --> errors/delete_private_member.js:6:17
+6 |     delete this.#x;
+  |                 ^^
+

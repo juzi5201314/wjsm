@@ -72,6 +72,16 @@ fn async_compound_await_loop_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn delete_non_reference_fixture_matches_ir_snapshot() {
+    assert_snapshot("delete_non_reference");
+}
+
+#[test]
+fn delete_declared_bindings_fixture_matches_ir_snapshot() {
+    assert_snapshot("delete_declared_bindings");
+}
+
+#[test]
 fn undeclared_var_reports_diagnostic() {
     let source = "console.log(z);\n";
     let error = lower_module(parse_module(source).expect("parse should succeed"), false)
