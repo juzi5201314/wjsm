@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+function ReadableStream 0
+function WritableStream
+function TransformStream
+4
+32
+true
+AB
+CD
+done true
+1+2
+--- stderr ---

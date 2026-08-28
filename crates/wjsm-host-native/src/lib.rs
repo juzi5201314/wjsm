@@ -599,6 +599,7 @@ enum NativeCallableKind {
     NodeDgram(dispatch::node_dgram::NodeDgramMethod),
     NodeAsyncHooks(dispatch::node_async_hooks::NodeAsyncHooksCallable),
     NodeOs(dispatch::node_os::NodeOsMethod),
+    NodeTty(dispatch::node_tty::NodeTtyMethod),
     Idna(dispatch::idna::IdnaMethod),
     NodeVm(dispatch::node_vm::NodeVmCallable),
     NodeChildProcess(dispatch::node_child_process::NodeChildProcessCallable),
@@ -1159,6 +1160,8 @@ struct NativeAgentState {
     intl: dispatch::intl::IntlState,
     native_callables: Vec<NativeCallableKind>,
     node_fs_bridge: Option<i64>,
+    node_module_bridge: Option<i64>,
+    node_tty_bridge: Option<i64>,
     regexps: Vec<Option<NativeRegExp>>,
     regexp_free: Vec<u32>,
     node_crypto: dispatch::node_crypto::NodeCryptoState,
@@ -1373,6 +1376,8 @@ impl NativeAgentState {
             agent_bridge: None,
             test262_agent: None,
             node_fs_bridge: None,
+            node_module_bridge: None,
+            node_tty_bridge: None,
             native_callables: vec![eval_callable],
             environment: std::env::vars().collect(),
             working_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -1643,6 +1648,8 @@ impl NativeAgentState {
         self.typed_arrays.clear();
         self.mapped_arguments.clear();
         self.node_fs_bridge = None;
+        self.node_module_bridge = None;
+        self.node_tty_bridge = None;
         self.callable_properties.clear();
         self.callable_accessors.clear();
         self.callable_property_flags.clear();
@@ -3226,6 +3233,15 @@ impl NativeAgentState {
         if name == "__wjsm_node_os" {
             return dispatch::node_os::ensure_bridge(self);
         }
+        if name == "__wjsm_node_tty" {
+            return dispatch::node_tty::ensure_bridge(self);
+        }
+        if name == "__wjsm_node_module" {
+            return dispatch::modules::ensure_node_module_bridge(self);
+        }
+        if name == "__wjsm_web_streams" {
+            return dispatch::streams::ensure_web_bridge(self);
+        }
         if name == "__wjsm_node_perf_hooks" {
             return dispatch::node_perf_hooks::ensure_bridge(self);
         }
@@ -3391,6 +3407,7 @@ impl NativeAgentState {
             | NativeCallableKind::NodeAsyncHooks(_)
             | NativeCallableKind::NodeFs(_)
             | NativeCallableKind::NodeOs(_)
+            | NativeCallableKind::NodeTty(_)
             | NativeCallableKind::Idna(_)
             | NativeCallableKind::NodeVm(_)
             | NativeCallableKind::NodeChildProcess(_)
@@ -5909,6 +5926,7 @@ unsafe extern "C" fn native_callable_call(
             dispatch::node_zlib::call(ctx, state, method, &arguments)
         }
         NativeCallableKind::NodeOs(method) => dispatch::node_os::call(ctx, state, method),
+        NativeCallableKind::NodeTty(method) => dispatch::node_tty::call(method, &arguments),
         NativeCallableKind::Idna(method) => dispatch::idna::call(ctx, state, method, &arguments),
         NativeCallableKind::NodeVm(callable) => {
             dispatch::node_vm::call(ctx, state, callable, &arguments)

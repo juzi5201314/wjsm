@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+false false false false
+boolean boolean boolean
+function function
+function function
+--- stderr ---

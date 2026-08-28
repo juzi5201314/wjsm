@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+function isatty 1
+false false false false false
+boolean boolean boolean
+function ReadStream function
+function WriteStream
+function function function function
+function function function
+true true true
+--- stderr ---

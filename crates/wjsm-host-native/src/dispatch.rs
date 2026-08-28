@@ -38,6 +38,7 @@ pub(crate) mod node_net;
 pub(crate) mod node_os;
 pub(crate) mod node_perf_hooks;
 pub(crate) mod node_tls;
+pub(crate) mod node_tty;
 pub(crate) mod node_vm;
 pub(crate) mod node_worker_threads;
 pub(crate) mod node_zlib;

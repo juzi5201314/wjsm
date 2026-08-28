@@ -1,6 +1,6 @@
 # Node.js 兼容能力
 
-wjsm 内置 24 个 Node.js 核心模块的实现，可用 `node:` 前缀或裸名导入。它们由 wjsm 自己用 JavaScript + 宿主函数实现，不是 Node.js 源码移植，因此覆盖范围是 Node API 的子集。
+wjsm 内置 41 个 Node.js 核心模块的实现，可用 `node:` 前缀或裸名导入。它们由 wjsm 自己用 JavaScript + 宿主函数实现，不是 Node.js 源码移植，因此覆盖范围是 Node API 的子集。
 
 ## 可用模块
 
@@ -17,6 +17,7 @@ wjsm 内置 24 个 Node.js 核心模块的实现，可用 `node:` 前缀或裸�
 | `fs/promises` | Promise 版文件操作 |
 | `crypto` | 摘要、HMAC、随机数、UUID |
 | `stream` | Readable/Writable/Transform |
+| `stream/web` | re-export 既有 Web Streams 构造器 |
 | `http` / `https` | 客户端请求与服务端监听 |
 | `net` | TCP socket 与 server |
 | `tls` | TLS socket（rustls 实现） |
@@ -29,6 +30,9 @@ wjsm 内置 24 个 Node.js 核心模块的实现，可用 `node:` 前缀或裸�
 | `async_hooks` | `AsyncLocalStorage` 与异步上下文追踪 |
 | `perf_hooks` | `performance` 计时与观察器 |
 | `inspector` | CDP inspector 会话接口 |
+| `module` | `createRequire` / `builtinModules` / `isBuiltin` |
+| `tty` | `isatty` 真实探测；ReadStream/WriteStream 形状 |
+| `v8` | `getHeapStatistics`（真实 GC 计量） |
 
 导入未列出的模块名会在编译期报错：
 

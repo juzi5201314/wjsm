@@ -241,6 +241,8 @@ pub(crate) struct NativeStreamsState {
     pub(super) writers: Vec<WriterState>,
     pub(super) transforms: Vec<TransformState>,
     pub(super) async_iterators: Vec<AsyncIteratorState>,
+    /// node:stream/web 桥对象缓存（Web Streams 构造器的可调用值集合）。
+    pub(super) web_bridge: Option<i64>,
 }
 
 pub(super) fn register_object(state: &mut NativeAgentState, object: i64, kind: ObjectKind) {
@@ -314,6 +316,32 @@ pub(super) fn type_error(
     super::modules::named_error_object(state, "TypeError", message.to_owned())
         .and_then(|error| state.create_exception(error))
         .unwrap_or_else(|| super::fail_dispatch(ctx))
+}
+
+/// node:stream/web 桥：把 Web Streams 构造器以可调用值形式暴露给 builtin JS。
+/// 与调用点拦截命中的 `dispatch_streams` 是同一实现，只是取值形态不同。
+pub(crate) fn ensure_web_bridge(state: &mut NativeAgentState) -> Option<i64> {
+    if let Some(bridge) = state.streams.web_bridge {
+        return Some(bridge);
+    }
+    let constructors = [
+        ("ReadableStream", Builtin::ReadableStreamConstructor),
+        ("WritableStream", Builtin::WritableStreamConstructor),
+        ("TransformStream", Builtin::TransformStreamConstructor),
+        ("CountQueuingStrategy", Builtin::CountQueuingStrategyConstructor),
+        (
+            "ByteLengthQueuingStrategy",
+            Builtin::ByteLengthQueuingStrategyConstructor,
+        ),
+    ];
+    let bridge = state.allocate_object(constructors.len() as u32, false).ok()?;
+    for (name, builtin) in constructors {
+        let callable =
+            state.native_callable(crate::NativeCallableKind::Builtin(builtin, false))?;
+        super::modules::set_named_property(state, bridge, name, callable).ok()?;
+    }
+    state.streams.web_bridge = Some(bridge);
+    Some(bridge)
 }
 
 pub(crate) fn dispatch_streams(

@@ -16,7 +16,7 @@ ECMAScript 是子集，不是完整实现。已覆盖作用域与 TDZ、闭包�
 
 ## Node.js 兼容
 
-内置 24 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。这些模块是 wjsm 自有的 JS 实现，不是 Node.js 移植——每个模块覆盖的是常用 API 子集，行为不一定与 Node 逐字一致。
+内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析。这些模块是 wjsm 自有的 JS 实现，不是 Node.js 移植——每个模块覆盖的是常用 API 子集，行为不一定与 Node 逐字一致。
 
 全局对象方面，`process`、`Buffer`、`TextEncoder`、`TextDecoder`、`structuredClone`、`queueMicrotask`、`atob`、`btoa`、`performance`、`setImmediate`、`clearImmediate`、`Intl` 可用；`fetch` 与 Streams 构造器只能直接调用，取值得到 `undefined`。`Intl` 使用嵌入的 ICU4X 数据，不读宿主 ICU。
 

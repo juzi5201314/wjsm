@@ -18,6 +18,7 @@ mod source_store;
 mod static_runtime_entries;
 use swc_core::ecma::ast;
 
+pub use builtin_modules::builtin_module_names;
 pub use bundler::{ModuleBundler, RuntimeEntryBundle, logical_url_from_path, logical_url_path};
 pub use graph::{ModuleGraph, ModuleId};
 pub use resolution_options::ResolutionOptions;
