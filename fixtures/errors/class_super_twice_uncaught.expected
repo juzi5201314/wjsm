@@ -1,0 +1,6 @@
+exit_code: 2
+--- stdout ---
+base-run
+base-run
+--- stderr ---
+Runtime error: ReferenceError: Super constructor may only be called once
