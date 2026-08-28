@@ -201,11 +201,11 @@ fn collect_strings(
         }
         let item = match super::js::get_named(ctx, state, result, "value") {
             Ok(item) => item,
-            Err(exception) => return Err(iterator_close(ctx, state, &[iterator, exception])),
+            Err(exception) => return Err(iterator_close(ctx, state, &[iterator, exception], true)),
         };
         if !value::is_string(item) {
             let exception = type_error(ctx, state, "list item must be a string");
-            return Err(iterator_close(ctx, state, &[iterator, exception]));
+            return Err(iterator_close(ctx, state, &[iterator, exception], true));
         }
         items.push(to_string_coerced(ctx, state, item)?);
     }

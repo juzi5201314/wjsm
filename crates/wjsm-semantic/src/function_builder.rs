@@ -143,6 +143,10 @@ pub(crate) enum LabelKind {
     Loop,
     Switch,
     Block,
+    /// 数组解构的迭代器保护区（§8.6.2 / §13.15.5.2 步骤 3）：仅承载
+    /// `iterator_to_close`，供 abrupt completion 展开时发射 IteratorClose；
+    /// 不是 break/continue 目标（解构内部不可能出现语句级跳转）。
+    Destructuring,
 }
 
 #[derive(Debug, Clone)]
