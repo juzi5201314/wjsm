@@ -215,6 +215,9 @@ pub(crate) struct Lowerer {
     /// 含默认值/rest/解构形参时为 `None`。`None` 表示按 §10.2.11 步骤 22
     /// 只能建 unmapped arguments 对象，也就没有 [[ParameterMap]]。
     pub(crate) arguments_simple_params: Option<Vec<String>>,
+    /// generator/async body 待兑现的 [[ParameterMap]] 目标对象；由
+    /// `emit_pending_arguments_param_map` 在 body 用户代码入口块消费。
+    pub(crate) pending_arguments_param_map: Option<ValueId>,
     /// `arguments` 对象的预物化来源：generator/async 函数 body 从续体槽位加载 wrapper
     /// 侧物化好的 arguments 对象时设置；`emit_arguments_init` 在入口 take 消费，
     /// 命中时直接绑定该对象而不再发射 `CollectRestArgs`（body 的原生调用帧没有用户实参）。
@@ -330,6 +333,7 @@ pub(crate) struct AsyncContextState {
     /// 形参默认值里的嵌套函数在 override 设定与消费之间降级，若不清零会把
     /// 外层 body 的 ValueId 泄漏进嵌套函数（跨函数值引用 → IR 验证失败）。
     pub(crate) arguments_source_override: Option<ValueId>,
+    pub(crate) pending_arguments_param_map: Option<ValueId>,
     pub(crate) rest_args_source_override: Option<ValueId>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]

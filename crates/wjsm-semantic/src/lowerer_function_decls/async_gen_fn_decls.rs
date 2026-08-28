@@ -288,6 +288,7 @@ impl Lowerer {
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
 
+        let body_entry = self.emit_pending_arguments_param_map(body_entry)?;
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_decl.function.body {
             for stmt in &body.stmts {

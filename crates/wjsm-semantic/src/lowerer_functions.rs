@@ -172,6 +172,7 @@ impl Lowerer {
             || self.scopes.lookup("arguments").is_ok();
 
         // Lower body.
+        let body_entry = self.emit_pending_arguments_param_map(body_entry)?;
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_expr.function.body {
             for stmt in &body.stmts {
@@ -603,6 +604,7 @@ impl Lowerer {
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
 
+        let body_entry = self.emit_pending_arguments_param_map(body_entry)?;
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_expr.function.body {
             for stmt in &body.stmts {

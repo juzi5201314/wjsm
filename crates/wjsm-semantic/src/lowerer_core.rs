@@ -138,6 +138,7 @@ impl Lowerer {
             is_method: false,
             arguments_param_count: 0,
             arguments_simple_params: Some(Vec::new()),
+            pending_arguments_param_map: None,
             arguments_source_override: None,
             rest_args_source_override: None,
             script_mode: false,
@@ -314,6 +315,7 @@ impl Lowerer {
             async_closure_env_ir_name: self.async_closure_env_ir_name.clone(),
             pending_suspends: self.pending_suspends.clone(),
             arguments_source_override: self.arguments_source_override,
+            pending_arguments_param_map: self.pending_arguments_param_map,
             rest_args_source_override: self.rest_args_source_override,
         }
     }
@@ -336,6 +338,7 @@ impl Lowerer {
         self.async_closure_env_ir_name = context.async_closure_env_ir_name;
         self.pending_suspends = context.pending_suspends;
         self.arguments_source_override = context.arguments_source_override;
+        self.pending_arguments_param_map = context.pending_arguments_param_map;
         self.rest_args_source_override = context.rest_args_source_override;
     }
 
@@ -358,6 +361,7 @@ impl Lowerer {
             async_closure_env_ir_name: None,
             pending_suspends: Vec::new(),
             arguments_source_override: None,
+            pending_arguments_param_map: None,
             rest_args_source_override: None,
         });
     }

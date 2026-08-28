@@ -649,9 +649,11 @@ impl Lowerer {
             if self.scopes.mark_initialised("arguments").is_err() {
                 // 已初始化过，无需处理
             }
-            let store_block = self.resolve_store_block(block);
-            let after_map = self.emit_arguments_param_map(store_block, source)?;
-            return Ok(self.resolve_store_block(after_map));
+            // 映射不能就地建：此处仍在状态机 dispatch 之前，而 dispatch 会把
+            // `$shared_env` 槽清成 undefined。改为登记待办，由调用方在 body 的
+            // 用户代码入口块（每次 resume 都会重新走到的 state 分支）兑现。
+            self.pending_arguments_param_map = Some(source);
+            return Ok(self.resolve_store_block(block));
         }
 
         // 1) Collect all arguments into an array
@@ -771,6 +773,18 @@ impl Lowerer {
             return Ok(self.resolve_store_block(after_map));
         }
         Ok(self.resolve_store_block(block))
+    }
+
+    /// 兑现 generator/async body 延迟登记的 [[ParameterMap]]。调用点必须是状态机
+    /// dispatch 之后的用户代码入口块，那里 `$shared_env` 才由 body 自己掌管。
+    pub(crate) fn emit_pending_arguments_param_map(
+        &mut self,
+        block: BasicBlockId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let Some(arguments_obj) = self.pending_arguments_param_map.take() else {
+            return Ok(block);
+        };
+        self.emit_arguments_param_map(block, arguments_obj)
     }
 
     /// 为 mapped arguments 对象装上 [[ParameterMap]]（ES §10.4.4）。
