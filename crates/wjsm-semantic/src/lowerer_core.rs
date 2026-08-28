@@ -140,6 +140,10 @@ impl Lowerer {
             arguments_source_override: None,
             rest_args_source_override: None,
             script_mode: false,
+            script_global_names: std::collections::HashMap::new(),
+            script_global_lexicals: Vec::new(),
+            script_global_vars: Vec::new(),
+            script_global_decl_init: false,
             emit_debug_checks: false,
             diagnostic_source: None,
             diagnostic_filename: "input".into(),
@@ -1147,6 +1151,10 @@ impl Lowerer {
             self.init_eval_completion_var(entry);
         }
 
+        // 脚本模式：GlobalDeclarationInstantiation 序幕（§16.1.7）——冲突预检、
+        // 全局词法绑定创建（TDZ）、顶层函数声明实例化、var 全局属性创建。
+        let entry = self.emit_script_gdi_prologue(&module.body, entry)?;
+
         let mut flow = StmtFlow::Open(entry);
 
         for item in &module.body {
@@ -1156,6 +1164,10 @@ impl Lowerer {
             }
             match item {
                 swc_ast::ModuleItem::Stmt(stmt) => {
+                    // 脚本模式顶层函数声明已在 GDI 序幕实例化，语句序跳过。
+                    if self.script_mode && Self::script_top_level_fn_stmt(stmt) {
+                        continue;
+                    }
                     flow = self.lower_stmt(stmt, flow)?;
                 }
                 swc_ast::ModuleItem::ModuleDecl(decl) => {

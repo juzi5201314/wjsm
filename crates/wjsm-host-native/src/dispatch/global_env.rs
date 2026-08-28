@@ -260,7 +260,8 @@ fn declare_var(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
 
 /// CreateGlobalFunctionBinding（§9.1.1.4.18）：既有属性可配置（或缺失）时按
 /// {value, writable, enumerable, configurable=false} 重定义，否则仅更新值；
-/// 并计入 [[VarNames]]。
+/// 并计入 [[VarNames]]。属性缺失且全局对象不可扩展时抛 TypeError
+/// （DefinePropertyOrThrow）。
 fn declare_func(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [global, name, stored] = args else {
         return fail_dispatch(ctx);
@@ -278,6 +279,20 @@ fn declare_func(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
                 .flatten()
         })
         .flatten();
+    if existing.is_none()
+        && !global_has_own_or_lazy(state, *global, *name, key)
+        && state
+            .non_extensible_objects
+            .contains(&value::decode_handle(*global))
+    {
+        let text = binding_name(state, *name);
+        return javascript_error(
+            ctx,
+            state,
+            "TypeError",
+            format!("Cannot define property {text}, object is not extensible"),
+        );
+    }
     let flags = match existing {
         Some(property) if property.flags & CONFIGURABLE == 0 => {
             property.flags & !(constants::FLAG_IS_ACCESSOR as u32)

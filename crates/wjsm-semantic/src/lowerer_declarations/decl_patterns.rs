@@ -140,6 +140,19 @@ impl Lowerer {
                         .map_err(|msg| self.error(pat.span(), msg))?;
                 }
 
+                // 脚本全局词法声明的绑定初始化：InitializeBinding（§9.1.1.4.4）
+                // 写宿主全局声明式记录并解除 TDZ。赋值型解构不受此分流（走
+                // store_binding_value → GlobalEnvSet 的 SetMutableBinding 语义）。
+                if self.script_global_decl_init
+                    && scope_id == 0
+                    && matches!(
+                        self.script_global_names.get(&name),
+                        Some(ScriptGlobalKind::Lexical { .. })
+                    )
+                {
+                    return Ok(self.emit_script_global_init_lex(block, &name, src_val));
+                }
+
                 let binding = CapturedBinding::new(name.clone(), scope_id);
                 let store_block =
                     self.store_binding_value(block, &binding, src_val, pat.span(), true)?;

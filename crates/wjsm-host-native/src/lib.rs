@@ -4592,6 +4592,10 @@ impl NativeAgentState {
                 .keys()
                 .filter_map(|(_, key)| key.name_id()),
         );
+        for record in self.global_env_records.values() {
+            names.extend(record.lexical.keys().filter_map(|key| key.name_id()));
+            names.extend(record.var_names.iter().filter_map(|key| key.name_id()));
+        }
         self.string_ids
             .values()
             .copied()
