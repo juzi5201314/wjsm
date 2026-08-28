@@ -457,9 +457,9 @@ module {
       call builtin.private_accessor_bind(%54, %79, %36, %38)
       %80 = const c78
       call builtin.private_set(%54, %80, %40)
+      store var $1.PrivateClosure, %54
       %81 = const c79
       %82 = set_prop %54, %81, %55
-      store var $1.PrivateClosure, %54
       store var $0.PrivateClosure, %54
       %83 = load var $0.PrivateClosure
       %84 = new_object(capacity=4)

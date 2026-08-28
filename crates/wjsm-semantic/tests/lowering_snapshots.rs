@@ -904,6 +904,16 @@ fn fn_expr_name_binding_fixture_matches_ir_snapshot() {
     assert_snapshot("fn_expr_name_binding");
 }
 
+#[test]
+fn class_self_name_binding_fixture_matches_ir_snapshot() {
+    assert_snapshot("class_self_name_binding");
+}
+
+#[test]
+fn class_name_loop_iterations_fixture_matches_ir_snapshot() {
+    assert_snapshot("class_name_loop_iterations");
+}
+
 // ── with 语句 ───────────────────────────────────────────────────────────
 
 #[test]
