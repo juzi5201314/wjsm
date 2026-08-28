@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+RAW:1+2
+RAW:7
+a1b2c
+true undefined
+GETTER 1
+m5n
+SLICE:5:1
+SLICE:11:0
+ello
+true true
+stored
+undefined false
+--- stderr ---

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 
+use crate::dominators::Dominators;
 use crate::{
     BasicBlock, BasicBlockId, Constant, ConstantId, Function, HomeObject, Instruction, Module,
     PhiSource, Terminator, ValueId,
@@ -39,9 +40,7 @@ struct ValueDefinition {
 }
 
 type Predecessors = HashMap<BasicBlockId, HashSet<BasicBlockId>>;
-type Successors = HashMap<BasicBlockId, Vec<BasicBlockId>>;
 type Definitions = HashMap<ValueId, ValueDefinition>;
-type Dominators = HashMap<BasicBlockId, HashSet<BasicBlockId>>;
 
 pub(crate) fn verify_module(module: &Module) -> Result<(), IrVerificationError> {
     verify_module_constants(module)?;
@@ -96,7 +95,6 @@ fn verify_function(
     verify_function_id_refs(module, function)?;
 
     let mut predecessors = empty_predecessors(function);
-    let mut successors = HashMap::new();
 
     for (index, block) in function.blocks().iter().enumerate() {
         if block.id().0 as usize != index {
@@ -135,20 +133,12 @@ fn verify_function(
                 .or_default()
                 .insert(block.id());
         }
-        successors.insert(block.id(), block_successors);
     }
 
     let definitions = collect_definitions(function)?;
-    let reachable = reachable_blocks(function, &successors);
-    let dominators = compute_dominators(function, &predecessors, &reachable);
-    verify_phi_sources(
-        function,
-        &predecessors,
-        &definitions,
-        &reachable,
-        &dominators,
-    )?;
-    verify_non_phi_uses(function, &definitions, &predecessors, &successors)?;
+    let dominators = Dominators::compute(function);
+    verify_phi_sources(function, &predecessors, &definitions, &dominators)?;
+    verify_non_phi_uses(function, &definitions, &dominators)?;
 
     let _ = function_index;
     Ok(())
@@ -255,7 +245,6 @@ fn verify_phi_sources(
     function: &Function,
     predecessors: &Predecessors,
     definitions: &Definitions,
-    reachable: &HashSet<BasicBlockId>,
     dominators: &Dominators,
 ) -> Result<(), IrVerificationError> {
     for block in function.blocks() {
@@ -295,7 +284,7 @@ fn verify_phi_sources(
                         phi_block: block.id(),
                         predecessor: source.predecessor,
                     },
-                    Some((reachable, dominators)),
+                    dominators,
                 )?;
             }
             for predecessor in actual_predecessors {
@@ -348,12 +337,8 @@ fn verify_phi_source_predecessor(
 fn verify_non_phi_uses(
     function: &Function,
     definitions: &Definitions,
-    predecessors: &Predecessors,
-    successors: &Successors,
+    dominators: &Dominators,
 ) -> Result<(), IrVerificationError> {
-    let reachable = reachable_blocks(function, successors);
-    let dominators = compute_dominators(function, predecessors, &reachable);
-
     for block in function.blocks() {
         for (instruction_index, instruction) in block.instructions().iter().enumerate() {
             verify_instruction_uses(
@@ -364,7 +349,7 @@ fn verify_non_phi_uses(
                     block: block.id(),
                     instruction_index,
                 },
-                Some((&reachable, &dominators)),
+                dominators,
             )?;
         }
         verify_terminator_uses(
@@ -372,7 +357,7 @@ fn verify_non_phi_uses(
             definitions,
             block.terminator(),
             block.id(),
-            Some((&reachable, &dominators)),
+            dominators,
         )?;
     }
     Ok(())
@@ -383,7 +368,7 @@ fn verify_instruction_uses(
     definitions: &Definitions,
     instruction: &Instruction,
     site: ValueUseSite,
-    dominance: Option<(&HashSet<BasicBlockId>, &Dominators)>,
+    dominance: &Dominators,
 ) -> Result<(), IrVerificationError> {
     match instruction {
         Instruction::Const { .. } | Instruction::LoadVar { .. } | Instruction::Phi { .. } => {}
@@ -532,7 +517,7 @@ fn verify_value_slice(
     definitions: &Definitions,
     values: &[ValueId],
     site: ValueUseSite,
-    dominance: Option<(&HashSet<BasicBlockId>, &Dominators)>,
+    dominance: &Dominators,
 ) -> Result<(), IrVerificationError> {
     for value in values {
         verify_value_use(function, definitions, *value, site, dominance)?;
@@ -545,7 +530,7 @@ fn verify_terminator_uses(
     definitions: &Definitions,
     terminator: &Terminator,
     block: BasicBlockId,
-    dominance: Option<(&HashSet<BasicBlockId>, &Dominators)>,
+    dominance: &Dominators,
 ) -> Result<(), IrVerificationError> {
     let site = ValueUseSite::Terminator { block };
     match terminator {
@@ -616,7 +601,7 @@ fn verify_value_use(
     definitions: &Definitions,
     value: ValueId,
     site: ValueUseSite,
-    dominance: Option<(&HashSet<BasicBlockId>, &Dominators)>,
+    dominance: &Dominators,
 ) -> Result<(), IrVerificationError> {
     let Some(definition) = definitions.get(&value).copied() else {
         return Err(function_error(
@@ -638,99 +623,20 @@ fn verify_value_use(
         ));
     }
 
-    if let Some((reachable, dominators)) = dominance {
-        let use_block = site.block();
-        if reachable.contains(&use_block)
-            && (!reachable.contains(&definition.block)
-                || !dominators
-                    .get(&use_block)
-                    .is_some_and(|block_dominators| block_dominators.contains(&definition.block)))
-        {
-            return Err(function_error(
-                function,
-                format_args!(
-                    "definition of value {value} in {} does not dominate use by {}",
-                    definition.block,
-                    site.describe()
-                ),
-            ));
-        }
+    // 使用点可达时定义必须支配使用；不可达定义不支配任何可达块（dominates 返回 false）。
+    let use_block = site.block();
+    if dominance.is_reachable(use_block) && !dominance.dominates(definition.block, use_block) {
+        return Err(function_error(
+            function,
+            format_args!(
+                "definition of value {value} in {} does not dominate use by {}",
+                definition.block,
+                site.describe()
+            ),
+        ));
     }
 
     Ok(())
-}
-
-fn reachable_blocks(function: &Function, successors: &Successors) -> HashSet<BasicBlockId> {
-    let mut reachable = HashSet::new();
-    let mut stack = vec![function.entry()];
-    while let Some(block) = stack.pop() {
-        if !reachable.insert(block) {
-            continue;
-        }
-        if let Some(block_successors) = successors.get(&block) {
-            for successor in block_successors {
-                stack.push(*successor);
-            }
-        }
-    }
-    reachable
-}
-
-fn compute_dominators(
-    function: &Function,
-    predecessors: &Predecessors,
-    reachable: &HashSet<BasicBlockId>,
-) -> Dominators {
-    let mut dominators = HashMap::new();
-    for block in function.blocks() {
-        let initial = if block.id() == function.entry() {
-            HashSet::from([block.id()])
-        } else if reachable.contains(&block.id()) {
-            reachable.clone()
-        } else {
-            HashSet::from([block.id()])
-        };
-        dominators.insert(block.id(), initial);
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for block in function.blocks() {
-            let block_id = block.id();
-            if block_id == function.entry() || !reachable.contains(&block_id) {
-                continue;
-            }
-
-            let reachable_predecessors: Vec<_> = predecessors
-                .get(&block_id)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|predecessor| reachable.contains(predecessor))
-                .collect();
-
-            let mut next = if let Some((first, rest)) = reachable_predecessors.split_first() {
-                let mut intersection = dominators.get(first).cloned().unwrap_or_default();
-                for predecessor in rest {
-                    if let Some(predecessor_dominators) = dominators.get(predecessor) {
-                        intersection.retain(|item| predecessor_dominators.contains(item));
-                    }
-                }
-                intersection
-            } else {
-                HashSet::new()
-            };
-            next.insert(block_id);
-
-            if dominators.get(&block_id) != Some(&next) {
-                dominators.insert(block_id, next);
-                changed = true;
-            }
-        }
-    }
-
-    dominators
 }
 
 fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {

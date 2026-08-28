@@ -12,50 +12,9 @@ use super::cfg_fold::terminator_successors;
 use super::direct_call::{collect_uses, instr_uses, instruction_dest, terminator_uses};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use wjsm_ir::{
-    BasicBlockId, Builtin, Constant, ConstantId, FunctionId, Instruction, Module, Terminator,
-    ValueId, is_host_shared_variable,
+    BasicBlockId, Builtin, Constant, ConstantId, Dominators, FunctionId, Instruction, Module,
+    Terminator, ValueId, is_host_shared_variable,
 };
-
-/// 计算函数的支配集（迭代数据流，O(n²) 可接受，块数 ≤512）。
-///
-/// `dom[b]` = 支配块 b 的块集合（含 b 自身）。入口块的支配集为 {entry}。
-fn compute_dominators(function: &wjsm_ir::Function) -> Vec<HashSet<BasicBlockId>> {
-    let n = function.blocks().len();
-    let all: HashSet<BasicBlockId> = (0..n as u32).map(BasicBlockId).collect();
-    let mut dom: Vec<HashSet<BasicBlockId>> = vec![all; n];
-    let entry = function.entry();
-    dom[entry.0 as usize] = HashSet::from([entry]);
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for b in 0..n {
-            if b == entry.0 as usize {
-                continue;
-            }
-            // 前驱集合。
-            let preds: Vec<usize> = (0..n)
-                .filter(|&p| {
-                    terminator_successors(function.blocks()[p].terminator())
-                        .contains(&BasicBlockId(b as u32))
-                })
-                .collect();
-            if preds.is_empty() {
-                continue;
-            }
-            let mut new_dom = dom[preds[0]].clone();
-            for &p in &preds[1..] {
-                new_dom.retain(|x| dom[p].contains(x));
-            }
-            new_dom.insert(BasicBlockId(b as u32));
-            if new_dom != dom[b] {
-                dom[b] = new_dom;
-                changed = true;
-            }
-        }
-    }
-    dom
-}
 
 #[derive(Clone, Debug)]
 pub(super) struct PropertyWrite {
@@ -101,7 +60,7 @@ fn try_forward_store(
     name: &str,
     store_block: BasicBlockId,
     store_idx: usize,
-    dom: &[HashSet<BasicBlockId>],
+    dom: &Dominators,
     family: &mut HashSet<ValueId>,
     delete_targets: &mut Vec<(BasicBlockId, usize)>,
 ) -> bool {
@@ -125,7 +84,7 @@ fn try_forward_store(
         if block.id() == store_block {
             continue;
         }
-        if dom[block.id().0 as usize].contains(&store_block) {
+        if dom.dominates(store_block, block.id()) {
             for (idx, ins) in block.instructions().iter().enumerate() {
                 match ins {
                     Instruction::StoreVar { name: n, .. } if n == name => {
@@ -151,7 +110,7 @@ fn try_forward_store(
 fn collect_object_family(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
-    dom: &[HashSet<BasicBlockId>],
+    dom: &Dominators,
 ) -> Option<ObjectFamily> {
     let mut family = HashSet::from([candidate_dest]);
     let forwarded_vars = HashSet::new();
@@ -214,7 +173,7 @@ fn analyze_candidate(
     function: &wjsm_ir::Function,
     candidate_dest: ValueId,
     const_strings: &HashMap<ValueId, String>,
-    dom: &[HashSet<BasicBlockId>],
+    dom: &Dominators,
 ) -> CandidateAnalysis {
     let Some((family, _, mut delete_targets)) =
         collect_object_family(function, candidate_dest, dom)
@@ -629,7 +588,7 @@ pub(crate) fn run(module: &mut Module) {
                         }
                     }
                 }
-                let dom = compute_dominators(function);
+                let dom = Dominators::compute(function);
                 for block in function.blocks() {
                     for instruction in block.instructions() {
                         if let Instruction::NewObject { dest, .. } = instruction
@@ -1100,7 +1059,7 @@ fn eliminate_array_templates(module: &mut Module) -> bool {
         {
             let function = &module.functions()[function_index];
             next_val = next_value_id(function);
-            let dom = compute_dominators(function);
+            let dom = Dominators::compute(function);
 
             let mut candidates = Vec::new();
             for block in function.blocks() {
@@ -1379,7 +1338,7 @@ fn eliminate_dead_string_computations(module: &mut Module) -> bool {
             {
                 let function = &module.functions()[function_index];
                 next_val = next_value_id(function);
-                let dom = compute_dominators(function);
+                let dom = Dominators::compute(function);
 
                 let mut candidates: Vec<(ValueId, Option<f64>)> = Vec::new();
 
