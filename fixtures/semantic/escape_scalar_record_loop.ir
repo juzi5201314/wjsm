@@ -50,9 +50,23 @@ module {
     c47 = functionref(@0)
     c48 = undefined
     c49 = string("$0.RECORD")
-    c50 = undefined
-    c51 = undefined
-    c52 = bool(true)
+    c50 = number(1)
+    c51 = number(0)
+    c52 = number(1)
+    c53 = number(0)
+    c54 = number(1)
+    c55 = number(0)
+    c56 = undefined
+    c57 = undefined
+    c58 = number(1)
+    c59 = number(0)
+    c60 = number(1)
+    c61 = number(0)
+    c62 = number(1)
+    c63 = number(0)
+    c64 = undefined
+    c65 = undefined
+    c66 = bool(true)
 
   fn @work [needs_prototype] [js_length 0] [captures: $0.RECORD] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -264,171 +278,205 @@ module {
       store var $0.$shared_env, %27
       %32 = call builtin.create_closure(%25, %27)
       store var $0.work, %32
-      %136 = const c0
-      jump bb44
+      %33 = const c50
+      %34 = const c51
+      %35 = call builtin.intrinsic_pristine(%33, %34)
+      branch %35, bb1, bb2
     bb1:
-      %38 = call builtin.console.log(%222)
+      %46 = const c56
+      jump bb8
+    bb2:
+      %36 = const c52
+      %37 = const c53
+      %38 = call builtin.intrinsic_resolve(%36, %37)
       %39 = is_exception %38
       branch %39, bb4, bb3
-    bb2:
-      unreachable
     bb3:
-      %49 = const c0
-      jump bb10
+      %41 = const c54
+      %42 = const c55
+      %43 = call builtin.intrinsic_resolve(%41, %42, %38)
+      %44 = is_exception %43
+      branch %44, bb6, bb5
     bb4:
       %40 = call builtin.exception_value(%38)
-      store var $sroa.$0.RECORD.name, %243
-      store var $sroa.$0.RECORD.value, %278
+      store var $sroa.$0.RECORD.name, %21
+      store var $sroa.$0.RECORD.value, %22
       store var $sroa.$0.RECORD.length, %23
       throw %40
     bb5:
-      %46 = call builtin.console.log(%135)
-      %47 = is_exception %46
-      branch %47, bb8, bb7
+      jump bb8
     bb6:
-      unreachable
+      %45 = call builtin.exception_value(%43)
+      store var $sroa.$0.RECORD.name, %21
+      store var $sroa.$0.RECORD.value, %22
+      store var $sroa.$0.RECORD.length, %23
+      throw %45
     bb7:
-      store var $sroa.$0.RECORD.name, %233
-      store var $sroa.$0.RECORD.value, %262
-      store var $sroa.$0.RECORD.length, %23
-      return
+      %56 = phi [(bb11, %54), (bb12, %55)]
+      %57 = is_exception %56
+      branch %57, bb14, bb13
     bb8:
-      %48 = call builtin.exception_value(%46)
-      store var $sroa.$0.RECORD.name, %233
-      store var $sroa.$0.RECORD.value, %262
-      store var $sroa.$0.RECORD.length, %23
-      throw %48
+      %47 = phi [(bb1, %46), (bb5, %43)]
+      %48 = phi [(bb1, %46), (bb5, %38)]
+      %172 = const c0
+      jump bb64
     bb9:
-      jump bb5
+      branch %35, bb11, bb12
     bb10:
-      %50 = const c24
-      store var $1.total, %50
-      %51 = const c25
-      store var $2.i, %51
-      jump bb11
+      unreachable
     bb11:
-      %262 = phi [(bb10, %278), (bb41, %95)]
-      %233 = phi [(bb10, %243), (bb41, %73)]
-      %52 = load var $2.i
-      %53 = const c26
-      %54 = lt %52, %53
-      jump bb15
+      %54 = call builtin.console.log(%258)
+      jump bb7
     bb12:
-      jump bb19
+      store var $sroa.$0.RECORD.name, %292
+      store var $sroa.$0.RECORD.value, %340
+      store var $sroa.$0.RECORD.length, %23
+      %55 = call %47, this=%48, args=[%258]
+      jump bb7
     bb13:
-      %130 = load var $2.i
-      %131 = const c46
-      %132 = add %130, %131
-      store var $2.i, %132
-      jump bb41
+      %59 = const c58
+      %60 = const c59
+      %61 = call builtin.intrinsic_pristine(%59, %60)
+      branch %61, bb15, bb16
     bb14:
-      %135 = load var $1.total
-      store var $1.total, %49
-      store var $2.i, %49
-      jump bb9
+      %58 = call builtin.exception_value(%56)
+      store var $sroa.$0.RECORD.name, %292
+      store var $sroa.$0.RECORD.value, %340
+      store var $sroa.$0.RECORD.length, %23
+      throw %58
     bb15:
-      jump bb17
+      %72 = const c64
+      jump bb22
     bb16:
-      unreachable
+      %62 = const c60
+      %63 = const c61
+      %64 = call builtin.intrinsic_resolve(%62, %63)
+      %65 = is_exception %64
+      branch %65, bb18, bb17
     bb17:
-      branch %54, bb12, bb14
+      %67 = const c62
+      %68 = const c63
+      %69 = call builtin.intrinsic_resolve(%67, %68, %64)
+      %70 = is_exception %69
+      branch %70, bb20, bb19
     bb18:
-      unreachable
+      %66 = call builtin.exception_value(%64)
+      store var $sroa.$0.RECORD.name, %292
+      store var $sroa.$0.RECORD.value, %340
+      store var $sroa.$0.RECORD.length, %23
+      throw %66
     bb19:
-      %72 = const c33
-      %73 = add %233, %72
-      jump bb21
+      jump bb22
     bb20:
-      unreachable
+      %71 = call builtin.exception_value(%69)
+      store var $sroa.$0.RECORD.name, %292
+      store var $sroa.$0.RECORD.value, %340
+      store var $sroa.$0.RECORD.length, %23
+      throw %71
     bb21:
-      jump bb23
+      %82 = phi [(bb25, %80), (bb26, %81)]
+      %83 = is_exception %82
+      branch %83, bb28, bb27
     bb22:
-      unreachable
+      %73 = phi [(bb15, %72), (bb19, %69)]
+      %74 = phi [(bb15, %72), (bb19, %64)]
+      %85 = const c0
+      jump bb30
     bb23:
-      jump bb25
+      branch %61, bb25, bb26
     bb24:
       unreachable
     bb25:
-      %95 = add %73, %23
-      jump bb27
+      %80 = call builtin.console.log(%171)
+      jump bb21
     bb26:
-      unreachable
+      store var $sroa.$0.RECORD.name, %282
+      store var $sroa.$0.RECORD.value, %324
+      store var $sroa.$0.RECORD.length, %23
+      %81 = call %73, this=%74, args=[%171]
+      jump bb21
     bb27:
-      %99 = load var $1.total
-      jump bb29
+      store var $sroa.$0.RECORD.name, %282
+      store var $sroa.$0.RECORD.value, %324
+      store var $sroa.$0.RECORD.length, %23
+      return
     bb28:
-      unreachable
+      %84 = call builtin.exception_value(%82)
+      store var $sroa.$0.RECORD.name, %282
+      store var $sroa.$0.RECORD.value, %324
+      store var $sroa.$0.RECORD.length, %23
+      throw %84
     bb29:
-      %107 = add %99, %73
-      jump bb31
+      jump bb23
     bb30:
-      unreachable
+      %86 = const c24
+      store var $1.total, %86
+      %87 = const c25
+      store var $2.i, %87
+      jump bb31
     bb31:
-      jump bb33
-    bb32:
-      unreachable
-    bb33:
-      %117 = add %107, %95
+      %324 = phi [(bb30, %340), (bb61, %131)]
+      %282 = phi [(bb30, %292), (bb61, %109)]
+      %88 = load var $2.i
+      %89 = const c26
+      %90 = lt %88, %89
       jump bb35
+    bb32:
+      jump bb39
+    bb33:
+      %166 = load var $2.i
+      %167 = const c46
+      %168 = add %166, %167
+      store var $2.i, %168
+      jump bb61
     bb34:
-      unreachable
+      %171 = load var $1.total
+      store var $1.total, %85
+      store var $2.i, %85
+      jump bb29
     bb35:
       jump bb37
     bb36:
       unreachable
     bb37:
-      %127 = add %117, %23
-      store var $1.total, %127
-      jump bb39
+      branch %90, bb32, bb34
     bb38:
       unreachable
     bb39:
-      jump bb13
+      %108 = const c33
+      %109 = add %282, %108
+      jump bb41
     bb40:
       unreachable
     bb41:
-      jump bb11
+      jump bb43
     bb42:
       unreachable
     bb43:
-      jump bb1
-    bb44:
-      %137 = const c24
-      store var $1.total, %137
-      %138 = const c25
-      store var $2.i, %138
       jump bb45
+    bb44:
+      unreachable
     bb45:
-      %278 = phi [(bb44, %22), (bb75, %182)]
-      %243 = phi [(bb44, %21), (bb75, %160)]
-      %139 = load var $2.i
-      %140 = const c26
-      %141 = lt %139, %140
-      jump bb49
+      %131 = add %109, %23
+      jump bb47
     bb46:
-      jump bb53
+      unreachable
     bb47:
-      %217 = load var $2.i
-      %218 = const c46
-      %219 = add %217, %218
-      store var $2.i, %219
-      jump bb75
+      %135 = load var $1.total
+      jump bb49
     bb48:
-      %222 = load var $1.total
-      store var $1.total, %136
-      store var $2.i, %136
-      jump bb43
+      unreachable
     bb49:
+      %143 = add %135, %109
       jump bb51
     bb50:
       unreachable
     bb51:
-      branch %141, bb46, bb48
+      jump bb53
     bb52:
       unreachable
     bb53:
-      %159 = const c33
-      %160 = add %243, %159
+      %153 = add %143, %131
       jump bb55
     bb54:
       unreachable
@@ -437,49 +485,109 @@ module {
     bb56:
       unreachable
     bb57:
+      %163 = add %153, %23
+      store var $1.total, %163
       jump bb59
     bb58:
       unreachable
     bb59:
-      %182 = add %160, %23
-      jump bb61
+      jump bb33
     bb60:
       unreachable
     bb61:
-      %186 = load var $1.total
-      jump bb63
+      jump bb31
     bb62:
       unreachable
     bb63:
-      %194 = add %186, %160
-      jump bb65
+      jump bb9
     bb64:
-      unreachable
+      %173 = const c24
+      store var $1.total, %173
+      %174 = const c25
+      store var $2.i, %174
+      jump bb65
     bb65:
-      jump bb67
-    bb66:
-      unreachable
-    bb67:
-      %204 = add %194, %182
+      %340 = phi [(bb64, %22), (bb95, %218)]
+      %292 = phi [(bb64, %21), (bb95, %196)]
+      %175 = load var $2.i
+      %176 = const c26
+      %177 = lt %175, %176
       jump bb69
+    bb66:
+      jump bb73
+    bb67:
+      %253 = load var $2.i
+      %254 = const c46
+      %255 = add %253, %254
+      store var $2.i, %255
+      jump bb95
     bb68:
-      unreachable
+      %258 = load var $1.total
+      store var $1.total, %172
+      store var $2.i, %172
+      jump bb63
     bb69:
       jump bb71
     bb70:
       unreachable
     bb71:
-      %214 = add %204, %23
-      store var $1.total, %214
-      jump bb73
+      branch %177, bb66, bb68
     bb72:
       unreachable
     bb73:
-      jump bb47
+      %195 = const c33
+      %196 = add %292, %195
+      jump bb75
     bb74:
       unreachable
     bb75:
-      jump bb45
+      jump bb77
     bb76:
+      unreachable
+    bb77:
+      jump bb79
+    bb78:
+      unreachable
+    bb79:
+      %218 = add %196, %23
+      jump bb81
+    bb80:
+      unreachable
+    bb81:
+      %222 = load var $1.total
+      jump bb83
+    bb82:
+      unreachable
+    bb83:
+      %230 = add %222, %196
+      jump bb85
+    bb84:
+      unreachable
+    bb85:
+      jump bb87
+    bb86:
+      unreachable
+    bb87:
+      %240 = add %230, %218
+      jump bb89
+    bb88:
+      unreachable
+    bb89:
+      jump bb91
+    bb90:
+      unreachable
+    bb91:
+      %250 = add %240, %23
+      store var $1.total, %250
+      jump bb93
+    bb92:
+      unreachable
+    bb93:
+      jump bb67
+    bb94:
+      unreachable
+    bb95:
+      jump bb65
+    bb96:
       unreachable
 }

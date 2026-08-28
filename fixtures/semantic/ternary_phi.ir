@@ -23,7 +23,14 @@ module {
     c20 = bool(true)
     c21 = number(1)
     c22 = number(2)
-    c23 = bool(false)
+    c23 = number(1)
+    c24 = number(0)
+    c25 = number(1)
+    c26 = number(0)
+    c27 = number(1)
+    c28 = number(0)
+    c29 = undefined
+    c30 = bool(false)
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -77,13 +84,51 @@ module {
       unreachable
     bb3:
       store var $0.x, %22
-      %25 = load var $0.x
-      %26 = call builtin.console.log(%25)
-      %27 = is_exception %26
-      branch %27, bb5, bb4
+      %25 = const c23
+      %26 = const c24
+      %27 = call builtin.intrinsic_pristine(%25, %26)
+      branch %27, bb4, bb5
     bb4:
-      return
+      %38 = const c29
+      jump bb11
     bb5:
-      %28 = call builtin.exception_value(%26)
-      throw %28
+      %28 = const c25
+      %29 = const c26
+      %30 = call builtin.intrinsic_resolve(%28, %29)
+      %31 = is_exception %30
+      branch %31, bb7, bb6
+    bb6:
+      %33 = const c27
+      %34 = const c28
+      %35 = call builtin.intrinsic_resolve(%33, %34, %30)
+      %36 = is_exception %35
+      branch %36, bb9, bb8
+    bb7:
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb8:
+      jump bb11
+    bb9:
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb10:
+      %44 = phi [(bb12, %42), (bb13, %43)]
+      %45 = is_exception %44
+      branch %45, bb15, bb14
+    bb11:
+      %39 = phi [(bb4, %38), (bb8, %35)]
+      %40 = phi [(bb4, %38), (bb8, %30)]
+      %41 = load var $0.x
+      branch %27, bb12, bb13
+    bb12:
+      %42 = call builtin.console.log(%41)
+      jump bb10
+    bb13:
+      %43 = call %39, this=%40, args=[%41]
+      jump bb10
+    bb14:
+      return
+    bb15:
+      %46 = call builtin.exception_value(%44)
+      throw %46
 }

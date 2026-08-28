@@ -32,10 +32,24 @@ module {
     c29 = string("Blue")
     c30 = string("2")
     c31 = string("Blue")
-    c32 = string("Red")
-    c33 = string("Green")
-    c34 = bool(true)
-    c35 = bool(false)
+    c32 = number(1)
+    c33 = number(0)
+    c34 = number(1)
+    c35 = number(0)
+    c36 = number(1)
+    c37 = number(0)
+    c38 = undefined
+    c39 = string("Red")
+    c40 = number(1)
+    c41 = number(0)
+    c42 = number(1)
+    c43 = number(0)
+    c44 = number(1)
+    c45 = number(0)
+    c46 = undefined
+    c47 = string("Green")
+    c48 = bool(true)
+    c49 = bool(false)
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -101,37 +115,113 @@ module {
       %38 = const c31
       %39 = set_prop %21, %37, %38
       store var $0.Color, %21
-      %40 = load var $0.Color
-      %41 = const c32
-      %42 = get_prop %40, %41
-      %43 = is_exception %42
-      branch %43, bb2, bb1
+      %40 = const c32
+      %41 = const c33
+      %42 = call builtin.intrinsic_pristine(%40, %41)
+      branch %42, bb1, bb2
     bb1:
-      %45 = call builtin.console.log(%42)
+      %53 = const c38
+      jump bb8
+    bb2:
+      %43 = const c34
+      %44 = const c35
+      %45 = call builtin.intrinsic_resolve(%43, %44)
       %46 = is_exception %45
       branch %46, bb4, bb3
-    bb2:
-      %44 = call builtin.exception_value(%42)
-      throw %44
     bb3:
-      %48 = load var $0.Color
-      %49 = const c33
-      %50 = get_prop %48, %49
+      %48 = const c36
+      %49 = const c37
+      %50 = call builtin.intrinsic_resolve(%48, %49, %45)
       %51 = is_exception %50
       branch %51, bb6, bb5
     bb4:
       %47 = call builtin.exception_value(%45)
       throw %47
     bb5:
-      %53 = call builtin.console.log(%50)
-      %54 = is_exception %53
-      branch %54, bb8, bb7
+      jump bb8
     bb6:
       %52 = call builtin.exception_value(%50)
       throw %52
     bb7:
-      return
+      %63 = phi [(bb11, %61), (bb12, %62)]
+      %64 = is_exception %63
+      branch %64, bb14, bb13
     bb8:
-      %55 = call builtin.exception_value(%53)
-      throw %55
+      %54 = phi [(bb1, %53), (bb5, %50)]
+      %55 = phi [(bb1, %53), (bb5, %45)]
+      %56 = load var $0.Color
+      %57 = const c39
+      %58 = get_prop %56, %57
+      %59 = is_exception %58
+      branch %59, bb10, bb9
+    bb9:
+      branch %42, bb11, bb12
+    bb10:
+      %60 = call builtin.exception_value(%58)
+      throw %60
+    bb11:
+      %61 = call builtin.console.log(%58)
+      jump bb7
+    bb12:
+      %62 = call %54, this=%55, args=[%58]
+      jump bb7
+    bb13:
+      %66 = const c40
+      %67 = const c41
+      %68 = call builtin.intrinsic_pristine(%66, %67)
+      branch %68, bb15, bb16
+    bb14:
+      %65 = call builtin.exception_value(%63)
+      throw %65
+    bb15:
+      %79 = const c46
+      jump bb22
+    bb16:
+      %69 = const c42
+      %70 = const c43
+      %71 = call builtin.intrinsic_resolve(%69, %70)
+      %72 = is_exception %71
+      branch %72, bb18, bb17
+    bb17:
+      %74 = const c44
+      %75 = const c45
+      %76 = call builtin.intrinsic_resolve(%74, %75, %71)
+      %77 = is_exception %76
+      branch %77, bb20, bb19
+    bb18:
+      %73 = call builtin.exception_value(%71)
+      throw %73
+    bb19:
+      jump bb22
+    bb20:
+      %78 = call builtin.exception_value(%76)
+      throw %78
+    bb21:
+      %89 = phi [(bb25, %87), (bb26, %88)]
+      %90 = is_exception %89
+      branch %90, bb28, bb27
+    bb22:
+      %80 = phi [(bb15, %79), (bb19, %76)]
+      %81 = phi [(bb15, %79), (bb19, %71)]
+      %82 = load var $0.Color
+      %83 = const c47
+      %84 = get_prop %82, %83
+      %85 = is_exception %84
+      branch %85, bb24, bb23
+    bb23:
+      branch %68, bb25, bb26
+    bb24:
+      %86 = call builtin.exception_value(%84)
+      throw %86
+    bb25:
+      %87 = call builtin.console.log(%84)
+      jump bb21
+    bb26:
+      %88 = call %80, this=%81, args=[%84]
+      jump bb21
+    bb27:
+      return
+    bb28:
+      %91 = call builtin.exception_value(%89)
+      throw %91
 }

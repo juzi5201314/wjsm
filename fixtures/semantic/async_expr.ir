@@ -49,9 +49,16 @@ module {
     c46 = functionref(@1)
     c47 = undefined
     c48 = number(7)
-    c49 = functionref(@2)
-    c50 = undefined
-    c51 = bool(true)
+    c49 = number(1)
+    c50 = number(0)
+    c51 = number(1)
+    c52 = number(0)
+    c53 = number(1)
+    c54 = number(0)
+    c55 = undefined
+    c56 = functionref(@2)
+    c57 = undefined
+    c58 = bool(true)
 
   fn @anon_0$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -142,9 +149,47 @@ module {
 
   fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
-      %0 = load var $3.v
-      %1 = call builtin.console.log(%0)
-      return %1
+      %0 = const c49
+      %1 = const c50
+      %2 = call builtin.intrinsic_pristine(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %13 = const c55
+      jump bb8
+    bb2:
+      %3 = const c51
+      %4 = const c52
+      %5 = call builtin.intrinsic_resolve(%3, %4)
+      %6 = is_exception %5
+      branch %6, bb4, bb3
+    bb3:
+      %8 = const c53
+      %9 = const c54
+      %10 = call builtin.intrinsic_resolve(%8, %9, %5)
+      %11 = is_exception %10
+      branch %11, bb6, bb5
+    bb4:
+      %7 = call builtin.exception_value(%5)
+      throw %7
+    bb5:
+      jump bb8
+    bb6:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb7:
+      %19 = phi [(bb9, %17), (bb10, %18)]
+      return %19
+    bb8:
+      %14 = phi [(bb1, %13), (bb5, %10)]
+      %15 = phi [(bb1, %13), (bb5, %5)]
+      %16 = load var $3.v
+      branch %2, bb9, bb10
+    bb9:
+      %17 = call builtin.console.log(%16)
+      jump bb7
+    bb10:
+      %18 = call %14, this=%15, args=[%16]
+      jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -199,8 +244,8 @@ module {
       %26 = is_exception %25
       branch %26, bb2, bb1
     bb1:
-      %28 = const c49
-      %29 = const c50
+      %28 = const c56
+      %29 = const c57
       %30 = call builtin.promise.then(%25, %28, %29)
       %31 = is_exception %30
       branch %31, bb4, bb3

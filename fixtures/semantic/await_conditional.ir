@@ -28,45 +28,87 @@ module {
     c25 = number(3)
     c26 = number(4)
     c27 = undefined
-    c28 = undefined
-    c29 = number(10)
-    c30 = undefined
-    c31 = number(1)
-    c32 = number(5)
-    c33 = bool(true)
-    c34 = bool(false)
-    c35 = string("big")
-    c36 = string("small")
+    c28 = number(1)
+    c29 = number(157)
+    c30 = number(1)
+    c31 = number(157)
+    c32 = number(1)
+    c33 = number(157)
+    c34 = undefined
+    c35 = number(10)
+    c36 = undefined
     c37 = undefined
-    c38 = number(3)
-    c39 = undefined
-    c40 = number(1)
-    c41 = number(5)
-    c42 = bool(true)
-    c43 = bool(false)
-    c44 = string("big")
-    c45 = string("small")
-    c46 = undefined
+    c38 = number(1)
+    c39 = number(5)
+    c40 = bool(true)
+    c41 = bool(false)
+    c42 = number(1)
+    c43 = number(0)
+    c44 = number(1)
+    c45 = number(0)
+    c46 = number(1)
     c47 = number(0)
-    c48 = number(1)
-    c49 = number(2)
-    c50 = number(0)
-    c51 = functionref(@0)
-    c52 = number(7)
+    c48 = undefined
+    c49 = string("big")
+    c50 = number(1)
+    c51 = number(0)
+    c52 = number(1)
     c53 = number(0)
-    c54 = number(0)
-    c55 = number(1)
-    c56 = bool(false)
-    c57 = number(2)
-    c58 = number(3)
-    c59 = undefined
-    c60 = number(4)
-    c61 = number(6)
-    c62 = number(0)
-    c63 = undefined
-    c64 = bool(false)
-    c65 = functionref(@1)
+    c54 = number(1)
+    c55 = number(0)
+    c56 = undefined
+    c57 = string("small")
+    c58 = number(1)
+    c59 = number(157)
+    c60 = number(1)
+    c61 = number(157)
+    c62 = number(1)
+    c63 = number(157)
+    c64 = undefined
+    c65 = number(3)
     c66 = undefined
+    c67 = undefined
+    c68 = number(1)
+    c69 = number(5)
+    c70 = bool(true)
+    c71 = bool(false)
+    c72 = number(1)
+    c73 = number(0)
+    c74 = number(1)
+    c75 = number(0)
+    c76 = number(1)
+    c77 = number(0)
+    c78 = undefined
+    c79 = string("big")
+    c80 = number(1)
+    c81 = number(0)
+    c82 = number(1)
+    c83 = number(0)
+    c84 = number(1)
+    c85 = number(0)
+    c86 = undefined
+    c87 = string("small")
+    c88 = undefined
+    c89 = number(0)
+    c90 = number(1)
+    c91 = number(2)
+    c92 = number(0)
+    c93 = functionref(@0)
+    c94 = number(7)
+    c95 = number(0)
+    c96 = number(0)
+    c97 = number(1)
+    c98 = bool(false)
+    c99 = number(2)
+    c100 = number(3)
+    c101 = undefined
+    c102 = number(4)
+    c103 = number(6)
+    c104 = number(0)
+    c105 = undefined
+    c106 = bool(false)
+    c107 = functionref(@1)
+    c108 = undefined
 
   fn @demo$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -98,198 +140,450 @@ module {
     bb1:
       %15 = const c27
       store var $1.$shared_env, %15
-      %88 = load var $1.$state
-      switch %88 [case c47 -> bb2, case c48 -> bb5, case c49 -> bb21], default bb35, exit bb36
+      %208 = load var $1.$state
+      switch %208 [case c89 -> bb2, case c90 -> bb15, case c91 -> bb61], default bb95, exit bb96
     bb2:
       %16 = const c28
       %17 = const c29
-      %18 = call builtin.promise.resolve_static(%16, %17)
-      %19 = is_exception %18
-      branch %19, bb4, bb3
+      %18 = call builtin.intrinsic_pristine(%16, %17)
+      branch %18, bb3, bb4
     bb3:
-      %23 = const c30
-      %22 = call builtin.promise.resolve_static(%23, %18)
-      suspend %22, state=1
-      jump bb7
+      %31 = const c34
+      jump bb10
     bb4:
-      %20 = call builtin.exception_value(%18)
-      %21 = load var $1.$promise
-      promise_reject %21, %20
-      return
+      %19 = const c30
+      %20 = const c31
+      %21 = call builtin.intrinsic_resolve(%19, %20)
+      %22 = is_exception %21
+      branch %22, bb6, bb5
     bb5:
-      %24 = load var $1.$resume_val
-      %25 = load var $1.$is_rejected
-      %26 = const c31
-      %27 = stricteq %25, %26
-      branch %27, bb6, bb7
+      %25 = const c32
+      %26 = const c33
+      %27 = call builtin.intrinsic_resolve(%25, %26, %21)
+      %28 = is_exception %27
+      branch %28, bb8, bb7
     bb6:
-      %28 = load var $1.$promise
-      promise_reject %28, %24
+      %23 = call builtin.exception_value(%21)
+      %24 = load var $1.$promise
+      promise_reject %24, %23
       return
     bb7:
-      %29 = load var $1.$resume_val
-      store var $1.a, %29
-      %30 = load var $1.a
-      %31 = const c32
-      %33 = const c33
-      %34 = const c34
-      %32 = call builtin.abstract_compare(%30, %31, %33, %34)
-      %35 = is_exception %32
-      branch %35, bb9, bb8
+      jump bb10
     bb8:
-      %38 = is_exception %32
-      branch %38, bb11, bb10
+      %29 = call builtin.exception_value(%27)
+      %30 = load var $1.$promise
+      promise_reject %30, %29
+      return
     bb9:
-      %36 = call builtin.exception_value(%32)
-      %37 = load var $1.$promise
-      promise_reject %37, %36
-      return
+      %38 = phi [(bb11, %36), (bb12, %37)]
+      %39 = is_exception %38
+      branch %39, bb14, bb13
     bb10:
-      branch %32, bb12, bb13
+      %32 = phi [(bb3, %31), (bb7, %27)]
+      %33 = phi [(bb3, %31), (bb7, %21)]
+      %34 = const c35
+      branch %18, bb11, bb12
     bb11:
-      %39 = call builtin.exception_value(%32)
-      %40 = load var $1.$promise
-      promise_reject %40, %39
-      return
+      %35 = const c36
+      %36 = call builtin.promise.resolve_static(%35, %34)
+      jump bb9
     bb12:
-      %41 = const c35
-      %42 = call builtin.console.log(%41)
-      %43 = is_exception %42
-      branch %43, bb15, bb14
+      %37 = call %32, this=%33, args=[%34]
+      jump bb9
     bb13:
-      %46 = const c36
-      %47 = call builtin.console.log(%46)
-      %48 = is_exception %47
-      branch %48, bb17, bb16
+      %43 = const c37
+      %42 = call builtin.promise.resolve_static(%43, %38)
+      suspend %42, state=1
+      jump bb17
     bb14:
-      jump bb18
+      %40 = call builtin.exception_value(%38)
+      %41 = load var $1.$promise
+      promise_reject %41, %40
+      return
     bb15:
-      %44 = call builtin.exception_value(%42)
-      %45 = load var $1.$promise
-      promise_reject %45, %44
-      return
+      %44 = load var $1.$resume_val
+      %45 = load var $1.$is_rejected
+      %46 = const c38
+      %47 = stricteq %45, %46
+      branch %47, bb16, bb17
     bb16:
-      jump bb18
+      %48 = load var $1.$promise
+      promise_reject %48, %44
+      return
     bb17:
-      %49 = call builtin.exception_value(%47)
-      %50 = load var $1.$promise
-      promise_reject %50, %49
-      return
+      %49 = load var $1.$resume_val
+      store var $1.a, %49
+      %50 = load var $1.a
+      %51 = const c39
+      %53 = const c40
+      %54 = const c41
+      %52 = call builtin.abstract_compare(%50, %51, %53, %54)
+      %55 = is_exception %52
+      branch %55, bb19, bb18
     bb18:
-      %51 = const c37
-      %52 = const c38
-      %53 = call builtin.promise.resolve_static(%51, %52)
-      %54 = is_exception %53
-      branch %54, bb20, bb19
+      %58 = is_exception %52
+      branch %58, bb21, bb20
     bb19:
-      %58 = const c39
-      %57 = call builtin.promise.resolve_static(%58, %53)
-      suspend %57, state=2
-      jump bb23
+      %56 = call builtin.exception_value(%52)
+      %57 = load var $1.$promise
+      promise_reject %57, %56
+      return
     bb20:
-      %55 = call builtin.exception_value(%53)
-      %56 = load var $1.$promise
-      promise_reject %56, %55
-      return
+      branch %52, bb22, bb23
     bb21:
-      %59 = load var $1.$resume_val
-      %60 = load var $1.$is_rejected
-      %61 = const c40
-      %62 = stricteq %60, %61
-      branch %62, bb22, bb23
+      %59 = call builtin.exception_value(%52)
+      %60 = load var $1.$promise
+      promise_reject %60, %59
+      return
     bb22:
-      %63 = load var $1.$promise
-      promise_reject %63, %59
-      return
+      %61 = const c42
+      %62 = const c43
+      %63 = call builtin.intrinsic_pristine(%61, %62)
+      branch %63, bb24, bb25
     bb23:
-      %64 = load var $1.$resume_val
-      store var $1.b, %64
-      %65 = load var $1.b
-      %66 = const c41
-      %68 = const c42
-      %69 = const c43
-      %67 = call builtin.abstract_compare(%65, %66, %68, %69)
-      %70 = is_exception %67
-      branch %70, bb25, bb24
+      %86 = const c50
+      %87 = const c51
+      %88 = call builtin.intrinsic_pristine(%86, %87)
+      branch %88, bb36, bb37
     bb24:
-      %73 = is_exception %67
-      branch %73, bb27, bb26
+      %76 = const c48
+      jump bb31
     bb25:
-      %71 = call builtin.exception_value(%67)
-      %72 = load var $1.$promise
-      promise_reject %72, %71
-      return
+      %64 = const c44
+      %65 = const c45
+      %66 = call builtin.intrinsic_resolve(%64, %65)
+      %67 = is_exception %66
+      branch %67, bb27, bb26
     bb26:
-      branch %67, bb28, bb29
+      %70 = const c46
+      %71 = const c47
+      %72 = call builtin.intrinsic_resolve(%70, %71, %66)
+      %73 = is_exception %72
+      branch %73, bb29, bb28
     bb27:
-      %74 = call builtin.exception_value(%67)
+      %68 = call builtin.exception_value(%66)
+      %69 = load var $1.$promise
+      promise_reject %69, %68
+      return
+    bb28:
+      jump bb31
+    bb29:
+      %74 = call builtin.exception_value(%72)
       %75 = load var $1.$promise
       promise_reject %75, %74
       return
-    bb28:
-      %76 = const c44
-      %77 = call builtin.console.log(%76)
-      %78 = is_exception %77
-      branch %78, bb31, bb30
-    bb29:
-      %81 = const c45
-      %82 = call builtin.console.log(%81)
-      %83 = is_exception %82
-      branch %83, bb33, bb32
     bb30:
-      jump bb34
+      %82 = phi [(bb32, %80), (bb33, %81)]
+      %83 = is_exception %82
+      branch %83, bb35, bb34
     bb31:
-      %79 = call builtin.exception_value(%77)
-      %80 = load var $1.$promise
-      promise_reject %80, %79
-      return
+      %77 = phi [(bb24, %76), (bb28, %72)]
+      %78 = phi [(bb24, %76), (bb28, %66)]
+      %79 = const c49
+      branch %63, bb32, bb33
     bb32:
-      jump bb34
+      %80 = call builtin.console.log(%79)
+      jump bb30
     bb33:
+      %81 = call %77, this=%78, args=[%79]
+      jump bb30
+    bb34:
+      jump bb48
+    bb35:
       %84 = call builtin.exception_value(%82)
       %85 = load var $1.$promise
       promise_reject %85, %84
       return
-    bb34:
-      %86 = const c46
-      %87 = load var $1.$promise
-      promise_resolve %87, %86
-      return
-    bb35:
-      return
     bb36:
+      %101 = const c56
+      jump bb43
+    bb37:
+      %89 = const c52
+      %90 = const c53
+      %91 = call builtin.intrinsic_resolve(%89, %90)
+      %92 = is_exception %91
+      branch %92, bb39, bb38
+    bb38:
+      %95 = const c54
+      %96 = const c55
+      %97 = call builtin.intrinsic_resolve(%95, %96, %91)
+      %98 = is_exception %97
+      branch %98, bb41, bb40
+    bb39:
+      %93 = call builtin.exception_value(%91)
+      %94 = load var $1.$promise
+      promise_reject %94, %93
+      return
+    bb40:
+      jump bb43
+    bb41:
+      %99 = call builtin.exception_value(%97)
+      %100 = load var $1.$promise
+      promise_reject %100, %99
+      return
+    bb42:
+      %107 = phi [(bb44, %105), (bb45, %106)]
+      %108 = is_exception %107
+      branch %108, bb47, bb46
+    bb43:
+      %102 = phi [(bb36, %101), (bb40, %97)]
+      %103 = phi [(bb36, %101), (bb40, %91)]
+      %104 = const c57
+      branch %88, bb44, bb45
+    bb44:
+      %105 = call builtin.console.log(%104)
+      jump bb42
+    bb45:
+      %106 = call %102, this=%103, args=[%104]
+      jump bb42
+    bb46:
+      jump bb48
+    bb47:
+      %109 = call builtin.exception_value(%107)
+      %110 = load var $1.$promise
+      promise_reject %110, %109
+      return
+    bb48:
+      %111 = const c58
+      %112 = const c59
+      %113 = call builtin.intrinsic_pristine(%111, %112)
+      branch %113, bb49, bb50
+    bb49:
+      %126 = const c64
+      jump bb56
+    bb50:
+      %114 = const c60
+      %115 = const c61
+      %116 = call builtin.intrinsic_resolve(%114, %115)
+      %117 = is_exception %116
+      branch %117, bb52, bb51
+    bb51:
+      %120 = const c62
+      %121 = const c63
+      %122 = call builtin.intrinsic_resolve(%120, %121, %116)
+      %123 = is_exception %122
+      branch %123, bb54, bb53
+    bb52:
+      %118 = call builtin.exception_value(%116)
+      %119 = load var $1.$promise
+      promise_reject %119, %118
+      return
+    bb53:
+      jump bb56
+    bb54:
+      %124 = call builtin.exception_value(%122)
+      %125 = load var $1.$promise
+      promise_reject %125, %124
+      return
+    bb55:
+      %133 = phi [(bb57, %131), (bb58, %132)]
+      %134 = is_exception %133
+      branch %134, bb60, bb59
+    bb56:
+      %127 = phi [(bb49, %126), (bb53, %122)]
+      %128 = phi [(bb49, %126), (bb53, %116)]
+      %129 = const c65
+      branch %113, bb57, bb58
+    bb57:
+      %130 = const c66
+      %131 = call builtin.promise.resolve_static(%130, %129)
+      jump bb55
+    bb58:
+      %132 = call %127, this=%128, args=[%129]
+      jump bb55
+    bb59:
+      %138 = const c67
+      %137 = call builtin.promise.resolve_static(%138, %133)
+      suspend %137, state=2
+      jump bb63
+    bb60:
+      %135 = call builtin.exception_value(%133)
+      %136 = load var $1.$promise
+      promise_reject %136, %135
+      return
+    bb61:
+      %139 = load var $1.$resume_val
+      %140 = load var $1.$is_rejected
+      %141 = const c68
+      %142 = stricteq %140, %141
+      branch %142, bb62, bb63
+    bb62:
+      %143 = load var $1.$promise
+      promise_reject %143, %139
+      return
+    bb63:
+      %144 = load var $1.$resume_val
+      store var $1.b, %144
+      %145 = load var $1.b
+      %146 = const c69
+      %148 = const c70
+      %149 = const c71
+      %147 = call builtin.abstract_compare(%145, %146, %148, %149)
+      %150 = is_exception %147
+      branch %150, bb65, bb64
+    bb64:
+      %153 = is_exception %147
+      branch %153, bb67, bb66
+    bb65:
+      %151 = call builtin.exception_value(%147)
+      %152 = load var $1.$promise
+      promise_reject %152, %151
+      return
+    bb66:
+      branch %147, bb68, bb69
+    bb67:
+      %154 = call builtin.exception_value(%147)
+      %155 = load var $1.$promise
+      promise_reject %155, %154
+      return
+    bb68:
+      %156 = const c72
+      %157 = const c73
+      %158 = call builtin.intrinsic_pristine(%156, %157)
+      branch %158, bb70, bb71
+    bb69:
+      %181 = const c80
+      %182 = const c81
+      %183 = call builtin.intrinsic_pristine(%181, %182)
+      branch %183, bb82, bb83
+    bb70:
+      %171 = const c78
+      jump bb77
+    bb71:
+      %159 = const c74
+      %160 = const c75
+      %161 = call builtin.intrinsic_resolve(%159, %160)
+      %162 = is_exception %161
+      branch %162, bb73, bb72
+    bb72:
+      %165 = const c76
+      %166 = const c77
+      %167 = call builtin.intrinsic_resolve(%165, %166, %161)
+      %168 = is_exception %167
+      branch %168, bb75, bb74
+    bb73:
+      %163 = call builtin.exception_value(%161)
+      %164 = load var $1.$promise
+      promise_reject %164, %163
+      return
+    bb74:
+      jump bb77
+    bb75:
+      %169 = call builtin.exception_value(%167)
+      %170 = load var $1.$promise
+      promise_reject %170, %169
+      return
+    bb76:
+      %177 = phi [(bb78, %175), (bb79, %176)]
+      %178 = is_exception %177
+      branch %178, bb81, bb80
+    bb77:
+      %172 = phi [(bb70, %171), (bb74, %167)]
+      %173 = phi [(bb70, %171), (bb74, %161)]
+      %174 = const c79
+      branch %158, bb78, bb79
+    bb78:
+      %175 = call builtin.console.log(%174)
+      jump bb76
+    bb79:
+      %176 = call %172, this=%173, args=[%174]
+      jump bb76
+    bb80:
+      jump bb94
+    bb81:
+      %179 = call builtin.exception_value(%177)
+      %180 = load var $1.$promise
+      promise_reject %180, %179
+      return
+    bb82:
+      %196 = const c86
+      jump bb89
+    bb83:
+      %184 = const c82
+      %185 = const c83
+      %186 = call builtin.intrinsic_resolve(%184, %185)
+      %187 = is_exception %186
+      branch %187, bb85, bb84
+    bb84:
+      %190 = const c84
+      %191 = const c85
+      %192 = call builtin.intrinsic_resolve(%190, %191, %186)
+      %193 = is_exception %192
+      branch %193, bb87, bb86
+    bb85:
+      %188 = call builtin.exception_value(%186)
+      %189 = load var $1.$promise
+      promise_reject %189, %188
+      return
+    bb86:
+      jump bb89
+    bb87:
+      %194 = call builtin.exception_value(%192)
+      %195 = load var $1.$promise
+      promise_reject %195, %194
+      return
+    bb88:
+      %202 = phi [(bb90, %200), (bb91, %201)]
+      %203 = is_exception %202
+      branch %203, bb93, bb92
+    bb89:
+      %197 = phi [(bb82, %196), (bb86, %192)]
+      %198 = phi [(bb82, %196), (bb86, %186)]
+      %199 = const c87
+      branch %183, bb90, bb91
+    bb90:
+      %200 = call builtin.console.log(%199)
+      jump bb88
+    bb91:
+      %201 = call %197, this=%198, args=[%199]
+      jump bb88
+    bb92:
+      jump bb94
+    bb93:
+      %204 = call builtin.exception_value(%202)
+      %205 = load var $1.$promise
+      promise_reject %205, %204
+      return
+    bb94:
+      %206 = const c88
+      %207 = load var $1.$promise
+      promise_resolve %207, %206
+      return
+    bb95:
+      return
+    bb96:
       unreachable
 
   fn @demo [needs_prototype] [js_name "demo"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c50
+      %1 = const c92
       %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $6.arguments, %2
       %3 = new_promise
-      %4 = const c51
-      %5 = const c52
+      %4 = const c93
+      %5 = const c94
       %6 = call builtin.continuation.create(%4, %3, %5)
-      %7 = const c53
-      %8 = const c54
+      %7 = const c95
+      %8 = const c96
       call builtin.continuation.save_var(%6, %7, %8)
-      %9 = const c55
-      %10 = const c56
+      %9 = const c97
+      %10 = const c98
       call builtin.continuation.save_var(%6, %9, %10)
-      %11 = const c57
+      %11 = const c99
       call builtin.continuation.save_var(%6, %11, %3)
-      %12 = const c58
-      %13 = const c59
+      %12 = const c100
+      %13 = const c101
       call builtin.continuation.save_var(%6, %12, %13)
       %14 = load var $6.arguments
-      %15 = const c60
+      %15 = const c102
       call builtin.continuation.save_var(%6, %15, %14)
       %16 = load var $6.$this
-      %17 = const c61
+      %17 = const c103
       call builtin.continuation.save_var(%6, %17, %16)
-      %18 = const c62
-      %19 = const c63
-      %20 = const c64
+      %18 = const c104
+      %19 = const c105
+      %20 = const c106
       call builtin.async_function.resume(%4, %6, %18, %19, %20)
       return %3
 
@@ -337,9 +631,9 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c65
+      %21 = const c107
       store var $0.demo, %21
-      %22 = const c66
+      %22 = const c108
       %23 = load var $0.demo
       %24 = call %23, this=%22
       %25 = is_exception %24

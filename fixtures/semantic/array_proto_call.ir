@@ -23,19 +23,24 @@ module {
     c20 = number(1)
     c21 = number(2)
     c22 = number(3)
-    c23 = number(2)
-    c24 = functionref(@0)
-    c25 = undefined
-    c26 = string("length")
-    c27 = number(0)
-    c28 = number(-1)
-    c29 = bool(true)
-    c30 = bool(false)
+    c23 = number(3)
+    c24 = number(62)
+    c25 = number(3)
+    c26 = number(62)
+    c27 = undefined
+    c28 = number(2)
+    c29 = functionref(@0)
+    c30 = undefined
+    c31 = string("length")
+    c32 = number(0)
+    c33 = number(-1)
+    c34 = bool(true)
+    c35 = bool(false)
 
   fn @anon_0 [needs_prototype] [direct_callable] [js_name ""] [js_length 1] [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
       %0 = load var $1.x
-      %1 = const c23
+      %1 = const c28
       %2 = mul %0, %1
       return %2
 
@@ -92,66 +97,100 @@ module {
       call builtin.array.push(%21, %24)
       store var $0.a, %21
       %25 = load var $0.a
-      %26 = const c24
-      %27 = const c25
-      %28 = call builtin.create_closure(%26, %27)
-      jump bb3
+      %26 = const c23
+      %27 = const c24
+      %28 = call builtin.intrinsic_pristine(%26, %27, %25)
+      branch %28, bb1, bb2
     bb1:
-      store var $0.b, %29
-      return
+      %34 = const c27
+      jump bb5
     bb2:
-      %31 = call builtin.exception_value(%29)
-      throw %31
+      %29 = const c25
+      %30 = const c26
+      %31 = call builtin.intrinsic_resolve(%29, %30, %25)
+      %32 = is_exception %31
+      branch %32, bb4, bb3
     bb3:
-      %34 = call builtin.array.is_array(%25)
-      branch %34, bb5, bb4
+      jump bb5
     bb4:
-      %32 = call builtin.array.map(%25, %28)
-      jump bb14
+      %33 = call builtin.exception_value(%31)
+      throw %33
     bb5:
-      %35 = const c26
-      %36 = get_prop %25, %35
-      %37 = const c27
-      %38 = const c20
-      %42 = const c30
-      %43 = call builtin.array.allocate(%36)
-      jump bb6
+      %35 = phi [(bb1, %34), (bb3, %31)]
+      %36 = const c29
+      %37 = const c30
+      %38 = call builtin.create_closure(%36, %37)
+      branch %28, bb6, bb7
     bb6:
-      %44 = phi [(bb5, %37), (bb12, %33)]
-      %45 = call builtin.abstract_compare(%44, %36, %42, %42)
-      branch %45, bb7, bb13
+      jump bb13
     bb7:
-      %46 = call builtin.array.has_element(%25, %44)
-      branch %46, bb8, bb10
+      %42 = call %35, this=%25, args=[%38]
+      jump bb8
     bb8:
-      %47 = get_elem %25, %44
-      %52 = const c0
-      jump bb17
+      %43 = phi [(bb9, %39), (bb7, %42)]
+      %44 = is_exception %43
+      branch %44, bb12, bb11
     bb9:
-      %50 = set_elem %43, %44, %55
-      jump bb12
+      jump bb8
     bb10:
-      jump bb12
+      %41 = call builtin.exception_value(%39)
+      throw %41
     bb11:
-      %51 = call builtin.exception_value(%55)
-      throw %51
+      store var $0.b, %43
+      return
     bb12:
-      %33 = add %44, %38
-      jump bb6
+      %45 = call builtin.exception_value(%43)
+      throw %45
     bb13:
-      jump bb14
+      %48 = call builtin.array.is_array(%25)
+      branch %48, bb15, bb14
     bb14:
-      %29 = phi [(bb4, %32), (bb13, %43)]
-      jump bb15
+      %46 = call builtin.array.map(%25, %38)
+      jump bb24
     bb15:
-      %30 = is_exception %29
-      branch %30, bb2, bb1
-    bb16:
-      %49 = is_exception %55
-      branch %49, bb11, bb9
-    bb17:
-      %54 = const c23
-      %55 = mul %47, %54
-      store var $1.x, %52
+      %49 = const c31
+      %50 = get_prop %25, %49
+      %51 = const c32
+      %52 = const c20
+      %56 = const c35
+      %57 = call builtin.array.allocate(%50)
       jump bb16
+    bb16:
+      %58 = phi [(bb15, %51), (bb22, %47)]
+      %59 = call builtin.abstract_compare(%58, %50, %56, %56)
+      branch %59, bb17, bb23
+    bb17:
+      %60 = call builtin.array.has_element(%25, %58)
+      branch %60, bb18, bb20
+    bb18:
+      %61 = get_elem %25, %58
+      %66 = const c0
+      jump bb27
+    bb19:
+      %64 = set_elem %57, %58, %69
+      jump bb22
+    bb20:
+      jump bb22
+    bb21:
+      %65 = call builtin.exception_value(%69)
+      throw %65
+    bb22:
+      %47 = add %58, %52
+      jump bb16
+    bb23:
+      jump bb24
+    bb24:
+      %39 = phi [(bb14, %46), (bb23, %57)]
+      jump bb25
+    bb25:
+      %40 = is_exception %39
+      branch %40, bb10, bb9
+    bb26:
+      %63 = is_exception %69
+      branch %63, bb21, bb19
+    bb27:
+      %68 = const c28
+      %69 = mul %61, %68
+      store var $1.x, %66
+      jump bb26
 }

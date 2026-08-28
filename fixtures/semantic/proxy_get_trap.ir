@@ -26,9 +26,16 @@ module {
     c23 = number(42)
     c24 = functionref(@0)
     c25 = undefined
-    c26 = string("x")
-    c27 = bool(true)
-    c28 = bool(false)
+    c26 = number(1)
+    c27 = number(0)
+    c28 = number(1)
+    c29 = number(0)
+    c30 = number(1)
+    c31 = number(0)
+    c32 = undefined
+    c33 = string("x")
+    c34 = bool(true)
+    c35 = bool(false)
 
   fn @anon_0 [needs_prototype] [direct_callable] [js_name "get"] [js_length 3] [params: $1.$env, $1.$this, $1.t, $1.p, $1.r] [entry=bb0]:
     bb0:
@@ -94,24 +101,62 @@ module {
       branch %30, bb2, bb1
     bb1:
       store var $0.proxy, %29
-      %32 = load var $0.proxy
-      %33 = const c26
-      %34 = get_prop %32, %33
-      %35 = is_exception %34
-      branch %35, bb4, bb3
+      %32 = const c26
+      %33 = const c27
+      %34 = call builtin.intrinsic_pristine(%32, %33)
+      branch %34, bb3, bb4
     bb2:
       %31 = call builtin.exception_value(%29)
       throw %31
     bb3:
-      %37 = call builtin.console.log(%34)
+      %45 = const c32
+      jump bb10
+    bb4:
+      %35 = const c28
+      %36 = const c29
+      %37 = call builtin.intrinsic_resolve(%35, %36)
       %38 = is_exception %37
       branch %38, bb6, bb5
-    bb4:
-      %36 = call builtin.exception_value(%34)
-      throw %36
     bb5:
-      return
+      %40 = const c30
+      %41 = const c31
+      %42 = call builtin.intrinsic_resolve(%40, %41, %37)
+      %43 = is_exception %42
+      branch %43, bb8, bb7
     bb6:
       %39 = call builtin.exception_value(%37)
       throw %39
+    bb7:
+      jump bb10
+    bb8:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb9:
+      %55 = phi [(bb13, %53), (bb14, %54)]
+      %56 = is_exception %55
+      branch %56, bb16, bb15
+    bb10:
+      %46 = phi [(bb3, %45), (bb7, %42)]
+      %47 = phi [(bb3, %45), (bb7, %37)]
+      %48 = load var $0.proxy
+      %49 = const c33
+      %50 = get_prop %48, %49
+      %51 = is_exception %50
+      branch %51, bb12, bb11
+    bb11:
+      branch %34, bb13, bb14
+    bb12:
+      %52 = call builtin.exception_value(%50)
+      throw %52
+    bb13:
+      %53 = call builtin.console.log(%50)
+      jump bb9
+    bb14:
+      %54 = call %46, this=%47, args=[%50]
+      jump bb9
+    bb15:
+      return
+    bb16:
+      %57 = call builtin.exception_value(%55)
+      throw %57
 }

@@ -26,10 +26,24 @@ module {
     c23 = string("container")
     c24 = string("className")
     c25 = string("text")
-    c26 = string("type")
-    c27 = string("props")
-    c28 = bool(true)
-    c29 = bool(false)
+    c26 = number(1)
+    c27 = number(0)
+    c28 = number(1)
+    c29 = number(0)
+    c30 = number(1)
+    c31 = number(0)
+    c32 = undefined
+    c33 = string("type")
+    c34 = number(1)
+    c35 = number(0)
+    c36 = number(1)
+    c37 = number(0)
+    c38 = number(1)
+    c39 = number(0)
+    c40 = undefined
+    c41 = string("props")
+    c42 = bool(true)
+    c43 = bool(false)
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -88,37 +102,113 @@ module {
       call builtin.array.push(%29, %30)
       %31 = call builtin.jsx.create_element(%21, %22, %29)
       store var $0.el, %31
-      %32 = load var $0.el
-      %33 = const c26
-      %34 = get_prop %32, %33
-      %35 = is_exception %34
-      branch %35, bb2, bb1
+      %32 = const c26
+      %33 = const c27
+      %34 = call builtin.intrinsic_pristine(%32, %33)
+      branch %34, bb1, bb2
     bb1:
-      %37 = call builtin.console.log(%34)
+      %45 = const c32
+      jump bb8
+    bb2:
+      %35 = const c28
+      %36 = const c29
+      %37 = call builtin.intrinsic_resolve(%35, %36)
       %38 = is_exception %37
       branch %38, bb4, bb3
-    bb2:
-      %36 = call builtin.exception_value(%34)
-      throw %36
     bb3:
-      %40 = load var $0.el
-      %41 = const c27
-      %42 = get_prop %40, %41
+      %40 = const c30
+      %41 = const c31
+      %42 = call builtin.intrinsic_resolve(%40, %41, %37)
       %43 = is_exception %42
       branch %43, bb6, bb5
     bb4:
       %39 = call builtin.exception_value(%37)
       throw %39
     bb5:
-      %45 = call builtin.console.log(%42)
-      %46 = is_exception %45
-      branch %46, bb8, bb7
+      jump bb8
     bb6:
       %44 = call builtin.exception_value(%42)
       throw %44
     bb7:
-      return
+      %55 = phi [(bb11, %53), (bb12, %54)]
+      %56 = is_exception %55
+      branch %56, bb14, bb13
     bb8:
-      %47 = call builtin.exception_value(%45)
-      throw %47
+      %46 = phi [(bb1, %45), (bb5, %42)]
+      %47 = phi [(bb1, %45), (bb5, %37)]
+      %48 = load var $0.el
+      %49 = const c33
+      %50 = get_prop %48, %49
+      %51 = is_exception %50
+      branch %51, bb10, bb9
+    bb9:
+      branch %34, bb11, bb12
+    bb10:
+      %52 = call builtin.exception_value(%50)
+      throw %52
+    bb11:
+      %53 = call builtin.console.log(%50)
+      jump bb7
+    bb12:
+      %54 = call %46, this=%47, args=[%50]
+      jump bb7
+    bb13:
+      %58 = const c34
+      %59 = const c35
+      %60 = call builtin.intrinsic_pristine(%58, %59)
+      branch %60, bb15, bb16
+    bb14:
+      %57 = call builtin.exception_value(%55)
+      throw %57
+    bb15:
+      %71 = const c40
+      jump bb22
+    bb16:
+      %61 = const c36
+      %62 = const c37
+      %63 = call builtin.intrinsic_resolve(%61, %62)
+      %64 = is_exception %63
+      branch %64, bb18, bb17
+    bb17:
+      %66 = const c38
+      %67 = const c39
+      %68 = call builtin.intrinsic_resolve(%66, %67, %63)
+      %69 = is_exception %68
+      branch %69, bb20, bb19
+    bb18:
+      %65 = call builtin.exception_value(%63)
+      throw %65
+    bb19:
+      jump bb22
+    bb20:
+      %70 = call builtin.exception_value(%68)
+      throw %70
+    bb21:
+      %81 = phi [(bb25, %79), (bb26, %80)]
+      %82 = is_exception %81
+      branch %82, bb28, bb27
+    bb22:
+      %72 = phi [(bb15, %71), (bb19, %68)]
+      %73 = phi [(bb15, %71), (bb19, %63)]
+      %74 = load var $0.el
+      %75 = const c41
+      %76 = get_prop %74, %75
+      %77 = is_exception %76
+      branch %77, bb24, bb23
+    bb23:
+      branch %60, bb25, bb26
+    bb24:
+      %78 = call builtin.exception_value(%76)
+      throw %78
+    bb25:
+      %79 = call builtin.console.log(%76)
+      jump bb21
+    bb26:
+      %80 = call %72, this=%73, args=[%76]
+      jump bb21
+    bb27:
+      return
+    bb28:
+      %83 = call builtin.exception_value(%81)
+      throw %83
 }

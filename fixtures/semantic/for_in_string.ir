@@ -21,8 +21,15 @@ module {
     c18 = number(inf)
     c19 = undefined
     c20 = string("abc")
-    c21 = bool(true)
-    c22 = bool(false)
+    c21 = number(1)
+    c22 = number(0)
+    c23 = number(1)
+    c24 = number(0)
+    c25 = number(1)
+    c26 = number(0)
+    c27 = undefined
+    c28 = bool(true)
+    c29 = bool(false)
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -78,25 +85,77 @@ module {
     bb2:
       %25 = call builtin.enumerator.key(%22)
       store var $1.k, %25
-      %26 = load var $1.k
-      %27 = call builtin.console.log(%26)
-      %28 = is_exception %27
-      branch %28, bb6, bb5
+      %26 = const c21
+      %27 = const c22
+      %28 = call builtin.intrinsic_pristine(%26, %27)
+      branch %28, bb5, bb6
     bb3:
       call builtin.enumerator.next(%22)
       jump bb1
     bb4:
       return
     bb5:
-      jump bb3
+      %45 = const c27
+      jump bb16
     bb6:
-      %29 = call builtin.exception_value(%27)
-      %30 = call builtin.iterator.close(%22, %29)
-      %31 = is_exception %30
-      branch %31, bb8, bb7
+      %29 = const c23
+      %30 = const c24
+      %31 = call builtin.intrinsic_resolve(%29, %30)
+      %32 = is_exception %31
+      branch %32, bb8, bb7
     bb7:
-      throw %29
+      %37 = const c25
+      %38 = const c26
+      %39 = call builtin.intrinsic_resolve(%37, %38, %31)
+      %40 = is_exception %39
+      branch %40, bb12, bb11
     bb8:
-      %32 = call builtin.exception_value(%30)
-      throw %32
+      %33 = call builtin.exception_value(%31)
+      %34 = call builtin.iterator.close(%22, %33)
+      %35 = is_exception %34
+      branch %35, bb10, bb9
+    bb9:
+      throw %33
+    bb10:
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb11:
+      jump bb16
+    bb12:
+      %41 = call builtin.exception_value(%39)
+      %42 = call builtin.iterator.close(%22, %41)
+      %43 = is_exception %42
+      branch %43, bb14, bb13
+    bb13:
+      throw %41
+    bb14:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb15:
+      %51 = phi [(bb17, %49), (bb18, %50)]
+      %52 = is_exception %51
+      branch %52, bb20, bb19
+    bb16:
+      %46 = phi [(bb5, %45), (bb11, %39)]
+      %47 = phi [(bb5, %45), (bb11, %31)]
+      %48 = load var $1.k
+      branch %28, bb17, bb18
+    bb17:
+      %49 = call builtin.console.log(%48)
+      jump bb15
+    bb18:
+      %50 = call %46, this=%47, args=[%48]
+      jump bb15
+    bb19:
+      jump bb3
+    bb20:
+      %53 = call builtin.exception_value(%51)
+      %54 = call builtin.iterator.close(%22, %53)
+      %55 = is_exception %54
+      branch %55, bb22, bb21
+    bb21:
+      throw %53
+    bb22:
+      %56 = call builtin.exception_value(%54)
+      throw %56
 }
