@@ -14,15 +14,14 @@ wjsm run /tmp/app.wjsm
 `build` 只做到 verified IR + manifest。`run` 在当前宿主上把 artifact 编成 native image。默认不落盘；要跨进程复用机器码，显式打开磁盘缓存：
 
 ```bash
-export WJSM_CACHE_DIR=~/.cache/wjsm
-wjsm run /tmp/app.wjsm
+wjsm run /tmp/app.wjsm    # 磁盘缓存默认可用（~/.cache/wjsm，可用 WJSM_CACHE_DIR 覆盖）
 ```
 
-命中时 `NativeImageRepository` 从 `${WJSM_CACHE_DIR}/<digest>.wnat` 加载 image。key 绑定 artifact digest、native ABI、codegen hash、target、Cranelift 版本和 settings，不是文件 mtime。
+命中时 `NativeImageRepository` 从 `${cache_dir}/<digest>.wnat` 加载 image。key 绑定 artifact digest、native ABI、codegen hash、target、Cranelift 版本和 settings，不是文件 mtime。
 
 ## 测试路径
 
-fixture 走 `run_file_in_process`，与 CLI 共用 `NativeRuntime`。测试进程默认不设 `WJSM_CACHE_DIR`，因此每个用例都冷编译。需要磁盘复用时由个别测试自己设置（例如 `tests/cluster_ipc.rs` 的 `/tmp/wjsm-test-cache`）。
+fixture 走 `run_file_in_process`，与 CLI 共用 `NativeRuntime`。测试进程通过 `tests/support/test_env.rs` 把 `WJSM_CACHE_DIR` 重定向到 `/tmp` 下的进程隔离目录，避免污染用户缓存，也保证跨测试运行不吃到旧缓存。
 
 `--watch` 是父进程监听、子进程整段重跑，不是预编译 handoff。
 

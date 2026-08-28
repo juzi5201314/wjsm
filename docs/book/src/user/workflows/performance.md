@@ -28,19 +28,19 @@ Timing: parse=6ms, lower=10ms, compile=6ms, execute=67ms
 
 `-v` 让计时用微秒单位，同时打印阶段进入信息。`execute` 只在实际执行的命令里出现；`build --stage compile --time` 只会看到前三段。
 
-`--stats` 输出常量数、函数数、基本块数和指令数。对已编码的 `.wjsm` 还会打印 artifact 字节数。若设置了 `WJSM_CACHE_DIR`，执行后还会打印 native cache 的 entries / bytes / hits / misses / invalidated。
+`--stats` 输出常量数、函数数、基本块数和指令数。对已编码的 `.wjsm` 还会打印 artifact 字节数。磁盘缓存可用时，执行后还会打印 native cache 的 entries / bytes / hits / misses / invalidated。
 
-## 打开磁盘缓存
+## 磁盘缓存
 
-`wjsm run` 默认不读写硬盘缓存，每次都从 IR 重新 codegen。重复执行同一份源码或 `.wjsm` 时，显式设置目录即可复用 native image 和 builtin IR 段：
+磁盘缓存默认可用：`WJSM_CACHE_DIR` 未设置时回落 `${XDG_CACHE_HOME}/wjsm`，再回落 `${HOME}/.cache/wjsm`。重复执行同一文件入口时，输入寻址 artifact 缓存跳过 parse/lower，native image 缓存跳过 Cranelift 编译，builtin IR 段缓存跳过 builtin lower：
 
 ```bash
-export WJSM_CACHE_DIR=~/.cache/wjsm
-wjsm run app.ts
+wjsm run --time app.ts     # 冷路径：parse/lower/compile 全额支付
+wjsm run --time app.ts     # 命中：parse=0 lower=0，读盘量级
 wjsm cache stats
 ```
 
-测试套件默认也不设这个变量。空值不会回落到 `$HOME/.cache/wjsm`。打开后默认 256 MiB LRU，可用 `WJSM_CACHE_MAX_BYTES` 调整。
+`WJSM_CACHE_DIR` 设为空串显式禁用磁盘缓存。测试套件把缓存目录重定向到进程隔离的 `/tmp` 路径。默认 256 MiB LRU，可用 `WJSM_CACHE_MAX_BYTES` 调整。
 
 对比特化前后用 `WJSM_DISABLE_SPECIALIZATION=1`。对比 Cranelift 优化档位用 `WJSM_OPT_LEVEL=none`。
 

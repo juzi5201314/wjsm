@@ -24,10 +24,11 @@ pub(crate) fn run(command: CacheCommand, directory: Option<&Path>, quiet: bool) 
 fn cache_directory(explicit: Option<&Path>) -> Result<PathBuf> {
     explicit
         .map(Path::to_path_buf)
-        .or_else(|| std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from))
+        .or_else(wjsm_module::resolve_cache_dir)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "native cache directory is not configured; pass --dir or set WJSM_CACHE_DIR"
+                "disk cache is disabled (WJSM_CACHE_DIR is empty and no user cache directory \
+                 is available); pass --dir or set WJSM_CACHE_DIR"
             )
         })
 }
@@ -90,8 +91,18 @@ fn entries(directory: &Path) -> Result<Vec<CacheEntry>> {
     Ok(entries)
 }
 
-/// 递归收集缓存条目：顶层 `*.wnat` + `builtin_ir/*.bin`（wjsm-module 的
-/// lower 产物缓存），与 backend 的自动 LRU 淘汰范围保持一致。
+/// 缓存子目录及各自的条目扩展名：`builtin_ir/*.bin`（wjsm-module 的 lower
+/// 产物缓存）、`artifact/*.{wjsm,dep}`（输入寻址 artifact 缓存）。顶层只认
+/// `*.wnat`。与 backend 的自动 LRU 淘汰范围保持一致。
+fn cache_subdir_extensions(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "builtin_ir" => Some(&["bin"]),
+        "artifact" => Some(&["wjsm", "dep"]),
+        _ => None,
+    }
+}
+
+/// 递归收集缓存条目：顶层 `*.wnat` + 已知缓存子目录内的对应扩展名。
 fn collect_entries(directory: &Path, out: &mut Vec<CacheEntry>) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read native cache '{}'", directory.display()))?
@@ -99,19 +110,27 @@ fn collect_entries(directory: &Path, out: &mut Vec<CacheEntry>) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
         if entry.file_type()?.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) == Some("builtin_ir") {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(cache_subdir_extensions)
+                .is_some()
+            {
                 collect_entries(&path, out)?;
             }
             continue;
         }
         let extension = path.extension().and_then(|extension| extension.to_str());
-        let is_builtin_ir = path
+        let subdir_extensions = path
             .parent()
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str())
-            == Some("builtin_ir");
-        let is_cache_file =
-            extension == Some("wnat") || (extension == Some("bin") && is_builtin_ir);
+            .and_then(cache_subdir_extensions);
+        let is_cache_file = match (extension, subdir_extensions) {
+            (Some(extension), Some(allowed)) => allowed.contains(&extension),
+            (Some(extension), None) => extension == "wnat",
+            (None, _) => false,
+        };
         if !is_cache_file {
             continue;
         }
@@ -168,6 +187,10 @@ mod tests {
         let builtin_ir = cache.path.join("builtin_ir");
         fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
         fs::write(builtin_ir.join("c.bin"), [0_u8; 8]).expect("builtin ir entry should be written");
+        let artifact = cache.path.join("artifact");
+        fs::create_dir_all(&artifact).expect("artifact dir should be created");
+        fs::write(artifact.join("d.wjsm"), [0_u8; 10]).expect("artifact entry should be written");
+        fs::write(artifact.join("d.dep"), [0_u8; 2]).expect("deps entry should be written");
         fs::write(cache.path.join("keep.txt"), b"keep").expect("unrelated file should be written");
 
         prune(&cache.path, 6, true).expect("cache should prune to byte limit");
@@ -185,15 +208,24 @@ mod tests {
     }
 
     #[test]
-    fn stats_and_entries_include_builtin_ir() {
+    fn stats_and_entries_include_builtin_ir_and_artifact() {
         let cache = TestCache::new();
         fs::write(cache.path.join("a.wnat"), [0_u8; 4]).expect("wnat entry should be written");
         let builtin_ir = cache.path.join("builtin_ir");
         fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
         fs::write(builtin_ir.join("c.bin"), [0_u8; 8]).expect("builtin ir entry should be written");
+        let artifact = cache.path.join("artifact");
+        fs::create_dir_all(&artifact).expect("artifact dir should be created");
+        fs::write(artifact.join("d.wjsm"), [0_u8; 16]).expect("artifact entry should be written");
+        fs::write(artifact.join("d.dep"), [0_u8; 2]).expect("deps entry should be written");
+        fs::write(artifact.join("skip.txt"), b"x").expect("unrelated file should be written");
 
-        let all = entries(&cache.path).expect("entries should include builtin_ir");
-        assert_eq!(all.len(), 2);
-        assert_eq!(all.iter().map(|entry| entry.bytes).sum::<u64>(), 12);
+        let all = entries(&cache.path).expect("entries should include cache subdirectories");
+        assert_eq!(
+            all.len(),
+            4,
+            "wnat + builtin_ir/*.bin + artifact/*.{{wjsm,dep}}"
+        );
+        assert_eq!(all.iter().map(|entry| entry.bytes).sum::<u64>(), 30);
     }
 }

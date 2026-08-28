@@ -10,7 +10,7 @@ run_compile_then_execute (CLI)
        └─ NativeRuntime::execute(artifact, module_root, cwd)
 ```
 
-`create_native_runtime` 只在 `WJSM_CACHE_DIR` 有值时把该路径传给 `NativeRuntimeConfig.cache_dir`。未设置时 runtime 每次从 IR 编译，不读写磁盘。
+`create_native_runtime` 把 `resolve_cache_dir()` 的结果传给 `NativeRuntimeConfig.cache_dir`（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。缓存被禁用时 runtime 每次从 IR 编译，不读写磁盘。
 
 in-process fixture（`run_file_in_process`）与 CLI 共用同一条路径，同样只认这个环境变量。测试套件默认不设置它。
 

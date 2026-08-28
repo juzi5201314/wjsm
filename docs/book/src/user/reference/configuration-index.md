@@ -30,7 +30,7 @@
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_CACHE_DIR` | native / builtin 缓存目录 | 未设置（关闭） |
+| `WJSM_CACHE_DIR` | 磁盘缓存目录（native / builtin / artifact） | 未设置（回落 XDG/HOME） |
 | `WJSM_CACHE_MAX_BYTES` | 磁盘缓存 LRU 上限 | `268435456` |
 | `WJSM_NO_BUILTIN_CACHE` | 禁用 builtin IR 段缓存 | 未设置 |
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级 | `speed` |

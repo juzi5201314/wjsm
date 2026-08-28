@@ -17,7 +17,7 @@ flowchart LR
 1. **parse** — SWC 把源码解析为 AST；
 2. **lower** — 作用域分析、early error 与 semantic lowering，产出 verified `Program`；
 3. **artifact 构造** — IR 与 module/source metadata 封装为 canonical `.wjsm`，经 bounded decode 与 verifier 校验；
-4. **native codegen** — 未设置 `WJSM_CACHE_DIR` 时每次从 IR 编译；设置后先查 `${WJSM_CACHE_DIR}/*.wnat`，命中则加载 image，miss 则编译并写入该目录；
+4. **native codegen** — 磁盘缓存可用时（默认回落 XDG/HOME，`WJSM_CACHE_DIR` 可覆盖）先查 `${cache_dir}/*.wnat`，命中则加载 image，miss 则编译并写入该目录；缓存被禁用时每次从 IR 编译；
 5. **execute** — `NativeRuntime` 调用入口，排空 Promise、微任务与外部事件，产出可观察结果与退出码。
 
 `wjsm build app.ts -o app.wjsm` 只完成前 3 步；`wjsm run app.wjsm` 从第 4 步开始。两条路径在 native codegen 处汇合。
@@ -38,7 +38,7 @@ flowchart LR
 - module/source metadata（含 manifest）；
 - 可选 source metadata。
 
-它不保存机器码、宿主 pointer 或 native relocation。Cranelift object、relocation、可执行 image 与 native cache 都是当前宿主私有派生数据——同一份 `.wjsm` 可以拿到另一个受支持宿主上直接 `run`。只有设置了 `WJSM_CACHE_DIR` 时，首次编译的 native image 才会写入该宿主的磁盘缓存。
+它不保存机器码、宿主 pointer 或 native relocation。Cranelift object、relocation、可执行 image 与 native cache 都是当前宿主私有派生数据——同一份 `.wjsm` 可以拿到另一个受支持宿主上直接 `run`。磁盘缓存可用时（默认回落 XDG/HOME），首次编译的 native image 会写入该宿主的磁盘缓存。
 
 ## 值、对象与 GC
 

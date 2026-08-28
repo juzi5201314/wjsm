@@ -44,7 +44,9 @@ use super::licm_facts::{ModuleFacts, collect_const_strings, is_protocol_or_env_n
 const MAX_ROUNDS: usize = 64;
 
 /// `WJSM_DISABLE_LICM` 是否生效：除空值与显式 0/false/off 外均视为禁用。
-fn licm_disabled_by_env() -> bool {
+/// 该开关改变 lower 产物，输入寻址 artifact 缓存的键必须包含它
+/// （经 [`crate::licm_disabled_by_env`] 暴露给缓存层）。
+pub(crate) fn licm_disabled_by_env() -> bool {
     !matches!(
         std::env::var("WJSM_DISABLE_LICM").as_deref(),
         Err(_) | Ok("") | Ok("0") | Ok("false") | Ok("off")

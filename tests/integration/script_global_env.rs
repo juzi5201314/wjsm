@@ -8,6 +8,7 @@
 use wjsm_cli::run_script_source_in_process;
 
 fn run_script(source: &str) -> (i32, String, String) {
+    crate::test_env::ensure_test_cache_dir();
     let (exit, stdout, stderr) = run_script_source_in_process(source);
     (
         exit,

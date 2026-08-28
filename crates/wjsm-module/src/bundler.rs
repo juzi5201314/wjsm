@@ -71,8 +71,9 @@ impl ModuleBundler {
     /// 流程：全图构建（现状）→ 按 [`builtin_modules::is_builtin_virtual_path`] 分片：
     /// 用户模块集 + builtin canonical frontier（用户模块直接 import/重导出/动态 import
     /// 的 builtin canonical 名，排序）。无 builtin frontier 时退化为 [`ModuleBundler::lower_bundle`]。
-    /// 有 frontier 时：`${WJSM_CACHE_DIR}/builtin_ir/<key>.bin` 命中则反序列化段，未命中则
-    /// [`crate::builtin_cache::build_builtin_segment`] 构建并落盘（`WJSM_CACHE_DIR` 未设置时
+    /// 有 frontier 时：`${cache_dir}/builtin_ir/<key>.bin`（目录经
+    /// [`crate::cache_dir::resolve_cache_dir`] 解析，缺省回落用户缓存目录）命中则反序列化段，
+    /// 未命中则 [`crate::builtin_cache::build_builtin_segment`] 构建并落盘（磁盘缓存被禁用时
     /// 构建段但不落盘）；用户图重建（id 从段模块数起、共享 builtin canonical 节点）后经
     /// `wjsm_semantic::lower_modules_with_builtin_seed` 合并两段，返回合并后的 `Program`
     /// （builtin 段 ModuleId 0..B，用户模块 B..，两段不重叠）。
@@ -128,11 +129,9 @@ impl ModuleBundler {
             return self.lower_bundle(entry);
         }
 
-        // 4) 缓存键 + 目录；WJSM_CACHE_DIR 未设置时构建段但不落盘。
+        // 4) 缓存键 + 目录；磁盘缓存被禁用时构建段但不落盘。
         let key = crate::builtin_cache::builtin_cache_key(&frontier, self.emit_debug_checks)?;
-        let cache_dir = std::env::var_os("WJSM_CACHE_DIR")
-            .map(PathBuf::from)
-            .map(|root| root.join("builtin_ir"));
+        let cache_dir = crate::cache_dir::resolve_cache_dir().map(|root| root.join("builtin_ir"));
         let segment = if let Some(segment) = crate::builtin_cache::load_memory_segment(&key) {
             segment
         } else {

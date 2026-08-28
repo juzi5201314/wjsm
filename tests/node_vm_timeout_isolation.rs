@@ -7,6 +7,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::thread;
 
+#[path = "support/test_env.rs"]
+mod test_env;
+
 fn write_temp_script(name: &str, source: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "wjsm-timeout-isolation-{}-{}",
@@ -45,6 +48,7 @@ console.log('B:' + s);
     );
 
     // 并发启动：不 sleep 协调时序；正确性只要求最终结果。
+    test_env::ensure_test_cache_dir();
     let handle_a = {
         let p = path_a.clone();
         thread::spawn(move || wjsm_cli::run_file_in_process_with_options(&p, &[], &[], None))

@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 fn run_inline(source: &str) -> (i32, String, String) {
+    crate::test_env::ensure_test_cache_dir();
     let (exit, stdout, stderr) = wjsm_cli::run_source_in_process(source);
     (
         exit,
@@ -54,6 +55,7 @@ fn inline_dynamic_import_namespace_is_exotic() {
 fn inline_dynamic_import_relative_resolves_against_module_root() {
     // 显式 root 模拟从该目录执行 `run -e`：相对说明符以模块根为解析基址
     //（对齐 Node `--eval` 以 cwd 为基址）。
+    crate::test_env::ensure_test_cache_dir();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/modules/dynamic_import_builtin_runtime");
     let (exit, stdout, stderr) = wjsm_cli::run_source_in_process_with_root(

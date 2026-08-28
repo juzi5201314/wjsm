@@ -6,13 +6,13 @@
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_CACHE_DIR` | native image 与 builtin IR 段缓存目录 | 未设置（磁盘缓存关闭） |
+| `WJSM_CACHE_DIR` | 磁盘缓存目录（native image、builtin IR 段、artifact 缓存） | 未设置（回落 XDG/HOME） |
 | `WJSM_CACHE_MAX_BYTES` | 自动 LRU 上限（字节） | `268435456`（256 MiB） |
-| `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存 | 未设置 |
+| `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段与 artifact 缓存 | 未设置 |
 
-磁盘缓存是 opt-in。只有 `WJSM_CACHE_DIR` 被设置时，`wjsm run` 才会读写 `${WJSM_CACHE_DIR}/*.wnat`，多文件项目才会把 builtin IR 段落到 `${WJSM_CACHE_DIR}/builtin_ir/`。未设置或空值都不会回落到 `$HOME/.cache/wjsm`；`wjsm cache` 这时也需要 `--dir`。
+磁盘缓存默认可用。`WJSM_CACHE_DIR` 未设置时回落 `${XDG_CACHE_HOME}/wjsm`，再回落 `${HOME}/.cache/wjsm`；设为空串则显式禁用磁盘缓存（此时 `wjsm cache` 需要 `--dir`）。缓存目录下有三类条目：native image（`*.wnat`）、builtin IR 段（`builtin_ir/*.bin`）与输入寻址 artifact 缓存（`artifact/*.{wjsm,dep}`，同源二次运行跳过 parse/lower）。
 
-打开磁盘缓存后，每次写入会节流扫描目录总字节（顶层 `*.wnat` 与 `builtin_ir/*.bin`）。超过上限按 mtime 删除最旧条目。`WJSM_CACHE_MAX_BYTES=0` 关闭自动淘汰；非法值回落到 256 MiB。手动管理走 `wjsm cache stats / clear / prune --max-bytes N`。
+每次写入会节流扫描目录总字节（三类条目全部计入）。超过上限按 mtime 删除最旧条目。`WJSM_CACHE_MAX_BYTES=0` 关闭自动淘汰；非法值回落到 256 MiB。手动管理走 `wjsm cache stats / clear / prune --max-bytes N`。
 
 ## 启动快照
 

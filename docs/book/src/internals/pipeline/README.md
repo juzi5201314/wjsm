@@ -24,7 +24,7 @@ flowchart LR
 | native codegen | CLIF / current-host image | `dump-clif` / `disasm` |
 | execute | observable output/status | `run` / fixtures |
 
-`run` 从 source 或 `.wjsm` 输入开始，artifact 经过 bounded decode/verification 后才进入 native compiler/runtime。native cache 是 opt-in 的 image 派生加速数据（只认 `WJSM_CACHE_DIR`），不改变 artifact source of truth。
+`run` 从 source 或 `.wjsm` 输入开始，artifact 经过 bounded decode/verification 后才进入 native compiler/runtime。native cache 是 image 派生加速数据（目录经 `resolve_cache_dir()` 解析，默认回落 XDG/HOME），不改变 artifact source of truth。
 
 ## 失败定位
 

@@ -35,6 +35,13 @@ use crate::builtin_modules::canonical_from_virtual_path;
 
 include!(concat!(env!("OUT_DIR"), "/builtin_cache_abi_hash.rs"));
 
+/// 语义 ABI 指纹（构建期生成）：覆盖 module/parser/semantic/IR/artifact-format
+/// 源码、全部 builtin_js 与 Cargo.lock。builtin 段缓存与输入寻址 artifact 缓存
+/// 共用它作为「语义版本」维度——上述任一输入变化都会切换缓存命名空间。
+pub(crate) fn semantic_abi_hash() -> [u8; 32] {
+    BUILTIN_CACHE_ABI_HASH
+}
+
 /// builtin 段中每个模块的布局记录（与 lower 时的 ModuleId / 作用域布局一致）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BuiltinModuleRecord {
