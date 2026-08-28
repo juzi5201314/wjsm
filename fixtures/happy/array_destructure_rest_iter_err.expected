@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+rest value err: poisoned value
+rest step err: poisoned next
+elision step err: poisoned next
+elem step err: poisoned next
+collected: 0 next: 1 return: 0
+--- stderr ---
