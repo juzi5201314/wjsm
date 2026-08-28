@@ -89,6 +89,11 @@ fn function_is_loopifiable(function: &Function, frame_locals: &HashSet<String>) 
     if is_resumable_function_name(function.name()) {
         return false;
     }
+    // 类构造器体内的自调用是 [[Call]]，运行时必须抛 TypeError（ES §10.2.1
+    // 步骤 2）；改写为回边会静默循环执行构造器体。
+    if function.is_class_constructor() {
+        return false;
+    }
     // 约定：params[0] = $env，params[1] = $this，其后才是 JS 形参。
     if function.params().len() < 2 {
         return false;

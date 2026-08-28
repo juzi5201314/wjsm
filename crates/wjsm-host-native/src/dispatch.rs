@@ -428,6 +428,36 @@ pub(super) unsafe extern "C" fn native_rejected_construct(
     rejected_call_error(ctx, state, callee, true)
 }
 
+/// 类构造器 [[Call]] 的拒绝 handler（ES §10.2.1 步骤 2）：文案对齐 V8/Node，
+/// 命名类含类名，匿名类用复数句式。
+pub(super) unsafe extern "C" fn native_class_ctor_rejected(
+    ctx: *mut NativeVmContext,
+    callee: i64,
+    _this_value: i64,
+    _args_base: u32,
+    _args_count: u32,
+) -> i64 {
+    let Some(ctx) = (unsafe { ctx.as_mut() }) else {
+        return value::encode_handle(value::TAG_EXCEPTION, 0);
+    };
+    let Some(state) = (unsafe { ctx.heap_state.cast::<NativeAgentState>().as_mut() }) else {
+        return fail_dispatch(ctx);
+    };
+    let name = state.pending_class_ctor_name.take();
+    if ctx.pending_exception_kind == PendingExceptionKind::StackOverflow {
+        return rejected_call_error(ctx, state, callee, false);
+    }
+    let message = match name {
+        Some(name) if !name.is_empty() => {
+            format!("Class constructor {name} cannot be invoked without 'new'")
+        }
+        _ => "Class constructors cannot be invoked without 'new'".to_owned(),
+    };
+    modules::named_error_object(state, "TypeError", message)
+        .and_then(|error| state.create_exception(error))
+        .unwrap_or_else(|| fail_dispatch(ctx))
+}
+
 /// 实参合法携带 `TAG_EXCEPTION` 的 builtin：不参与入口处的实参哨兵透传。
 ///
 /// - `ExceptionValue`：本职就是解包异常哨兵。
