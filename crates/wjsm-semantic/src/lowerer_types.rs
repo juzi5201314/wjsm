@@ -97,6 +97,18 @@ pub(crate) struct Lowerer {
     /// 词法上可继承的 [[HomeObject]]（类方法体内嵌套箭头函数使用）。
     pub(crate) lexical_home_object: Option<HomeObject>,
     pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
+    /// 派生类显式构造器的实例初始化上下文：super() 站点按 ECMAScript
+    /// SuperCall 语义（BindThisValue 后 InitializeInstanceElements）发射
+    /// 参数属性字段与实例字段初始化器。构造器帧持有；箭头帧随词法 super
+    /// 能力克隆继承（箭头体内 super() 同样发射）；普通嵌套函数帧为 None。
+    pub(crate) derived_ctor_init_ctx: Option<Box<crate::lowerer_classes_ts::DerivedCtorInitCtx>>,
+    pub(crate) function_derived_ctor_init_ctx_stack:
+        Vec<Option<Box<crate::lowerer_classes_ts::DerivedCtorInitCtx>>>,
+    /// 派生构造器体内存在箭头函数 super() 时为 true：this 的规范存储改为
+    /// 共享 env（构造器入口注册），构造器帧的 this 读写与箭头帧的
+    /// BindThisValue 重绑经同一 env 保持一致。
+    pub(crate) ctor_this_via_env: bool,
+    pub(crate) function_ctor_this_via_env_stack: Vec<bool>,
     /// 模块/外层作用域 `const X = <字面量>` 绑定 → 字面量常量（IR 变量名
     /// `$<scope_id>.<name>` 为键）。闭包捕获读取时若命中则直接折叠为常量，
     /// 避免每次读取都经 env `obj_get` host 调用（基准：算术循环读模块 const
@@ -326,6 +338,10 @@ impl CapturedBinding {
 
     pub(crate) fn is_lexical_new_target(&self) -> bool {
         self.scope_id.is_none() && self.name == "__wjsm_new_target"
+    }
+
+    pub(crate) fn is_lexical_this(&self) -> bool {
+        self.scope_id.is_none() && self.name == "$this"
     }
 
     pub(crate) fn env_key(&self) -> String {

@@ -91,6 +91,10 @@ impl Lowerer {
             function_is_method_stack: Vec::new(),
             lexical_home_object: None,
             function_lexical_home_object_stack: Vec::new(),
+            derived_ctor_init_ctx: None,
+            function_derived_ctor_init_ctx_stack: Vec::new(),
+            ctor_this_via_env: false,
+            function_ctor_this_via_env_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             iteration_env_stack: Vec::new(),
             current_module_id: None,
@@ -380,6 +384,11 @@ impl Lowerer {
             .push(self.super_call_allowed);
         self.super_allowed = false;
         self.super_call_allowed = false;
+        self.function_derived_ctor_init_ctx_stack
+            .push(self.derived_ctor_init_ctx.take());
+        self.function_ctor_this_via_env_stack
+            .push(self.ctor_this_via_env);
+        self.ctor_this_via_env = false;
         self.function_is_arrow_stack.push(self.is_arrow);
         self.function_is_method_stack.push(self.is_method);
         self.is_arrow = false;
@@ -440,6 +449,14 @@ impl Lowerer {
             .function_super_call_allowed_stack
             .pop()
             .expect("super call context stack underflow");
+        self.derived_ctor_init_ctx = self
+            .function_derived_ctor_init_ctx_stack
+            .pop()
+            .expect("derived ctor init ctx stack underflow");
+        self.ctor_this_via_env = self
+            .function_ctor_this_via_env_stack
+            .pop()
+            .expect("ctor this via env stack underflow");
         self.lexical_home_object = self
             .function_lexical_home_object_stack
             .pop()
@@ -501,7 +518,12 @@ impl Lowerer {
             .expect("async context stack underflow");
         self.restore_async_context(async_context);
         for binding in child_captures {
-            if self.binding_belongs_to_current_function(&binding) {
+            // 词法 this 的 owner 是最近的非箭头函数：当前帧是箭头时继续向外
+            // 传播捕获，避免箭头帧把 this 误登记为自有共享绑定（其 env 不持有
+            // this 的自有副本，读写都沿原型链定位真正 owner）。
+            if binding.is_lexical_this() && self.is_arrow {
+                self.record_capture(binding);
+            } else if self.binding_belongs_to_current_function(&binding) {
                 self.shared_binding_names_stack
                     .last_mut()
                     .expect("shared binding names stack underflow")

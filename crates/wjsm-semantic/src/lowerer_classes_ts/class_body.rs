@@ -100,10 +100,16 @@ impl Lowerer {
         let ctor_param_pats: Vec<&swc_ast::Pat> = ctor_param_pats_owned.iter().collect();
         let param_ir_names =
             self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id)?;
-        // 形参 IR 名此时才确定，回填成 (形参 IR 名, 字段名)。
-        let param_prop_fields: Vec<(String, String)> = param_prop_slots
+        // 形参 IR 名此时才确定，回填成 (形参绑定, 字段名)；绑定携带作用域
+        // id，箭头 super() 站点可经捕获链读取外层构造器帧的形参。
+        let param_prop_fields: Vec<(CapturedBinding, String)> = param_prop_slots
             .into_iter()
-            .map(|(slot, field)| (param_ir_names[slot].clone(), field))
+            .map(|(slot, field)| {
+                (
+                    crate::lowerer_modules::parse_ir_name_to_binding(&param_ir_names[slot]),
+                    field,
+                )
+            })
             .collect();
         if let Some(ctor) = constructor {
             if class.super_class.is_some()
@@ -122,10 +128,54 @@ impl Lowerer {
 
         let entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(entry);
+
+        let is_derived = class.super_class.is_some();
+        if let Some(ctor) = constructor
+            && is_derived
+        {
+            // 箭头 super()（如 `(() => super())()`）：BindThisValue 发生在箭头
+            // 帧，构造器帧必须经共享 env 观察重绑后的 this——入口即把 this
+            // 注册进共享 env，本帧读写与箭头帧的重绑统一走 env。
+            if ctor_has_arrow_super(ctor) {
+                self.ctor_this_via_env = true;
+                self.ensure_shared_env(entry, &[CapturedBinding::lexical_this()], class_span)?;
+            }
+            // 字段初始化器的 `arguments` 早错误与发射解耦：即使构造器没有
+            // 可达 super() 站点，类定义仍必须报告该错误。
+            for member in &class.body {
+                match member {
+                    swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
+                        self.check_field_initializer_arguments(prop.value.as_deref())?;
+                    }
+                    swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
+                        self.check_field_initializer_arguments(prop.value.as_deref())?;
+                    }
+                    _ => {}
+                }
+            }
+            let has_init_work = !param_prop_fields.is_empty()
+                || private_members.iter().any(|member| !member.is_static)
+                || class.body.iter().any(|member| match member {
+                    swc_ast::ClassMember::PrivateProp(prop) => !prop.is_static,
+                    swc_ast::ClassMember::ClassProp(prop) => !prop.is_static,
+                    _ => false,
+                });
+            // 实例初始化推迟到 super() 站点发射（ES SuperCall 步骤 8–11：
+            // BindThisValue 之后立即 InitializeInstanceElements），对语句、
+            // 表达式、形参默认值中的任意 super() 位置一致成立。
+            self.derived_ctor_init_ctx = Some(Box::new(DerivedCtorInitCtx {
+                param_prop_fields: param_prop_fields.clone(),
+                members: class.body.to_vec(),
+                private_members: private_members.clone(),
+                computed_instance_keys: computed_instance_keys.clone(),
+                has_init_work,
+            }));
+        }
+
         let parameter_block = self.emit_pat_inits_impl(&ctor_param_pats, &param_ir_names, entry)?;
 
         let mut field_block = parameter_block;
-        if constructor.is_none() && class.super_class.is_some() {
+        if constructor.is_none() && is_derived {
             let callee = self.alloc_value();
             self.current_function.append_instruction(
                 field_block,
@@ -150,19 +200,20 @@ impl Lowerer {
                     forward_args: true,
                 },
             );
-            // 派生类缺省构造器等价 `constructor(...args) { super(...args); }`，
-            // 其 `? Construct(func, args, NewTarget)` 抛出的异常必须终止本构造
-            // 器并向 `new` 调用点传播，不得被丢弃后继续执行字段初始化器。
-            field_block = self.lower_value_exception_branch(field_block, super_result)?;
+            // 派生类缺省构造器等价 `constructor(...args) { super(...args); }`：
+            // 父构造器返回对象时按 BindThisValue 重绑 this（字段随后落在该
+            // 对象上）；`? Construct(func, args, NewTarget)` 抛出的异常必须
+            // 终止本构造器并向 `new` 调用点传播，不得触达字段初始化器。
+            let (selected, merge) =
+                self.select_super_call_result(field_block, super_result, this_val);
+            field_block = self.lower_value_exception_branch(merge, selected)?;
         }
-        let defer_instance_initializers = constructor.is_some() && class.super_class.is_some();
-        if !defer_instance_initializers {
-            // 参数属性字段先于字段初始化器生效（TS 语义），故在其之前发射。
-            field_block =
-                self.emit_param_prop_fields(field_block, this_scope_id, &param_prop_fields);
+        if !(constructor.is_some() && is_derived) {
+            // 基类构造器 this 从入口即存在；派生缺省构造器已在上方完成
+            // super() 与重绑。参数属性字段先于字段初始化器生效（TS 语义）。
+            field_block = self.emit_param_prop_fields(field_block, &param_prop_fields)?;
             field_block = self.emit_instance_initializers(
                 field_block,
-                this_scope_id,
                 &class.body,
                 &private_members,
                 &computed_instance_keys,
@@ -211,37 +262,31 @@ impl Lowerer {
         if let Some(ctor) = constructor
             && let Some(body) = &ctor.body
         {
-            let mut deferred_instance_initializers_emitted = false;
             for stmt in &body.stmts {
                 // unreachable code 合法，跳过不报错
                 if matches!(inner_flow, StmtFlow::Terminated) {
                     continue;
                 }
                 inner_flow = self.lower_stmt(stmt, inner_flow)?;
-                if defer_instance_initializers
-                    && !deferred_instance_initializers_emitted
-                    && stmt_is_direct_super_call(stmt)
-                    && let StmtFlow::Open(b) = inner_flow
-                {
-                    // 派生类：`this` 在 super() 之后才存在，故参数属性字段与
-                    // 字段初始化器都必须推迟到此处，且参数属性先行。
-                    let after_props =
-                        self.emit_param_prop_fields(b, this_scope_id, &param_prop_fields);
-                    inner_flow = StmtFlow::Open(self.emit_instance_initializers(
-                        after_props,
-                        this_scope_id,
-                        &class.body,
-                        &private_members,
-                        &computed_instance_keys,
-                    )?);
-                    deferred_instance_initializers_emitted = true;
-                }
             }
         }
 
         if let StmtFlow::Open(b) = inner_flow {
-            self.current_function
-                .set_terminator(b, Terminator::Return { value: None });
+            if is_derived {
+                // [[Construct]] 步骤 13.c：派生构造器体正常完结返回当前 this
+                // 绑定——super() 重绑后即父构造器返回的对象；new 站点与
+                // Reflect.construct 都以该对象为构造结果。
+                let this_val = self.emit_read_ctor_this(b);
+                self.current_function.set_terminator(
+                    b,
+                    Terminator::Return {
+                        value: Some(this_val),
+                    },
+                );
+            } else {
+                self.current_function
+                    .set_terminator(b, Terminator::Return { value: None });
+            }
         }
 
         let old_fn = std::mem::replace(
