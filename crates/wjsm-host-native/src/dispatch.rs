@@ -19,6 +19,7 @@ pub(crate) mod fetch;
 mod function;
 pub(crate) mod function_constructor;
 pub(crate) mod generator;
+pub(crate) mod global_env;
 pub(crate) mod idna;
 pub(crate) mod intl;
 mod iterator;
@@ -571,6 +572,7 @@ pub(super) fn dispatch_builtin(
             console::dispatch_console => Builtin::ConsoleLog | Builtin::ConsoleInfo | Builtin::ConsoleDebug | Builtin::ConsoleWarn | Builtin::ConsoleError | Builtin::ConsoleTrace,
             errors::dispatch_error => Builtin::ErrorConstructor | Builtin::EvalErrorConstructor | Builtin::RangeErrorConstructor | Builtin::ReferenceErrorConstructor | Builtin::SyntaxErrorConstructor | Builtin::TypeErrorConstructor | Builtin::URIErrorConstructor,
             eval::dispatch_eval => Builtin::Eval | Builtin::EvalIndirect | Builtin::EvalGetBinding | Builtin::EvalSetBinding | Builtin::EvalHasBinding | Builtin::EvalSuperBase | Builtin::EvalWithBase,
+            global_env::dispatch_global_env => Builtin::GlobalEnvCheck | Builtin::GlobalEnvDeclareVar | Builtin::GlobalEnvDeclareFunc | Builtin::GlobalEnvDeclareLex | Builtin::GlobalEnvInitLex | Builtin::GlobalEnvGet | Builtin::GlobalEnvSet | Builtin::GlobalEnvDelete,
             with_env::dispatch_with => Builtin::WithHasBinding | Builtin::WithToObject,
             iterator::dispatch_iterator => Builtin::IteratorFrom | Builtin::IteratorDone | Builtin::IteratorValue | Builtin::IteratorStepValue | Builtin::IteratorNext | Builtin::IteratorClose,
             node_perf_hooks::dispatch_perf => Builtin::PerformanceNow,
