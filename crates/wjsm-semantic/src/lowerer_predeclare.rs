@@ -134,6 +134,7 @@ impl Lowerer {
                                 .scopes
                                 .declare(&name, kind, declared)
                                 .map_err(|msg| self.error(var_decl.span, msg))?;
+                            self.record_script_global(scope_id, &name, kind);
                             if matches!(kind, VarKind::Var) {
                                 self.record_hoisted_var(scope_id, name);
                             }
@@ -147,18 +148,32 @@ impl Lowerer {
                 }
                 swc_ast::Decl::Fn(fn_decl) => {
                     let name = fn_decl.ident.sym.to_string();
-                    let _scope_id = self
+                    let scope_id = self
                         .scopes
                         .declare(&name, VarKind::Var, true)
                         .map_err(|msg| self.error(fn_decl.span(), msg))?;
+                    // 顶层直陈函数声明按 CreateGlobalFunctionBinding 类别登记；
+                    // 块内函数（Annex B）按 var 提升类别。
+                    if matches!(mode, LexicalMode::Include) {
+                        self.record_script_global_func(scope_id, &name);
+                    } else {
+                        self.record_script_global(scope_id, &name, VarKind::Var);
+                    }
                 }
                 swc_ast::Decl::Class(class_decl) => {
                     let name = class_decl.ident.sym.to_string();
-                    let _scope_id = self
+                    let scope_id = self
                         .scopes
                         .declare(&name, VarKind::Let, false)
                         .map_err(|msg| self.error(class_decl.span(), msg))?;
+                    // 仅顶层直陈类声明进入全局声明式记录；块内类由块作用域承载。
+                    if matches!(mode, LexicalMode::Include) {
+                        self.record_script_global(scope_id, &name, VarKind::Let);
+                    }
                 }
+                // TS enum / namespace 是 TypeScript 构造（非 ECMAScript 全局语义），
+                // 其多段合并式降级依赖 `$0.*` 槽自由读写，保持既有绑定模型，
+                // 不进入脚本全局环境记录。
                 swc_ast::Decl::TsEnum(ts_enum) => {
                     let name = ts_enum.id.sym.to_string();
                     let _scope_id = self
@@ -175,6 +190,8 @@ impl Lowerer {
                             .map_err(|msg| self.error(ts_module.span(), msg))?;
                     }
                 }
+                // `using` 声明的绑定由 pending-finalizer 机制经 `$0.*` 槽管理
+                //（作用域退出即 dispose），不进入脚本全局环境记录。
                 swc_ast::Decl::Using(using_decl) => {
                     for declarator in &using_decl.decls {
                         let mut names = Vec::new();
@@ -274,6 +291,9 @@ impl Lowerer {
                             .scopes
                             .declare(&name, VarKind::Var, true)
                             .map_err(|msg| self.error(expr_stmt.span, msg))?;
+                        // 脚本顶层的直接 eval 字面量 var：CreateGlobalVarBinding(N, true)
+                        // 建可删除全局属性（EvalDeclarationInstantiation §19.2.1.3）。
+                        self.record_script_global_eval_var(scope_id, &name);
                         self.record_hoisted_var(scope_id, name);
                     }
                 }
@@ -351,6 +371,7 @@ impl Lowerer {
                     .scopes
                     .declare(&name, kind, declared)
                     .map_err(|msg| self.error(var_decl.span, msg))?;
+                self.record_script_global(scope_id, &name, kind);
                 if matches!(kind, VarKind::Var) {
                     self.record_hoisted_var(scope_id, name);
                 }
@@ -382,6 +403,11 @@ impl Lowerer {
         );
 
         for var in &self.hoisted_vars {
+            // 脚本全局 var 没有 `$0.*` 槽：GDI 序幕经 GlobalEnvDeclareVar 在
+            // 全局对象上建立属性（初值 undefined），此处跳过。
+            if var.scope_id == 0 && self.script_global_names.contains_key(&var.name) {
+                continue;
+            }
             let name = format!("${}.{}", var.scope_id, var.name);
             self.current_function
                 .append_instruction(block, Instruction::StoreVar { name, value });

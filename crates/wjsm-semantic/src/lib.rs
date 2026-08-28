@@ -129,6 +129,7 @@ mod lowerer_function_names;
 mod lowerer_functions;
 mod lowerer_jsx_objects;
 mod lowerer_predeclare;
+mod lowerer_script_global;
 mod lowerer_stmt;
 mod lowerer_ts;
 mod lowerer_with;

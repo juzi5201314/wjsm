@@ -1161,11 +1161,17 @@ impl Lowerer {
         };
 
         // 2. Get all lexically visible bindings (including TDZ)
+        // 脚本全局绑定不进快照：宿主 eval 边界解析（EvalGet/Set/HasBinding）
+        // 穿透 ScopeRecord 后按全局环境记录（声明式 → 对象）命中，快照副本
+        // 反而会遮蔽真值并造成写入分叉。
         let all_bindings: Vec<_> = self
             .scopes
             .visible_bindings_all()
             .into_iter()
             .filter(|(_, name, _, _)| !matches!(name.as_str(), "undefined" | "NaN" | "Infinity"))
+            .filter(|(scope_id, name, _, _)| {
+                !(*scope_id == 0 && self.script_global_names.contains_key(name))
+            })
             .collect();
 
         // 3. Create ScopeRecord

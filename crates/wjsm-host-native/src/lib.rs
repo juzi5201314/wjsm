@@ -1052,6 +1052,8 @@ struct NativeAgentState {
     repository: NativeImageRepository,
     runtime_modules: dispatch::modules::NativeModuleState,
     scope_records: HashMap<u32, dispatch::modules::NativeScopeRecord>,
+    /// 各 realm（全局对象句柄）的全局环境记录：脚本级词法绑定 + [[VarNames]]。
+    global_env_records: HashMap<u32, dispatch::global_env::GlobalEnvRecord>,
     string_ids: HashMap<(u32, u32), u32>,
     /// 码元值是密集的 `0..=255`，JIT 按值直接索引；固定数组避免热路径哈希与分配。
     latin1_char_strings: Box<[i64; LATIN1_CHAR_COUNT]>,
@@ -1268,6 +1270,7 @@ impl NativeAgentState {
             repository,
             runtime_modules: dispatch::modules::NativeModuleState::default(),
             scope_records: HashMap::new(),
+            global_env_records: HashMap::new(),
             string_ids: HashMap::new(),
             latin1_char_strings: Box::new([value::encode_undefined(); LATIN1_CHAR_COUNT]),
             activations: Vec::new(),
@@ -1589,6 +1592,7 @@ impl NativeAgentState {
         self.function_ids.clear();
         self.runtime_modules.clear();
         self.scope_records.clear();
+        self.global_env_records.clear();
         self.array_properties.clear();
         self.array_property_order.clear();
         self.string_ids.clear();
@@ -4674,6 +4678,10 @@ impl NativeAgentState {
                 .keys()
                 .filter_map(|(_, key)| key.name_id()),
         );
+        for record in self.global_env_records.values() {
+            names.extend(record.lexical.keys().filter_map(|key| key.name_id()));
+            names.extend(record.var_names.iter().filter_map(|key| key.name_id()));
+        }
         self.string_ids
             .values()
             .copied()
@@ -5379,6 +5387,7 @@ impl NativeAgentState {
             .retain(|(handle, _), _| is_live(handle));
         self.array_fixed_length.retain(is_live);
         self.scope_records.retain(|handle, _| is_live(handle));
+        self.global_env_records.retain(|handle, _| is_live(handle));
         self.async_from_sync_iterators
             .retain(|handle, _| is_live(handle));
         self.async_generator_resume_completions

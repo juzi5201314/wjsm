@@ -574,6 +574,38 @@ pub enum Builtin {
     /// `function <name>() { [native code] }`，非 callable this 抛 TypeError。
     /// args: [this]。
     FunctionToString,
+    // ── 全局环境记录（ES §9.1.1.4，脚本模式 GlobalDeclarationInstantiation）──
+    /// GlobalDeclarationInstantiation（§16.1.7）步骤 1–6 的声明冲突预检：
+    /// kind=0（词法名）检查 HasVarDeclaration / HasLexicalDeclaration /
+    /// HasRestrictedGlobalProperty，kind=1（var/函数名）检查
+    /// HasLexicalDeclaration。冲突抛 SyntaxError。args: [global, name, kind]。
+    GlobalEnvCheck,
+    /// CreateGlobalVarBinding（§9.1.1.4.17）：全局对象无同名自有属性且可扩展时
+    /// 定义 {undefined, writable, enumerable, configurable=args[2]} 数据属性，
+    /// 并把名字计入 [[VarNames]]。args: [global, name, configurable]。
+    GlobalEnvDeclareVar,
+    /// CreateGlobalFunctionBinding（§9.1.1.4.18）：按既有属性可配置性定义/更新
+    /// 全局函数属性（脚本级恒 configurable=false），并计入 [[VarNames]]。
+    /// args: [global, name, value]。
+    GlobalEnvDeclareFunc,
+    /// 全局声明式记录 CreateMutableBinding / CreateImmutableBinding：创建
+    /// 未初始化（TDZ）词法绑定。args: [global, name, is_const]。
+    GlobalEnvDeclareLex,
+    /// 全局声明式记录 InitializeBinding：写入初值并解除 TDZ。
+    /// args: [global, name, value]。
+    GlobalEnvInitLex,
+    /// 全局环境 ResolveBinding + GetValue：先查声明式记录（TDZ 抛
+    /// ReferenceError），再落全局对象属性；均未命中时 flags bit0（typeof 容忍）
+    /// 置位返回 undefined，否则抛 "x is not defined"。args: [global, name, flags]。
+    GlobalEnvGet,
+    /// 全局环境 SetMutableBinding / PutValue：声明式记录命中时检查 TDZ 与
+    /// const（TypeError "Assignment to constant variable."）；否则按对象记录
+    /// 语义写属性——strict（args[3]）且属性不存在抛 ReferenceError，sloppy
+    /// 创建 configurable 隐式全局。args: [global, name, value, strict]。
+    GlobalEnvSet,
+    /// 全局环境 DeleteBinding：声明式记录绑定不可删除（false）；否则按全局
+    /// 对象 [[Delete]] 返回结果，属性缺失返回 true。args: [global, name]。
+    GlobalEnvDelete,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -609,7 +641,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::FunctionToString as u16
+        Self::GlobalEnvDelete as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1107,6 +1139,14 @@ impl Builtin {
             Self::SuperCallOnceCheck => "super_call_once_check",
             Self::FunctionSetName => "function.set_name",
             Self::FunctionToString => "function.to_string",
+            Self::GlobalEnvCheck => "global_env.check",
+            Self::GlobalEnvDeclareVar => "global_env.declare_var",
+            Self::GlobalEnvDeclareFunc => "global_env.declare_func",
+            Self::GlobalEnvDeclareLex => "global_env.declare_lex",
+            Self::GlobalEnvInitLex => "global_env.init_lex",
+            Self::GlobalEnvGet => "global_env.get",
+            Self::GlobalEnvSet => "global_env.set",
+            Self::GlobalEnvDelete => "global_env.delete",
         }
     }
 }

@@ -121,6 +121,12 @@ impl Lowerer {
             return Ok(dest);
         }
 
+        // 脚本全局绑定：读经 GlobalEnvGet（声明式记录 TDZ → 全局对象属性），
+        // 宿主全局环境记录是唯一权威（间接 eval / vm / Function 共享真值）。
+        if self.script_global_kind_for(&name).is_some() {
+            return self.lower_script_global_read(block, &name, false);
+        }
+
         // eval 作用域桥接优先：自由变量（含 builtin / eval 标识符）走 EvalGetBinding，
         // 由 runtime 经 sandbox → realm.global 原型链解析（多 realm 正确性）。
         if self.eval_scope_bridge_active() && self.scopes.lookup(&name).is_err() {
@@ -173,6 +179,13 @@ impl Lowerer {
                 // 静态无法判定调用是否先于声明执行，改为运行时 TdzCheck。
                 if let Some((scope_id, _)) = self.runtime_tdz_binding(&name) {
                     return self.lower_tdz_checked_read(block, &name, scope_id);
+                }
+                // 脚本模式：未声明名延迟到运行时全局解析（eval/vm 可能已创建
+                // 隐式全局；确实缺失时由宿主抛 "x is not defined"）。
+                if msg.starts_with("undeclared identifier")
+                    && self.script_global_dynamic_free_name(&name)
+                {
+                    return self.lower_script_global_read(block, &name, false);
                 }
                 return Err(self.error(ident.span, msg));
             }
@@ -449,10 +462,25 @@ impl Lowerer {
             }
         };
 
+        // 脚本全局绑定：写经 GlobalEnvSet（TDZ / const TypeError / strict 未
+        // 解析名 ReferenceError 均为运行时语义，绕过编译期 const/TDZ 拒绝）。
+        if self.script_global_kind_for(&name).is_some() {
+            return self.lower_assign_script_global(assign, block, &name);
+        }
+
         // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
         // 避免独立的 const 检查与 lookup 各自遍历 scope chain 的冗余。
         let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
             Ok(found) => found,
+            Err(msg)
+                if self.script_mode
+                    && !self.eval_scope_bridge_active()
+                    && msg.starts_with("undeclared identifier") =>
+            {
+                // 脚本模式未声明名赋值：sloppy 创建隐式全局属性，strict 由宿主
+                // 在运行时抛 ReferenceError（含 builtin 全局名的重写）。
+                return self.lower_assign_script_global(assign, block, &name);
+            }
             Err(msg)
                 if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
             {
@@ -662,6 +690,11 @@ impl Lowerer {
         span: Span,
         _sync_existing_env: bool,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 脚本全局绑定没有 `$0.*` 槽：一切写入按 SetMutableBinding 路由到
+        // 宿主全局环境记录（声明初始化已由调用方经 GlobalEnvInitLex 分流）。
+        if binding.scope_id == Some(0) && self.script_global_names.contains_key(&binding.name) {
+            return self.emit_script_global_set(block, &binding.name, value);
+        }
         let mut store_block = self.resolve_store_block(block);
         self.current_function.append_instruction(
             store_block,

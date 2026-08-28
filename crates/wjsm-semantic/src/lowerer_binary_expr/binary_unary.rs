@@ -656,6 +656,24 @@ impl Lowerer {
                     if self.eval_scope_bridge_active() && self.scopes.lookup(&name).is_err() {
                         return self.lower_eval_typeof_binding(&name, block);
                     }
+                    // 脚本全局绑定：typeof 经容忍读（可配置 var 属性可能已被
+                    // delete，缺失返回 undefined；词法 TDZ 仍抛 ReferenceError）。
+                    if self.script_global_kind_for(&name).is_some() {
+                        let value = self.lower_script_global_read(block, &name, true)?;
+                        let mut current_block = block;
+                        self.resolve_expr_continuations(&mut current_block);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            current_block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::TypeOf,
+                                args: vec![value],
+                            },
+                        );
+                        self.publish_expr_continuation(block, current_block);
+                        return Ok(dest);
+                    }
                     if !has_module_alias
                         && !self.eval_scope_bridge_active()
                         && name != "eval"
@@ -663,6 +681,24 @@ impl Lowerer {
                         && let Err(msg) = self.scopes.lookup(&name)
                         && msg.starts_with("undeclared identifier")
                     {
+                        // 脚本模式未声明名：typeof 须运行时解析（eval/vm 可能已
+                        // 创建全局绑定），经 GlobalEnvGet 容忍缺失后 TypeOf。
+                        if self.script_global_dynamic_free_name(&name) {
+                            let value = self.lower_script_global_read(block, &name, true)?;
+                            let mut current_block = block;
+                            self.resolve_expr_continuations(&mut current_block);
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                current_block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: Builtin::TypeOf,
+                                    args: vec![value],
+                                },
+                            );
+                            self.publish_expr_continuation(block, current_block);
+                            return Ok(dest);
+                        }
                         let undef_const = self
                             .module
                             .add_constant(Constant::String("undefined".to_string()));
@@ -742,6 +778,14 @@ impl Lowerer {
                         if !crossed.is_empty() {
                             return self.lower_with_delete(ident, &crossed, block);
                         }
+                        // 脚本全局绑定 / 脚本模式未声明名：全局环境 DeleteBinding
+                        // （词法与非可配置 var/函数属性返回 false；隐式全局可删）。
+                        let name = ident.sym.to_string();
+                        if self.script_global_kind_for(&name).is_some()
+                            || self.script_global_dynamic_free_name(&name)
+                        {
+                            return self.lower_script_global_delete(block, &name);
+                        }
                         let true_const = self.module.add_constant(Constant::Bool(true));
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
@@ -795,6 +839,13 @@ impl Lowerer {
                     return self.lower_with_update(update, ident, &crossed, block);
                 }
                 let name = ident.sym.to_string();
+                // 脚本全局绑定 / 脚本模式未声明名：读改写全链经 GlobalEnvGet/Set
+                //（TDZ、const TypeError、缺失名 ReferenceError 均为运行时语义）。
+                if self.script_global_kind_for(&name).is_some()
+                    || self.script_global_dynamic_free_name(&name)
+                {
+                    return self.lower_script_global_update(update, block, &name);
+                }
                 let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
                     Ok(found) => found,
                     Err(msg) => {

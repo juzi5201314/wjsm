@@ -4,6 +4,7 @@ use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext};
 
 use super::errors::javascript_error;
+use super::global_env;
 use super::modules;
 use super::node_vm;
 use super::runtime::{self, fail_dispatch};
@@ -173,6 +174,22 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         modules::ScopeBindingRead::Missing => {}
     }
     let outer = modules::scope_record_outer(state, *environment).unwrap_or(*environment);
+    // 全局环境声明式记录（脚本级 let/const/class）先于全局对象属性命中（§9.1.1.4.1）。
+    if let Some(env_key) = runtime::property_key(state, *key) {
+        match global_env::lexical_read(state, outer, env_key) {
+            global_env::GlobalLexicalRead::Value(result) => return result,
+            global_env::GlobalLexicalRead::Uninitialized => {
+                let name = eval_binding_name(state, *key);
+                return javascript_error(
+                    ctx,
+                    state,
+                    "ReferenceError",
+                    format!("Cannot access '{name}' before initialization"),
+                );
+            }
+            global_env::GlobalLexicalRead::Missing => {}
+        }
+    }
     let Ok(result) = runtime::get_property(ctx, state, outer, *key) else {
         return fail_dispatch(ctx);
     };
@@ -230,23 +247,58 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         }
         modules::ScopeBindingWrite::Missing => {}
     }
+    // 全局环境声明式记录命中：SetMutableBinding（TDZ / const 检查）先于对象记录。
+    let outer_env = modules::scope_record_outer(state, *environment).unwrap_or(*environment);
+    if let Some(env_key) = runtime::property_key(state, *key) {
+        match global_env::lexical_write(state, outer_env, env_key, *stored) {
+            global_env::GlobalLexicalWrite::Written => return *stored,
+            global_env::GlobalLexicalWrite::Uninitialized => {
+                let name = eval_binding_name(state, *key);
+                return javascript_error(
+                    ctx,
+                    state,
+                    "ReferenceError",
+                    format!("Cannot access '{name}' before initialization"),
+                );
+            }
+            global_env::GlobalLexicalWrite::Constant => {
+                return javascript_error(
+                    ctx,
+                    state,
+                    "TypeError",
+                    "Assignment to constant variable.".to_string(),
+                );
+            }
+            global_env::GlobalLexicalWrite::Missing => {}
+        }
+    }
     if modules::scope_record_is_strict(state, *environment) {
-        return javascript_error(
+        // 严格 eval 写未入快照的名字：全局对象记录持有该属性（含惰性内建）
+        // 时按 [[Set]]（strict）写入；确实缺失才抛 ReferenceError（§9.1.1.1.5）。
+        let exists = runtime::property_key(state, *key).is_some_and(|env_key| {
+            global_env::global_has_own_or_lazy(state, outer_env, *key, env_key)
+        }) || runtime::has_property(state, outer_env, *key);
+        if !exists {
+            return javascript_error(
+                ctx,
+                state,
+                "ReferenceError",
+                format!("{} is not defined", eval_binding_name(state, *key)),
+            );
+        }
+        return runtime::dispatch_runtime(
             ctx,
             state,
-            "ReferenceError",
-            format!(
-                "assignment to undeclared variable `{}`",
-                eval_binding_name(state, *key)
-            ),
+            NativeRuntimeOp::SetPropStrict,
+            &[outer_env, *key, *stored],
+            None,
         );
     }
-    let outer = modules::scope_record_outer(state, *environment).unwrap_or(*environment);
     runtime::dispatch_runtime(
         ctx,
         state,
         NativeRuntimeOp::SetProp,
-        &[outer, *key, *stored],
+        &[outer_env, *key, *stored],
         None,
     )
 }
@@ -271,6 +323,11 @@ fn eval_binding_exists(
         return Ok(true);
     }
     let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+    if let Some(env_key) = runtime::property_key(state, key)
+        && global_env::lexical_has(state, outer, env_key)
+    {
+        return Ok(true);
+    }
     Ok(
         runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
             !value::is_undefined(property) || runtime::has_property(state, outer, key)

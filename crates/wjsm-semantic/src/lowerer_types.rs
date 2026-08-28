@@ -34,6 +34,17 @@ pub(crate) enum MethodSuperBinding {
     ClosureEnv,
 }
 
+/// 脚本模式顶层声明在全局环境记录中的绑定类别（ES §9.1.1.4）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScriptGlobalKind {
+    /// 对象记录 var 绑定（CreateGlobalVarBinding）。
+    Var,
+    /// 对象记录函数绑定（CreateGlobalFunctionBinding，顶层函数声明）。
+    Func,
+    /// 声明式记录词法绑定（let/const/class；`true` = 不可变）。
+    Lexical { is_const: bool },
+}
+
 /// 类私有名词法条目。
 #[derive(Clone)]
 pub(crate) struct PrivateNameEntry {
@@ -209,6 +220,22 @@ pub(crate) struct Lowerer {
     /// 命中时直接解构该数组而不再发射 `CollectRestArgs`。
     pub(crate) rest_args_source_override: Option<ValueId>,
     pub(crate) script_mode: bool,
+    /// 脚本模式主程序的顶层声明名 → 全局环境绑定类别（ES §16.1.7 GDI）。
+    /// 命中的名字在读/写/typeof/delete 全部路由到 GlobalEnv 系列 builtin，
+    /// 真值以宿主全局环境记录（对象记录 + 声明式记录）为唯一权威。
+    pub(crate) script_global_names: std::collections::HashMap<String, ScriptGlobalKind>,
+    /// GDI 词法声明的收集序（let/const/class，按源码声明顺序）。
+    pub(crate) script_global_lexicals: Vec<(String, bool)>,
+    /// GDI var 声明名的收集序（含块内 var 提升与 Annex B 函数名）。
+    pub(crate) script_global_vars: Vec<String>,
+    /// 仅由直接 eval 字面量静态提升引入的 var 名（EvalDeclarationInstantiation
+    /// 的 CreateGlobalVarBinding(name, true)）：全局属性按 configurable=true
+    /// 创建；显式 var/函数声明命中同名时移出本集合（非可配置优先）。
+    pub(crate) script_global_eval_vars: std::collections::HashSet<String>,
+    /// 当前正在降级脚本顶层词法声明（let/const）的绑定初始化：
+    /// 命中的脚本全局词法名走 InitializeBinding（GlobalEnvInitLex，解除 TDZ）
+    /// 而非 SetMutableBinding。仅声明语句的 pattern 目标受此标志影响。
+    pub(crate) script_global_decl_init: bool,
     /// 是否在语句入口发射 `Instruction::DebugCheck`（默认关闭，不影响现有 IR 快照）。
     pub(crate) emit_debug_checks: bool,
     pub(crate) diagnostic_source: Option<std::sync::Arc<str>>,

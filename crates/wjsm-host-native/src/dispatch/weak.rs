@@ -870,6 +870,10 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         }
     }
     queue.extend(state.async_from_sync_iterators.values().copied());
+    // 全局声明式记录的词法绑定值（let/const/class）仅由宿主表持有，必须钉扎。
+    for record in state.global_env_records.values() {
+        queue.extend(record.lexical.values().map(|binding| binding.value));
+    }
     state
         .runtime_modules
         .visit_gc_roots(|root| queue.push_back(root));

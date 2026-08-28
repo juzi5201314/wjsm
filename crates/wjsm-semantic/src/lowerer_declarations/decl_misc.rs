@@ -42,7 +42,14 @@ impl Lowerer {
                 if self.expr_can_throw(init) {
                     block = self.lower_value_exception_branch(block, value)?;
                 }
-                block = self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
+                // 声明语句的 pattern 目标是 InitializeBinding：脚本全局词法名
+                // 须经 GlobalEnvInitLex 解除 TDZ（区别于赋值的 SetMutableBinding）。
+                let saved_decl_init = self.script_global_decl_init;
+                self.script_global_decl_init = !matches!(kind, VarKind::Var);
+                let destructured =
+                    self.lower_destructure_pattern(&declarator.name, value, block, kind);
+                self.script_global_decl_init = saved_decl_init;
+                block = destructured?;
                 // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
                 if let swc_ast::Pat::Ident(binding) = &declarator.name {
                     let name = binding.id.sym.to_string();
@@ -123,7 +130,12 @@ impl Lowerer {
                         constant: undef_cid,
                     },
                 );
-                block = self.lower_destructure_pattern(&declarator.name, undef_val, block, kind)?;
+                let saved_decl_init = self.script_global_decl_init;
+                self.script_global_decl_init = true;
+                let destructured =
+                    self.lower_destructure_pattern(&declarator.name, undef_val, block, kind);
+                self.script_global_decl_init = saved_decl_init;
+                block = destructured?;
             }
         }
 

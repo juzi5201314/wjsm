@@ -54,6 +54,17 @@ impl Lowerer {
             .scopes
             .resolve_scope_id(&class_name)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
+        // 脚本全局类声明：InitializeBinding 写全局声明式记录（解除 TDZ）。
+        if outer_scope_id == 0
+            && matches!(
+                self.script_global_names.get(&class_name),
+                Some(ScriptGlobalKind::Lexical { .. })
+            )
+        {
+            let outer_block = self.emit_script_global_init_lex(outer_block, &class_name, ctor_dest);
+            return Ok(StmtFlow::Open(outer_block));
+        }
+
         let outer_binding = CapturedBinding::new(&class_name, outer_scope_id);
         if let Some(function_id) = ctor_function_id {
             self.current_function

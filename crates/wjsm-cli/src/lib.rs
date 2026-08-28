@@ -2184,14 +2184,29 @@ pub fn run_file_in_process_with_root(input: &Path, root: &Path) -> (i32, Vec<u8>
 
 /// 在测试进程内执行一段 source，使用与 CLI 相同的 portable artifact/native runtime 路径。
 pub fn run_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
+    run_source_in_process_with_flags(source, PipelineFlags::default())
+}
+
+/// 在测试进程内以脚本模式执行一段 source（等价 `run --script -e`）：
+/// 顶层声明走全局环境记录（GDI），供脚本全局语义集成测试使用。
+pub fn run_script_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
+    run_source_in_process_with_flags(
+        source,
+        PipelineFlags {
+            script: true,
+            ..PipelineFlags::default()
+        },
+    )
+}
+
+fn run_source_in_process_with_flags(source: &str, flags: PipelineFlags) -> (i32, Vec<u8>, Vec<u8>) {
     let (artifact, module_root) =
-        match compile_source_to_pipeline_result(source, None, PipelineFlags::default(), false)
-            .and_then(|result| {
-                let artifact = result
-                    .artifact
-                    .context("compile stage produced no portable artifact")?;
-                Ok((artifact, result.module_root))
-            }) {
+        match compile_source_to_pipeline_result(source, None, flags, false).and_then(|result| {
+            let artifact = result
+                .artifact
+                .context("compile stage produced no portable artifact")?;
+            Ok((artifact, result.module_root))
+        }) {
             Ok(compiled) => compiled,
             Err(error) => {
                 return (

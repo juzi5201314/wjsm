@@ -62,6 +62,10 @@ impl Lowerer {
         value: ValueId,
         span: Span,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 脚本全局绑定不走捕获 env 链：按 SetMutableBinding 写宿主全局环境记录。
+        if binding.scope_id == Some(0) && self.script_global_names.contains_key(&binding.name) {
+            return self.emit_script_global_set(block, &binding.name, value);
+        }
         if self.iteration_env_for_binding(binding).is_some()
             || self.binding_belongs_to_current_function(binding)
         {

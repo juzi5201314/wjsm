@@ -159,6 +159,16 @@ impl Lowerer {
         callee_val: ValueId,
         callee_fn_id: wjsm_ir::FunctionId,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 脚本全局顶层函数声明：CreateGlobalFunctionBinding 定义全局对象属性，
+        // 不再落 `$0.*` 槽（读取统一经 GlobalEnvGet，宿主记录是唯一权威）。
+        if scope_id == 0
+            && matches!(
+                self.script_global_names.get(name),
+                Some(ScriptGlobalKind::Func)
+            )
+        {
+            return self.emit_script_global_declare_func(block, name, callee_val);
+        }
         let ir_name = format!("${scope_id}.{name}");
         // 记录 callee 变量→FunctionId 映射（Layer 3 callee no-GC 分析）。
         // 仅对函数声明（hoisted，语义不可重赋）安全；async / async-generator 的包装函数
