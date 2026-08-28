@@ -21,22 +21,29 @@ pub(super) fn dispatch_proxy(
         Builtin::ReflectSet => reflect_set(ctx, state, args),
         Builtin::ReflectHas => has(ctx, state, args),
         Builtin::ReflectDeleteProperty => reflect_delete(ctx, state, args),
-        Builtin::ReflectOwnKeys => {
-            super::object::dispatch_object(ctx, state, Builtin::ObjectGetOwnPropertyNames, args)
-                .unwrap_or_else(|| fail_dispatch(ctx))
-        }
+        Builtin::ReflectOwnKeys => reflect_own_keys(ctx, state, args),
         Builtin::ReflectApply => reflect_apply(ctx, state, args),
         Builtin::ReflectConstruct => reflect_construct(ctx, state, args),
         Builtin::ReflectGetPrototypeOf => {
+            if let Some(exception) = require_reflect_object(ctx, state, args, "getPrototypeOf") {
+                return Some(exception);
+            }
             super::object::dispatch_object(ctx, state, Builtin::ObjectGetPrototypeOf, args)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         Builtin::ReflectSetPrototypeOf => reflect_set_prototype(ctx, state, args),
         Builtin::ReflectIsExtensible => {
+            if let Some(exception) = require_reflect_object(ctx, state, args, "isExtensible") {
+                return Some(exception);
+            }
             super::object::dispatch_object(ctx, state, Builtin::ObjectIsExtensible, args)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         Builtin::ReflectPreventExtensions => {
+            if let Some(exception) = require_reflect_object(ctx, state, args, "preventExtensions")
+            {
+                return Some(exception);
+            }
             let Some(target) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));
             };
@@ -58,10 +65,18 @@ pub(super) fn dispatch_proxy(
             }
         }
         Builtin::ReflectGetOwnPropertyDescriptor => {
+            if let Some(exception) =
+                require_reflect_object(ctx, state, args, "getOwnPropertyDescriptor")
+            {
+                return Some(exception);
+            }
             super::object::dispatch_object(ctx, state, Builtin::GetOwnPropDesc, args)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         Builtin::ReflectDefineProperty => {
+            if let Some(exception) = require_reflect_object(ctx, state, args, "defineProperty") {
+                return Some(exception);
+            }
             let [target, key, descriptor] = args else {
                 return Some(fail_dispatch(ctx));
             };
@@ -75,6 +90,55 @@ pub(super) fn dispatch_proxy(
         }
         _ => return None,
     })
+}
+
+/// Reflect 静态方法（§28.1）步骤 1 的 target 校验：非对象一律 TypeError，
+/// 文案对齐 V8 kCalledOnNonObject（`Reflect.<method> called on non-object`）。
+/// 返回 `Some(exception)` 表示校验失败。
+fn require_reflect_object(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    method: &str,
+) -> Option<i64> {
+    let target = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if super::runtime::is_language_object(target) {
+        return None;
+    }
+    Some(type_error(
+        ctx,
+        state,
+        &format!("Reflect.{method} called on non-object"),
+    ))
+}
+
+/// Reflect.ownKeys（§28.1.11）：target.[[OwnPropertyKeys]]() 全量键（含
+/// 符号，区别于 Object.getOwnPropertyNames 的 String 过滤）；Proxy 走
+/// ownKeys trap。
+fn reflect_own_keys(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    if let Some(exception) = require_reflect_object(ctx, state, args, "ownKeys") {
+        return exception;
+    }
+    let Some(target) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    let keys = if value::is_proxy(target) {
+        match own_keys(ctx, state, target) {
+            Ok(keys) => keys,
+            Err(exception) => return exception,
+        }
+    } else {
+        let Some(properties) = super::object::own_keys(state, target, false) else {
+            return fail_dispatch(ctx);
+        };
+        properties.into_iter().map(|(key, _)| key).collect()
+    };
+    state
+        .allocate_array_values_with_gc_retry(ctx, &keys)
+        .unwrap_or_else(|_| fail_dispatch(ctx))
 }
 
 fn is_proxy_target(encoded: i64) -> bool {
@@ -696,6 +760,21 @@ pub(crate) fn reflect_set_prototype(
     let [target, prototype] = args else {
         return fail_dispatch(ctx);
     };
+    // Reflect.setPrototypeOf（§28.1.14）步骤 1：非对象 target TypeError（区别
+    // 于 Object.setPrototypeOf 对基元的原样放行）。
+    if let Some(exception) = require_reflect_object(ctx, state, args, "setPrototypeOf") {
+        return exception;
+    }
+    // 步骤 2：proto 非对象非 null 必须抛 TypeError——不能混入下方「[[SetPrototypeOf]]
+    // 失败返回 false」的异常吞并（循环原型 / 不可扩展按规范返回 false）。
+    if !(value::is_null(*prototype) || super::runtime::is_language_object(*prototype)) {
+        let rendered = super::runtime::render_value(state, *prototype);
+        return type_error(
+            ctx,
+            state,
+            &format!("Object prototype may only be an Object or null: {rendered}"),
+        );
+    }
     if value::is_proxy(*target) {
         return set_prototype(ctx, state, *target, *prototype);
     }
