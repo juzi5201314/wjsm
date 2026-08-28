@@ -779,5 +779,21 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
         for block in blocks {
             caller.push_block(block);
         }
+        // 原终止器已迁入 b_post：后继块中以原块为前驱的 phi source 必须改指
+        // b_post，否则 phi 清洗会把这条边当死边剔除，塌缩出支配性破坏。
+        let orig_block = BasicBlockId(cand.block_idx);
+        for succ in super::cfg_fold::terminator_successors(
+            caller.blocks()[b_post.0 as usize].terminator(),
+        ) {
+            for instr in caller.blocks_mut()[succ.0 as usize].instructions_mut() {
+                if let Instruction::Phi { sources, .. } = instr {
+                    for source in sources {
+                        if source.predecessor == orig_block {
+                            source.predecessor = b_post;
+                        }
+                    }
+                }
+            }
+        }
     }
 }

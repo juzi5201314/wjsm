@@ -138,11 +138,14 @@ fn date_args_to_ms(state: &NativeAgentState, args: &[i64], is_utc: bool) -> f64 
 }
 
 fn set_date_prototype(state: &mut NativeAgentState, object: i64) -> Result<(), ()> {
-    let global = state.global_object.ok_or(())?;
-    let date_key = state
-        .intern_text("Date".into(), value::TAG_STRING)
+    // 直接取规范 Date 构造器：全局名可能被用户改写/删除（自有属性优先于
+    // 惰性合成），内部原型接线不得依赖可变的全局绑定。
+    let constructor = state
+        .native_callable(crate::NativeCallableKind::Builtin(
+            Builtin::DateConstructor,
+            false,
+        ))
         .ok_or(())?;
-    let constructor = state.global_property(global, date_key).ok_or(())?;
     let prototype_key = state.intern_property_string("prototype".into()).ok_or(())?;
     let prototype = state
         .callable_property(constructor, prototype_key)

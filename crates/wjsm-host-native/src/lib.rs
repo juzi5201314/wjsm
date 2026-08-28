@@ -643,7 +643,7 @@ enum NativeCallableKind {
 /// 按 receiver 家族惰性合成内建方法值。字符串方法不在此合成：它们是
 /// %String.prototype%（`ensure_string_prototype`）上的真实自有属性，基元
 /// 读取未命中后沿包装原型链命中。
-fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
+pub(crate) fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
     use wjsm_ir::Builtin;
 
     let builtin = if value::is_bool(receiver) {
@@ -1103,6 +1103,11 @@ struct NativeAgentState {
     callable_properties: HashMap<(i64, PropertyKey), i64>,
     callable_accessors: HashMap<(i64, PropertyKey), (i64, i64)>,
     callable_property_flags: HashMap<(i64, PropertyKey), u32>,
+    /// 惰性合成 intrinsic 属性的删除墓碑：`(owner 编码值去色, key)`。
+    /// owner 为 native callable、realm 全局对象或 %Array.prototype% 等
+    /// 永活规范值；命中即禁止 `primitive_property` / `global_property`
+    /// 再度合成，使 `delete String.raw` 后读取与 Node 一致地缺失。
+    intrinsic_tombstones: HashSet<(i64, PropertyKey)>,
     non_extensible_objects: HashSet<u32>,
     /// 已 preventExtensions/seal/freeze 的 callable（编码值，去色规范形）。
     non_extensible_callables: HashSet<i64>,
@@ -1322,6 +1327,7 @@ impl NativeAgentState {
             private_brands: HashMap::new(),
             callable_accessors: HashMap::new(),
             callable_property_flags: HashMap::new(),
+            intrinsic_tombstones: HashSet::new(),
             error_objects: HashSet::new(),
             boxed_primitives: HashMap::new(),
             error_prototypes: HashMap::new(),
@@ -1648,6 +1654,7 @@ impl NativeAgentState {
         self.callable_properties.clear();
         self.callable_accessors.clear();
         self.callable_property_flags.clear();
+        self.intrinsic_tombstones.clear();
         self.error_objects.clear();
         self.boxed_primitives.clear();
         self.error_prototypes.clear();
@@ -2296,6 +2303,37 @@ impl NativeAgentState {
         false
     }
     fn primitive_property(&mut self, receiver: i64, key: i64) -> Option<i64> {
+        // 删除墓碑先于任何惰性合成：`delete String.raw` /
+        // `delete Array.prototype.map` 后禁止复活，读取与 Node 一致地缺失。
+        if !self.intrinsic_tombstones.is_empty()
+            && let Some(tombstone_key) = dispatch::runtime::property_key(self, key)
+            && self
+                .intrinsic_tombstones
+                .contains(&(value::strip_gc_color(receiver), tombstone_key))
+        {
+            return None;
+        }
+        // 数组方法在语义上继承自 %Array.prototype%：原型层的覆盖、访问器与
+        // 删除墓碑对所有数组 receiver 的惰性合成可见（堆原型链缺失的兜底
+        // 合成路径同样必须遵守），返回 None 让通用链行走解析真实属性。
+        if value::is_array(receiver)
+            && let Some(prototype) = self.array_prototype
+            && let Some(property_key) = dispatch::runtime::property_key(self, key)
+        {
+            let proto_handle = value::decode_handle(prototype);
+            if self
+                .array_accessors
+                .contains_key(&(proto_handle, property_key))
+                || self
+                    .array_properties
+                    .contains_key(&(proto_handle, property_key))
+                || self
+                    .intrinsic_tombstones
+                    .contains(&(value::strip_gc_color(prototype), property_key))
+            {
+                return None;
+            }
+        }
         if value::is_regexp(receiver)
             && let Some(builtin) = dispatch::regexp::symbol_builtin(key)
         {
@@ -2575,6 +2613,39 @@ impl NativeAgentState {
         let builtin = intrinsic_builtin(receiver, &key)?;
         self.native_callable(NativeCallableKind::Builtin(builtin, true))
     }
+
+    /// [[Delete]] 收尾：若该键仍会被 receiver 的 own 层惰性合成命中，落墓碑
+    /// 禁止复活（`delete String.raw` / `delete Array.prototype.map`）。
+    /// %Function.prototype% 继承成员（bind/call/apply/toString）的合成不属于
+    /// own 层——删除自有属性后继承成员仍须可见，不落墓碑。
+    pub(crate) fn record_intrinsic_tombstone_after_delete(
+        &mut self,
+        receiver: i64,
+        encoded_key: i64,
+    ) {
+        let receiver = value::strip_gc_color(receiver);
+        if value::is_callable(receiver) {
+            // 仅 native callable 拥有 own 层静态合成；显式改过原型的
+            // callable 不再走隐式链尾合成。
+            if !value::is_native_callable(receiver)
+                || self.callable_prototypes.contains_key(&receiver)
+            {
+                return;
+            }
+            if let Some(text) = self.string_owned(encoded_key).and_then(|text| text.to_utf8())
+                && intrinsic_builtin(receiver, &text).is_some()
+            {
+                return;
+            }
+        }
+        if self.primitive_property(receiver, encoded_key).is_none() {
+            return;
+        }
+        if let Some(key) = dispatch::runtime::property_key(self, encoded_key) {
+            self.intrinsic_tombstones.insert((receiver, key));
+        }
+    }
+
     fn ensure_console_object(&mut self) -> Option<i64> {
         if let Some(console) = self.console_object {
             return Some(console);
@@ -3159,6 +3230,28 @@ impl NativeAgentState {
             self.global_object == Some(receiver) || dispatch::node_vm::is_context(self, receiver);
         if !is_realm_global {
             return None;
+        }
+        // 全局对象的自有属性（含用户赋值 / defineProperty 访问器）与删除
+        // 墓碑先于惰性内建合成：返回 None 让通用对象路径解析真实属性，
+        // 使 `globalThis.parseInt = f` 的读取与 `delete globalThis.parseInt`
+        // 的缺失都与 Node 一致。
+        if let Some(property_key) = dispatch::runtime::property_key(self, key) {
+            if self
+                .gc
+                .heap()
+                .get_property_slot(value::decode_handle(receiver), property_key)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return None;
+            }
+            if self
+                .intrinsic_tombstones
+                .contains(&(value::strip_gc_color(receiver), property_key))
+            {
+                return None;
+            }
         }
         let name = self.string_owned(key)?.to_utf8()?;
         if matches!(name.as_str(), "globalThis" | "global") {

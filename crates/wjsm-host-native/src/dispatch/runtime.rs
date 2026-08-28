@@ -1720,7 +1720,7 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
     }
 }
 
-pub(super) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {
+pub(crate) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {
     if value::is_inline_string(encoded) {
         return PropertyKey::inline_string(encoded);
     }
@@ -1954,6 +1954,13 @@ pub(super) fn get_property_with_receiver(
         }
         if let Some(prototype) = heap_prototype_value(state, object)? {
             return get_property_with_receiver(ctx, state, prototype, encoded_key, receiver);
+        }
+        // %Array.prototype% 已物化（CreateGlobalObject 引导时完成）后，数组
+        // proto 槽为 null 哨兵只能来自显式 `Object.setPrototypeOf(arr, null)`
+        // ——分配即接线真实句柄。链已断，不得回退兜底合成复活方法；未物化的
+        // 引导期内部数组保持兜底合成。
+        if state.array_prototype.is_some() {
+            return Ok(value::encode_undefined());
         }
         return Ok(state
             .primitive_property(object, encoded_key)
@@ -2292,6 +2299,8 @@ pub(super) fn delete_property(
         state.callable_properties.remove(&(object, key));
         state.callable_accessors.remove(&(object, key));
         state.callable_property_flags.remove(&(object, key));
+        // 静态成员会被惰性合成复活（String.raw 等）：删除即落墓碑。
+        state.record_intrinsic_tombstone_after_delete(object, encoded_key);
         return Ok(true);
     }
     if value::is_array(object) {
@@ -2347,6 +2356,11 @@ pub(super) fn delete_property(
         state.array_accessors.remove(&(handle, key));
         state.array_property_flags.remove(&(handle, key));
         state.forget_array_property(handle, key);
+        // %Array.prototype% 的方法按 receiver 惰性合成：在原型对象上删除
+        // 即落墓碑禁止复活；普通数组实例删除缺失自有属性不影响原型可见性。
+        if state.array_prototype.map(value::strip_gc_color) == Some(value::strip_gc_color(object)) {
+            state.record_intrinsic_tombstone_after_delete(object, encoded_key);
+        }
         return Ok(true);
     }
     let handle = object_handle(object).ok_or(())?;
@@ -2378,6 +2392,15 @@ pub(super) fn delete_property(
         .map_err(|_| ())?;
     if removed && let Some((index, previous)) = mapped_slot {
         super::arguments::after_delete_property(state, handle, index, previous);
+    }
+    // realm 全局对象上仍会被惰性内建合成的名字（parseInt / console 等在
+    // Node 中是可配置自有属性）：删除即落墓碑禁止复活，且即使尚未物化
+    // 自有槽位也视为删除成功。自有属性优先规则保证此处 Some 即纯合成态。
+    if state.global_property(object, encoded_key).is_some() {
+        state
+            .intrinsic_tombstones
+            .insert((value::strip_gc_color(object), key));
+        return Ok(true);
     }
     Ok(removed)
 }
@@ -2425,12 +2448,17 @@ pub(super) fn has_property(
         };
         if state.array_properties.contains_key(&(handle, key))
             || state.array_accessors.contains_key(&(handle, key))
-            || state.primitive_property(object, encoded_key).is_some()
         {
             return Ok(true);
         }
-        // 数组合成方法未命中：沿堆原型链上行（%Array.prototype% →
-        // %Object.prototype%），使 hasOwnProperty 等继承成员对 in 可见。
+        // 合成方法在语义上属于 %Array.prototype% 层：receiver 即原型对象或
+        // 引导期未物化时就地合成，否则交给真实堆链上行解析（原型被替换 /
+        // 置 null 的数组不得越过链直接命中合成方法）。
+        if (state.array_prototype == Some(object) || state.array_prototype.is_none())
+            && state.primitive_property(object, encoded_key).is_some()
+        {
+            return Ok(true);
+        }
         let Ok(Some(prototype)) = heap_prototype_value(state, object) else {
             return Ok(false);
         };
@@ -2471,7 +2499,11 @@ pub(super) fn has_property(
         .get_property_slot_on_proto_chain(handle, key)
     {
         Ok(Some(_)) => Ok(true),
-        Ok(None) => Ok(state.primitive_property(object, encoded_key).is_some()
+        // realm 全局对象的惰性内建（parseInt / console 等）对 HasProperty
+        // 可见（`"parseInt" in globalThis` 与 Node 一致），墓碑与自有属性
+        // 优先规则由 `global_property` 内部处理。
+        Ok(None) => Ok(state.global_property(object, encoded_key).is_some()
+            || state.primitive_property(object, encoded_key).is_some()
             || boxed_primitive_value(state, object)
                 .is_some_and(|primitive| boxed_primitive_has(state, primitive, encoded_key))),
         // 链上出现宿主 exotic 原型（Proxy / RegExp）：解码标记位后递归继续。
