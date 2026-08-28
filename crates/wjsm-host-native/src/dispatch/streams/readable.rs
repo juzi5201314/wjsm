@@ -124,6 +124,9 @@ pub(super) fn create_stream(
     close_requested: bool,
 ) -> Option<(i64, i64)> {
     let stream_object = state.allocate_object(8, false).ok()?;
+    state
+        .set_web_instance_prototype(stream_object, wjsm_ir::Builtin::ReadableStreamConstructor)
+        .ok()?;
     let controller_object = state.allocate_object(6, false).ok()?;
     let stream_handle = state.streams.readables.len() as u32;
     let controller_handle = state.streams.controllers.len() as u32;

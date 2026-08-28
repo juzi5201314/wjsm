@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+false
+false
+false
+true
+true Cannot delete property 'fixed' of #<Object>
+true
+false
+true 'deleteProperty' on proxy: trap returned falsish for property 'entry'
+false
+false false true true
+true Cannot delete property 'length' of [object String]
+true SyntaxError
+--- stderr ---

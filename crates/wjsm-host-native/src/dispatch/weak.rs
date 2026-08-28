@@ -569,6 +569,7 @@ fn root_values(
     queue.extend(state.weak_map_prototype);
     queue.extend(state.weak_set_prototype);
     queue.extend(state.view_prototypes.values().copied());
+    queue.extend(state.web_prototypes.values().copied());
     queue.extend(state.console_object);
     queue.extend(state.intl.object);
     queue.extend(state.intl.locale_prototype);
@@ -890,6 +891,7 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
     queue.extend(state.fatal_exception);
     state.node_perf_hooks.extend_gc_roots(queue);
     super::streams::extend_gc_roots(&state.streams, queue);
+    super::fetch::extend_gc_roots(&state.fetch, queue);
     queue.extend(state.node_async_hooks.defaults.values().copied());
     for stores in state.node_async_hooks.captured_frames.iter().flatten() {
         queue.extend(stores.values().copied());

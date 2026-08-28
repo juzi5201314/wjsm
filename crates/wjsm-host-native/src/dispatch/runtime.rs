@@ -355,27 +355,12 @@ pub(super) fn dispatch_runtime(
                 ctx, state, *object, *key, *stored, strict, completion,
             )
         }
-        NativeRuntimeOp::DeleteProp => {
+        NativeRuntimeOp::DeleteProp | NativeRuntimeOp::DeletePropStrict => {
             let [object, key] = args else {
                 return fail_dispatch(ctx);
             };
-            // `delete o[k]`：[[Delete]]（含 proxy trap）须接收已转换的属性键。
-            let key = &match to_property_key_value(ctx, state, *key) {
-                Ok(key) => key,
-                Err(exception) => return exception,
-            };
-            if value::is_proxy(*object) {
-                return super::proxy::dispatch_proxy(
-                    ctx,
-                    state,
-                    wjsm_ir::Builtin::ReflectDeleteProperty,
-                    &[*object, *key],
-                )
-                .expect("ReflectDeleteProperty is handled");
-            }
-            delete_property(state, *object, *key)
-                .map(value::encode_bool)
-                .unwrap_or_else(|()| fail_dispatch(ctx))
+            let strict = operation == NativeRuntimeOp::DeletePropStrict;
+            delete_property_operator(ctx, state, *object, *key, strict)
         }
         NativeRuntimeOp::ObjectSpread => {
             let [destination, source] = args else {
@@ -2187,6 +2172,104 @@ fn assign_to_callable_receiver(
         .entry((receiver, key))
         .or_insert(ASSIGNED_PROPERTY_FLAGS);
     SetCompletion::Written
+}
+
+/// delete 操作符对属性引用的求值（§13.5.5.9 步骤 5）：ToObject 先于键
+/// 转换拒绝 nullish 基座，proxy 走 [[Delete]] trap（strict 时 falsish 抛
+/// proxy 专属 TypeError），基元接收者按新建包装对象的自有属性判定，
+/// 其余对象走通用 [[Delete]]；deleteStatus 为 false 时 strict 抛
+/// TypeError（步骤 5.d），sloppy 返回 false。
+pub(super) fn delete_property_operator(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    strict: bool,
+) -> i64 {
+    if value::is_null(object) || value::is_undefined(object) {
+        return type_error(ctx, state, "Cannot convert undefined or null to object");
+    }
+    let key = match to_property_key_value(ctx, state, key) {
+        Ok(key) => key,
+        Err(exception) => return exception,
+    };
+    if value::is_proxy(object) {
+        return super::proxy::delete_for_operator(ctx, state, object, key, strict);
+    }
+    delete_property_operator_with_key(ctx, state, object, key, strict)
+}
+
+/// [[Delete]] 已转换属性键的非 proxy 收口：供 delete 操作符与 proxy
+/// 无 trap 下钻到最终 target 时复用（strict 位随调用链透传）。
+pub(super) fn delete_property_operator_with_key(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    strict: bool,
+) -> i64 {
+    if let Some(result) = delete_on_primitive_receiver(ctx, state, object, key, strict) {
+        return result;
+    }
+    match delete_property(state, object, key) {
+        Ok(true) => value::encode_bool(true),
+        Ok(false) if !strict => value::encode_bool(false),
+        Ok(false) => strict_delete_failure_error(ctx, state, object, key),
+        Err(()) => fail_dispatch(ctx),
+    }
+}
+
+/// delete 操作符对基元 base 的终局：ToObject（§13.5.5.9 步骤 5.b）的包装
+/// 对象是新建实例，除字符串的 length 与在界索引（自有不可配置，§10.4.3）
+/// 外不存在自有属性，[[Delete]] 恒为 true；不可配置命中时 sloppy 返回
+/// false、strict 抛 TypeError。返回 `None` 表示接收者不是基元。
+fn delete_on_primitive_receiver(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    strict: bool,
+) -> Option<i64> {
+    let is_primitive = value::is_string(object)
+        || value::is_f64(object)
+        || value::is_bool(object)
+        || value::is_symbol(object)
+        || value::is_bigint(object);
+    if !is_primitive {
+        return None;
+    }
+    let undeletable = value::is_string(object)
+        && (state.text_matches(key, "length")
+            || array_index(state, key)
+                .is_some_and(|index| (index as usize) < state.string_len(object).unwrap_or(0)));
+    if !undeletable {
+        return Some(value::encode_bool(true));
+    }
+    if !strict {
+        return Some(value::encode_bool(false));
+    }
+    Some(strict_delete_failure_error(ctx, state, object, key))
+}
+
+/// strict delete 失败的 TypeError，消息与 V8 对齐（Node 同口径）：
+/// `Cannot delete property 'k' of #<Object> / [object Array] / [object
+/// String] / 函数源文本`。
+pub(super) fn strict_delete_failure_error(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    receiver: i64,
+    key: i64,
+) -> i64 {
+    let owner = if value::is_string(receiver) {
+        "[object String]".to_string()
+    } else {
+        property_write::render_receiver_brief(state, receiver)
+    };
+    let message = format!(
+        "Cannot delete property '{}' of {owner}",
+        render_value(state, key)
+    );
+    type_error(ctx, state, &message)
 }
 
 pub(super) fn delete_property(

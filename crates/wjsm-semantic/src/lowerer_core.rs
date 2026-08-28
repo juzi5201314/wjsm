@@ -979,10 +979,12 @@ impl Lowerer {
         // 保留 eval 路径预置的继承严格位（direct eval 继承调用方严格性），
         // 与模块自身指令做并集，而非覆盖。
         self.strict_mode = self.strict_mode || module_has_use_strict_directive(module);
-        // 早错误：严格模式代码（含函数级指令与类体）不得包含 with 语句（§14.11.1）。
-        if let Some(span) = crate::lowerer_with::find_with_in_strict_code(module, self.strict_mode)
+        // 早错误：严格模式代码（含函数级指令与类体）不得包含 with 语句
+        // （§14.11.1），也不得以 eval/arguments 为赋值目标（§13.1.3）。
+        if let Some((span, message)) =
+            crate::lowerer_with::find_strict_code_early_error(module, self.strict_mode)
         {
-            return Err(self.error(span, "Strict mode code may not include a with statement"));
+            return Err(self.error(span, message));
         }
         // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
         self.shared_env_stack.push(None);
@@ -1375,13 +1377,13 @@ impl Lowerer {
     /// 原型方法」链（如 `arr.map(f).filter(g)` 的中间结果）。用于数组原型方法
     /// 调用的 `CallBuiltin` 直连判定，使链式高阶函数逐链节内建化。
     pub(crate) fn is_array_producing_expr(&self, expr: &swc_ast::Expr) -> bool {
-        if is_array_constructor_expr(expr) {
+        if is_array_constructor_expr(expr) && !self.ctor_shape_shadowed(expr) {
             return true;
         }
         match expr {
             swc_ast::Expr::Ident(ident) => self.is_array_binding(ident),
             swc_ast::Expr::Call(call) => {
-                if is_array_from_of_call(expr) && self.scopes.lookup("Array").is_err() {
+                if is_array_from_of_call(expr) && !self.global_intrinsic_shadowed("Array") {
                     return true;
                 }
                 let swc_ast::Callee::Expr(callee) = &call.callee else {
@@ -1440,7 +1442,7 @@ impl Lowerer {
                 match callee.as_ref() {
                     // 未被遮蔽的全局 `String(x)` 恒返回字符串。
                     swc_ast::Expr::Ident(ident) => {
-                        ident.sym.as_ref() == "String" && self.scopes.lookup("String").is_err()
+                        ident.sym.as_ref() == "String" && !self.global_intrinsic_shadowed("String")
                     }
                     swc_ast::Expr::Member(member) => {
                         let swc_ast::MemberProp::Ident(prop) = &member.prop else {

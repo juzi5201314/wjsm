@@ -421,8 +421,10 @@ impl Lowerer {
                         self.eval_continue_block = Some(merge_block);
                         return Ok(val);
                     }
+                    // 词法/模块绑定（含导入别名与 TDZ 声明）遮蔽全局 intrinsic：
+                    // 只有名字未被遮蔽时才允许 CallBuiltin 快路径。
                     if let Some(builtin) = builtin_from_global_ident(&ident.sym)
-                        && self.scopes.lookup(&ident.sym).is_err()
+                        && !self.global_intrinsic_shadowed(&ident.sym)
                     {
                         return self.lower_host_builtin_call_expr(call, block, builtin);
                     }
@@ -446,12 +448,13 @@ impl Lowerer {
                     }
 
                     // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
-                    // 对象名解析穿越 with 作用域时禁用（with 对象可能提供同名属性）。
+                    // 对象名被词法/模块绑定遮蔽或解析穿越 with 作用域时禁用
+                    // （导入别名、TDZ 声明与 with 对象都可能提供同名值）。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(builtin) =
                             builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
-                        && (self.scopes.lookup(&obj_ident.sym).is_err()
+                        && (!self.global_intrinsic_shadowed(&obj_ident.sym)
                             || self.eval_scope_bridge_active())
                         && self
                             .with_scopes_for_ident(obj_ident.sym.as_ref())
@@ -1031,7 +1034,7 @@ impl Lowerer {
             && let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
             && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
             && let Some(builtin) = builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
-            && self.scopes.lookup(&obj_ident.sym).is_err()
+            && !self.global_intrinsic_shadowed(&obj_ident.sym)
             && self
                 .with_scopes_for_ident(obj_ident.sym.as_ref())
                 .is_empty()

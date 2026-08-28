@@ -69,10 +69,12 @@ impl Lowerer {
         block: BasicBlockId,
         is_optional: bool,
     ) -> Result<ValueId, LoweringError> {
-        // Symbol.xxx → well-known symbol（须在 GetProp 之前，否则 key 会变成普通字符串）
+        // Symbol.xxx → well-known symbol（须在 GetProp 之前，否则 key 会变成普通字符串；
+        // `Symbol` 名被词法/模块绑定遮蔽时禁用，走通用属性读取）。
         if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
             && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
             && obj_ident.sym == "Symbol"
+            && !self.global_intrinsic_shadowed("Symbol")
             && let Some(idx) =
                 crate::wk_symbol_map::well_known_symbol_property_index(&prop_ident.sym)
         {
@@ -102,7 +104,7 @@ impl Lowerer {
         if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
             && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
         {
-            if obj_ident.sym == "Math" && self.scopes.lookup("Math").is_err() {
+            if obj_ident.sym == "Math" && !self.global_intrinsic_shadowed("Math") {
                 let prop_name = prop_ident.sym.to_string();
                 let is_math_const = matches!(
                     prop_name.as_str(),
@@ -123,7 +125,7 @@ impl Lowerer {
             }
 
             // 拦截 Number 常量属性访问（Number.EPSILON, Number.MAX_VALUE 等）
-            if obj_ident.sym == "Number" && self.scopes.lookup("Number").is_err() {
+            if obj_ident.sym == "Number" && !self.global_intrinsic_shadowed("Number") {
                 let prop_name = prop_ident.sym.to_string();
                 let is_number_const = matches!(
                     prop_name.as_str(),
@@ -264,9 +266,11 @@ impl Lowerer {
                     self.expr_merge_block = Some(*block);
                     return Ok(dest);
                 }
-                // 检查对象是否为 Symbol（编译时已知的 well-known symbol 访问）
+                // 检查对象是否为 Symbol（编译时已知的 well-known symbol 访问；
+                // `Symbol` 名被词法/模块绑定遮蔽时禁用）
                 if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
                     && obj_ident.sym == "Symbol"
+                    && !self.global_intrinsic_shadowed("Symbol")
                 {
                     let prop_name = ident.sym.to_string();
                     if let Some(idx) =

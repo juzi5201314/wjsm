@@ -50,16 +50,19 @@ impl Lowerer {
                     self.lower_destructure_pattern(&declarator.name, value, block, kind);
                 self.script_global_decl_init = saved_decl_init;
                 block = destructured?;
-                // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
+                // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型。
+                // 构造器名被词法/模块绑定遮蔽时形状证明不成立（ctor_shape_shadowed）。
                 if let swc_ast::Pat::Ident(binding) = &declarator.name {
                     let name = binding.id.sym.to_string();
-                    if (is_array_constructor_expr(init)
-                        || (is_array_from_of_call(init) && self.scopes.lookup("Array").is_err()))
+                    if ((is_array_constructor_expr(init) && !self.ctor_shape_shadowed(init))
+                        || (is_array_from_of_call(init)
+                            && !self.global_intrinsic_shadowed("Array")))
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.array_bindings.insert((scope_id, name.clone()));
                     }
                     if is_typedarray_constructor_expr(init)
+                        && !self.ctor_shape_shadowed(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.typedarray_bindings.insert((scope_id, name.clone()));
@@ -78,21 +81,25 @@ impl Lowerer {
                         self.maybe_string_bindings.insert((scope_id, name.clone()));
                     }
                     if is_sharedarraybuffer_constructor_expr(init)
+                        && !self.ctor_shape_shadowed(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.sab_bindings.insert((scope_id, name.clone()));
                     }
                     if is_dataview_constructor_expr(init)
+                        && !self.ctor_shape_shadowed(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.dataview_bindings.insert((scope_id, name.clone()));
                     }
                     if is_map_constructor_expr(init)
+                        && !self.ctor_shape_shadowed(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.map_bindings.insert((scope_id, name.clone()));
                     }
                     if is_set_constructor_expr(init)
+                        && !self.ctor_shape_shadowed(init)
                         && let Ok((scope_id, _)) = self.scopes.lookup(&name)
                     {
                         self.set_bindings.insert((scope_id, name.clone()));

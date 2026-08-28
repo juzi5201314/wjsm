@@ -17,7 +17,7 @@ use wjsm_native_abi::{NativeVmContext, PendingExceptionKind};
 use super::promise::{
     NativeMicrotask, PromiseState, drain_microtasks, enqueue_microtask, new_promise, settle_promise,
 };
-use super::runtime::fail_dispatch;
+use super::runtime::{fail_dispatch, to_string_coerced};
 use crate::{NativeAgentState, NativeCallableKind, NativeHostRegistry, PropertyKey};
 
 #[derive(Clone, Copy)]
@@ -616,19 +616,28 @@ fn runtime_dynamic_import(
     let [referrer, specifier] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(referrer) = state
+    // EvaluateImportCall（§13.3.10.1.1）步骤 7-8：ToString(specifier) 抛出走
+    // IfAbruptRejectPromise——以被抛值 reject 返回的 promise，而非宿主失败。
+    let specifier = match to_string_coerced(ctx, state, *specifier) {
+        Ok(text) => text,
+        Err(thrown) => {
+            let Some(promise_value) = new_promise(ctx, state) else {
+                return fail_dispatch(ctx);
+            };
+            settle_promise(state, value::decode_handle(promise_value), thrown, true);
+            return promise_value;
+        }
+    };
+    // 语义层对无文件身份的模块（`-e`/eval 等内联入口）把 referrer 发为
+    // undefined——对应规范里 referrer 为 null 的 HostLoadImportedModule，
+    // 解析基址由宿主决定，而不是宿主 invariant 失败。
+    let referrer = match state
         .string_owned(*referrer)
         .and_then(|text| text.to_utf8())
-    else {
-        return fail_dispatch(ctx);
+    {
+        Some(text) => normalize_referrer(state, Path::new(&text)),
+        None => inline_entry_referrer(state),
     };
-    let Some(specifier) = state
-        .string_owned(*specifier)
-        .and_then(|text| text.to_utf8())
-    else {
-        return fail_dispatch(ctx);
-    };
-    let referrer = normalize_referrer(state, Path::new(&referrer));
     let Some(promise_value) = new_promise(ctx, state) else {
         return fail_dispatch(ctx);
     };
@@ -641,6 +650,13 @@ fn runtime_dynamic_import(
         },
     );
     promise_value
+}
+
+/// 无文件入口（`-e`/内联求值）动态 import 的默认解析基址：对齐 Node `--eval`
+/// 的 `[eval]` 虚拟入口——相对说明符相对模块根（运行时工作目录）解析，
+/// 内置模块解析不依赖 referrer。
+fn inline_entry_referrer(state: &NativeAgentState) -> PathBuf {
+    normalize_referrer(state, Path::new("[eval]"))
 }
 
 fn create_import_meta_resolve(

@@ -1131,6 +1131,10 @@ struct NativeAgentState {
     /// TypedArray 各构造器与 DataView 的 `prototype` 对象，按构造器 builtin
     /// 懒创建缓存；方法以数据属性安装（`Uint8Array.prototype.slice` 可取值）。
     view_prototypes: HashMap<wjsm_ir::Builtin, i64>,
+    /// fetch / Streams / AbortController 全局构造器的 `prototype` 对象，按
+    /// builtin 懒创建缓存；携带不可枚举 `constructor` 自有属性，实例创建时
+    /// 挂接为 [[Prototype]]，使 instanceof 与 Object.getPrototypeOf 成立。
+    web_prototypes: HashMap<wjsm_ir::Builtin, i64>,
     console_object: Option<i64>,
     intl: dispatch::intl::IntlState,
     native_callables: Vec<NativeCallableKind>,
@@ -1331,6 +1335,7 @@ impl NativeAgentState {
             weak_map_prototype: None,
             weak_set_prototype: None,
             view_prototypes: HashMap::new(),
+            web_prototypes: HashMap::new(),
             console_object: None,
             intl: dispatch::intl::IntlState::default(),
             array_constructor: None,
@@ -1606,6 +1611,7 @@ impl NativeAgentState {
         self.weak_map_prototype = None;
         self.weak_set_prototype = None;
         self.view_prototypes.clear();
+        self.web_prototypes.clear();
         self.array_constructor = None;
         self.global_object = None;
         self.console_object = None;
@@ -3055,6 +3061,7 @@ impl NativeAgentState {
         }
         let constructor_kind = match name {
             "AggregateError" => NativeCallableKind::AggregateErrorConstructor,
+            "AbortError" => NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, false),
             "DataCloneError" => {
                 NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, false)
             }
@@ -3324,6 +3331,10 @@ impl NativeAgentState {
             "FinalizationRegistry" => wjsm_ir::Builtin::FinalizationRegistryConstructor,
             "Request" => wjsm_ir::Builtin::RequestConstructor,
             "Response" => wjsm_ir::Builtin::ResponseConstructor,
+            "ReadableStream" => wjsm_ir::Builtin::ReadableStreamConstructor,
+            "WritableStream" => wjsm_ir::Builtin::WritableStreamConstructor,
+            "TransformStream" => wjsm_ir::Builtin::TransformStreamConstructor,
+            "AbortController" => wjsm_ir::Builtin::AbortControllerConstructor,
             "queueMicrotask" => wjsm_ir::Builtin::QueueMicrotask,
             "RangeError" => wjsm_ir::Builtin::RangeErrorConstructor,
             "ReferenceError" => wjsm_ir::Builtin::ReferenceErrorConstructor,
@@ -4466,6 +4477,29 @@ impl NativeAgentState {
                 .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
             return Some(prototype);
         }
+        if let Some((builtin, false)) = self.native_callable_builtin(callable)
+            && Self::is_web_interface_constructor(builtin)
+            && self.text_matches(key.to_value(), "prototype")
+        {
+            let prototype = self.ensure_web_prototype(callable, builtin)?;
+            self.callable_properties.insert((callable, key), prototype);
+            // Web IDL 接口对象 `prototype`：{ writable: false, enumerable: false,
+            // configurable: false }，与 Node 一致。
+            self.callable_property_flags.insert((callable, key), 0);
+            return Some(prototype);
+        }
+        if let Some((wjsm_ir::Builtin::Fetch, false)) = self.native_callable_builtin(callable)
+            && self.text_matches(key.to_value(), "prototype")
+        {
+            // Node v22 的 fetch 是普通函数：`prototype` 为 {constructor: fetch}
+            // 的普通对象（{writable: true, enumerable: false, configurable:
+            // false}），`x instanceof fetch` 返回 false 而不是抛 TypeError。
+            let prototype = self.ensure_web_prototype(callable, wjsm_ir::Builtin::Fetch)?;
+            self.callable_properties.insert((callable, key), prototype);
+            self.callable_property_flags
+                .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
+            return Some(prototype);
+        }
 
         if self
             .native_callable_builtin(callable)
@@ -4685,6 +4719,64 @@ impl NativeAgentState {
         }
         self.view_prototypes.insert(builtin, prototype);
         Some(prototype)
+    }
+
+    /// fetch / Streams / AbortController 构造器的 `prototype` 对象：懒创建并
+    /// 缓存，仅安装不可枚举 `constructor` 数据属性。实例方法仍经侧表虚拟属性
+    /// 解析，此对象的职责是承载 instanceof 的原型链身份。
+    fn ensure_web_prototype(&mut self, constructor: i64, builtin: wjsm_ir::Builtin) -> Option<i64> {
+        if let Some(prototype) = self.web_prototypes.get(&builtin).copied() {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let prototype = self.allocate_object(1, false).ok()?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                constructor_key,
+                constructor as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        self.web_prototypes.insert(builtin, prototype);
+        Some(prototype)
+    }
+
+    /// builtin 是否为 fetch / Streams / AbortController 家族的全局构造器
+    /// （Web IDL 接口对象，`prototype` 描述符三 false）。
+    fn is_web_interface_constructor(builtin: wjsm_ir::Builtin) -> bool {
+        matches!(
+            builtin,
+            wjsm_ir::Builtin::HeadersConstructor
+                | wjsm_ir::Builtin::RequestConstructor
+                | wjsm_ir::Builtin::ResponseConstructor
+                | wjsm_ir::Builtin::ReadableStreamConstructor
+                | wjsm_ir::Builtin::WritableStreamConstructor
+                | wjsm_ir::Builtin::TransformStreamConstructor
+                | wjsm_ir::Builtin::AbortControllerConstructor
+        )
+    }
+
+    /// 把实例 [[Prototype]] 挂到对应 web 构造器的 `prototype` 对象。
+    fn set_web_instance_prototype(
+        &mut self,
+        object: i64,
+        builtin: wjsm_ir::Builtin,
+    ) -> Result<(), ()> {
+        let constructor = self
+            .native_callable(NativeCallableKind::Builtin(builtin, false))
+            .ok_or(())?;
+        let prototype = self
+            .ensure_web_prototype(constructor, builtin)
+            .filter(|prototype| value::is_object(*prototype))
+            .map(value::decode_handle)
+            .ok_or(())?;
+        self.gc
+            .heap()
+            .set_prototype(value::decode_handle(object), prototype)
+            .map_err(|_| ())
     }
 
     /// 判定 handle 是否为某个 TypedArray 构造器的 `prototype` 对象
