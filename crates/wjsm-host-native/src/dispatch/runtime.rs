@@ -1427,6 +1427,13 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
         Some(crate::NativeCallableKind::DateMethod(_)) => false,
         Some(crate::NativeCallableKind::FunctionPrototype) => false,
         Some(crate::NativeCallableKind::SpeciesGetter) => false,
+        // %TypedArray% 本体是构造器（[[Construct]] 抛错在调用期），但
+        // from / of 与 @@toStringTag getter 是普通方法 / 访问器函数。
+        Some(
+            crate::NativeCallableKind::TypedArrayFrom
+            | crate::NativeCallableKind::TypedArrayOf
+            | crate::NativeCallableKind::TypedArrayToStringTag,
+        ) => false,
         Some(_) => true,
         None => state
             .callable_function(encoded)

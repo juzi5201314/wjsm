@@ -619,6 +619,18 @@ pub(super) fn set_element(
     Some(converted)
 }
 
+/// 缺省内在构造器直建：与 Construct(%<kind>Array%, args) 等价的合流快路径
+/// （newTarget 缺省，实例挂内在原型）。slice 缺省 species 与 from / of 的
+/// 内在构造器 receiver 共用。
+pub(super) fn construct_default(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    kind: TypedArrayKind,
+) -> i64 {
+    construct(ctx, state, args, kind, value::encode_undefined())
+}
+
 /// TypedArray 构造器的可调用对象路径入口（类 extends 的 super()、
 /// Reflect.construct）：newTarget 已由调用方归一（undefined 表示缺省形态，
 /// 实例挂内在原型）。
@@ -1012,13 +1024,8 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         };
     let target = match decision {
         super::typedarray_create::SpeciesDecision::Default => {
-            let object = construct(
-                ctx,
-                state,
-                &[value::encode_f64(count as f64)],
-                array.kind,
-                value::encode_undefined(),
-            );
+            let object =
+                construct_default(ctx, state, &[value::encode_f64(count as f64)], array.kind);
             if value::is_exception(object) {
                 return object;
             }

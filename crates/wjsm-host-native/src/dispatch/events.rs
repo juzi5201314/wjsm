@@ -125,10 +125,10 @@ fn construct_event_target(ctx: &mut NativeVmContext, state: &mut NativeAgentStat
     }) else {
         return fail_dispatch(ctx);
     };
-    state
-        .events
-        .objects
-        .insert(value::decode_handle(object), EventsObjectKind::EventTarget(slot));
+    state.events.objects.insert(
+        value::decode_handle(object),
+        EventsObjectKind::EventTarget(slot),
+    );
     object
 }
 
@@ -144,10 +144,7 @@ fn register_event(state: &mut NativeAgentState, event: EventState) -> Option<i64
 }
 
 /// 按实际 this 解析事件目标品牌：通用 EventTarget 或 AbortSignal。
-pub(super) fn resolve_event_target(
-    state: &NativeAgentState,
-    this_value: i64,
-) -> Option<TargetRef> {
+pub(super) fn resolve_event_target(state: &NativeAgentState, this_value: i64) -> Option<TargetRef> {
     if !value::is_js_object(this_value) {
         return None;
     }
@@ -168,7 +165,11 @@ pub(super) fn target_data_mut(
     target: TargetRef,
 ) -> Option<&mut EventTargetData> {
     match target {
-        TargetRef::Generic(slot) => state.events.targets.get_mut(slot).map(|entry| &mut entry.data),
+        TargetRef::Generic(slot) => state
+            .events
+            .targets
+            .get_mut(slot)
+            .map(|entry| &mut entry.data),
         TargetRef::Signal(handle) => fetch::abort_signal_events_mut(state, handle),
     }
 }
@@ -205,7 +206,9 @@ pub(crate) fn call(
     args: &[i64],
 ) -> i64 {
     match callable {
-        EventsCallable::AddEventListener => target::add_event_listener(ctx, state, this_value, args),
+        EventsCallable::AddEventListener => {
+            target::add_event_listener(ctx, state, this_value, args)
+        }
         EventsCallable::RemoveEventListener => {
             target::remove_event_listener(ctx, state, this_value, args)
         }
@@ -228,7 +231,10 @@ pub(crate) fn call(
         EventsCallable::SignalOnabortSet => target::onabort_set(ctx, state, this_value, args),
         EventsCallable::SignalThrowIfAborted => throw_if_aborted(ctx, state, this_value),
         EventsCallable::RethrowListenerError => {
-            let error = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let error = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             state
                 .create_exception(error)
                 .unwrap_or_else(|| fail_dispatch(ctx))
@@ -238,7 +244,11 @@ pub(crate) fn call(
 
 /// `AbortSignal.prototype.throwIfAborted`（WHATWG DOM §3.2）：aborted 时把
 /// reason 作为异常值原样抛出。
-fn throw_if_aborted(ctx: &mut NativeVmContext, state: &mut NativeAgentState, this_value: i64) -> i64 {
+fn throw_if_aborted(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    this_value: i64,
+) -> i64 {
     let Some(handle) = fetch::abort_signal_of(state, this_value) else {
         return invalid_this(ctx, state, "AbortSignal");
     };
@@ -363,7 +373,9 @@ fn instance_label(ctx: &mut NativeVmContext, state: &mut NativeAgentState, encod
         }
         state.string_owned(name)?.to_utf8()
     })();
-    label.filter(|name| !name.is_empty()).unwrap_or_else(|| "Object".into())
+    label
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Object".into())
 }
 
 /// 把已实现成员安装为共享 prototype 的自有属性；描述符逐项对齐 Node v22
