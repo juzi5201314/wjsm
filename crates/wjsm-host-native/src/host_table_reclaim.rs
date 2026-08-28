@@ -71,6 +71,78 @@ fn explicit_gc_waits_for_an_inflight_concurrent_cycle() {
     assert_eq!(result.unwrap().stdout, b"42\n");
 }
 
+/// issue #365：intern 路径只增不减 → 水位清扫。不调用显式 `gc()` 的唯一
+/// 字符串 churn 循环里，`string_ids` 触水位即触发全量清扫；结束时表尺寸
+/// 有界（远低于插入总量），且清扫/搬迁多轮后存活字符串内容不变。
+#[test]
+fn string_table_watermark_bounds_interned_strings_without_explicit_gc() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const keep=['alive_'+123456789, 'bravo_'+987654321]; let n=0; \
+         for(let i=0;i<60000;i++){ const s='xx'+i+'yy'; n+=s.length; } \
+         console.log(n, keep.join('|'));",
+    );
+    assert_eq!(execution.stdout, b"528890 alive_123456789|bravo_987654321\n");
+    let stats = runtime.host_side_table_stats();
+    assert!(
+        stats.string_ids < 16384,
+        "水位清扫后 string_ids 应远低于 6 万插入量：{}",
+        stats.string_ids
+    );
+    runtime.collect_garbage_now().expect("GC should run");
+    let stats = runtime.host_side_table_stats();
+    assert!(
+        stats.string_ids < 4096,
+        "全量 GC 后 string_ids 应回落到存活集：{}",
+        stats.string_ids
+    );
+}
+
+/// issue #365：regex match 文本/捕获组值是短命结果，走免入表路径，
+/// `string_ids` 不随匹配数量增长（长 subject 字面量超过 64 码元去重上限，
+/// 本身也不入表）。
+#[test]
+fn regexp_match_texts_do_not_enter_string_table() {
+    let tokens = (0..40)
+        .map(|i| format!("AA{}BB", 9_000_000 + i))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let source = format!(
+        "const s='{tokens}'; const parts=s.match(/AA\\d+BB/g); \
+         const m=/AA(\\d+)BB/.exec('ccAA12345678BBcc'); \
+         console.log(parts.length, parts[0], parts[39], m[0], m[1], m.index);"
+    );
+    let mut runtime = small_heap_runtime();
+    let before = runtime.host_side_table_stats().string_ids;
+    let execution = execute_source_with_runtime(&mut runtime, &source);
+    assert_eq!(
+        execution.stdout,
+        b"40 AA9000000BB AA9000039BB AA12345678BB 12345678 2\n"
+    );
+    let after = runtime.host_side_table_stats().string_ids;
+    assert!(
+        after <= before + 8,
+        "40 个 match 文本 + exec 捕获组不应入表：before={before} after={after}"
+    );
+}
+
+/// 回归：动态加法 lowering 的兄弟块（string 快路径 / dispatcher 慢路径）曾共用
+/// `staged_dirty`，先 lower 的兄弟块清掉 dirty 后，慢路径带着陈旧 root frame 进
+/// 宿主。intern 安全点此刻开启的并发 Young 标记看不到仅存于 SSA、正在构造的
+/// 数组，随后的清扫把活数组误判为死（表现为 keep[0] 变成垃圾值或
+/// InternalInvariant）。小堆下 pacing 恰好在 `'alive_'+N` 的 intern 处开启
+/// Young 周期，确定性复现。
+#[test]
+fn array_under_construction_survives_mark_started_mid_expression() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const keep=['alive_'+123456789]; gc(); console.log(keep[0]);",
+    );
+    assert_eq!(execution.stdout, b"alive_123456789\n");
+}
+
 #[test]
 fn dead_closures_are_reclaimed() {
     let mut runtime = small_heap_runtime();

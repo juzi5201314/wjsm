@@ -60,6 +60,10 @@ const DEFAULT_CALL_ARENA_SLOTS: usize = 64 * 1024;
 const FIRST_USER_SYMBOL_HANDLE: u32 = wjsm_ir::wk_symbol::UNSCOPABLES + 1;
 const LATIN1_CHAR_COUNT: usize = 256;
 const DEFAULT_MAX_HEAP_BYTES: u64 = 64 * 1024 * 1024;
+/// 字符串去重表（`string_ids`）的清扫水位基线。intern 路径只增不减，
+/// 表长触达水位即借 `poll_gc` 强制一次全量收集清扫，收集后按存活量
+/// 重算水位，保证长跑进程的表尺寸与堆内 interned 字符串有界（issue #365）。
+const STRING_TABLE_SWEEP_BASE_LEN: usize = 8 * 1024;
 const OUT_OF_MEMORY_MESSAGE: &str = "JavaScript heap out of memory";
 const MAX_JS_CALL_DEPTH: u32 = 1024;
 pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32
@@ -1028,6 +1032,10 @@ struct NativeAgentState {
     /// 各 realm（全局对象句柄）的全局环境记录：脚本级词法绑定 + [[VarNames]]。
     global_env_records: HashMap<u32, dispatch::global_env::GlobalEnvRecord>,
     string_ids: HashMap<(u32, u32), u32>,
+    /// `string_ids` 的清扫水位：表长触达该值即在下一次 `poll_gc` 强制全量
+    /// 收集；全量清扫后按存活量重算为 `max(基线, 2×存活)`，避免存活集大的
+    /// 程序反复触发全量收集。
+    string_table_sweep_watermark: usize,
     /// 码元值是密集的 `0..=255`，JIT 按值直接索引；固定数组避免热路径哈希与分配。
     latin1_char_strings: Box<[i64; LATIN1_CHAR_COUNT]>,
     activations: Vec<NativeActivation>,
@@ -1268,6 +1276,7 @@ impl NativeAgentState {
             scope_records: HashMap::new(),
             global_env_records: HashMap::new(),
             string_ids: HashMap::new(),
+            string_table_sweep_watermark: STRING_TABLE_SWEEP_BASE_LEN,
             latin1_char_strings: Box::new([value::encode_undefined(); LATIN1_CHAR_COUNT]),
             activations: Vec::new(),
             maps: HashMap::new(),
@@ -1599,6 +1608,7 @@ impl NativeAgentState {
         self.array_properties.clear();
         self.array_property_order.clear();
         self.string_ids.clear();
+        self.string_table_sweep_watermark = STRING_TABLE_SWEEP_BASE_LEN;
         self.latin1_char_strings.fill(value::encode_undefined());
         self.array_accessors.clear();
         self.array_property_flags.clear();
@@ -5024,6 +5034,7 @@ impl NativeAgentState {
             let length = self.gc.heap().string_length(handle)?;
             self.string_ids.insert((hash, length), handle);
         }
+        self.finish_string_table_sweep();
         Ok(())
     }
 
@@ -5116,6 +5127,16 @@ impl NativeAgentState {
         });
     }
 
+    /// 全量清扫后收尾：按存活量重算水位并收缩表容量。容量下界取水位，
+    /// 避免下一轮 intern 立即触发再散列；峰值后的多余容量随之归还，
+    /// 长跑进程的 RSS 不会停留在历史峰值。
+    pub(crate) fn finish_string_table_sweep(&mut self) {
+        self.string_table_sweep_watermark = STRING_TABLE_SWEEP_BASE_LEN
+            .max(self.string_ids.len().saturating_mul(2));
+        self.string_ids
+            .shrink_to(self.string_table_sweep_watermark);
+    }
+
     fn encode_inline_ascii_units(units: &[u16]) -> Option<i64> {
         if units.len() > value::INLINE_STRING_MAX_LEN {
             return None;
@@ -5140,6 +5161,19 @@ impl NativeAgentState {
         }
         let units = text.encode_utf16().collect::<Vec<_>>();
         self.publish_string_units(&units, tag, true)
+    }
+
+    /// 短命结果文本（regex match 文本、捕获组值等）不进 `string_ids` 去重表：
+    /// 匹配文本通常一次性使用，入表只会推高清扫水位并把摘除成本转嫁给 GC。
+    /// 内容相同的字符串若后续用作属性键，会在 `intern_property_string` 合流到
+    /// 同一 interned 句柄，语义不受影响。
+    fn publish_transient_text(&mut self, text: &str) -> Option<i64> {
+        if let Some(encoded) = value::encode_inline_ascii(text.as_bytes()) {
+            self.gc.record_inline_string();
+            return Some(encoded);
+        }
+        let units = text.encode_utf16().collect::<Vec<_>>();
+        self.publish_string_units(&units, value::TAG_STRING, false)
     }
 
     /// 去重命中时复用既有句柄；键为（内容哈希, UTF-16 长度），同一内容无论
@@ -5738,6 +5772,18 @@ impl NativeAgentState {
 
     fn poll_gc(&mut self, ctx: &mut NativeVmContext) -> Result<bool, NativeRuntimeError> {
         let action = self.gc.safepoint_action();
+        // 字符串去重表触水位：pacing director 不承诺及时开启周期（intern 密集
+        // 的负载可能整轮只跑一个周期），这里直接同步全量收集，`finish_gc_cycle`
+        // 会清扫 `string_ids` 并按存活量重算水位，保证表与堆内 interned
+        // 字符串在长跑进程中有界。
+        if matches!(action, wjsm_gc::GcSafepointAction::Idle)
+            && self.string_ids.len() >= self.string_table_sweep_watermark
+        {
+            // 老年代并发周期可长期在飞（action 仍为 Idle），collect_full 自会
+            // 先驱动在飞周期收敛再做全量收集，无需等待其自然结束。
+            self.collect_garbage(ctx)?;
+            return Ok(true);
+        }
         let snapshot = if let wjsm_gc::GcSafepointAction::PublishRoots { epoch } = action {
             self.gc.flush_native_tlab(ctx)?;
             let frame_roots = native_root_values(ctx)?;

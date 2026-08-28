@@ -64,6 +64,13 @@ struct FrameLowering {
     /// 非安全点之间的 root frame 内容对 GC 不可见，无需维护。
     staged_roots: Vec<ValueId>,
     staged_dirty: bool,
+    /// 上一次真正落地 root frame 时 builder 所在的 CLIF block。同一条 IR 指令
+    /// 的 lowering 会分裂出互斥的兄弟块（如动态加法的 string 快路径与 dispatcher
+    /// 慢路径），先 lower 的兄弟块清掉 dirty 后，后 lower 的兄弟块若照旧跳过
+    /// 发布，运行时走到它就会带着陈旧 root frame 进宿主——正在构造、仅存于
+    /// SSA 的对象对 GC 根快照不可见，会被并发标记误判为死。只有仍在同一
+    /// block（先前发布点支配当前点）时才允许跳过。
+    flushed_block: Option<ir::Block>,
     /// 入口块一次性物化的基址，被所有块支配后可跨块复用。
     frame_base: ir::Value,
     roots_base: ir::Value,
@@ -119,6 +126,7 @@ impl FrameLowering {
             capacity,
             staged_roots: Vec::new(),
             staged_dirty: false,
+            flushed_block: None,
             frame_base,
             roots_base,
             arena_slot,
@@ -200,8 +208,15 @@ impl FrameLowering {
     }
 
     /// 在可 GC / 可重入调用之前把暂存的 root 集合真正写入 root frame。
+    ///
+    /// 只有「暂存集自上次发布未变、且上次发布落在当前 CLIF block（顺序执行
+    /// 必先经过它，即支配当前点）」时才可跳过；跨块一律重新发布——兄弟块
+    /// 之间互不支配，复用彼此的发布会让 GC 扫到缺槽的陈旧 root frame。
     fn flush(&mut self, builder: &mut FunctionBuilder<'_>, variables: &ValueRepr) -> Result<()> {
-        if !self.staged_dirty {
+        if !self.staged_dirty
+            && self.flushed_block.is_some()
+            && self.flushed_block == builder.current_block()
+        {
             return Ok(());
         }
         let roots = std::mem::take(&mut self.staged_roots);
@@ -270,6 +285,7 @@ impl FrameLowering {
             frame_offset(offset_of!(NativeRootFrame, bitmap_word_count))?,
         );
         self.staged_dirty = false;
+        self.flushed_block = builder.current_block();
         Ok(())
     }
 
@@ -309,6 +325,7 @@ impl FrameLowering {
     fn enter_block(&mut self) {
         self.staged_roots.clear();
         self.staged_dirty = false;
+        self.flushed_block = None;
     }
 
     fn unlink(&self, builder: &mut FunctionBuilder<'_>, ctx: ir::Value) -> Result<()> {
