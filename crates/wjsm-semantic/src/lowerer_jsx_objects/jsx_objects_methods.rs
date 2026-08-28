@@ -35,8 +35,7 @@ impl Lowerer {
                             // `__proto__: value` 走 SetProto；静态键无副作用，
                             // 仅需按规范传播属性值求值抛出的异常。
                             let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
-                            if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value)
-                            {
+                            if self.expr_can_throw(&kv.value) {
                                 block = self.lower_value_exception_branch(block, val_dest)?;
                             }
                             self.current_function.append_instruction(
@@ -54,7 +53,7 @@ impl Lowerer {
                         let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
                         // 属性值求值抛异常必须传播，
                         // 不得把 TAG_EXCEPTION 存为属性值后继续求值后续属性。
-                        if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
+                        if self.expr_can_throw(&kv.value) {
                             block = self.lower_value_exception_branch(block, val_dest)?;
                         }
                         self.emit_set_prop(block, obj_dest, key_dest, val_dest);
@@ -177,7 +176,7 @@ impl Lowerer {
                     let source = self.lower_expr_then_continue(&spread.expr, &mut block)?;
                     // CopyDataProperties：spread 源求值抛异常必须传播，
                     // 不得让 TAG_EXCEPTION 流入 ObjectSpread 被静默吞掉。
-                    if self.expr_exception_fork_allowed() && self.expr_can_throw(&spread.expr) {
+                    if self.expr_can_throw(&spread.expr) {
                         block = self.lower_value_exception_branch(block, source)?;
                     }
                     block = self.emit_object_spread_checked(block, obj_dest, source)?;
@@ -273,7 +272,7 @@ impl Lowerer {
             return self.lower_prop_name(key, *block);
         };
         let key_dest = self.lower_expr_then_continue(&computed.expr, block)?;
-        if self.expr_exception_fork_allowed() && self.expr_can_throw(&computed.expr) {
+        if self.expr_can_throw(&computed.expr) {
             *block = self.lower_value_exception_branch(*block, key_dest)?;
         }
         let converted = self.alloc_value();
@@ -287,9 +286,7 @@ impl Lowerer {
         );
         // 转换本身可抛（用户转换函数 throw / 无法转为 primitive 的 TypeError），
         // 与键表达式是否可抛无关，必须无条件分叉传播。
-        if self.expr_exception_fork_allowed() {
-            *block = self.lower_value_exception_branch(*block, converted)?;
-        }
+        *block = self.lower_value_exception_branch(*block, converted)?;
         Ok(converted)
     }
 
@@ -726,7 +723,7 @@ impl Lowerer {
             let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
             // 与通用路径一致：属性值求值抛异常必须传播，
             // 不得把 TAG_EXCEPTION 烘焙进 InitObjectLiteral 的值列表。
-            if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
+            if self.expr_can_throw(&kv.value) {
                 block = self.lower_value_exception_branch(block, val_dest)?;
             }
             values.push(val_dest);

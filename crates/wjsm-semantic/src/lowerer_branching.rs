@@ -623,9 +623,7 @@ impl Lowerer {
             // 吞咽语义不同）、派生构造器返回协议（哨兵不得流入对象/基元裁决）。
             // 裸尾位置不分叉，保持 `return f(x)` 的尾调用形态（tail_self_loop），
             // 哨兵返回值即异常传播机制本身。
-            let needs_fork = self.expr_exception_fork_allowed()
-                && self.expr_can_throw(arg)
-                && self.return_operand_throw_observable();
+            let needs_fork = self.expr_can_throw(arg) && self.return_operand_throw_observable();
             let value = self.lower_expr_then_continue(arg, &mut block)?;
             if needs_fork {
                 block = self.lower_value_exception_branch(block, value)?;
@@ -673,8 +671,7 @@ impl Lowerer {
 
         // ── 降低判别式表达式 ──────────────────────────────────────────────
         let mut discr_block = block;
-        let can_throw =
-            self.expr_exception_fork_allowed() && self.expr_can_throw(&switch_stmt.discriminant);
+        let can_throw = self.expr_can_throw(&switch_stmt.discriminant);
         let discr = if can_throw {
             self.lower_expr_then_continue(&switch_stmt.discriminant, &mut discr_block)?
         } else {
@@ -733,7 +730,7 @@ impl Lowerer {
 
             // 降低 case test 表达式（任意表达式）
             let mut current_block = test_block;
-            let test_can_throw = self.expr_exception_fork_allowed() && self.expr_can_throw(test);
+            let test_can_throw = self.expr_can_throw(test);
             let test_val = if test_can_throw {
                 self.lower_expr_then_continue(test, &mut current_block)?
             } else {

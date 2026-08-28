@@ -474,9 +474,7 @@ impl Lowerer {
                 let this_val = self.lower_call_operand_then_continue(&member_expr.obj, block)?;
                 let callee_val =
                     self.lower_member_expr_from_object(member_expr, this_val, block, false)?;
-                if self.expr_exception_fork_allowed() {
-                    *block = self.lower_value_exception_branch(*block, callee_val)?;
-                }
+                *block = self.lower_value_exception_branch(*block, callee_val)?;
                 Ok((callee_val, this_val))
             }
             _ => {

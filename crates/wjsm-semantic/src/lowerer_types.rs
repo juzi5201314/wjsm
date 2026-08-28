@@ -1,7 +1,5 @@
 use super::*;
 
-/// 异常分叉抑制栈帧：深度 + 被延迟的 (continue_block, exception_value) 列表。
-pub(crate) type ExceptionForkSuppressionFrame = (u32, Vec<Vec<(BasicBlockId, ValueId)>>);
 pub(crate) type ExpressionContinuationFrame = (
     Option<BasicBlockId>,
     Option<BasicBlockId>,
@@ -76,7 +74,6 @@ pub(crate) struct Lowerer {
     pub(crate) function_label_stack_stack: Vec<Vec<LabelContext>>,
     pub(crate) function_active_finalizers_stack: Vec<Vec<PendingFinalizer>>,
     pub(crate) function_pending_loop_label_stack: Vec<Option<String>>,
-    pub(crate) function_exception_fork_suppression_stack: Vec<ExceptionForkSuppressionFrame>,
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     pub(crate) captured_names_stack: Vec<Vec<CapturedBinding>>,
@@ -231,11 +228,6 @@ pub(crate) struct Lowerer {
     /// 由 resolve_store_block 消费，确保后续指令插入到正确的继续块中。
     pub(crate) expr_merge_block: Option<BasicBlockId>,
     pub(crate) function_expr_continuation_stack: Vec<ExpressionContinuationFrame>,
-    /// 表达式结果需要由当前拥有者处理 abrupt completion 时，临时禁止通用异常分叉。
-    /// 动态 import(expr) 用它让 specifier 求值产生的 TAG_EXCEPTION 继续流向 runtime host，
-    /// 再由 host 创建并 reject import promise，而不是在外层同步 throw。
-    pub(crate) exception_fork_suppression_depth: u32,
-    pub(crate) deferred_exception_forks_stack: Vec<Vec<(BasicBlockId, ValueId)>>,
     /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
     pub(crate) active_using_vars: Vec<ActiveUsingVar>,
     /// 追踪当前作用域中已推断为 Array 的绑定（scope_id, name）。

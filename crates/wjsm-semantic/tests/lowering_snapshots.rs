@@ -1153,87 +1153,95 @@ fn dynamic_import_template_expression_lowers_to_runtime_host_path() {
     );
 }
 
+// ImportCall（ES §13.3.10.1）步骤 2-3 为 `? Evaluation` / `? GetValue`：
+// specifier 求值抛出必须同步传播（分叉到 exception_value + throw），
+// 不得转为返回 promise 的 rejection；仅 ToString(specifier) 起才由宿主
+// IfAbruptRejectPromise。以下用例断言同步抛出分叉且 runtime 调用只有一处。
+
 #[test]
-fn dynamic_import_json_parse_abrupt_lowers_to_runtime_rejection_path() {
+fn dynamic_import_json_parse_abrupt_lowers_to_synchronous_throw() {
     let text = lower_single_esm_source("import(JSON.parse('bad'));\n");
 
     assert!(
         text.contains("dynamic_import_runtime"),
-        "JSON.parse specifier abrupt should still reach dynamic import runtime path:\n{text}"
+        "runtime dynamic import path should exist for the normal completion:\n{text}"
     );
+    assert_eq!(
+        text.matches("dynamic_import_runtime").count(),
+        1,
+        "specifier abrupt must propagate synchronously, not fork a second runtime call:\n{text}"
+    );
+    let exception_value_pos = text
+        .find("exception_value")
+        .expect("specifier abrupt fork should unwrap the exception for a synchronous throw");
+    let runtime_pos = text.find("dynamic_import_runtime").unwrap();
     assert!(
-        text.matches("dynamic_import_runtime").count() >= 2,
-        "specifier abrupt branch should call dynamic import runtime with the original exception:\n{text}"
+        exception_value_pos < runtime_pos,
+        "specifier abrupt must be unwrapped and thrown before the runtime call:\n{text}"
     );
-    if let Some(exception_value_pos) = text.find("exception_value") {
-        let runtime_pos = text.find("dynamic_import_runtime").unwrap();
-        assert!(
-            exception_value_pos > runtime_pos,
-            "specifier abrupt must not be unwrapped before dynamic import runtime owns rejection:\n{text}"
-        );
-    }
 }
 
 #[test]
-fn dynamic_import_import_meta_resolve_abrupt_lowers_to_runtime_rejection_path() {
+fn dynamic_import_import_meta_resolve_abrupt_lowers_to_synchronous_throw() {
     let text = lower_single_esm_source("import(import.meta.resolve('./missing.js'));\n");
 
     assert!(
         text.contains("import_meta.resolve") && text.contains("dynamic_import_runtime"),
-        "import.meta.resolve specifier abrupt should be passed to dynamic import runtime:\n{text}"
+        "import.meta.resolve specifier should keep the runtime dynamic import path:\n{text}"
+    );
+    assert_eq!(
+        text.matches("dynamic_import_runtime").count(),
+        1,
+        "import.meta.resolve abrupt must propagate synchronously, not fork a second runtime call:\n{text}"
     );
     assert!(
-        text.matches("dynamic_import_runtime").count() >= 2,
-        "import.meta.resolve abrupt branch should call dynamic import runtime with the original exception:\n{text}"
+        text.contains("exception_value"),
+        "import.meta.resolve abrupt fork should unwrap the exception for a synchronous throw:\n{text}"
     );
-    if let Some(exception_value_pos) = text.find("exception_value") {
-        let runtime_pos = text.find("dynamic_import_runtime").unwrap();
-        assert!(
-            exception_value_pos > runtime_pos,
-            "import.meta.resolve abrupt must not be unwrapped before dynamic import runtime owns rejection:\n{text}"
-        );
-    }
 }
 
 #[test]
-fn dynamic_import_composed_json_parse_abrupt_lowers_to_runtime_rejection_path() {
+fn dynamic_import_composed_json_parse_abrupt_lowers_to_synchronous_throw() {
     let text = lower_single_esm_source("import(JSON.parse('bad') + './never.js');\n");
 
     assert!(
         text.contains("JSON.parse") && text.contains("dynamic_import_runtime"),
-        "composed JSON.parse specifier abrupt should still reach dynamic import runtime path:\n{text}"
+        "composed specifier should keep the runtime dynamic import path:\n{text}"
     );
-    assert!(
-        text.matches("dynamic_import_runtime").count() >= 2,
-        "composed specifier abrupt branch should call dynamic import runtime before stringification:\n{text}"
+    assert_eq!(
+        text.matches("dynamic_import_runtime").count(),
+        1,
+        "composed specifier abrupt must propagate synchronously before stringification:\n{text}"
     );
 }
 
 #[test]
-fn dynamic_import_conditional_json_parse_abrupt_lowers_to_runtime_rejection_path() {
+fn dynamic_import_conditional_json_parse_abrupt_lowers_to_synchronous_throw() {
     let text = lower_single_esm_source("import((true ? JSON.parse('bad') : './dep.js') + '?x');\n");
 
     assert!(
         text.contains("JSON.parse") && text.contains("dynamic_import_runtime"),
-        "conditional JSON.parse specifier abrupt should still reach dynamic import runtime path:\n{text}"
+        "conditional specifier should keep the runtime dynamic import path:\n{text}"
     );
-    assert!(
-        text.matches("dynamic_import_runtime").count() >= 2,
-        "conditional specifier abrupt branch should call dynamic import runtime before stringification:\n{text}"
+    assert_eq!(
+        text.matches("dynamic_import_runtime").count(),
+        1,
+        "conditional specifier abrupt must propagate synchronously before stringification:\n{text}"
     );
 }
 
 #[test]
-fn dynamic_import_sequence_json_parse_abrupt_lowers_to_runtime_rejection_path() {
+fn dynamic_import_sequence_json_parse_abrupt_lowers_to_synchronous_throw() {
     let text = lower_single_esm_source("import((JSON.parse('bad'), './dep.js'));\n");
 
     assert!(
         text.contains("JSON.parse") && text.contains("dynamic_import_runtime"),
-        "sequence JSON.parse specifier abrupt should still reach dynamic import runtime path:\n{text}"
+        "sequence specifier should keep the runtime dynamic import path:\n{text}"
     );
-    assert!(
-        text.matches("dynamic_import_runtime").count() >= 2,
-        "sequence abrupt branch should pass the original exception to dynamic import runtime before the final specifier can overwrite it:\n{text}"
+    assert_eq!(
+        text.matches("dynamic_import_runtime").count(),
+        1,
+        "sequence abrupt must propagate synchronously; the final specifier must not mask it:\n{text}"
     );
 }
 
@@ -1252,16 +1260,17 @@ fn dynamic_import_sequence_normal_completion_lowers_final_specifier_path() {
 }
 
 #[test]
-fn dynamic_import_composed_import_meta_resolve_abrupt_lowers_to_runtime_rejection_path() {
+fn dynamic_import_composed_import_meta_resolve_abrupt_lowers_to_synchronous_throw() {
     let text = lower_single_esm_source("import(import.meta.resolve('./missing.js') + '?x');\n");
 
     assert!(
         text.contains("import_meta.resolve") && text.contains("dynamic_import_runtime"),
-        "composed import.meta.resolve specifier abrupt should reach dynamic import runtime path:\n{text}"
+        "composed import.meta.resolve specifier should keep the runtime dynamic import path:\n{text}"
     );
-    assert!(
-        text.matches("dynamic_import_runtime").count() >= 2,
-        "composed import.meta.resolve abrupt branch should call dynamic import runtime before stringification:\n{text}"
+    assert_eq!(
+        text.matches("dynamic_import_runtime").count(),
+        1,
+        "composed import.meta.resolve abrupt must propagate synchronously before stringification:\n{text}"
     );
 }
 

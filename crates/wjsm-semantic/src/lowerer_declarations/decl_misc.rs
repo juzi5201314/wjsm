@@ -36,7 +36,7 @@ impl Lowerer {
                 // （调用 / 成员读取 / new / `in` 等），插入异常检查分叉，使
                 // `let x = throws()` 之类在 try/catch 中可被捕获，而非令 TAG_EXCEPTION
                 // 流入 StoreVar 后触发 native pending-exception invariant。
-                if self.expr_can_throw(init) && self.expr_exception_fork_allowed() {
+                if self.expr_can_throw(init) {
                     block = self.lower_value_exception_branch(block, value)?;
                 }
                 block = self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
@@ -417,7 +417,7 @@ impl Lowerer {
             return Ok(ud_dest);
         };
         let value_dest = self.lower_expr_then_continue(value, block)?;
-        if self.expr_exception_fork_allowed() && self.expr_can_throw(value) {
+        if self.expr_can_throw(value) {
             *block = self.lower_value_exception_branch(*block, value_dest)?;
         }
         Ok(value_dest)

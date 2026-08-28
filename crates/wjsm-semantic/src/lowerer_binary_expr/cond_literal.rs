@@ -6,11 +6,6 @@ impl Lowerer {
         cond: &swc_ast::CondExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        // Dynamic import specifier lowering suppresses immediate exception throws so
-        // the import runtime can reject its Promise with the original reason. In that
-        // mode, collect abrupt completions before the conditional result feeds an
-        // enclosing operator such as `+`.
-        let collect_exception_forks = self.exception_fork_suppressed();
         // test 操作数的 `? GetValue`：getter/调用抛出必须在 ToBoolean 分支前
         // 分叉传播，哨兵不得被 Branch 当真值消费（lower_branch_condition 统一处理）。
         let (test, branch_block) = self.lower_branch_condition(cond.test.as_ref(), block)?;
@@ -41,25 +36,13 @@ impl Lowerer {
             },
         );
 
-        let mut cons_end = cons_block;
-        let cons_val = if collect_exception_forks {
-            self.lower_expr_then_continue(cond.cons.as_ref(), &mut cons_end)?
-        } else {
-            let value = self.lower_expr(cond.cons.as_ref(), cons_end)?;
-            cons_end = self.resolve_store_block(cons_end);
-            value
-        };
+        let cons_val = self.lower_expr(cond.cons.as_ref(), cons_block)?;
+        let cons_end = self.resolve_store_block(cons_block);
         self.current_function
             .set_terminator(cons_end, Terminator::Jump { target: merge });
 
-        let mut alt_end = alt_block;
-        let alt_val = if collect_exception_forks {
-            self.lower_expr_then_continue(cond.alt.as_ref(), &mut alt_end)?
-        } else {
-            let value = self.lower_expr(cond.alt.as_ref(), alt_end)?;
-            alt_end = self.resolve_store_block(alt_end);
-            value
-        };
+        let alt_val = self.lower_expr(cond.alt.as_ref(), alt_block)?;
+        let alt_end = self.resolve_store_block(alt_block);
         self.current_function
             .set_terminator(alt_end, Terminator::Jump { target: merge });
 
@@ -97,7 +80,7 @@ impl Lowerer {
             last = self.lower_expr_then_continue(expr, &mut block)?;
             // 逗号左侧的 Call/New 必须在求值后检查 TAG_EXCEPTION，否则
             // `f(), "msg"` 会把宿主抛出的异常当成普通值丢掉。
-            if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+            if self.expr_can_throw(expr) {
                 block = self.lower_value_exception_branch(block, last)?;
             }
         }

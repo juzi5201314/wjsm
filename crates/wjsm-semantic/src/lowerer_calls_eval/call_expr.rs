@@ -388,12 +388,8 @@ impl Lowerer {
                 },
             );
         }
-        if self.expr_exception_fork_allowed() {
-            let continue_block = self.lower_value_exception_branch(call_block, dest)?;
-            self.expr_merge_block = Some(continue_block);
-        } else if call_block != block {
-            self.expr_merge_block = Some(call_block);
-        }
+        let continue_block = self.lower_value_exception_branch(call_block, dest)?;
+        self.expr_merge_block = Some(continue_block);
         Ok(dest)
     }
 
@@ -441,10 +437,7 @@ impl Lowerer {
                         self.lower_super_prop_with_this(super_prop, this_val, &mut super_block)?;
                     // 方法查找（原型链 getter）抛出必须先于调用分叉传播，
                     // 哨兵不得作为 callee 流入 Call。
-                    if self.expr_exception_fork_allowed() {
-                        super_block =
-                            self.lower_value_exception_branch(super_block, callee_val)?;
-                    }
+                    super_block = self.lower_value_exception_branch(super_block, callee_val)?;
                     callee_block = super_block;
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 } else if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
@@ -866,10 +859,7 @@ impl Lowerer {
                     // 方法查找（getter / Proxy get 陷阱）抛出必须先于调用分叉
                     // 传播，哨兵不得作为 callee 流入 Call（否则误报
                     // "... is not a function" 且丢失原始异常）。
-                    if self.expr_exception_fork_allowed() {
-                        member_block =
-                            self.lower_value_exception_branch(member_block, callee_val)?;
-                    }
+                    member_block = self.lower_value_exception_branch(member_block, callee_val)?;
                     callee_block = member_block;
                 } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
                     && self.eval_scope_record
@@ -1063,9 +1053,7 @@ impl Lowerer {
             swc_ast::Callee::Expr(expr) => match expr.as_ref() {
                 swc_ast::Expr::Member(member_expr) => Some((member_expr, false)),
                 swc_ast::Expr::OptChain(oc) => match oc.base.as_ref() {
-                    swc_ast::OptChainBase::Member(member_expr) => {
-                        Some((member_expr, oc.optional))
-                    }
+                    swc_ast::OptChainBase::Member(member_expr) => Some((member_expr, oc.optional)),
                     swc_ast::OptChainBase::Call(_) => None,
                 },
                 _ => None,
@@ -1087,10 +1075,7 @@ impl Lowerer {
                         &mut member_block,
                         member_optional,
                     )?;
-                    if self.expr_exception_fork_allowed() {
-                        member_block =
-                            self.lower_value_exception_branch(member_block, callee_val)?;
-                    }
+                    member_block = self.lower_value_exception_branch(member_block, callee_val)?;
                     callee_block = member_block;
                 } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
                     && !self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()

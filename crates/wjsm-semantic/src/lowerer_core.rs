@@ -77,7 +77,6 @@ impl Lowerer {
             function_label_stack_stack: Vec::new(),
             function_active_finalizers_stack: Vec::new(),
             function_pending_loop_label_stack: Vec::new(),
-            function_exception_fork_suppression_stack: Vec::new(),
             function_expr_continuation_stack: Vec::new(),
             captured_names_stack: Vec::new(),
             shared_binding_names_stack: vec![std::collections::HashSet::new()],
@@ -162,8 +161,6 @@ impl Lowerer {
             new_expr_continue_block: None,
             await_continue_block: None,
             expr_merge_block: None,
-            exception_fork_suppression_depth: 0,
-            deferred_exception_forks_stack: Vec::new(),
             eval_completion_var: None,
             with_scope_count: 0,
         }
@@ -430,11 +427,6 @@ impl Lowerer {
             .push(std::mem::take(&mut self.active_finalizers));
         self.function_pending_loop_label_stack
             .push(self.pending_loop_label.take());
-        self.function_exception_fork_suppression_stack.push((
-            self.exception_fork_suppression_depth,
-            std::mem::take(&mut self.deferred_exception_forks_stack),
-        ));
-        self.exception_fork_suppression_depth = 0;
         self.shared_env_stack.push(None);
         self.reset_async_context();
     }
@@ -525,12 +517,6 @@ impl Lowerer {
             .function_pending_loop_label_stack
             .pop()
             .expect("pending loop label stack underflow");
-        let (exception_fork_suppression_depth, deferred_exception_forks_stack) = self
-            .function_exception_fork_suppression_stack
-            .pop()
-            .expect("exception fork suppression stack underflow");
-        self.exception_fork_suppression_depth = exception_fork_suppression_depth;
-        self.deferred_exception_forks_stack = deferred_exception_forks_stack;
         let (new_expr_continue, await_continue, eval_continue, expr_merge) = self
             .function_expr_continuation_stack
             .pop()

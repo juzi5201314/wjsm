@@ -247,9 +247,7 @@ impl Lowerer {
             }
         };
         // PutValue 失败（strict TypeError）或 setter 抛出须传播。
-        if self.expr_exception_fork_allowed() {
-            current_block = self.lower_value_exception_branch(current_block, result)?;
-        }
+        current_block = self.lower_value_exception_branch(current_block, result)?;
         Ok(current_block)
     }
 
@@ -279,9 +277,7 @@ impl Lowerer {
                         },
                     );
                     // getter 可能抛出：异常须先于后续绑定/写入传播。
-                    if self.expr_exception_fork_allowed() {
-                        block = self.lower_value_exception_branch(block, dest)?;
-                    }
+                    block = self.lower_value_exception_branch(block, dest)?;
                     block = self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
                 }
                 swc_ast::ObjectPatProp::Assign(assign) => {
@@ -307,9 +303,7 @@ impl Lowerer {
                         },
                     );
                     // getter 可能抛出：异常须先于默认值判定/绑定传播。
-                    if self.expr_exception_fork_allowed() {
-                        block = self.lower_value_exception_branch(block, dest)?;
-                    }
+                    block = self.lower_value_exception_branch(block, dest)?;
 
                     // 如果有默认值 { key = default }
                     if let Some(default_expr) = &assign.value {

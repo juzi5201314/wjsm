@@ -88,12 +88,11 @@ impl Lowerer {
             let value = self.lower_expr_then_continue(&expr_stmt.expr, &mut current_block)?;
             // 调用等可抛表达式的返回值可能是 TAG_EXCEPTION：先分叉异常路径，
             // 只在正常路径把值写入完成值槽（异常路径经 emit_throw_value 传播）。
-            let continuation =
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(&expr_stmt.expr) {
-                    self.lower_value_exception_branch(current_block, value)?
-                } else {
-                    self.resolve_store_block(current_block)
-                };
+            let continuation = if self.expr_can_throw(&expr_stmt.expr) {
+                self.lower_value_exception_branch(current_block, value)?
+            } else {
+                self.resolve_store_block(current_block)
+            };
             self.emit_eval_completion_store(continuation, value);
             return Ok(StmtFlow::Open(continuation));
         }
@@ -103,7 +102,7 @@ impl Lowerer {
             expr => {
                 let mut continuation = block;
                 let value = self.lower_expr_then_continue(expr, &mut continuation)?;
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+                if self.expr_can_throw(expr) {
                     self.lower_value_exception_branch(continuation, value)?
                 } else {
                     continuation
@@ -152,16 +151,15 @@ impl Lowerer {
 
     /// 按 `? GetValue` 语义降低分支条件表达式（if/while/do-while/for/三元）：
     /// 条件求值可能抛出时先插入异常分叉（哨兵路由到最近 catch / promise
-    /// rejection），返回条件值与可安全设置 Branch 终结器的延续块。异常分叉
-    /// 被规范拥有者（动态 import 等）压制时保持直通，由拥有者收集哨兵。
+    /// rejection），返回条件值与可安全设置 Branch 终结器的延续块。
     pub(crate) fn lower_branch_condition(
         &mut self,
         test: &swc_ast::Expr,
         block: BasicBlockId,
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
-        let fork = self.expr_exception_fork_allowed() && self.expr_can_throw(test);
+        let fork = self.expr_can_throw(test);
         let mut cond_entry = block;
-        let cond = if fork || self.exception_fork_suppressed() {
+        let cond = if fork {
             self.lower_expr_then_continue(test, &mut cond_entry)?
         } else {
             self.lower_expr(test, cond_entry)?
@@ -487,7 +485,7 @@ impl Lowerer {
                     // 分叉传播，哨兵不得被当普通值丢弃。
                     let mut init_cont = block;
                     let value = self.lower_expr_then_continue(expr, &mut init_cont)?;
-                    if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+                    if self.expr_can_throw(expr) {
                         init_cont = self.lower_value_exception_branch(init_cont, value)?;
                     }
                     init_cont
@@ -579,7 +577,7 @@ impl Lowerer {
         if let Some(update_expr) = &for_stmt.update {
             // 更新表达式抛出时必须在回边前分叉传播，否则异常被吞且循环继续。
             let value = self.lower_expr_then_continue(update_expr, &mut update_end)?;
-            if self.expr_exception_fork_allowed() && self.expr_can_throw(update_expr) {
+            if self.expr_can_throw(update_expr) {
                 update_end = self.lower_value_exception_branch(update_end, value)?;
             }
         }
