@@ -118,7 +118,7 @@ module {
       branch %35, bb5, bb4
     bb4:
       %33 = call builtin.array.filter(%26, %29)
-      jump bb16
+      jump bb18
     bb5:
       %36 = const c29
       %37 = get_prop %26, %36
@@ -128,55 +128,61 @@ module {
       %44 = new_array(capacity=0)
       jump bb6
     bb6:
-      %45 = phi [(bb5, %38), (bb14, %34)]
+      %45 = phi [(bb5, %38), (bb16, %34)]
       %46 = call builtin.abstract_compare(%45, %37, %43, %43)
-      branch %46, bb7, bb15
+      branch %46, bb7, bb17
     bb7:
       %47 = call builtin.array.has_element(%26, %45)
-      branch %47, bb8, bb12
+      %48 = is_exception %47
+      branch %48, bb9, bb8
     bb8:
-      %48 = get_elem %26, %45
-      %53 = const c0
-      jump bb19
+      branch %47, bb10, bb14
     bb9:
-      %51 = call builtin.to_boolean(%56)
-      branch %51, bb10, bb11
+      %49 = call builtin.exception_value(%47)
+      throw %49
     bb10:
-      call builtin.array.push(%44, %48)
-      jump bb14
+      %50 = get_elem %26, %45
+      %55 = const c0
+      jump bb21
     bb11:
-      jump bb14
+      %53 = call builtin.to_boolean(%58)
+      branch %53, bb12, bb13
     bb12:
-      jump bb14
+      call builtin.array.push(%44, %50)
+      jump bb16
     bb13:
-      %52 = call builtin.exception_value(%56)
-      throw %52
+      jump bb16
     bb14:
+      jump bb16
+    bb15:
+      %54 = call builtin.exception_value(%58)
+      throw %54
+    bb16:
       %34 = add %45, %39
       jump bb6
-    bb15:
-      jump bb16
-    bb16:
-      %30 = phi [(bb4, %33), (bb15, %44)]
-      jump bb17
     bb17:
+      jump bb18
+    bb18:
+      %30 = phi [(bb4, %33), (bb17, %44)]
+      jump bb19
+    bb19:
       %31 = is_exception %30
       branch %31, bb2, bb1
-    bb18:
-      %50 = is_exception %56
-      branch %50, bb13, bb9
-    bb19:
-      %55 = const c24
-      %57 = const c25
-      %58 = const c26
-      %56 = call builtin.abstract_compare(%48, %55, %57, %58)
-      %59 = is_exception %56
-      branch %59, bb21, bb20
     bb20:
-      store var $1.x, %53
-      jump bb18
+      %52 = is_exception %58
+      branch %52, bb15, bb11
     bb21:
-      %60 = call builtin.exception_value(%56)
-      store var $1.x, %53
-      throw %60
+      %57 = const c24
+      %59 = const c25
+      %60 = const c26
+      %58 = call builtin.abstract_compare(%50, %57, %59, %60)
+      %61 = is_exception %58
+      branch %61, bb23, bb22
+    bb22:
+      store var $1.x, %55
+      jump bb20
+    bb23:
+      %62 = call builtin.exception_value(%58)
+      store var $1.x, %55
+      throw %62
 }
