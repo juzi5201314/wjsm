@@ -2199,6 +2199,32 @@ pub fn run_script_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
     )
 }
 
+/// 同 [`run_source_in_process`]，但用显式 module root 模拟从该目录执行
+/// `run -e`：无文件入口的动态 import/require 相对说明符以 root 为解析基址。
+pub fn run_source_in_process_with_root(source: &str, root: &Path) -> (i32, Vec<u8>, Vec<u8>) {
+    let artifact = match compile_source_to_pipeline_result(
+        source,
+        None,
+        PipelineFlags::default(),
+        false,
+    )
+    .and_then(|result| {
+        result
+            .artifact
+            .context("compile stage produced no portable artifact")
+    }) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return (
+                EXIT_COMPILE_ERROR as i32,
+                Vec::new(),
+                format!("Error: {error:#}\n").into_bytes(),
+            );
+        }
+    };
+    execute_artifact_in_process(&artifact, root)
+}
+
 fn run_source_in_process_with_flags(source: &str, flags: PipelineFlags) -> (i32, Vec<u8>, Vec<u8>) {
     let (artifact, module_root) =
         match compile_source_to_pipeline_result(source, None, flags, false).and_then(|result| {
