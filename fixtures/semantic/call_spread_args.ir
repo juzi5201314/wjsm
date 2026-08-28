@@ -39,148 +39,150 @@ module {
     c36 = string("base")
     c37 = number(10)
     c38 = string("add")
-    c39 = number(0)
+    c39 = number(2)
     c40 = functionref(@2)
     c41 = string("base")
-    c42 = functionref(@2)
-    c43 = string("method")
-    c44 = string("add")
-    c45 = number(1)
-    c46 = number(2)
-    c47 = string("value")
-    c48 = functionref(@3)
-    c49 = string("constructor")
-    c50 = string("prototype")
-    c51 = string("new")
-    c52 = number(5)
-    c53 = number(6)
-    c54 = string("value")
-    c55 = string("builtin")
-    c56 = number(1)
-    c57 = number(5)
-    c58 = number(3)
-    c59 = string("mixed")
-    c60 = undefined
-    c61 = number(0)
-    c62 = number(1)
-    c63 = number(2)
-    c64 = string("multi")
-    c65 = undefined
-    c66 = number(1)
-    c67 = number(2)
-    c68 = number(3)
-    c69 = string("tail")
-    c70 = undefined
-    c71 = number(7)
-    c72 = number(8)
-    c73 = number(9)
-    c74 = string("string")
-    c75 = undefined
-    c76 = string("ab")
-    c77 = string("set")
-    c78 = undefined
-    c79 = number(4)
-    c80 = number(5)
-    c81 = number(0)
-    c82 = number(1)
-    c83 = number(2)
-    c84 = number(3)
-    c85 = number(4)
-    c86 = number(5)
-    c87 = undefined
-    c88 = number(6)
-    c89 = number(1)
-    c90 = number(2)
-    c91 = number(7)
-    c92 = number(1)
-    c93 = number(2)
-    c94 = undefined
-    c95 = number(0)
-    c96 = number(1)
-    c97 = number(2)
-    c98 = number(0)
-    c99 = string("$0.values")
-    c100 = functionref(@4)
-    c101 = number(7)
-    c102 = undefined
-    c103 = number(2)
-    c104 = number(3)
-    c105 = number(4)
-    c106 = number(5)
-    c107 = functionref(@5)
-    c108 = string("generator")
-    c109 = undefined
-    c110 = undefined
-    c111 = number(0)
-    c112 = number(0)
-    c113 = functionref(@6)
-    c114 = number(8)
-    c115 = string("next")
-    c116 = number(0)
-    c117 = functionref(@6)
-    c118 = string("$8.value")
-    c119 = number(9)
-    c120 = bool(true)
-    c121 = bool(false)
-    c122 = object_template([4613234131012925412])
-    c123 = bool(true)
-    c124 = object_template([4613269342530515190, 4613234131012925412])
-    c125 = string("$8.value")
-    c126 = number(1)
-    c127 = bool(false)
-    c128 = functionref(@6)
-    c129 = undefined
-    c130 = string("$8.value")
-    c131 = functionref(@7)
-    c132 = number(0)
-    c133 = string("custom")
-    c134 = undefined
-    c135 = number(1)
-    c136 = number(2)
-    c137 = number(0)
-    c138 = number(0)
-    c139 = number(1)
-    c140 = number(2)
-    c141 = number(3)
-    c142 = number(4)
-    c143 = number(5)
-    c144 = undefined
-    c145 = number(10)
-    c146 = number(1)
-    c147 = number(2)
-    c148 = number(11)
-    c149 = number(1)
-    c150 = number(2)
-    c151 = undefined
-    c152 = number(0)
-    c153 = number(1)
-    c154 = number(2)
-    c155 = number(0)
-    c156 = string("$0.$__wjsm_gen_expr_8")
-    c157 = functionref(@8)
-    c158 = number(7)
-    c159 = undefined
-    c160 = number(2)
-    c161 = number(3)
-    c162 = number(4)
-    c163 = number(5)
-    c164 = functionref(@9)
-    c165 = string("override")
-    c166 = undefined
-    c167 = string("sum")
-    c168 = functionref(@10)
-    c169 = string("constructor")
-    c170 = string("prototype")
-    c171 = uninitialized
-    c172 = functionref(@11)
-    c173 = string("prototype")
-    c174 = string("__super_constructor__")
-    c175 = string("constructor")
-    c176 = string("prototype")
-    c177 = string("super")
-    c178 = number(12)
-    c179 = number(13)
-    c180 = string("sum")
+    c42 = number(0)
+    c43 = number(1)
+    c44 = functionref(@2)
+    c45 = string("method")
+    c46 = string("add")
+    c47 = number(1)
+    c48 = number(2)
+    c49 = string("value")
+    c50 = functionref(@3)
+    c51 = string("constructor")
+    c52 = string("prototype")
+    c53 = string("new")
+    c54 = number(5)
+    c55 = number(6)
+    c56 = string("value")
+    c57 = string("builtin")
+    c58 = number(1)
+    c59 = number(5)
+    c60 = number(3)
+    c61 = string("mixed")
+    c62 = undefined
+    c63 = number(0)
+    c64 = number(1)
+    c65 = number(2)
+    c66 = string("multi")
+    c67 = undefined
+    c68 = number(1)
+    c69 = number(2)
+    c70 = number(3)
+    c71 = string("tail")
+    c72 = undefined
+    c73 = number(7)
+    c74 = number(8)
+    c75 = number(9)
+    c76 = string("string")
+    c77 = undefined
+    c78 = string("ab")
+    c79 = string("set")
+    c80 = undefined
+    c81 = number(4)
+    c82 = number(5)
+    c83 = number(0)
+    c84 = number(1)
+    c85 = number(2)
+    c86 = number(3)
+    c87 = number(4)
+    c88 = number(5)
+    c89 = undefined
+    c90 = number(6)
+    c91 = number(1)
+    c92 = number(2)
+    c93 = number(7)
+    c94 = number(1)
+    c95 = number(2)
+    c96 = undefined
+    c97 = number(0)
+    c98 = number(1)
+    c99 = number(2)
+    c100 = number(0)
+    c101 = string("$0.values")
+    c102 = functionref(@4)
+    c103 = number(7)
+    c104 = undefined
+    c105 = number(2)
+    c106 = number(3)
+    c107 = number(4)
+    c108 = number(5)
+    c109 = functionref(@5)
+    c110 = string("generator")
+    c111 = undefined
+    c112 = undefined
+    c113 = number(0)
+    c114 = number(0)
+    c115 = functionref(@6)
+    c116 = number(8)
+    c117 = string("next")
+    c118 = number(0)
+    c119 = functionref(@6)
+    c120 = string("$8.value")
+    c121 = number(9)
+    c122 = bool(true)
+    c123 = bool(false)
+    c124 = object_template([4613234131012925412])
+    c125 = bool(true)
+    c126 = object_template([4613269342530515190, 4613234131012925412])
+    c127 = string("$8.value")
+    c128 = number(1)
+    c129 = bool(false)
+    c130 = functionref(@6)
+    c131 = undefined
+    c132 = string("$8.value")
+    c133 = functionref(@7)
+    c134 = number(0)
+    c135 = string("custom")
+    c136 = undefined
+    c137 = number(1)
+    c138 = number(2)
+    c139 = number(0)
+    c140 = number(0)
+    c141 = number(1)
+    c142 = number(2)
+    c143 = number(3)
+    c144 = number(4)
+    c145 = number(5)
+    c146 = undefined
+    c147 = number(10)
+    c148 = number(1)
+    c149 = number(2)
+    c150 = number(11)
+    c151 = number(1)
+    c152 = number(2)
+    c153 = undefined
+    c154 = number(0)
+    c155 = number(1)
+    c156 = number(2)
+    c157 = number(0)
+    c158 = string("$0.$__wjsm_gen_expr_8")
+    c159 = functionref(@8)
+    c160 = number(7)
+    c161 = undefined
+    c162 = number(2)
+    c163 = number(3)
+    c164 = number(4)
+    c165 = number(5)
+    c166 = functionref(@9)
+    c167 = string("override")
+    c168 = undefined
+    c169 = string("sum")
+    c170 = functionref(@10)
+    c171 = string("constructor")
+    c172 = string("prototype")
+    c173 = uninitialized
+    c174 = functionref(@11)
+    c175 = string("prototype")
+    c176 = string("__super_constructor__")
+    c177 = string("constructor")
+    c178 = string("prototype")
+    c179 = string("super")
+    c180 = number(12)
+    c181 = number(13)
+    c182 = string("sum")
 
   fn @collect [needs_prototype] [js_length 0] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -249,31 +251,36 @@ module {
       %3 = const c40
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
+      store var $3.$args.mapped, %2
       %4 = load var $3.$this
       %5 = const c41
       %6 = get_prop %4, %5
       %7 = is_exception %6
       branch %7, bb2, bb1
     bb1:
-      %9 = load var $3.a
-      %10 = add %6, %9
-      %11 = is_exception %10
-      branch %11, bb4, bb3
+      %9 = load var $3.$args.mapped
+      %10 = const c42
+      %11 = call builtin.mapped_arguments_binding_read(%9, %10)
+      %12 = add %6, %11
+      %13 = is_exception %12
+      branch %13, bb4, bb3
     bb2:
       %8 = call builtin.exception_value(%6)
       throw %8
     bb3:
-      %13 = load var $3.b
-      %14 = add %10, %13
-      return %14
+      %15 = load var $3.$args.mapped
+      %16 = const c43
+      %17 = call builtin.mapped_arguments_binding_read(%15, %16)
+      %18 = add %12, %17
+      return %18
     bb4:
-      %12 = call builtin.exception_value(%10)
-      throw %12
+      %14 = call builtin.exception_value(%12)
+      throw %14
 
   fn @Pair.constructor [home_object=@3.prototype] [needs_prototype] [direct_callable] [class_ctor "Pair"] [js_name "Pair"] [js_length 2] [params: $5.$env, $5.$this, $5.a, $5.b] [entry=bb0]:
     bb0:
       %0 = load var $5.$this
-      %1 = const c47
+      %1 = const c49
       %2 = load var $5.a
       %3 = load var $5.b
       %4 = add %2, %3
@@ -289,34 +296,34 @@ module {
   fn @values$gen [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c81
+      %1 = const c83
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $6.$state, %2
-      %3 = const c82
+      %3 = const c84
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $6.$is_rejected, %4
-      %5 = const c83
+      %5 = const c85
       %6 = call builtin.continuation.load_var(%0, %5)
       store var $6.$generator, %6
-      %7 = const c84
+      %7 = const c86
       %8 = call builtin.continuation.load_var(%0, %7)
       store var $6.$closure_env, %8
       %9 = load var $6.$this
       store var $6.$resume_val, %9
-      %10 = const c85
+      %10 = const c87
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $6.$this, %11
-      %12 = const c86
+      %12 = const c88
       %13 = call builtin.continuation.load_var(%0, %12)
       store var $6.arguments, %13
       jump bb1
     bb1:
-      %14 = const c87
+      %14 = const c89
       store var $6.$shared_env, %14
       %46 = load var $6.$state
-      switch %46 [case c95 -> bb2, case c96 -> bb3, case c97 -> bb8], default bb13, exit bb14
+      switch %46 [case c97 -> bb2, case c98 -> bb3, case c99 -> bb8], default bb13, exit bb14
     bb2:
-      %15 = const c88
+      %15 = const c90
       %16 = load var $6.$generator
       %17 = call builtin.generator.next(%16, %15)
       generator_suspend %17, state=1
@@ -324,7 +331,7 @@ module {
     bb3:
       %18 = load var $6.$resume_val
       %19 = load var $6.$is_rejected
-      %20 = const c89
+      %20 = const c91
       %21 = stricteq %19, %20
       branch %21, bb4, bb7
     bb4:
@@ -332,7 +339,7 @@ module {
       %25 = call builtin.generator.throw(%24, %18)
       return %25
     bb5:
-      %29 = const c91
+      %29 = const c93
       %30 = load var $6.$generator
       %31 = call builtin.generator.next(%30, %29)
       generator_suspend %31, state=2
@@ -342,13 +349,13 @@ module {
       %27 = call builtin.generator.return(%26, %18)
       return %27
     bb7:
-      %22 = const c90
+      %22 = const c92
       %23 = stricteq %19, %22
       branch %23, bb6, bb5
     bb8:
       %32 = load var $6.$resume_val
       %33 = load var $6.$is_rejected
-      %34 = const c92
+      %34 = const c94
       %35 = stricteq %33, %34
       branch %35, bb9, bb12
     bb9:
@@ -357,7 +364,7 @@ module {
       return %39
     bb10:
       %43 = load var $6.$generator
-      %44 = const c94
+      %44 = const c96
       %45 = call builtin.generator.return(%43, %44)
       return %45
     bb11:
@@ -365,7 +372,7 @@ module {
       %41 = call builtin.generator.return(%40, %32)
       return %41
     bb12:
-      %36 = const c93
+      %36 = const c95
       %37 = stricteq %33, %36
       branch %37, bb11, bb10
     bb13:
@@ -376,42 +383,42 @@ module {
   fn @values [needs_prototype] [js_name "values"] [js_length 0] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c98
+      %1 = const c100
       %4 = load var $env
-      %5 = const c99
+      %5 = const c101
       %3 = get_prop %4, %5
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $7.arguments, %2
-      %6 = const c100
-      %7 = const c101
-      %8 = const c102
+      %6 = const c102
+      %7 = const c103
+      %8 = const c104
       %9 = call builtin.continuation.create(%6, %8, %7)
       %10 = call builtin.generator.start(%9)
       %11 = load var $7.$this
-      %12 = const c103
+      %12 = const c105
       call builtin.continuation.save_var(%9, %12, %10)
-      %13 = const c104
+      %13 = const c106
       call builtin.continuation.save_var(%9, %13, %8)
-      %14 = const c105
+      %14 = const c107
       call builtin.continuation.save_var(%9, %14, %11)
       %15 = load var $7.arguments
-      %16 = const c106
+      %16 = const c108
       call builtin.continuation.save_var(%9, %16, %15)
       return %10
 
   fn @$0.next [js_name "next"] [js_length 0] [captures: $8.value] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c116
-      %3 = const c117
+      %1 = const c118
+      %3 = const c119
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $9.arguments, %2
       %4 = load var $env
-      %5 = const c118
+      %5 = const c120
       %6 = get_prop %4, %5
-      %7 = const c119
-      %9 = const c120
-      %10 = const c121
+      %7 = const c121
+      %9 = const c122
+      %10 = const c123
       %8 = call builtin.abstract_compare(%6, %7, %9, %10)
       %11 = is_exception %8
       branch %11, bb2, bb1
@@ -427,18 +434,18 @@ module {
       %14 = call builtin.exception_value(%8)
       throw %14
     bb5:
-      %15 = const c123
-      %16 = init_object_literal(c122, values=[%15])
+      %15 = const c125
+      %16 = init_object_literal(c124, values=[%15])
       return %16
     bb6:
       %17 = load var $env
-      %18 = const c125
+      %18 = const c127
       %19 = get_prop %17, %18
       %20 = pos %19
       %21 = is_exception %20
       branch %21, bb8, bb7
     bb7:
-      %23 = const c126
+      %23 = const c128
       %24 = add %20, %23
       %25 = set_prop %17, %18, %24
       %26 = is_exception %25
@@ -447,8 +454,8 @@ module {
       %22 = call builtin.exception_value(%20)
       throw %22
     bb9:
-      %28 = const c127
-      %29 = init_object_literal(c124, values=[%20, %28])
+      %28 = const c129
+      %29 = init_object_literal(c126, values=[%20, %28])
       return %29
     bb10:
       %27 = call builtin.exception_value(%25)
@@ -457,23 +464,23 @@ module {
   fn @$0.anonymous [js_name ""] [js_length 0] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c112
-      %3 = const c113
+      %1 = const c114
+      %3 = const c115
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $8.arguments, %2
-      %4 = const c114
+      %4 = const c116
       store var $8.value, %4
       %5 = new_object(capacity=4)
-      %6 = const c115
-      %7 = const c128
-      %8 = const c129
+      %6 = const c117
+      %7 = const c130
+      %8 = const c131
       store var $8.$shared_env, %8
       %9 = new_object(capacity=1)
       %10 = load var $env
       set_proto %9, %10
       store var $8.$shared_env, %9
       %11 = load var $8.value
-      %12 = const c130
+      %12 = const c132
       %13 = set_prop %9, %12, %11
       %14 = call builtin.create_closure(%7, %9)
       %15 = set_prop %5, %6, %14
@@ -482,34 +489,34 @@ module {
   fn @$__wjsm_gen_expr_8$gen [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c138
+      %1 = const c140
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $10.$state, %2
-      %3 = const c139
+      %3 = const c141
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $10.$is_rejected, %4
-      %5 = const c140
+      %5 = const c142
       %6 = call builtin.continuation.load_var(%0, %5)
       store var $10.$generator, %6
-      %7 = const c141
+      %7 = const c143
       %8 = call builtin.continuation.load_var(%0, %7)
       store var $10.$closure_env, %8
       %9 = load var $10.$this
       store var $10.$resume_val, %9
-      %10 = const c142
+      %10 = const c144
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $10.$this, %11
-      %12 = const c143
+      %12 = const c145
       %13 = call builtin.continuation.load_var(%0, %12)
       store var $10.arguments, %13
       jump bb1
     bb1:
-      %14 = const c144
+      %14 = const c146
       store var $10.$shared_env, %14
       %46 = load var $10.$state
-      switch %46 [case c152 -> bb2, case c153 -> bb3, case c154 -> bb8], default bb13, exit bb14
+      switch %46 [case c154 -> bb2, case c155 -> bb3, case c156 -> bb8], default bb13, exit bb14
     bb2:
-      %15 = const c145
+      %15 = const c147
       %16 = load var $10.$generator
       %17 = call builtin.generator.next(%16, %15)
       generator_suspend %17, state=1
@@ -517,7 +524,7 @@ module {
     bb3:
       %18 = load var $10.$resume_val
       %19 = load var $10.$is_rejected
-      %20 = const c146
+      %20 = const c148
       %21 = stricteq %19, %20
       branch %21, bb4, bb7
     bb4:
@@ -525,7 +532,7 @@ module {
       %25 = call builtin.generator.throw(%24, %18)
       return %25
     bb5:
-      %29 = const c148
+      %29 = const c150
       %30 = load var $10.$generator
       %31 = call builtin.generator.next(%30, %29)
       generator_suspend %31, state=2
@@ -535,13 +542,13 @@ module {
       %27 = call builtin.generator.return(%26, %18)
       return %27
     bb7:
-      %22 = const c147
+      %22 = const c149
       %23 = stricteq %19, %22
       branch %23, bb6, bb5
     bb8:
       %32 = load var $10.$resume_val
       %33 = load var $10.$is_rejected
-      %34 = const c149
+      %34 = const c151
       %35 = stricteq %33, %34
       branch %35, bb9, bb12
     bb9:
@@ -550,7 +557,7 @@ module {
       return %39
     bb10:
       %43 = load var $10.$generator
-      %44 = const c151
+      %44 = const c153
       %45 = call builtin.generator.return(%43, %44)
       return %45
     bb11:
@@ -558,7 +565,7 @@ module {
       %41 = call builtin.generator.return(%40, %32)
       return %41
     bb12:
-      %36 = const c150
+      %36 = const c152
       %37 = stricteq %33, %36
       branch %37, bb11, bb10
     bb13:
@@ -569,33 +576,33 @@ module {
   fn @$__wjsm_gen_expr_8 [needs_prototype] [js_name ""] [js_length 0] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c155
+      %1 = const c157
       %4 = load var $env
-      %5 = const c156
+      %5 = const c158
       %3 = get_prop %4, %5
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $11.arguments, %2
-      %6 = const c157
-      %7 = const c158
-      %8 = const c159
+      %6 = const c159
+      %7 = const c160
+      %8 = const c161
       %9 = call builtin.continuation.create(%6, %8, %7)
       %10 = call builtin.generator.start(%9)
       %11 = load var $11.$this
-      %12 = const c160
+      %12 = const c162
       call builtin.continuation.save_var(%9, %12, %10)
-      %13 = const c161
+      %13 = const c163
       call builtin.continuation.save_var(%9, %13, %8)
-      %14 = const c162
+      %14 = const c164
       call builtin.continuation.save_var(%9, %14, %11)
       %15 = load var $11.arguments
-      %16 = const c163
+      %16 = const c165
       call builtin.continuation.save_var(%9, %16, %15)
       return %10
 
   fn @Base.constructor [home_object=@10.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [js_name "Base"] [js_length 2] [params: $13.$env, $13.$this, $13.a, $13.b] [entry=bb0]:
     bb0:
       %0 = load var $13.$this
-      %1 = const c167
+      %1 = const c169
       %2 = load var $13.a
       %3 = load var $13.b
       %4 = add %2, %3
@@ -613,7 +620,7 @@ module {
       %0 = load var $15.$this
       %1 = call builtin.object.get_prototype_of(%0)
       store var $15.$super_proto#ctor, %1
-      %2 = const c171
+      %2 = const c173
       store var $15.$this, %2
       %3 = collect_rest_args skip=0
       store var $15.args, %3
@@ -778,12 +785,12 @@ module {
       %56 = const c37
       %57 = set_prop %54, %55, %56
       %58 = const c38
-      %59 = const c42
+      %59 = const c44
       %60 = set_prop %54, %58, %59
       store var $0.receiver, %54
-      %61 = const c43
+      %61 = const c45
       %62 = load var $0.receiver
-      %63 = const c44
+      %63 = const c46
       %64 = get_prop %62, %63
       %65 = is_exception %64
       branch %65, bb14, bb13
@@ -793,9 +800,9 @@ module {
     bb13:
       %67 = new_array(capacity=4)
       %68 = new_array(capacity=4)
-      %69 = const c45
+      %69 = const c47
       call builtin.array.push(%68, %69)
-      %70 = const c46
+      %70 = const c48
       call builtin.array.push(%68, %70)
       %71 = call builtin.array.push_spread(%67, %68)
       %72 = is_exception %71
@@ -818,21 +825,21 @@ module {
       %76 = call builtin.exception_value(%74)
       throw %76
     bb19:
-      %80 = const c48
+      %80 = const c50
       %81 = new_object(capacity=4)
-      %82 = const c49
+      %82 = const c51
       %83 = set_prop %81, %82, %80
-      %84 = const c50
+      %84 = const c52
       %85 = set_prop %80, %84, %81
       store var $4.Pair, %80
       store var $0.Pair, %80
-      %86 = const c51
-      %87 = const c48
+      %86 = const c53
+      %87 = const c50
       %88 = new_array(capacity=4)
       %89 = new_array(capacity=4)
-      %90 = const c52
+      %90 = const c54
       call builtin.array.push(%89, %90)
-      %91 = const c53
+      %91 = const c55
       call builtin.array.push(%89, %91)
       %92 = call builtin.array.push_spread(%88, %89)
       %93 = is_exception %92
@@ -848,7 +855,7 @@ module {
       %94 = call builtin.exception_value(%92)
       throw %94
     bb23:
-      %98 = const c54
+      %98 = const c56
       %99 = get_prop %95, %98
       %100 = is_exception %99
       branch %100, bb26, bb25
@@ -863,14 +870,14 @@ module {
       %101 = call builtin.exception_value(%99)
       throw %101
     bb27:
-      %105 = const c55
+      %105 = const c57
       %106 = new_array(capacity=4)
       %107 = new_array(capacity=4)
-      %108 = const c56
+      %108 = const c58
       call builtin.array.push(%107, %108)
-      %109 = const c57
+      %109 = const c59
       call builtin.array.push(%107, %109)
-      %110 = const c58
+      %110 = const c60
       call builtin.array.push(%107, %110)
       %111 = call builtin.array.push_spread(%106, %107)
       %112 = is_exception %111
@@ -893,16 +900,16 @@ module {
       %116 = call builtin.exception_value(%114)
       throw %116
     bb33:
-      %120 = const c59
-      %121 = const c60
+      %120 = const c61
+      %121 = const c62
       %122 = load var $0.collect
       %123 = new_array(capacity=4)
-      %124 = const c61
+      %124 = const c63
       call builtin.array.push(%123, %124)
       %125 = new_array(capacity=4)
-      %126 = const c62
+      %126 = const c64
       call builtin.array.push(%125, %126)
-      %127 = const c63
+      %127 = const c65
       call builtin.array.push(%125, %127)
       %128 = call builtin.array.push_spread(%123, %125)
       %129 = is_exception %128
@@ -925,12 +932,12 @@ module {
       %133 = call builtin.exception_value(%131)
       throw %133
     bb39:
-      %137 = const c64
-      %138 = const c65
+      %137 = const c66
+      %138 = const c67
       %139 = load var $0.collect
       %140 = new_array(capacity=4)
       %141 = new_array(capacity=4)
-      %142 = const c66
+      %142 = const c68
       call builtin.array.push(%141, %142)
       %143 = call builtin.array.push_spread(%140, %141)
       %144 = is_exception %143
@@ -940,7 +947,7 @@ module {
       throw %136
     bb41:
       %146 = new_array(capacity=4)
-      %147 = const c67
+      %147 = const c69
       call builtin.array.push(%146, %147)
       %148 = call builtin.array.push_spread(%140, %146)
       %149 = is_exception %148
@@ -949,7 +956,7 @@ module {
       %145 = call builtin.exception_value(%143)
       throw %145
     bb43:
-      %151 = const c68
+      %151 = const c70
       call builtin.array.push(%140, %151)
       %152 = call builtin.func_apply(%139, %138, %140)
       %153 = is_exception %152
@@ -965,14 +972,14 @@ module {
       %154 = call builtin.exception_value(%152)
       throw %154
     bb47:
-      %158 = const c69
-      %159 = const c70
+      %158 = const c71
+      %159 = const c72
       %160 = load var $0.collect
       %161 = new_array(capacity=4)
       %162 = new_array(capacity=4)
-      %163 = const c71
+      %163 = const c73
       call builtin.array.push(%162, %163)
-      %164 = const c72
+      %164 = const c74
       call builtin.array.push(%162, %164)
       %165 = call builtin.array.push_spread(%161, %162)
       %166 = is_exception %165
@@ -981,7 +988,7 @@ module {
       %157 = call builtin.exception_value(%155)
       throw %157
     bb49:
-      %168 = const c73
+      %168 = const c75
       call builtin.array.push(%161, %168)
       %169 = call builtin.func_apply(%160, %159, %161)
       %170 = is_exception %169
@@ -997,11 +1004,11 @@ module {
       %171 = call builtin.exception_value(%169)
       throw %171
     bb53:
-      %175 = const c74
-      %176 = const c75
+      %175 = const c76
+      %176 = const c77
       %177 = load var $0.collect
       %178 = new_array(capacity=4)
-      %179 = const c76
+      %179 = const c78
       %180 = call builtin.array.push_spread(%178, %179)
       %181 = is_exception %180
       branch %181, bb56, bb55
@@ -1023,14 +1030,14 @@ module {
       %185 = call builtin.exception_value(%183)
       throw %185
     bb59:
-      %189 = const c77
-      %190 = const c78
+      %189 = const c79
+      %190 = const c80
       %191 = load var $0.collect
       %192 = new_array(capacity=4)
       %193 = new_array(capacity=4)
-      %194 = const c79
+      %194 = const c81
       call builtin.array.push(%193, %194)
-      %195 = const c80
+      %195 = const c82
       call builtin.array.push(%193, %195)
       %196 = call builtin.Set(%193)
       %197 = is_exception %196
@@ -1060,13 +1067,13 @@ module {
       %204 = call builtin.exception_value(%202)
       throw %204
     bb67:
-      %208 = const c107
+      %208 = const c109
       store var $0.values, %208
-      %209 = const c108
-      %210 = const c109
+      %209 = const c110
+      %210 = const c111
       %211 = load var $0.collect
       %212 = new_array(capacity=4)
-      %213 = const c110
+      %213 = const c112
       %214 = load var $0.values
       %215 = call %214, this=%213
       %216 = is_exception %215
@@ -1097,7 +1104,7 @@ module {
       throw %223
     bb75:
       %227 = new_object(capacity=4)
-      %228 = const c111
+      %228 = const c113
       %229 = call builtin.symbol.well_known(%228)
       %230 = is_exception %229
       branch %230, bb78, bb77
@@ -1112,13 +1119,13 @@ module {
       %231 = call builtin.exception_value(%229)
       throw %231
     bb79:
-      %235 = const c131
-      %236 = const c132
+      %235 = const c133
+      %236 = const c134
       call builtin.function.set_name(%235, %232, %236)
       %237 = set_prop %227, %232, %235
       store var $0.iterable, %227
-      %238 = const c133
-      %239 = const c134
+      %238 = const c135
+      %239 = const c136
       %240 = load var $0.collect
       %241 = new_array(capacity=4)
       %242 = load var $0.iterable
@@ -1144,15 +1151,15 @@ module {
       throw %248
     bb85:
       %252 = new_array(capacity=4)
-      %253 = const c135
+      %253 = const c137
       call builtin.array.push(%252, %253)
-      %254 = const c136
+      %254 = const c138
       call builtin.array.push(%252, %254)
       store var $0.overridden, %252
       %255 = load var $0.overridden
-      %256 = const c137
+      %256 = const c139
       %257 = call builtin.symbol.well_known(%256)
-      %258 = const c164
+      %258 = const c166
       store var $0.$__wjsm_gen_expr_8, %258
       %259 = load var $0.$__wjsm_gen_expr_8
       %260 = set_elem %255, %257, %259
@@ -1162,8 +1169,8 @@ module {
       %251 = call builtin.exception_value(%249)
       throw %251
     bb87:
-      %263 = const c165
-      %264 = const c166
+      %263 = const c167
+      %264 = const c168
       %265 = load var $0.collect
       %266 = new_array(capacity=4)
       %267 = load var $0.overridden
@@ -1188,36 +1195,36 @@ module {
       %273 = call builtin.exception_value(%271)
       throw %273
     bb93:
-      %277 = const c168
+      %277 = const c170
       %278 = new_object(capacity=4)
-      %279 = const c169
+      %279 = const c171
       %280 = set_prop %278, %279, %277
-      %281 = const c170
+      %281 = const c172
       %282 = set_prop %277, %281, %278
       store var $12.Base, %277
       store var $0.Base, %277
-      %283 = const c172
+      %283 = const c174
       %284 = new_object(capacity=4)
-      %285 = const c168
-      %286 = const c173
+      %285 = const c170
+      %286 = const c175
       %287 = call builtin.reflect.get(%285, %286, %285)
       set_proto %284, %287
       set_proto %283, %285
-      %288 = const c174
+      %288 = const c176
       %289 = set_prop %283, %288, %285
-      %290 = const c175
+      %290 = const c177
       %291 = set_prop %284, %290, %283
-      %292 = const c176
+      %292 = const c178
       %293 = set_prop %283, %292, %284
       store var $14.Derived, %283
       store var $0.Derived, %283
-      %294 = const c177
+      %294 = const c179
       %295 = load var $0.Derived
       %296 = new_object(capacity=4)
       %297 = call builtin.get_prototype_from_constructor(%295)
       set_proto %296, %297
-      %298 = const c178
-      %299 = const c179
+      %298 = const c180
+      %299 = const c181
       %300 = construct_call %295, this=%296, args=[%298, %299]
       %301 = is_exception %300
       branch %301, bb95, bb96
@@ -1238,7 +1245,7 @@ module {
       %304 = is_exception %303
       branch %304, bb101, bb100
     bb100:
-      %306 = const c180
+      %306 = const c182
       %307 = get_prop %303, %306
       %308 = is_exception %307
       branch %308, bb103, bb102

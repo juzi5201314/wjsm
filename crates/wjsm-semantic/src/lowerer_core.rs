@@ -141,6 +141,7 @@ impl Lowerer {
             rest_args_source_override: None,
             arguments_simple_param_ir_names: None,
             arguments_alias_blocked: false,
+            arguments_simple_param_list: false,
             mapped_arg_aliases: std::collections::HashMap::new(),
             script_mode: false,
             script_global_names: std::collections::HashMap::new(),

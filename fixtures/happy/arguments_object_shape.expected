@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+truetruetrue 2truefalsetrue truefalsetruefalse truefalsetrue
+0,1 0,1 {"0":8,"1":2} {"0":8,"1":2} 8,2 0:8,1:2
+0,1,length,callee Symbol(Symbol.iterator)
+length,callee Symbol(Symbol.iterator)
+1,true,false
+true,false,false,TypeError,TypeError
+false,true,[object Arguments],function
+--- stderr ---

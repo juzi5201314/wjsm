@@ -608,6 +608,7 @@ impl Lowerer {
         let args_override = self.arguments_source_override.take();
         let alias_param_ir_names = self.arguments_simple_param_ir_names.take();
         let alias_blocked = std::mem::take(&mut self.arguments_alias_blocked);
+        let simple_param_list = std::mem::take(&mut self.arguments_simple_param_list);
         if self.scopes.current_function_has_param_arguments() {
             return Ok(block);
         }
@@ -649,7 +650,7 @@ impl Lowerer {
             // 登记别名，两侧决策必然同真同假。
             if !self.strict_mode
                 && !self.is_arrow
-                && !self.is_method
+                && simple_param_list
                 && !alias_blocked
                 && let Some(names) = &alias_param_ir_names
             {
@@ -671,7 +672,9 @@ impl Lowerer {
             },
         );
 
-        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
+        // §10.2.11 步骤 22.a：严格模式**或**非简单形参列表建 unmapped 对象；
+        // 其余（含对象字面量方法/访问器——它们并非恒严格）建 mapped 对象。
+        let needs_mapped = !self.strict_mode && !self.is_arrow && simple_param_list;
         // 形参别名（[[ParameterMap]]）启用条件齐备时把真实形参个数传给宿主
         // 建侧表；否则传 0 保持普通对象行为（宿主对该实参只作侧表开关）。
         let alias_names = (needs_mapped && !alias_blocked)
