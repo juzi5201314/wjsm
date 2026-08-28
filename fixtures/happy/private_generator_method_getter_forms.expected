@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+42|TC39 #2
+1 #1
+7|8|9 #3
+null #1
+42
+a|b #2
+--- stderr ---
