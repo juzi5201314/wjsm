@@ -910,7 +910,10 @@ mod tests {
         fs::write(artifact.join("ignore.txt"), b"x").expect("unrelated file should be written");
 
         let (entries, bytes) = cache_dir_stats(&dir).expect("stats should be readable");
-        assert_eq!(entries, 4, "wnat、builtin_ir/*.bin 与 artifact/*.{{wjsm,dep}}");
+        assert_eq!(
+            entries, 4,
+            "wnat、builtin_ir/*.bin 与 artifact/*.{{wjsm,dep}}"
+        );
         assert_eq!(bytes, 20, "统计字节数应覆盖全部缓存条目");
         let _ = fs::remove_dir_all(&dir);
     }

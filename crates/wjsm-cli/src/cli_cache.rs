@@ -221,7 +221,11 @@ mod tests {
         fs::write(artifact.join("skip.txt"), b"x").expect("unrelated file should be written");
 
         let all = entries(&cache.path).expect("entries should include cache subdirectories");
-        assert_eq!(all.len(), 4, "wnat + builtin_ir/*.bin + artifact/*.{{wjsm,dep}}");
+        assert_eq!(
+            all.len(),
+            4,
+            "wnat + builtin_ir/*.bin + artifact/*.{{wjsm,dep}}"
+        );
         assert_eq!(all.iter().map(|entry| entry.bytes).sum::<u64>(), 30);
     }
 }

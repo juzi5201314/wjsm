@@ -2732,13 +2732,24 @@ mod tests {
         assert!(edited.program.is_some(), "源码编辑后必须重新 lower");
         assert_ne!(artifact_bytes(&edited), cold_bytes);
 
-        // 恢复原内容 → 内容寻址重新命中首个产物。
+        // 恢复原内容：.dep 索引仍指向编辑版读集 → 回放失败 miss 一次
+        // （宁可 miss 不可脏命中），重编译后索引指回原 content key。
         write_file(&root, "main.js", "console.log(40 + 2);\n");
         let restored =
             compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
                 .expect("restored compile should succeed");
-        assert!(restored.program.is_none(), "恢复内容后应重新命中");
+        assert!(
+            restored.program.is_some(),
+            "索引被编辑版覆盖后应 miss 重编译"
+        );
         assert_eq!(artifact_bytes(&restored), cold_bytes);
+
+        // miss 重编译已把索引写回原读集 → 再次编译重新命中。
+        let rehit =
+            compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+                .expect("re-hit compile should succeed");
+        assert!(rehit.program.is_none(), "索引恢复后应重新命中");
+        assert_eq!(artifact_bytes(&rehit), cold_bytes);
     }
 
     #[test]
@@ -2780,7 +2791,11 @@ mod tests {
 
         // 解析探测事实：曾以 .js 命中的说明符出现同名 .ts 不影响解析结果，
         // 但 package.json（解析输入之一）变化必须失效。
-        write_file(&root, "package.json", r#"{"type":"module","sideEffects":false}"#);
+        write_file(
+            &root,
+            "package.json",
+            r#"{"type":"module","sideEffects":false}"#,
+        );
         let request = wjsm_module::ArtifactCacheRequest::for_entry(
             &main,
             None,

@@ -25,9 +25,8 @@ pub use artifact_cache::{
     ArtifactCacheHit, ArtifactCacheRequest, lookup_portable_artifact, store_portable_artifact,
 };
 pub use builtin_modules::builtin_module_names;
-pub use cache_dir::resolve_cache_dir;
-pub use source_trace::{SourceFact, SourceReadTrace};
 pub use bundler::{ModuleBundler, RuntimeEntryBundle, logical_url_from_path, logical_url_path};
+pub use cache_dir::resolve_cache_dir;
 pub use graph::{ModuleGraph, ModuleId};
 pub use resolution_options::ResolutionOptions;
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
@@ -41,6 +40,7 @@ pub use source_store::{
     ModuleSourceStore, SNAPSHOT_FILE_URL_PREFIX, SNAPSHOT_VIRTUAL_ROOT, is_snapshot_fs_path,
     snapshot_file_url, snapshot_virtual_path, snapshot_virtual_root,
 };
+pub use source_trace::{SourceFact, SourceReadTrace};
 pub use static_runtime_entries::include_static_runtime_entries;
 
 use anyhow::{Context, Result};
