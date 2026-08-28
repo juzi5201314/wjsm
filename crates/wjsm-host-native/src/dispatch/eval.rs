@@ -200,7 +200,13 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
             } else {
                 NativeRuntimeOp::SetProp
             };
-            return runtime::dispatch_runtime(ctx, state, operation, &[object, *key, *stored], None);
+            return runtime::dispatch_runtime(
+                ctx,
+                state,
+                operation,
+                &[object, *key, *stored],
+                None,
+            );
         }
         WithLayerResolution::Abrupt(exception) => return exception,
         WithLayerResolution::Static => {}
@@ -261,9 +267,11 @@ fn eval_binding_exists(
         return Ok(true);
     }
     let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
-    Ok(runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
-        !value::is_undefined(property) || runtime::has_property(state, outer, key)
-    }))
+    Ok(
+        runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
+            !value::is_undefined(property) || runtime::has_property(state, outer, key)
+        }),
+    )
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {

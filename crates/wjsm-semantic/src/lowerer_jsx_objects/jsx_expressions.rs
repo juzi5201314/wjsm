@@ -108,10 +108,8 @@ impl Lowerer {
                     // Builtin::NewTarget（运行时 activation），与非 eval 代码
                     // 一致；只有纯箭头链穿透到 eval 顶层时才引用调用方的
                     // new.target（经 ScopeRecord）。
-                    let has_non_arrow_function = self
-                        .is_arrow_fn_stack
-                        .iter()
-                        .any(|is_arrow| !*is_arrow);
+                    let has_non_arrow_function =
+                        self.is_arrow_fn_stack.iter().any(|is_arrow| !*is_arrow);
                     // In eval mode: only valid if eval is inside a non-arrow function
                     if self.eval_mode
                         && !has_non_arrow_function

@@ -41,9 +41,10 @@ pub fn prepare_dynamic_function(
     parse_exact_anonymous_function(&format!("function anonymous(\n) {{\n{body}\n}}"))
         .map_err(|error| format!("invalid function body for Function constructor: {error}"))?;
     // 规范 sourceText 整体解析：形参与函数体的组合仍须恰好构成一个函数。
-    let function =
-        parse_exact_anonymous_function(&format!("function anonymous({parameters}\n) {{\n{body}\n}}"))
-            .map_err(|error| format!("invalid Function constructor source: {error}"))?;
+    let function = parse_exact_anonymous_function(&format!(
+        "function anonymous({parameters}\n) {{\n{body}\n}}"
+    ))
+    .map_err(|error| format!("invalid Function constructor source: {error}"))?;
     check_strict_early_errors(&function)?;
     Ok(DynamicFunctionSource {
         compile_source: format!("(function({parameters}\n) {{\n{body}\n}});"),
@@ -53,8 +54,7 @@ pub fn prepare_dynamic_function(
 
 /// 解析 `source` 并要求其恰好是一个名为 `anonymous` 的普通函数声明。
 fn parse_exact_anonymous_function(source: &str) -> Result<swc_ast::Function, String> {
-    let module =
-        wjsm_parser::parse_script_as_module(source).map_err(|error| error.to_string())?;
+    let module = wjsm_parser::parse_script_as_module(source).map_err(|error| error.to_string())?;
     let mut items = module.body.into_iter();
     let (Some(item), None) = (items.next(), items.next()) else {
         return Err("source text is not a single function".into());
@@ -102,10 +102,7 @@ fn check_strict_early_errors(function: &swc_ast::Function) -> Result<(), String>
 fn expected_argument_count(params: &[swc_ast::Param]) -> u32 {
     let mut count = 0u32;
     for param in params {
-        if matches!(
-            param.pat,
-            swc_ast::Pat::Assign(_) | swc_ast::Pat::Rest(_)
-        ) {
+        if matches!(param.pat, swc_ast::Pat::Assign(_) | swc_ast::Pat::Rest(_)) {
             break;
         }
         count += 1;

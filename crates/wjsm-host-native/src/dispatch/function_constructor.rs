@@ -79,9 +79,10 @@ fn apply_function_metadata(
         .callable_property_flags
         .insert((callable, name_key), FUNCTION_METADATA_FLAGS);
     let length_key = state.intern_property_string("length".into())?;
-    state
-        .callable_properties
-        .insert((callable, length_key), value::encode_f64(f64::from(expected_length)));
+    state.callable_properties.insert(
+        (callable, length_key),
+        value::encode_f64(f64::from(expected_length)),
+    );
     state
         .callable_property_flags
         .insert((callable, length_key), FUNCTION_METADATA_FLAGS);

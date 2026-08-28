@@ -18,7 +18,10 @@ fn sloppy_duplicate_params_lower_with_last_binding_winning() {
     let params = function.params();
     assert_eq!(params.len(), 4);
     assert!(!params[2].ends_with(".a"), "前一次出现应重命名: {params:?}");
-    assert!(params[3].ends_with(".a"), "最后一次出现持有真名: {params:?}");
+    assert!(
+        params[3].ends_with(".a"),
+        "最后一次出现持有真名: {params:?}"
+    );
 }
 
 #[test]
