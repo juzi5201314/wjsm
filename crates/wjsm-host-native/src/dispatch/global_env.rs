@@ -67,7 +67,7 @@ pub(super) fn dispatch_global_env(
 
 /// 全局对象上恒为非可配置数据属性的受限名（HasRestrictedGlobalProperty）。
 /// wjsm 的全局内建按需惰性物化，自有槽位不可靠，按规范名单静态判定。
-fn is_restricted_global_name(state: &NativeAgentState, key: i64) -> bool {
+pub(crate) fn is_restricted_global_name(state: &NativeAgentState, key: i64) -> bool {
     ["undefined", "NaN", "Infinity"]
         .iter()
         .any(|name| state.text_matches(key, name))

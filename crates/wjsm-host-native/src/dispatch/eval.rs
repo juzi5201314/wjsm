@@ -31,6 +31,12 @@ pub(super) fn dispatch_eval(
                 Err(exception) => exception,
             }
         }
+        Builtin::EvalDeleteBinding => {
+            let [environment, key] = args else {
+                return Some(fail_dispatch(ctx));
+            };
+            eval_delete_binding(ctx, state, *environment, *key)
+        }
         Builtin::EvalSuperBase => {
             let [environment] = args else {
                 return Some(fail_dispatch(ctx));
@@ -353,6 +359,43 @@ fn eval_binding_exists(
         Ok(_) => runtime::has_property(ctx, state, outer, key),
         Err(()) => Ok(false),
     }
+}
+
+/// direct/indirect eval 自由名的 DeleteBinding（§13.5.1.2 步骤 3–6）。
+/// 层序与 `eval_binding_exists` 一致：with 对象环境记录命中即按 [[Delete]]
+/// 裁决（§9.1.1.2.7）；调用方声明式绑定（含 arguments）不可删除返回 false
+/// （§9.1.1.1.8）；全局词法绑定与受限全局名返回 false；其余交由全局对象
+/// 属性 [[Delete]]（可配置属性删除返回 true，缺失名即不可解析引用亦 true）。
+/// delete 标识符在严格代码是 early error，本 builtin 只会从 sloppy 站点发射。
+fn eval_delete_binding(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    environment: i64,
+    key: i64,
+) -> i64 {
+    match resolve_with_layers(ctx, state, environment, key) {
+        WithLayerResolution::Object(base) => {
+            return runtime::delete_property_operator(ctx, state, base, key, false);
+        }
+        WithLayerResolution::Abrupt(exception) => return exception,
+        WithLayerResolution::Static => {}
+    }
+    if modules::scope_record_contains(state, environment, key)
+        || (state.text_matches(key, "arguments")
+            && modules::scope_record_has_arguments(state, environment))
+    {
+        return value::encode_bool(false);
+    }
+    let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+    if let Some(env_key) = runtime::property_key(state, key)
+        && global_env::lexical_has(state, outer, env_key)
+    {
+        return value::encode_bool(false);
+    }
+    if global_env::is_restricted_global_name(state, key) {
+        return value::encode_bool(false);
+    }
+    runtime::delete_property_operator(ctx, state, outer, key, false)
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {

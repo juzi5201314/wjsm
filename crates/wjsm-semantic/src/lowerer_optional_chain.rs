@@ -92,10 +92,11 @@ impl Lowerer {
                         self.lower_call_operand_then_continue(&computed.expr, &mut current)?
                     }
                     swc_ast::MemberProp::PrivateName(name) => {
-                        // §13.5.1 早期错误：delete 不得作用于私有成员引用。
+                        // §13.5.1.1 早错误：delete 不得作用于私有成员引用
+                        // （V8 同口径文案）。
                         return Err(self.error(
                             name.span,
-                            "private fields can not be deleted".to_string(),
+                            "Private fields can not be deleted".to_string(),
                         ));
                     }
                 };

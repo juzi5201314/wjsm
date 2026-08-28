@@ -162,6 +162,30 @@ impl Lowerer {
         Ok(result)
     }
 
+    /// eval 桥接下静态不可解析名的 `delete <ident>`：DeleteBinding 移交宿主
+    /// 运行时裁决（调用方声明式绑定 false；with 层 / 全局对象属性按
+    /// [[Delete]]；不可解析名 true）。with 层 has 探测（proxy trap /
+    /// `@@unscopables` getter）与 [[Delete]] trap 可抛，须分叉传播。
+    pub(crate) fn lower_eval_delete_binding(
+        &mut self,
+        name: &str,
+        block: BasicBlockId,
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
+        let environment = self.load_eval_scope_env(block);
+        let key = self.append_eval_env_key_const(block, name);
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::EvalDeleteBinding,
+                args: vec![environment, key],
+            },
+        );
+        let continue_block = self.lower_value_exception_branch(block, dest)?;
+        Ok((dest, continue_block))
+    }
+
     pub(crate) fn append_eval_env_write(
         &mut self,
         name: &str,
