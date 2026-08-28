@@ -333,7 +333,7 @@ module {
     bb4:
       %7 = const c101
       %8 = const c102
-      %9 = set_prop %2, %7, %8
+      %9 = set_prop %2, %7, %8, strict
       %10 = is_exception %9
       branch %10, bb6, bb5
     bb5:
@@ -371,7 +371,7 @@ module {
     bb4:
       %7 = const c124
       %8 = load var $13.next
-      %9 = set_prop %2, %7, %8
+      %9 = set_prop %2, %7, %8, strict
       %10 = is_exception %9
       branch %10, bb6, bb5
     bb5:
@@ -402,7 +402,7 @@ module {
     bb4:
       %7 = const c144
       %8 = load var $16.next
-      %9 = set_prop %2, %7, %8
+      %9 = set_prop %2, %7, %8, strict
       %10 = is_exception %9
       branch %10, bb6, bb5
     bb5:
@@ -1218,7 +1218,7 @@ module {
     bb139:
       %416 = const c101
       %417 = const c102
-      %418 = set_prop %411, %416, %417
+      %418 = set_prop %411, %416, %417, strict
       %419 = is_exception %418
       branch %419, bb141, bb140
     bb140:

@@ -133,6 +133,7 @@ impl Lowerer {
             async_closure_env_ir_name: None,
             pending_suspends: Vec::new(),
             strict_mode: false,
+            function_strict_stack: Vec::new(),
             is_arrow: false,
             is_method: false,
             arguments_param_count: 0,
@@ -357,6 +358,17 @@ impl Lowerer {
         });
     }
 
+    /// 函数体 directive prologue 含 `"use strict"` 时进入严格模式；严格性
+    /// 只增不减（嵌套继承由 push_function_context 保存/恢复承担）。须在
+    /// push_function_context 之后、降级形参与函数体之前调用。
+    pub(crate) fn apply_function_strictness(&mut self, body: Option<&swc_ast::BlockStmt>) {
+        if let Some(body) = body
+            && stmts_have_use_strict_directive(&body.stmts)
+        {
+            self.strict_mode = true;
+        }
+    }
+
     pub(crate) fn push_function_context(&mut self, name: impl Into<String>, entry: BasicBlockId) {
         self.async_context_stack.push(self.capture_async_context());
         self.function_expr_continuation_stack.push((
@@ -395,6 +407,9 @@ impl Lowerer {
             .push(self.ctor_super_proto.take());
         self.function_is_arrow_stack.push(self.is_arrow);
         self.function_is_method_stack.push(self.is_method);
+        // 严格性只增不减：嵌套函数继承外层严格模式，函数体 directive 由
+        // 各降级站点经 apply_function_strictness / 类上下文显式追加。
+        self.function_strict_stack.push(self.strict_mode);
         self.is_arrow = false;
         self.is_method = false;
         self.function_hoisted_stack.push((
@@ -449,6 +464,10 @@ impl Lowerer {
             .function_is_method_stack
             .pop()
             .expect("is_method stack underflow");
+        self.strict_mode = self
+            .function_strict_stack
+            .pop()
+            .expect("strict mode stack underflow");
         self.super_call_allowed = self
             .function_super_call_allowed_stack
             .pop()

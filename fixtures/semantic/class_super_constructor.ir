@@ -43,7 +43,7 @@ module {
       %0 = load var $2.$this
       %1 = const c20
       %2 = load var $2.x
-      %3 = set_prop %0, %1, %2
+      %3 = set_prop %0, %1, %2, strict
       %4 = is_exception %3
       branch %4, bb2, bb1
     bb1:
@@ -101,7 +101,7 @@ module {
     bb10:
       %21 = const c25
       %22 = const c26
-      %23 = set_prop %18, %21, %22
+      %23 = set_prop %18, %21, %22, strict
       %24 = is_exception %23
       branch %24, bb13, bb12
     bb11:

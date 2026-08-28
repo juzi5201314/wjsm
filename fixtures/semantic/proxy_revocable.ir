@@ -90,74 +90,86 @@ module {
     bb1:
       %29 = const c23
       %30 = get_prop %26, %29
-      store var $0.proxy, %30
-      %31 = const c24
-      %32 = get_prop %26, %31
-      store var $0.revoke, %32
-      %33 = load var $0.proxy
-      %34 = const c25
-      %35 = get_prop %33, %34
-      %36 = is_exception %35
-      branch %36, bb4, bb3
+      %31 = is_exception %30
+      branch %31, bb4, bb3
     bb2:
       %28 = call builtin.exception_value(%26)
       throw %28
     bb3:
-      %38 = call builtin.console.log(%35)
-      %39 = is_exception %38
-      branch %39, bb6, bb5
+      store var $0.proxy, %30
+      %33 = const c24
+      %34 = get_prop %26, %33
+      %35 = is_exception %34
+      branch %35, bb6, bb5
     bb4:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %32 = call builtin.exception_value(%30)
+      throw %32
     bb5:
-      %41 = const c26
-      %42 = load var $0.revoke
-      %43 = call %42, this=%41
-      %44 = is_exception %43
-      branch %44, bb8, bb7
+      store var $0.revoke, %34
+      %37 = load var $0.proxy
+      %38 = const c25
+      %39 = get_prop %37, %38
+      %40 = is_exception %39
+      branch %40, bb8, bb7
     bb6:
-      %40 = call builtin.exception_value(%38)
-      throw %40
+      %36 = call builtin.exception_value(%34)
+      throw %36
     bb7:
-      jump bb9
+      %42 = call builtin.console.log(%39)
+      %43 = is_exception %42
+      branch %43, bb10, bb9
     bb8:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %41 = call builtin.exception_value(%39)
+      throw %41
     bb9:
-      %46 = load var $0.proxy
-      %47 = const c27
-      %48 = get_prop %46, %47
-      %49 = is_exception %48
-      branch %49, bb13, bb12
+      %45 = const c26
+      %46 = load var $0.revoke
+      %47 = call %46, this=%45
+      %48 = is_exception %47
+      branch %48, bb12, bb11
     bb10:
-      return
+      %44 = call builtin.exception_value(%42)
+      throw %44
     bb11:
-      %56 = load var $tmp.0
-      store var $3.e, %56
-      %57 = const c29
-      %58 = call builtin.console.log(%57)
-      %59 = is_exception %58
-      branch %59, bb17, bb16
+      jump bb13
     bb12:
-      store var $2.v, %48
-      %51 = const c28
-      %52 = load var $2.v
-      %53 = call builtin.console.log(%51, %52)
-      %54 = is_exception %53
-      branch %54, bb15, bb14
+      %49 = call builtin.exception_value(%47)
+      throw %49
     bb13:
-      %50 = call builtin.exception_value(%48)
-      store var $tmp.0, %50
-      jump bb11
+      %50 = load var $0.proxy
+      %51 = const c27
+      %52 = get_prop %50, %51
+      %53 = is_exception %52
+      branch %53, bb17, bb16
     bb14:
-      jump bb10
+      return
     bb15:
-      %55 = call builtin.exception_value(%53)
-      store var $tmp.0, %55
-      jump bb11
+      %60 = load var $tmp.0
+      store var $3.e, %60
+      %61 = const c29
+      %62 = call builtin.console.log(%61)
+      %63 = is_exception %62
+      branch %63, bb21, bb20
     bb16:
-      jump bb10
+      store var $2.v, %52
+      %55 = const c28
+      %56 = load var $2.v
+      %57 = call builtin.console.log(%55, %56)
+      %58 = is_exception %57
+      branch %58, bb19, bb18
     bb17:
-      %60 = call builtin.exception_value(%58)
-      throw %60
+      %54 = call builtin.exception_value(%52)
+      store var $tmp.0, %54
+      jump bb15
+    bb18:
+      jump bb14
+    bb19:
+      %59 = call builtin.exception_value(%57)
+      store var $tmp.0, %59
+      jump bb15
+    bb20:
+      jump bb14
+    bb21:
+      %64 = call builtin.exception_value(%62)
+      throw %64
 }

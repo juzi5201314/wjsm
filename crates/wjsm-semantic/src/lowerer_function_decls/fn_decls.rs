@@ -17,6 +17,7 @@ impl Lowerer {
         }
         let name = fn_decl.ident.sym.to_string();
         self.push_function_context(&name, BasicBlockId(0));
+        self.apply_function_strictness(fn_decl.function.body.as_ref());
 
         // 声明 $env（闭包环境对象），非闭包时传入 undefined
         let env_scope_id = self
