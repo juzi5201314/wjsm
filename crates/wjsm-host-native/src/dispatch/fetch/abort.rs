@@ -55,9 +55,9 @@ pub(super) fn controller_property(
     let signal = state.fetch.abort_signals.get(handle as usize)?;
     match key {
         "signal" => Some(FetchProperty::Value(signal.object)),
-        "abort" => Some(FetchProperty::Callable(FetchCallable::AbortControllerAbort(
-            handle,
-        ))),
+        "abort" => Some(FetchProperty::Callable(
+            FetchCallable::AbortControllerAbort(handle),
+        )),
         _ => None,
     }
 }
@@ -92,7 +92,11 @@ pub(super) fn abort(
     {
         return value::encode_undefined();
     }
-    let reason = match args.first().copied().filter(|raw| !value::is_undefined(*raw)) {
+    let reason = match args
+        .first()
+        .copied()
+        .filter(|raw| !value::is_undefined(*raw))
+    {
         Some(reason) => reason,
         None => {
             let Some(reason) = super::super::modules::named_error_object(

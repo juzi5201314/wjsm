@@ -3054,9 +3054,7 @@ impl NativeAgentState {
         }
         let constructor_kind = match name {
             "AggregateError" => NativeCallableKind::AggregateErrorConstructor,
-            "AbortError" => {
-                NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, false)
-            }
+            "AbortError" => NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, false),
             "DataCloneError" => {
                 NativeCallableKind::Builtin(wjsm_ir::Builtin::ErrorConstructor, false)
             }
@@ -4709,11 +4707,7 @@ impl NativeAgentState {
     /// fetch / Streams / AbortController 构造器的 `prototype` 对象：懒创建并
     /// 缓存，仅安装不可枚举 `constructor` 数据属性。实例方法仍经侧表虚拟属性
     /// 解析，此对象的职责是承载 instanceof 的原型链身份。
-    fn ensure_web_prototype(
-        &mut self,
-        constructor: i64,
-        builtin: wjsm_ir::Builtin,
-    ) -> Option<i64> {
+    fn ensure_web_prototype(&mut self, constructor: i64, builtin: wjsm_ir::Builtin) -> Option<i64> {
         if let Some(prototype) = self.web_prototypes.get(&builtin).copied() {
             return Some(prototype);
         }
