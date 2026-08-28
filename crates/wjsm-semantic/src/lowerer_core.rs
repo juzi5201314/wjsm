@@ -143,6 +143,7 @@ impl Lowerer {
             script_global_names: std::collections::HashMap::new(),
             script_global_lexicals: Vec::new(),
             script_global_vars: Vec::new(),
+            script_global_eval_vars: std::collections::HashSet::new(),
             script_global_decl_init: false,
             emit_debug_checks: false,
             diagnostic_source: None,

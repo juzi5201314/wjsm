@@ -18,6 +18,23 @@ impl Lowerer {
     /// （scope 0）时生效；函数声明名可覆盖先行 var 登记（GDI 按函数初始化），
     /// 反向（var 重复声明函数名）不降级类别。
     pub(crate) fn record_script_global(&mut self, scope_id: usize, name: &str, kind: VarKind) {
+        self.record_script_global_impl(scope_id, name, kind, false);
+    }
+
+    /// 登记直接 eval 字面量静态提升出的 var 名：按对象记录 var 类别路由读写，
+    /// GDI 建属性时用 configurable=true（§19.2.1.3 CreateGlobalVarBinding(N, true)）。
+    /// 显式 var/函数声明命中同名时保持非可配置（不降级为可删除属性）。
+    pub(crate) fn record_script_global_eval_var(&mut self, scope_id: usize, name: &str) {
+        self.record_script_global_impl(scope_id, name, VarKind::Var, true);
+    }
+
+    fn record_script_global_impl(
+        &mut self,
+        scope_id: usize,
+        name: &str,
+        kind: VarKind,
+        from_eval: bool,
+    ) {
         if !self.script_mode || scope_id != 0 || Self::is_restricted_global_name(name) {
             return;
         }
@@ -28,6 +45,15 @@ impl Lowerer {
         };
         match entry {
             ScriptGlobalKind::Var => {
+                if from_eval {
+                    // 仅当此名尚无显式登记时才是「eval 专属」的可删除属性。
+                    if !self.script_global_names.contains_key(name) {
+                        self.script_global_eval_vars.insert(name.to_string());
+                    }
+                } else {
+                    // 显式 var 声明：非可配置属性优先于 eval 静态提升。
+                    self.script_global_eval_vars.remove(name);
+                }
                 if !self.script_global_names.contains_key(name) {
                     self.script_global_names
                         .insert(name.to_string(), ScriptGlobalKind::Var);
@@ -51,6 +77,7 @@ impl Lowerer {
         if !self.script_mode || scope_id != 0 || Self::is_restricted_global_name(name) {
             return;
         }
+        self.script_global_eval_vars.remove(name);
         self.script_global_names
             .insert(name.to_string(), ScriptGlobalKind::Func);
         if !self.script_global_vars.iter().any(|n| n == name) {
@@ -242,7 +269,8 @@ impl Lowerer {
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let mut current_block = block;
-                let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
+                let rhs =
+                    self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                 if self.expr_can_throw(assign.right.as_ref()) {
                     current_block = self.lower_value_exception_branch(current_block, rhs)?;
                 }
@@ -361,7 +389,8 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let old_val = self.lower_script_global_read(block, name, false)?;
         let read_end = self.resolve_store_block(block);
-        let (num_val, new_val, math_block) = self.append_update_math(read_end, old_val, update.op)?;
+        let (num_val, new_val, math_block) =
+            self.append_update_math(read_end, old_val, update.op)?;
         let after = self.emit_script_global_set(math_block, name, new_val)?;
         self.expr_merge_block = Some(after);
         Ok(if update.prefix { new_val } else { num_val })
@@ -422,7 +451,9 @@ impl Lowerer {
         block = self.ensure_open(flow)?;
 
         // 步骤 18：var 名创建全局属性（函数名已由 CreateGlobalFunctionBinding
-        // 建立并计入 [[VarNames]]，跳过）。脚本级 var 恒 configurable=false。
+        // 建立并计入 [[VarNames]]，跳过）。脚本级 var 恒 configurable=false；
+        // 仅由直接 eval 字面量静态提升引入的 var 按 EvalDeclarationInstantiation
+        // 的 CreateGlobalVarBinding(N, true) 建可删除属性。
         for name in &vars {
             if matches!(
                 self.script_global_names.get(name),
@@ -430,10 +461,11 @@ impl Lowerer {
             ) {
                 continue;
             }
+            let from_eval_only = self.script_global_eval_vars.contains(name);
             let check_block = self.resolve_store_block(block);
             let global = self.load_script_global_object(check_block);
             let name_val = self.append_name_const(check_block, name);
-            let configurable = self.append_bool_const(check_block, false);
+            let configurable = self.append_bool_const(check_block, from_eval_only);
             let dest = self.alloc_value();
             self.current_function.append_instruction(
                 check_block,

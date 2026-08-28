@@ -228,6 +228,10 @@ pub(crate) struct Lowerer {
     pub(crate) script_global_lexicals: Vec<(String, bool)>,
     /// GDI var 声明名的收集序（含块内 var 提升与 Annex B 函数名）。
     pub(crate) script_global_vars: Vec<String>,
+    /// 仅由直接 eval 字面量静态提升引入的 var 名（EvalDeclarationInstantiation
+    /// 的 CreateGlobalVarBinding(name, true)）：全局属性按 configurable=true
+    /// 创建；显式 var/函数声明命中同名时移出本集合（非可配置优先）。
+    pub(crate) script_global_eval_vars: std::collections::HashSet<String>,
     /// 当前正在降级脚本顶层词法声明（let/const）的绑定初始化：
     /// 命中的脚本全局词法名走 InitializeBinding（GlobalEnvInitLex，解除 TDZ）
     /// 而非 SetMutableBinding。仅声明语句的 pattern 目标受此标志影响。

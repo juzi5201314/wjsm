@@ -291,6 +291,9 @@ impl Lowerer {
                             .scopes
                             .declare(&name, VarKind::Var, true)
                             .map_err(|msg| self.error(expr_stmt.span, msg))?;
+                        // 脚本顶层的直接 eval 字面量 var：CreateGlobalVarBinding(N, true)
+                        // 建可删除全局属性（EvalDeclarationInstantiation §19.2.1.3）。
+                        self.record_script_global_eval_var(scope_id, &name);
                         self.record_hoisted_var(scope_id, name);
                     }
                 }

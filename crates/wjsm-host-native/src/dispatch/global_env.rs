@@ -74,7 +74,11 @@ fn is_restricted_global_name(state: &NativeAgentState, key: i64) -> bool {
 }
 
 /// 读取指定 realm 的全局词法绑定（供本模块与 eval 边界解析复用）。
-pub(crate) fn lexical_read(state: &NativeAgentState, global: i64, key: PropertyKey) -> GlobalLexicalRead {
+pub(crate) fn lexical_read(
+    state: &NativeAgentState,
+    global: i64,
+    key: PropertyKey,
+) -> GlobalLexicalRead {
     let Some(record) = state.global_env_records.get(&value::decode_handle(global)) else {
         return GlobalLexicalRead::Missing;
     };
@@ -139,11 +143,7 @@ fn binding_name(state: &NativeAgentState, key: i64) -> String {
         .unwrap_or_else(|| runtime::render_value(state, key))
 }
 
-fn redeclaration_error(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    key: i64,
-) -> i64 {
+fn redeclaration_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, key: i64) -> i64 {
     let name = binding_name(state, key);
     javascript_error(
         ctx,
@@ -177,7 +177,12 @@ fn check(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
 
 /// 全局对象是否已持有该名（自有槽位或惰性内建）；用于 CreateGlobalVarBinding
 /// 的 HasOwnProperty 判定——惰性内建视为既有属性，避免被 undefined 遮蔽。
-fn global_has_own_or_lazy(state: &mut NativeAgentState, global: i64, name: i64, key: PropertyKey) -> bool {
+fn global_has_own_or_lazy(
+    state: &mut NativeAgentState,
+    global: i64,
+    name: i64,
+    key: PropertyKey,
+) -> bool {
     let own = value::is_object(global)
         && state
             .gc
@@ -359,7 +364,12 @@ fn tdz_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, name: i64)
 
 fn not_defined_error(ctx: &mut NativeVmContext, state: &mut NativeAgentState, name: i64) -> i64 {
     let text = binding_name(state, name);
-    javascript_error(ctx, state, "ReferenceError", format!("{text} is not defined"))
+    javascript_error(
+        ctx,
+        state,
+        "ReferenceError",
+        format!("{text} is not defined"),
+    )
 }
 
 /// 全局环境 ResolveBinding + GetValue：声明式记录 →（TDZ 检查）→ 全局对象

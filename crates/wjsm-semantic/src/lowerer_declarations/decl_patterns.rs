@@ -356,8 +356,8 @@ impl Lowerer {
                                 assign.key.span(),
                                 true,
                             )?;
-                            block = self
-                                .append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
+                            block =
+                                self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
                         }
                     } else {
                         block = self.lower_destructure_pattern(

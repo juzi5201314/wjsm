@@ -992,10 +992,18 @@ fn script_mode_gdi_prologue_routes_global_bindings() {
         "global_env.get",
         "global_env.set",
     ] {
-        assert!(text.contains(marker), "missing {marker} in script IR:\n{text}");
+        assert!(
+            text.contains(marker),
+            "missing {marker} in script IR:\n{text}"
+        );
     }
     // 脚本全局绑定不再落 `$0.*` 槽（函数声明与 var 均由宿主记录承载）。
-    for absent in ["store_var $0.v", "store_var $0.l", "store_var $0.c", "store_var $0.f"] {
+    for absent in [
+        "store_var $0.v",
+        "store_var $0.l",
+        "store_var $0.c",
+        "store_var $0.f",
+    ] {
         assert!(
             !text.contains(absent),
             "script global should not use IR slot {absent}:\n{text}"

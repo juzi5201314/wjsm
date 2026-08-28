@@ -656,6 +656,24 @@ impl Lowerer {
                     if self.eval_scope_bridge_active() && self.scopes.lookup(&name).is_err() {
                         return self.lower_eval_typeof_binding(&name, block);
                     }
+                    // 脚本全局绑定：typeof 经容忍读（可配置 var 属性可能已被
+                    // delete，缺失返回 undefined；词法 TDZ 仍抛 ReferenceError）。
+                    if self.script_global_kind_for(&name).is_some() {
+                        let value = self.lower_script_global_read(block, &name, true)?;
+                        let mut current_block = block;
+                        self.resolve_expr_continuations(&mut current_block);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            current_block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::TypeOf,
+                                args: vec![value],
+                            },
+                        );
+                        self.publish_expr_continuation(block, current_block);
+                        return Ok(dest);
+                    }
                     if !has_module_alias
                         && !self.eval_scope_bridge_active()
                         && name != "eval"

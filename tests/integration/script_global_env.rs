@@ -253,6 +253,22 @@ console.log(eval("vv"));
 }
 
 #[test]
+fn direct_eval_var_creates_configurable_global_property() {
+    // EvalDeclarationInstantiation：直接 eval 引入的 var 是可删除全局属性
+    // （CreateGlobalVarBinding(N, true)）；显式 var 保持不可配置。
+    assert_stdout(
+        r#"
+eval("var q = 1");
+console.log(globalThis.q, Object.getOwnPropertyDescriptor(globalThis, "q").configurable);
+var w = 2;
+console.log(Object.getOwnPropertyDescriptor(globalThis, "w").configurable);
+console.log(delete q, typeof q, delete w, typeof w);
+"#,
+        "1 true\nfalse\ntrue undefined false number\n",
+    );
+}
+
+#[test]
 fn module_mode_keeps_module_scoped_var() {
     // 模块模式（默认 `run -e`）：顶层 var 是模块作用域绑定，不进全局对象。
     let (exit, stdout, stderr) = {
