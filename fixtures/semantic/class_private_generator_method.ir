@@ -910,8 +910,8 @@ module {
     bb1:
       %14 = const c110
       store var $8.$shared_env, %14
-      %86 = load var $8.$state
-      switch %86 [case c123 -> bb2, case c124 -> bb3, case c125 -> bb15, case c126 -> bb20], default bb25, exit bb26
+      %102 = load var $8.$state
+      switch %102 [case c123 -> bb2, case c124 -> bb3, case c125 -> bb21, case c126 -> bb28], default bb33, exit bb34
     bb2:
       %15 = const c111
       %16 = load var $8.$generator
@@ -953,89 +953,121 @@ module {
       return %35
     bb10:
       %41 = call builtin.iterator.from(%36)
-      store var $8.$yield_star_iter_0, %41
-      jump bb12
+      %42 = is_exception %41
+      branch %42, bb13, bb12
     bb11:
       %38 = call builtin.exception_value(%36)
       %39 = load var $8.$generator
       %40 = call builtin.generator.throw(%39, %38)
       return %40
     bb12:
-      %42 = load var $8.$yield_star_iter_0
-      %43 = call builtin.iterator.done(%42)
-      %44 = not %43
-      branch %44, bb13, bb14
+      store var $8.$yield_star_iter_0, %41
+      jump bb14
     bb13:
-      %45 = load var $8.$yield_star_iter_0
-      %46 = call builtin.iterator.value(%45)
-      %47 = load var $8.$generator
-      %48 = call builtin.generator.next(%47, %46)
-      %80 = load var $env
-      %81 = const c121
-      %82 = load var $8.$yield_star_iter_0
-      call builtin.continuation.save_var(%80, %81, %82)
-      generator_suspend %48, state=2
-      jump bb17
+      %43 = call builtin.exception_value(%41)
+      %44 = load var $8.$generator
+      %45 = call builtin.generator.throw(%44, %43)
+      return %45
     bb14:
-      %61 = load var $8.$yield_star_iter_0
-      %62 = call builtin.iterator.value(%61)
-      %63 = const c117
-      %64 = load var $8.$generator
-      %65 = call builtin.generator.next(%64, %63)
-      generator_suspend %65, state=3
-      jump bb22
+      %46 = load var $8.$yield_star_iter_0
+      %47 = call builtin.iterator.done(%46)
+      %48 = is_exception %47
+      branch %48, bb18, bb17
     bb15:
-      %83 = load var $env
-      %84 = const c122
-      %85 = call builtin.continuation.load_var(%83, %84)
-      store var $8.$yield_star_iter_0, %85
-      %49 = load var $8.$resume_val
-      %50 = load var $8.$is_rejected
-      %51 = const c115
-      %52 = stricteq %50, %51
-      branch %52, bb16, bb19
+      %53 = load var $8.$yield_star_iter_0
+      %54 = call builtin.iterator.value(%53)
+      %55 = is_exception %54
+      branch %55, bb20, bb19
     bb16:
-      %55 = load var $8.$generator
-      %56 = call builtin.generator.throw(%55, %49)
-      return %56
+      %73 = load var $8.$yield_star_iter_0
+      %74 = call builtin.iterator.value(%73)
+      %75 = is_exception %74
+      branch %75, bb27, bb26
     bb17:
-      %60 = load var $8.$yield_star_iter_0
-      call builtin.iterator.next(%60)
-      jump bb12
+      %52 = not %47
+      branch %52, bb15, bb16
     bb18:
-      %57 = load var $8.$generator
-      %58 = call builtin.generator.return(%57, %49)
-      return %58
+      %49 = call builtin.exception_value(%47)
+      %50 = load var $8.$generator
+      %51 = call builtin.generator.throw(%50, %49)
+      return %51
     bb19:
-      %53 = const c116
-      %54 = stricteq %50, %53
-      branch %54, bb18, bb17
+      %59 = load var $8.$generator
+      %60 = call builtin.generator.next(%59, %54)
+      %96 = load var $env
+      %97 = const c121
+      %98 = load var $8.$yield_star_iter_0
+      call builtin.continuation.save_var(%96, %97, %98)
+      generator_suspend %60, state=2
+      jump bb23
     bb20:
-      %66 = load var $8.$resume_val
-      %67 = load var $8.$is_rejected
-      %68 = const c118
-      %69 = stricteq %67, %68
-      branch %69, bb21, bb24
+      %56 = call builtin.exception_value(%54)
+      %57 = load var $8.$generator
+      %58 = call builtin.generator.throw(%57, %56)
+      return %58
     bb21:
-      %72 = load var $8.$generator
-      %73 = call builtin.generator.throw(%72, %66)
-      return %73
+      %99 = load var $env
+      %100 = const c122
+      %101 = call builtin.continuation.load_var(%99, %100)
+      store var $8.$yield_star_iter_0, %101
+      %61 = load var $8.$resume_val
+      %62 = load var $8.$is_rejected
+      %63 = const c115
+      %64 = stricteq %62, %63
+      branch %64, bb22, bb25
     bb22:
-      %77 = load var $8.$generator
-      %78 = const c120
-      %79 = call builtin.generator.return(%77, %78)
-      return %79
+      %67 = load var $8.$generator
+      %68 = call builtin.generator.throw(%67, %61)
+      return %68
     bb23:
-      %74 = load var $8.$generator
-      %75 = call builtin.generator.return(%74, %66)
-      return %75
+      %72 = load var $8.$yield_star_iter_0
+      call builtin.iterator.next(%72)
+      jump bb14
     bb24:
-      %70 = const c119
-      %71 = stricteq %67, %70
-      branch %71, bb23, bb22
+      %69 = load var $8.$generator
+      %70 = call builtin.generator.return(%69, %61)
+      return %70
     bb25:
-      return
+      %65 = const c116
+      %66 = stricteq %62, %65
+      branch %66, bb24, bb23
     bb26:
+      %79 = const c117
+      %80 = load var $8.$generator
+      %81 = call builtin.generator.next(%80, %79)
+      generator_suspend %81, state=3
+      jump bb30
+    bb27:
+      %76 = call builtin.exception_value(%74)
+      %77 = load var $8.$generator
+      %78 = call builtin.generator.throw(%77, %76)
+      return %78
+    bb28:
+      %82 = load var $8.$resume_val
+      %83 = load var $8.$is_rejected
+      %84 = const c118
+      %85 = stricteq %83, %84
+      branch %85, bb29, bb32
+    bb29:
+      %88 = load var $8.$generator
+      %89 = call builtin.generator.throw(%88, %82)
+      return %89
+    bb30:
+      %93 = load var $8.$generator
+      %94 = const c120
+      %95 = call builtin.generator.return(%93, %94)
+      return %95
+    bb31:
+      %90 = load var $8.$generator
+      %91 = call builtin.generator.return(%90, %82)
+      return %91
+    bb32:
+      %86 = const c119
+      %87 = stricteq %83, %86
+      branch %87, bb31, bb30
+    bb33:
+      return
+    bb34:
       unreachable
 
   fn @Seq.#outer [needs_prototype] [js_name "Seq.#outer"] [js_length 0] [params: $9.$env, $9.$this] [entry=bb0]:
