@@ -25,9 +25,18 @@ pub(super) fn dispatch_object(
         Builtin::ObjectEntries => enumerate(ctx, state, args, EnumerationKind::Entries),
         Builtin::ObjectGetOwnPropertyNames => enumerate(ctx, state, args, EnumerationKind::Names),
         Builtin::ObjectGetOwnPropertySymbols => {
-            let Some(object) = args.first().copied() else {
-                return Some(fail_dispatch(ctx));
-            };
+            let object = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            // ToObject（§20.1.2.11 步骤 1）：nullish 抛 TypeError。
+            if value::is_null(object) || value::is_undefined(object) {
+                return Some(type_error(
+                    ctx,
+                    state,
+                    "Cannot convert undefined or null to object",
+                ));
+            }
             let symbols: Vec<_> = if value::is_proxy(object) {
                 match super::proxy::own_keys(ctx, state, object) {
                     Ok(keys) => keys
@@ -342,7 +351,7 @@ pub(crate) fn own_keys(
     }
     if value::is_string(encoded) {
         let len = state.string_owned(encoded)?.utf16_len();
-        let mut properties = Vec::with_capacity(len);
+        let mut properties = Vec::with_capacity(len + usize::from(!enumerable_only));
         for index in 0..len {
             let unit = state.string_owned(encoded)?.code_unit_at(index)?;
             let key = state.intern_text(index.to_string(), value::TAG_STRING)?;
@@ -352,7 +361,32 @@ pub(crate) fn own_keys(
             )?;
             properties.push((key, stored));
         }
+        // 字符串奇异对象的 `length` 自有属性（§10.4.3）不可枚举，仅
+        // [[OwnPropertyKeys]] 视角（getOwnPropertyNames / descriptors）可见。
+        if !enumerable_only {
+            let key = state.intern_text("length".into(), value::TAG_STRING)?;
+            properties.push((key, value::encode_f64(len as f64)));
+        }
         return Some(properties);
+    }
+    if value::is_regexp(encoded) {
+        // RegExp 实例创建时唯一定义的自有属性是 lastIndex（§22.2.3.3，
+        // writable 不可枚举不可配置）；宿主 regexp 表示不承载 expando。
+        if enumerable_only {
+            return Some(Vec::new());
+        }
+        let last_index = u32::try_from(state.regexp(encoded)?.last_index).ok()?;
+        let key = state.intern_text("lastIndex".into(), value::TAG_STRING)?;
+        return Some(vec![(key, value::encode_f64(f64::from(last_index)))]);
+    }
+    if value::is_f64(encoded)
+        || value::is_bool(encoded)
+        || value::is_symbol(encoded)
+        || value::is_bigint(encoded)
+    {
+        // ToObject（§7.1.18）：number/boolean/symbol/bigint 的包装对象没有
+        // 任何自有属性（字符串奇异对象在上方特化）。
+        return Some(Vec::new());
     }
     let handle = object_handle(encoded)?;
     if super::async_generator::is_async_generator(state, encoded) {
@@ -497,9 +531,16 @@ fn enumerate(
     args: &[i64],
     kind: EnumerationKind,
 ) -> i64 {
-    let Some(object) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
+    let object = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    // keys/values/entries/getOwnPropertyNames 步骤 1 均为 ToObject(O)
+    // （§7.1.18）：nullish 抛 TypeError，先于任何键枚举；其余基元经包装
+    // 对象继续（字符串有索引自有属性）。
+    if value::is_null(object) || value::is_undefined(object) {
+        return type_error(ctx, state, "Cannot convert undefined or null to object");
+    }
     if value::is_proxy(object) {
         let keys = match super::proxy::own_keys(ctx, state, object) {
             Ok(keys) => keys,
@@ -507,6 +548,12 @@ fn enumerate(
         };
         let mut values = Vec::with_capacity(keys.len());
         for key in keys {
+            // GetOwnPropertyKeys（§20.1.2.10.1）与 EnumerableOwnPropertyNames
+            // （§7.3.24 步骤 2）都只保留 String 键：ownKeys trap 返回的符号
+            // 键在四种枚举形态下一律剔除（Reflect.ownKeys 才保留符号）。
+            if value::is_symbol(key) {
+                continue;
+            }
             let property_value = if matches!(kind, EnumerationKind::Names) {
                 key
             } else {
@@ -603,9 +650,16 @@ fn enumerate(
 }
 
 fn from_entries(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(source) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
+    let source = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    // RequireObjectCoercible（§20.1.2.7 步骤 1）：V8 的 fromEntries 对 nullish
+    // 固定抛 kNotIterable 短文案且渲染为 "undefined"（null 同样打印
+    // undefined，Node v22 实测），与 GetIterator 的长文案不同。
+    if value::is_null(source) || value::is_undefined(source) {
+        return type_error(ctx, state, "undefined is not iterable");
+    }
     let iterator = iterator_from(ctx, state, &[source]);
     if value::is_exception(iterator) {
         return iterator;
@@ -625,21 +679,34 @@ fn from_entries(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
         if value::is_exception(entry) {
             return entry;
         }
-        if !(value::is_object(entry) || value::is_array(entry)) {
-            return type_error(
+        if !super::runtime::is_language_object(entry) {
+            // AddEntriesFromIterable（§23.1.1.2 步骤 4.d）：entry 非对象按
+            // throw completion 关闭迭代器；文案对齐 V8
+            // kIteratorValueNotAnEntryObject（渲染 entry 值）。
+            let rendered = super::runtime::render_value(state, entry);
+            let exception = type_error(
                 ctx,
                 state,
-                "Object.fromEntries iterator value is not an object",
+                &format!("Iterator value {rendered} is not an entry object"),
             );
+            return super::runtime::iterator_close(ctx, state, &[iterator, exception], true);
         }
+        // 步骤 4.f/4.h（IfAbruptCloseIterator）：entry[0] / entry[1] 的
+        // [[Get]]（含 getter / proxy trap）异常先关闭迭代器再传播。
         let key = match get_property(ctx, state, entry, value::encode_f64(0.0)) {
             Ok(key) => key,
             Err(()) => return fail_dispatch(ctx),
         };
+        if value::is_exception(key) {
+            return super::runtime::iterator_close(ctx, state, &[iterator, key], true);
+        }
         let stored = match get_property(ctx, state, entry, value::encode_f64(1.0)) {
             Ok(stored) => stored,
             Err(()) => return fail_dispatch(ctx),
         };
+        if value::is_exception(stored) {
+            return super::runtime::iterator_close(ctx, state, &[iterator, stored], true);
+        }
         let Some(key) = property_key(state, key) else {
             return fail_dispatch(ctx);
         };
@@ -833,30 +900,39 @@ fn enumerable_own_keys(
         return Ok(properties.into_iter().map(|(key, _)| key).collect());
     }
     if value::is_null(source) || value::is_undefined(source) {
+        // 兜底：所有调用方（spread / rest / assign / defineProperties）均已
+        // 前置 nullish 校验，此处保持 V8 口径以防新调用点漏检。
         return Err(type_error(
             ctx,
             state,
-            "cannot convert null or undefined to object",
+            "Cannot convert undefined or null to object",
         ));
     }
     Ok(Vec::new())
 }
 
 fn assign(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(target) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
-    if object_handle(target).is_none() {
-        return fail_dispatch(ctx);
+    let target = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    // Object.assign（§20.1.2.1）步骤 1：to = ? ToObject(target)。nullish 抛
+    // TypeError；基元装箱为携带对应原型的包装对象，包装对象即返回值。
+    let target = super::with_env::to_object(ctx, state, target);
+    if value::is_exception(target) {
+        return target;
     }
-    for source in &args[1..] {
+    for source in args.get(1..).unwrap_or(&[]) {
         if value::is_null(*source) || value::is_undefined(*source) {
             continue;
         }
-        let Some(properties) = own_keys(state, *source, true) else {
-            continue;
+        // 步骤 4.b：[[OwnPropertyKeys]] 后按 [[GetOwnProperty]].[[Enumerable]]
+        // 过滤（Proxy 源走 ownKeys / getOwnPropertyDescriptor trap）。
+        let properties = match enumerable_own_keys(ctx, state, *source) {
+            Ok(properties) => properties,
+            Err(exception) => return exception,
         };
-        for (property, _) in properties {
+        for property in properties {
             let stored = match get_property(ctx, state, *source, property) {
                 Ok(value) => value,
                 Err(()) => return fail_dispatch(ctx),
@@ -881,11 +957,23 @@ fn assign(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
 }
 
 fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(prototype) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
+    let prototype = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    // Object.create（§20.1.2.2）步骤 1：O 非对象非 null 抛 TypeError，文案
+    // 对齐 V8 kProtoObjectOrNull（渲染非法值为后缀）。
+    if !value::is_null(prototype) && !super::runtime::is_language_object(prototype) {
+        let rendered = super::runtime::render_value(state, prototype);
+        return type_error(
+            ctx,
+            state,
+            &format!("Object prototype may only be an Object or null: {rendered}"),
+        );
+    }
     // OrdinaryObjectCreate（§10.1.12）：proto 槽可承载普通对象 / 数组 /
-    // Proxy / RegExp（标记位编码）。
+    // Proxy / RegExp（标记位编码）。callable 原型无堆句柄进不了 proto 槽
+    // （宿主表示限制），在支持前保持显式 TypeError 而非 invariant 崩溃。
     let Some(prototype) = super::runtime::encode_proto_slot(prototype) else {
         return type_error(ctx, state, "Object prototype may only be an Object or null");
     };
@@ -944,6 +1032,14 @@ pub(super) fn get_prototype(
             .native_callable(crate::NativeCallableKind::FunctionPrototype)
             .unwrap_or_else(value::encode_null);
     }
+    // Object.getPrototypeOf（§20.1.2.12）步骤 1 ToObject：nullish 抛
+    // TypeError；基元不实际装箱，直接返回对应包装原型。
+    if value::is_null(object) || value::is_undefined(object) {
+        return type_error(ctx, state, "Cannot convert undefined or null to object");
+    }
+    if let Some(prototype) = state.primitive_wrapper_prototype(object) {
+        return prototype;
+    }
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
@@ -963,14 +1059,28 @@ pub(super) fn set_prototype(
     let [object, prototype] = args else {
         return fail_dispatch(ctx);
     };
-    if !(value::is_null(*prototype)
-        || value::is_object(*prototype)
-        || value::is_array(*prototype)
-        || value::is_callable(*prototype)
-        || value::is_proxy(*prototype)
-        || value::is_regexp(*prototype))
-    {
-        return type_error(ctx, state, "Object prototype may only be an Object or null");
+    // Object.setPrototypeOf（§20.1.2.21）步骤 1：RequireObjectCoercible(O)
+    // 先于 proto 合法性校验（V8 kCalledOnNullOrUndefined）。
+    if value::is_null(*object) || value::is_undefined(*object) {
+        return type_error(
+            ctx,
+            state,
+            "Object.setPrototypeOf called on null or undefined",
+        );
+    }
+    if !(value::is_null(*prototype) || super::runtime::is_language_object(*prototype)) {
+        // 步骤 2：proto 非对象非 null 抛 TypeError（V8 kProtoObjectOrNull，
+        // 渲染非法值为后缀）。
+        let rendered = super::runtime::render_value(state, *prototype);
+        return type_error(
+            ctx,
+            state,
+            &format!("Object prototype may only be an Object or null: {rendered}"),
+        );
+    }
+    // 步骤 3：O 为基元时不做任何修改原样返回。
+    if !super::runtime::is_language_object(*object) {
+        return *object;
     }
     if value::is_proxy(*object) {
         let result = super::proxy::set_prototype(ctx, state, *object, *prototype);
@@ -1005,6 +1115,12 @@ pub(super) fn set_prototype(
             Err(_) => return fail_dispatch(ctx),
         }
     } else {
+        // 剩余 object 型目标只有 RegExp：宿主 regexp 表示无独立 proto 槽，
+        // 唯一可表达的原型是 %RegExp.prototype%——设回它是无操作成功，
+        // 其余原型在 regexp expando/proto 支持落地前显式拒绝。
+        if state.regexp_prototype == Some(*prototype) {
+            return *object;
+        }
         return type_error(ctx, state, "Object.setPrototypeOf target is not an object");
     };
     if current == *prototype {
@@ -1068,10 +1184,44 @@ pub(crate) fn get_own_property_descriptor(
     if value::is_proxy(*object) {
         return super::proxy::get_own_property_descriptor(ctx, state, *object, *key);
     }
+    // Object.getOwnPropertyDescriptor（§20.1.2.8）步骤 1 ToObject：nullish
+    // 抛 TypeError，先于键转换；其余基元按包装对象取自有属性。
+    if value::is_null(*object) || value::is_undefined(*object) {
+        return type_error(ctx, state, "Cannot convert undefined or null to object");
+    }
     let encoded_key = *key;
     let Some(key) = property_key(state, encoded_key) else {
         return fail_dispatch(ctx);
     };
+    if value::is_string(*object) {
+        return string_own_property_descriptor(ctx, state, *object, encoded_key);
+    }
+    if value::is_regexp(*object) {
+        // RegExp 唯一自有属性 lastIndex（writable 不可枚举不可配置）。
+        if state.text_matches(encoded_key, "lastIndex") {
+            let Some(last_index) = state
+                .regexp(*object)
+                .and_then(|regexp| u32::try_from(regexp.last_index).ok())
+            else {
+                return fail_dispatch(ctx);
+            };
+            return descriptor_object(
+                ctx,
+                state,
+                wjsm_gc::HeapAccessV2Property {
+                    flags: WRITABLE,
+                    value: value::encode_f64(f64::from(last_index)) as u64,
+                    getter: value::encode_undefined() as u64,
+                    setter: value::encode_undefined() as u64,
+                },
+            );
+        }
+        return value::encode_undefined();
+    }
+    if !super::runtime::is_language_object(*object) {
+        // number/boolean/symbol/bigint 的包装对象没有任何自有属性。
+        return value::encode_undefined();
+    }
     if value::is_array(*object) {
         let handle = value::decode_handle(*object);
         let property = if state.text_matches(encoded_key, "length") {
@@ -1177,11 +1327,8 @@ pub(crate) fn get_own_property_descriptor(
         return descriptor_object(ctx, state, property);
     }
     let Some(handle) = object_handle(*object) else {
-        return super::runtime::type_error(
-            ctx,
-            state,
-            "Object.getOwnPropertyDescriptor called on non-object",
-        );
+        // 语言层可见类型已全部在上方分派，残余仅内部表示破损。
+        return fail_dispatch(ctx);
     };
     let Ok(Some(property)) = state.gc.heap().get_property_slot(handle, key) else {
         return value::encode_undefined();
@@ -1216,6 +1363,61 @@ pub(crate) fn get_own_property_descriptor(
         );
     }
     descriptor_object(ctx, state, property)
+}
+
+/// 字符串奇异对象的 [[GetOwnProperty]]（§10.4.3.1 经 StringGetOwnProperty
+/// §10.4.3.5）：在界规范数字下标 → { value: 单代码单元, writable: false,
+/// enumerable: true, configurable: false }；`length` → 全 false 数据属性；
+/// 其余键无自有属性返回 undefined。
+fn string_own_property_descriptor(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    encoded_key: i64,
+) -> i64 {
+    let Some(len) = state.string_owned(object).map(|text| text.utf16_len()) else {
+        return fail_dispatch(ctx);
+    };
+    if state.text_matches(encoded_key, "length") {
+        return descriptor_object(
+            ctx,
+            state,
+            wjsm_gc::HeapAccessV2Property {
+                flags: 0,
+                value: value::encode_f64(len as f64) as u64,
+                getter: value::encode_undefined() as u64,
+                setter: value::encode_undefined() as u64,
+            },
+        );
+    }
+    let index = super::runtime::array_index(state, encoded_key)
+        .map(|index| index as usize)
+        .filter(|index| *index < len);
+    let Some(index) = index else {
+        return value::encode_undefined();
+    };
+    let unit = state
+        .string_owned(object)
+        .and_then(|text| text.code_unit_at(index));
+    let Some(unit) = unit else {
+        return fail_dispatch(ctx);
+    };
+    let Some(stored) = state.intern_runtime_string(
+        wjsm_host::RuntimeString::from_utf16_units(vec![unit]),
+        value::TAG_STRING,
+    ) else {
+        return fail_dispatch(ctx);
+    };
+    descriptor_object(
+        ctx,
+        state,
+        wjsm_gc::HeapAccessV2Property {
+            flags: ENUMERABLE,
+            value: stored as u64,
+            getter: value::encode_undefined() as u64,
+            setter: value::encode_undefined() as u64,
+        },
+    )
 }
 
 /// 命名空间导出槽的 live 值（§10.4.6.8 [[Get]]）：accessor 槽经 live binding
@@ -1664,10 +1866,27 @@ pub(crate) fn define_property(
     let [object, key, descriptor] = args else {
         return fail_dispatch(ctx);
     };
+    // Object.defineProperty（§20.1.2.4）步骤 1：O 非对象直接 TypeError
+    // （V8 kCalledOnNonObject，不做 ToObject）。
+    if !super::runtime::is_language_object(*object) {
+        return type_error(ctx, state, "Object.defineProperty called on non-object");
+    }
+    // ToPropertyDescriptor（§6.2.6.5 步骤 1）：描述符非对象 TypeError（V8
+    // kPropertyDescObject 渲染值为后缀），先于 [[DefineOwnProperty]]/trap。
+    if !super::runtime::is_language_object(*descriptor) {
+        let rendered = super::runtime::render_value(state, *descriptor);
+        return type_error(
+            ctx,
+            state,
+            &format!("Property description must be an object: {rendered}"),
+        );
+    }
     if value::is_proxy(*object) {
         return super::proxy::define_property(ctx, state, *object, *key, *descriptor);
     }
     let Some(descriptor) = object_handle(*descriptor) else {
+        // callable / Proxy / RegExp 载体的描述符读取（HasProperty+Get 形态）
+        // 尚未支持：残余 invariant，独立于非对象参数收口。
         return fail_dispatch(ctx);
     };
     let encoded_key = *key;
@@ -2148,9 +2367,15 @@ fn get_own_property_descriptors(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(object) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
+    let object = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    // Object.getOwnPropertyDescriptors（§20.1.2.9）步骤 1 ToObject：nullish
+    // 抛 TypeError；其余基元按包装对象枚举（字符串含索引与 length）。
+    if value::is_null(object) || value::is_undefined(object) {
+        return type_error(ctx, state, "Cannot convert undefined or null to object");
+    }
     let Some(keys) = own_keys(state, object, false) else {
         return fail_dispatch(ctx);
     };
@@ -2160,15 +2385,18 @@ fn get_own_property_descriptors(
     let result_handle = value::decode_handle(result);
     for (key, _) in keys {
         let descriptor = get_own_property_descriptor(ctx, state, &[object, key]);
+        if value::is_exception(descriptor) {
+            // 模块命名空间未初始化导出等 [[GetOwnProperty]] 异常原样传播。
+            return descriptor;
+        }
         let Some(property_key) = property_key(state, key) else {
             return fail_dispatch(ctx);
         };
-        if value::is_exception(descriptor)
-            || state
-                .gc
-                .heap()
-                .set_property(result_handle, property_key, descriptor as u64)
-                .is_err()
+        if state
+            .gc
+            .heap()
+            .set_property(result_handle, property_key, descriptor as u64)
+            .is_err()
         {
             return fail_dispatch(ctx);
         }
@@ -2180,10 +2408,31 @@ fn define_properties(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     let [object, descriptors] = args else {
         return fail_dispatch(ctx);
     };
-    let Some(properties) = own_keys(state, *descriptors, true) else {
-        return fail_dispatch(ctx);
+    // ObjectDefineProperties（§20.1.2.3.1）步骤 1：O 非对象 TypeError（V8
+    // kCalledOnNonObject）。Object.create 的 Properties 路径共用本入口，
+    // 彼时 O 是新建对象恒通过。
+    if !super::runtime::is_language_object(*object) {
+        return type_error(ctx, state, "Object.defineProperties called on non-object");
+    }
+    // 步骤 2 ToObject(Properties)：nullish 抛 TypeError；其余基元按包装
+    // 对象枚举（字符串索引属性会在 define_property 处按非对象描述符拒绝）。
+    if value::is_null(*descriptors) || value::is_undefined(*descriptors) {
+        return type_error(ctx, state, "Cannot convert undefined or null to object");
+    }
+    // 步骤 3-5：只取可枚举自有键（Proxy 走 trap），描述符对象经
+    // ? Get(props, key) 读取（访问器 / proxy get trap 可见）。
+    let keys = match enumerable_own_keys(ctx, state, *descriptors) {
+        Ok(keys) => keys,
+        Err(exception) => return exception,
     };
-    for (key, descriptor) in properties {
+    for key in keys {
+        let descriptor = match get_property(ctx, state, *descriptors, key) {
+            Ok(descriptor) => descriptor,
+            Err(()) => return fail_dispatch(ctx),
+        };
+        if value::is_exception(descriptor) {
+            return descriptor;
+        }
         let result = define_property(ctx, state, &[*object, key, descriptor]);
         if value::is_exception(result) {
             return result;

@@ -1,4 +1,4 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-Runtime error: TypeError: Object.getOwnPropertyDescriptor called on non-object
+Runtime error: TypeError: Cannot convert undefined or null to object

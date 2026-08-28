@@ -1,0 +1,37 @@
+exit_code: 0
+--- stdout ---
+=== enumerate on primitives ===
+[] [] []
+[] []
+["0","1"] ["a","b"] [["0","a"],["1","b"]]
+[] ["0","1","length"]
+[] []
+=== enumerate on regexp ===
+[] ["lastIndex"]
+{"value":0,"writable":true,"enumerable":false,"configurable":false}
+lastIndex
+=== getPrototypeOf on primitives ===
+true
+true
+true
+true
+=== setPrototypeOf primitive passthrough ===
+1 ab true
+=== assign ToObject(target) ===
+object true 1 2
+{"0":"a","1":"b","x":9}
+{}
+=== getOwnPropertyDescriptor(s) on primitives ===
+undefined undefined
+{"value":"a","writable":false,"enumerable":true,"configurable":false}
+{"value":"b","writable":false,"enumerable":true,"configurable":false}
+{"value":2,"writable":false,"enumerable":false,"configurable":false}
+undefined undefined
+{}
+{"0":{"value":"a","writable":false,"enumerable":true,"configurable":false},"1":{"value":"b","writable":false,"enumerable":true,"configurable":false},"length":{"value":2,"writable":false,"enumerable":false,"configurable":false}}
+=== proxy enumerate filters symbols ===
+b b [["b",2]]
+b,Symbol(q)
+=== Reflect.ownKeys keeps symbols ===
+b,Symbol(a)
+--- stderr ---

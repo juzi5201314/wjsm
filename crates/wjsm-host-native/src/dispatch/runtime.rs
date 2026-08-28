@@ -1595,6 +1595,17 @@ pub(super) fn object_handle(encoded: i64) -> Option<u32> {
     (value::is_object(encoded) || value::is_array(encoded)).then(|| value::decode_handle(encoded))
 }
 
+/// ECMAScript Type(V) 为 Object（§6.1）：普通堆对象 / 数组 / callable /
+/// Proxy / RegExp 等宿主对象表示均计入；基元与 null/undefined 为 false。
+/// Object 静态方法族与 Reflect 的「called on non-object」入口校验共用。
+pub(super) fn is_language_object(encoded: i64) -> bool {
+    value::is_object(encoded)
+        || value::is_array(encoded)
+        || value::is_callable(encoded)
+        || value::is_proxy(encoded)
+        || value::is_regexp(encoded)
+}
+
 /// IsArray（§7.2.2）：Proxy 沿 [[ProxyTarget]] 链穿透判定；revoked proxy
 /// 返回 None（调用方按规范抛 TypeError）。
 pub(super) fn is_array_value(state: &NativeAgentState, encoded: i64) -> Option<bool> {
