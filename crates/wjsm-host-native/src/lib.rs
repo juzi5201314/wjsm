@@ -260,6 +260,15 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         | NativeCallableKind::ErrorToString => Some(("toString", 0)),
         NativeCallableKind::AggregateErrorConstructor => Some(("AggregateError", 2)),
         NativeCallableKind::ObjectConstructor => Some(("Object", 1)),
+        // Node Buffer 家族的 name / length（与 Node v22 实测一致）。
+        NativeCallableKind::BufferConstructor => Some(("Buffer", 3)),
+        NativeCallableKind::BufferStatic(kind) => {
+            Some(dispatch::node_buffer::static_metadata(kind))
+        }
+        NativeCallableKind::BufferMethod(kind) => {
+            Some(dispatch::node_buffer::method_metadata(kind))
+        }
+        NativeCallableKind::BufferTranscode => Some(("transcode", 3)),
         NativeCallableKind::ArrayConstructor | NativeCallableKind::RealmArrayConstructor(_) => {
             Some(("Array", 1))
         }
@@ -1256,6 +1265,10 @@ struct NativeAgentState {
     /// %TypedArray% 抽象构造器（§23.2.1）：11 种具体构造器的静态
     /// [[Prototype]]，own 携带 prototype / from / of / @@species；懒创建缓存。
     typed_array_constructor: Option<i64>,
+    /// Node `Buffer.prototype`（lib/buffer.js 形态）：own `constructor` 与
+    /// 已实现实例方法为可枚举数据属性，[[Prototype]] 挂
+    /// %Uint8Array.prototype%；实例创建即接线，懒创建缓存。
+    buffer_prototype: Option<i64>,
     /// fetch / Streams / AbortController 全局构造器的 `prototype` 对象，按
     /// builtin 懒创建缓存；携带不可枚举 `constructor` 自有属性，实例创建时
     /// 挂接为 [[Prototype]]，使 instanceof 与 Object.getPrototypeOf 成立。
@@ -1467,6 +1480,7 @@ impl NativeAgentState {
             view_prototypes: HashMap::new(),
             typed_array_prototype: None,
             typed_array_constructor: None,
+            buffer_prototype: None,
             web_prototypes: HashMap::new(),
             console_object: None,
             intl: dispatch::intl::IntlState::default(),
@@ -1747,6 +1761,7 @@ impl NativeAgentState {
         self.view_prototypes.clear();
         self.typed_array_prototype = None;
         self.typed_array_constructor = None;
+        self.buffer_prototype = None;
         self.web_prototypes.clear();
         self.array_constructor = None;
         self.global_object = None;
@@ -2610,12 +2625,7 @@ impl NativeAgentState {
             return self.native_callable(NativeCallableKind::DateMethod(method));
         }
         if let Some(property) = dispatch::node_buffer::property(self, receiver, &key) {
-            return match property {
-                dispatch::node_buffer::BufferProperty::Method(method) => {
-                    self.native_callable(NativeCallableKind::BufferMethod(method))
-                }
-                dispatch::node_buffer::BufferProperty::Value(value) => Some(value),
-            };
+            return Some(property);
         }
         if let Some(property) = dispatch::collections::property(self, receiver, &key) {
             return match property {
@@ -2653,12 +2663,6 @@ impl NativeAgentState {
             }
             let builtin = static_builtin(wjsm_ir::Builtin::ObjectKeys, &key)?;
             return self.native_callable(NativeCallableKind::Builtin(builtin, false));
-        }
-        if value::is_native_callable(receiver)
-            && self.native_callable_kind(receiver) == Some(NativeCallableKind::BufferConstructor)
-        {
-            let kind = dispatch::node_buffer::constructor_property(&key)?;
-            return self.native_callable(kind);
         }
         if value::is_native_callable(receiver) {
             let prototype = match self.native_callable_kind(receiver) {
@@ -3435,7 +3439,7 @@ impl NativeAgentState {
             return self.ensure_process_object();
         }
         if name == "Buffer" {
-            return self.native_callable(NativeCallableKind::BufferConstructor);
+            return self.ensure_buffer_constructor();
         }
         if name == "__wjsm_node_net" {
             return dispatch::node_net::ensure_bridge(self);
@@ -5145,6 +5149,86 @@ impl NativeAgentState {
         self.install_species_accessor(constructor)?;
         self.typed_array_constructor = Some(constructor);
         Some((constructor, prototype))
+    }
+
+    /// Node `Buffer` 构造器：创建 callable 并连带物化 Node 形态的静态成员
+    /// 与 `Buffer.prototype`（全局名 `Buffer` 首次触达即完成，own keys 枚举
+    /// 与静态链解析不依赖访问历史）。
+    fn ensure_buffer_constructor(&mut self) -> Option<i64> {
+        let constructor = self.native_callable(NativeCallableKind::BufferConstructor)?;
+        self.ensure_buffer_prototype()?;
+        Some(constructor)
+    }
+
+    /// Buffer.prototype（Node lib/buffer.js 形态）懒物化：own `constructor`
+    /// （不可枚举）与已实现实例方法（可枚举，Node 定义次序）为数据属性，
+    /// [[Prototype]] 挂 %Uint8Array.prototype%——实例沿 Buffer.prototype →
+    /// %Uint8Array.prototype% → %TypedArray%.prototype 三层链继承 TypedArray
+    /// 方法族并满足 `instanceof Uint8Array`。同时物化构造器静态形态：own
+    /// `prototype`（writable 不可枚举不可配置）、静态方法（可枚举），静态
+    /// [[Prototype]] 挂 %Uint8Array%（Node：Object.getPrototypeOf(Buffer)
+    /// === Uint8Array，BYTES_PER_ELEMENT / @@species 沿静态链继承）。
+    pub(crate) fn ensure_buffer_prototype(&mut self) -> Option<i64> {
+        if let Some(prototype) = self.buffer_prototype {
+            return Some(prototype);
+        }
+        let constructor = self.native_callable(NativeCallableKind::BufferConstructor)?;
+        let uint8 = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::Uint8ArrayConstructor,
+            false,
+        ))?;
+        let parent = self.ensure_view_prototype(uint8, wjsm_ir::Builtin::Uint8ArrayConstructor)?;
+        let prototype = self.allocate_object(48, false).ok()?;
+        // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会回收
+        // 尚未挂满成员的 prototype 对象。
+        self.buffer_prototype = Some(prototype);
+        self.gc
+            .heap()
+            .set_prototype(
+                value::decode_handle(prototype),
+                value::decode_handle(parent),
+            )
+            .ok()?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                constructor_key,
+                constructor as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        for (name, kind) in dispatch::node_buffer::PROTOTYPE_METHODS {
+            let method = self.native_callable(NativeCallableKind::BufferMethod(*kind))?;
+            let key = self.intern_property_string((*name).into())?;
+            self.gc
+                .heap()
+                .define_data_property(
+                    value::decode_handle(prototype),
+                    key,
+                    method as u64,
+                    WEB_IDL_METHOD_FLAGS,
+                )
+                .ok()?;
+        }
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), prototype);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
+        for (name, kind) in dispatch::node_buffer::CONSTRUCTOR_STATICS {
+            let method = self.native_callable(NativeCallableKind::BufferStatic(*kind))?;
+            let key = self.intern_property_string((*name).into())?;
+            self.callable_properties.insert((constructor, key), method);
+            self.callable_property_flags
+                .insert((constructor, key), WEB_IDL_METHOD_FLAGS);
+        }
+        // 用户显式改设过静态原型（含 null）的条目不覆盖。
+        self.callable_prototypes
+            .entry(value::strip_gc_color(constructor))
+            .or_insert(uint8);
+        Some(prototype)
     }
 
     /// 把具体 TypedArray 构造器的静态 [[Prototype]] 挂到 %TypedArray%

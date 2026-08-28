@@ -571,6 +571,7 @@ fn root_values(
     queue.extend(state.weak_set_prototype);
     queue.extend(state.view_prototypes.values().copied());
     queue.extend(state.typed_array_prototype);
+    queue.extend(state.buffer_prototype);
     queue.extend(state.web_prototypes.values().copied());
     queue.extend(state.console_object);
     queue.extend(state.intl.object);
