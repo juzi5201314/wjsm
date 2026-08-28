@@ -155,6 +155,13 @@ impl Lowerer {
         let (scope_id, _kind) = match self.lookup_binding_for_read(&name) {
             Ok(found) => found,
             Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
+                // Web 平台全局是全局对象上真实的可配置自有属性：裸读须按全局
+                // 环境记录语义（GlobalEnvGet）解析——被 delete 后读取抛
+                // "X is not defined"，属性被改写后读到新值；普通 GetProp 对
+                // 缺失属性静默返回 undefined，不满足 ResolveBinding 语义。
+                if wjsm_ir::intrinsic_sites::web_global_property(&name).is_some() {
+                    return self.lower_script_global_read(block, &name, false);
+                }
                 // 变量查找失败 → 从全局对象按名读取属性
                 // 全局对象已在模块初始化阶段通过 CreateGlobalObject 创建并存入 $0.$global
                 let global_obj = self.alloc_value();
