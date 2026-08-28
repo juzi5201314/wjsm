@@ -546,7 +546,11 @@ impl Lowerer {
 
     // ── Unary operators ─────────────────────────────────────────────────────
 
-    fn publish_expr_continuation(&mut self, entry_block: BasicBlockId, continuation: BasicBlockId) {
+    pub(crate) fn publish_expr_continuation(
+        &mut self,
+        entry_block: BasicBlockId,
+        continuation: BasicBlockId,
+    ) {
         if continuation != entry_block {
             self.expr_merge_block = Some(continuation);
         }
@@ -778,6 +782,9 @@ impl Lowerer {
                         self.publish_expr_continuation(block, current_block);
                         Ok(dest)
                     }
+                    // delete 可选链（§13.5.1.2）：链短路产出 true，最外环
+                    // 成员访问发 DeleteProp，调用环求值后恒 true。
+                    swc_ast::Expr::OptChain(oc) => self.lower_optchain_delete(oc, block),
                     // delete x：绑定不可删除时返回 false，其余沿用既有恒 true。
                     swc_ast::Expr::Ident(ident) => {
                         // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。

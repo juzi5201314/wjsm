@@ -459,8 +459,17 @@ impl Lowerer {
                 let value =
                     self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                 let ir_pat = swc_ast::Pat::from(pat.clone());
-                let continuation =
-                    self.lower_destructure_pattern(&ir_pat, value, current_block, VarKind::Let)?;
+                // 解构赋值的 coercible 检查文案引用 RHS 的调用点文本。
+                let source = DestructureSource::TopLevel(DestructureCallsite::Text(
+                    render_destructure_callsite(assign.right.as_ref()),
+                ));
+                let continuation = self.lower_destructure_pattern(
+                    &ir_pat,
+                    value,
+                    current_block,
+                    VarKind::Let,
+                    &source,
+                )?;
                 self.expr_merge_block = Some(continuation);
                 return Ok(value);
             }

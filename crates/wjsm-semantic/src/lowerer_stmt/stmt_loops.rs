@@ -650,7 +650,14 @@ impl Lowerer {
                     self.store_binding_value(block, &binding, value, pat.span(), true)
                 }
                 swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
-                    self.lower_destructure_pattern(pat, value, block, VarKind::Let)
+                    // 迭代值的 coercible 检查文案调用点为 V8 内部临时名 `.for`。
+                    self.lower_destructure_pattern(
+                        pat,
+                        value,
+                        block,
+                        VarKind::Let,
+                        &DestructureSource::TopLevel(DestructureCallsite::Text(".for".into())),
+                    )
                 }
                 _ => Err(self.error(pat.span(), "unsupported pattern in for...in/for...of")),
             },
@@ -687,6 +694,9 @@ impl Lowerer {
                                 value,
                                 block,
                                 kind,
+                                &DestructureSource::TopLevel(DestructureCallsite::Text(
+                                    ".for".into(),
+                                )),
                             )?;
                         }
                     }
