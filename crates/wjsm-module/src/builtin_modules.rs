@@ -21,8 +21,20 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         source: include_str!("../builtin_js/node_path.js"),
     },
     BuiltinModule {
+        canonical: "path/posix",
+        source: include_str!("../builtin_js/node_path_posix.js"),
+    },
+    BuiltinModule {
+        canonical: "path/win32",
+        source: include_str!("../builtin_js/node_path_win32.js"),
+    },
+    BuiltinModule {
         canonical: "util",
         source: include_str!("../builtin_js/node_util.js"),
+    },
+    BuiltinModule {
+        canonical: "util/types",
+        source: include_str!("../builtin_js/node_util_types.js"),
     },
     BuiltinModule {
         canonical: "events",
@@ -31,6 +43,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
     BuiltinModule {
         canonical: "assert",
         source: include_str!("../builtin_js/node_assert.js"),
+    },
+    BuiltinModule {
+        canonical: "assert/strict",
+        source: include_str!("../builtin_js/node_assert_strict.js"),
     },
     BuiltinModule {
         canonical: "buffer",
@@ -125,6 +141,38 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
             include_str!("../builtin_js/node_perf_hooks/exports.js"),
         ),
     },
+    BuiltinModule {
+        canonical: "string_decoder",
+        source: include_str!("../builtin_js/node_string_decoder.js"),
+    },
+    BuiltinModule {
+        canonical: "timers",
+        source: include_str!("../builtin_js/node_timers.js"),
+    },
+    BuiltinModule {
+        canonical: "timers/promises",
+        source: include_str!("../builtin_js/node_timers_promises.js"),
+    },
+    BuiltinModule {
+        canonical: "punycode",
+        source: include_str!("../builtin_js/node_punycode.js"),
+    },
+    BuiltinModule {
+        canonical: "process",
+        source: include_str!("../builtin_js/node_process.js"),
+    },
+    BuiltinModule {
+        canonical: "console",
+        source: include_str!("../builtin_js/node_console.js"),
+    },
+    BuiltinModule {
+        canonical: "constants",
+        source: include_str!("../builtin_js/node_constants.js"),
+    },
+    BuiltinModule {
+        canonical: "diagnostics_channel",
+        source: include_str!("../builtin_js/node_diagnostics_channel.js"),
+    },
 ];
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
@@ -214,9 +262,13 @@ mod tests {
         let mut seen = HashSet::new();
         for canonical in [
             "path",
+            "path/posix",
+            "path/win32",
             "util",
+            "util/types",
             "events",
             "assert",
+            "assert/strict",
             "url",
             "querystring",
             "os",
@@ -235,10 +287,53 @@ mod tests {
             "inspector",
             "cluster",
             "perf_hooks",
+            "string_decoder",
+            "timers",
+            "timers/promises",
+            "punycode",
+            "process",
+            "console",
+            "constants",
+            "diagnostics_channel",
         ] {
             assert!(
                 seen.insert(virtual_path(canonical)),
                 "virtual path for {canonical} should be unique"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_lookup_resolves_subpath_modules_with_and_without_prefix() {
+        for canonical in [
+            "timers/promises",
+            "assert/strict",
+            "util/types",
+            "path/posix",
+        ] {
+            let bare = match lookup(canonical) {
+                BuiltinLookup::Found(module) => module,
+                other => panic!("bare lookup should find {canonical}, got {other:?}"),
+            };
+            let prefixed = match lookup(&format!("node:{canonical}")) {
+                BuiltinLookup::Found(module) => module,
+                other => panic!("node: lookup should find {canonical}, got {other:?}"),
+            };
+            assert_eq!(bare.canonical, canonical);
+            assert!(
+                std::ptr::eq(bare, prefixed),
+                "{canonical} should resolve to the same wrapper with or without node: prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn every_registered_builtin_has_nonempty_source() {
+        for module in BUILTIN_MODULES {
+            assert!(
+                !module.source.trim().is_empty(),
+                "builtin {} should have wrapper source",
+                module.canonical
             );
         }
     }

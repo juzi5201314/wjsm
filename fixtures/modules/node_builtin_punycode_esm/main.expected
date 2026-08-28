@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+true
+maana-pta --dqo34k
+mañana ☃-⌘
+xn--maana-pta.com xn--fiq228c.xn--fiqs8s plain.example
+mañana.com 中文.中国
+user@xn--bcher-kva.example
+[97,66615]
+a𐐷
+string
+--- stderr ---

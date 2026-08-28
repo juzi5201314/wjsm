@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+xn--bcher-kva.de
+bücher.de
+mnchen-3ya
+münchen
+--- stderr ---

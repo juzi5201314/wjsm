@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+true
+true true
+true true fixture:test
+false false
+true
+received 42 fixture:test
+true false
+false
+--- stderr ---

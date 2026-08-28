@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+true
+true
+true
+cjs assert strict done
+--- stderr ---

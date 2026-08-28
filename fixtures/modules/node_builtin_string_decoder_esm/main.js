@@ -1,0 +1,15 @@
+import sdBare from 'string_decoder';
+import { StringDecoder } from 'node:string_decoder';
+console.log(sdBare.StringDecoder === StringDecoder);
+const utf8 = new StringDecoder('utf8');
+console.log(utf8.encoding);
+console.log(JSON.stringify(utf8.write(Buffer.from([0xe4, 0xbd]))));
+console.log(JSON.stringify(utf8.write(Buffer.from([0xa0]))));
+console.log(JSON.stringify(utf8.end()));
+const incomplete = new StringDecoder('utf-8');
+incomplete.write(Buffer.from([0xe4]));
+console.log(JSON.stringify(incomplete.end()));
+const b64 = new StringDecoder('base64');
+console.log(JSON.stringify(b64.write(Buffer.from('ab'))));
+console.log(JSON.stringify(b64.write(Buffer.from('cd'))));
+console.log(JSON.stringify(b64.end()));
