@@ -4,7 +4,7 @@
 
 这份种子不是 builtin JS，也不是引导完的 primordial 堆。它只提供 global object（handle `0`）、空 shape table 和 `EvalIndirect`。`Object.prototype` 等在恢复后当场分配。`node:` 模块仍在编译期 lower。
 
-冷启动对比请关磁盘缓存（不设 `WJSM_CACHE_DIR`，或使用 `wjsm-bench --cold`）。`--cold` 每轮清空编译缓存，不关闭启动快照。
+冷启动对比请关磁盘缓存（`WJSM_CACHE_DIR=` 设为空串，或使用 `wjsm-bench --cold`）。`--cold` 每轮清空编译缓存，不关闭启动快照。
 
 ## 校验
 

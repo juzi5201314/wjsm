@@ -31,7 +31,7 @@ wjsm run app.js                               # 配置文件 verify-ir=true 生�
 # （没有 --verify-ir 的反选项，只能改配置文件）
 
 # 环境变量覆盖配置文件
-WJSM_CACHE_DIR=/tmp/wjsm-cache wjsm run app.js  # 启用磁盘缓存
+WJSM_CACHE_DIR=/tmp/wjsm-cache wjsm run app.js  # 覆盖磁盘缓存目录
 ```
 
 ## 不能写进配置文件的选项

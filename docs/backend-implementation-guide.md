@@ -92,7 +92,7 @@ overlay 的循环头类型守卫对 typed 活跃值恒真，直接省略；它�
 
 ## 3. Native image 与 cache
 
-`NativeImageRepository` 是 base image 内存去重与磁盘 cache 的唯一协调者，不是强生命周期 owner。磁盘路径来自调用方传入的 `cache_dir`；CLI / in-process 入口只在 `WJSM_CACHE_DIR` 有值时打开，没有 `$HOME/.cache/wjsm` 回落。`NativeCacheKey` 绑定：
+`NativeImageRepository` 是 base image 内存去重与磁盘 cache 的唯一协调者，不是强生命周期 owner。磁盘路径来自调用方传入的 `cache_dir`；CLI / in-process 入口用 `wjsm-module` 的 `resolve_cache_dir()` 解析（`WJSM_CACHE_DIR` > `${XDG_CACHE_HOME}/wjsm` > `${HOME}/.cache/wjsm`，空串显式禁用）。`NativeCacheKey` 绑定：
 
 - portable artifact digest；
 - native ABI hash；

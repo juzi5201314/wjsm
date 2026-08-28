@@ -77,10 +77,10 @@ fn intrinsic_pristine(
         return runtime::fail_dispatch(ctx);
     };
     let pristine = match (value::decode_f64(*family) as i64, rest) {
-        (constants::INTRINSIC_FAMILY_GLOBAL_IDENT, []) => intrinsic_sites::global_ident_name(
-            builtin,
-        )
-        .is_some_and(|name| global_ident_pristine(state, name)),
+        (constants::INTRINSIC_FAMILY_GLOBAL_IDENT, []) => {
+            intrinsic_sites::global_ident_name(builtin)
+                .is_some_and(|name| global_ident_pristine(state, name, Some(builtin)))
+        }
         (constants::INTRINSIC_FAMILY_STATIC_MEMBER, []) => {
             intrinsic_sites::static_member_names(builtin).is_some_and(|(container, prop)| {
                 static_member_pristine(state, builtin, container, prop)
@@ -113,10 +113,16 @@ fn expected_canonical(state: &mut NativeAgentState, builtin: Builtin, method: bo
 }
 
 /// 全局名未被运行时触碰：无全局词法绑定（间接 eval 注入的 let/const）、
-/// 无全局对象自有槽（赋值 / defineProperty 数据或访问器）、无删除墓碑。
-/// 全局对象尚未创建或名字从未驻留时不存在任何用户可达的修改通道，恒
-/// pristine。
-fn global_ident_pristine(state: &mut NativeAgentState, name: &str) -> bool {
+/// 无删除墓碑，且全局对象自有槽要么缺失、要么仍是持有站点规范值的数据
+/// 属性（Web 全局在 CreateGlobalObject 时急切物化为真实自有属性，槽位
+/// 存在本身不构成用户修改；`site_builtin` 为 None 的调用方——静态成员
+/// 容器名——无法给出规范值，槽位存在一律保守判 false）。全局对象尚未
+/// 创建或名字从未驻留时不存在任何用户可达的修改通道，恒 pristine。
+fn global_ident_pristine(
+    state: &mut NativeAgentState,
+    name: &str,
+    site_builtin: Option<Builtin>,
+) -> bool {
     let Some(global) = state.global_object else {
         return true;
     };
@@ -129,15 +135,22 @@ fn global_ident_pristine(state: &mut NativeAgentState, name: &str) -> bool {
     if global_env::lexical_has(state, global, key) {
         return false;
     }
-    if state
+    if let Some(slot) = state
         .gc
         .heap()
         .get_property_slot(value::decode_handle(global), key)
         .ok()
         .flatten()
-        .is_some()
     {
-        return false;
+        if slot.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
+            return false;
+        }
+        let Some(expected) =
+            site_builtin.and_then(|builtin| expected_canonical(state, builtin, false))
+        else {
+            return false;
+        };
+        return value::strip_gc_color(slot.value as i64) == value::strip_gc_color(expected);
     }
     !state
         .intrinsic_tombstones
@@ -152,7 +165,7 @@ fn static_member_pristine(
     container_name: &str,
     prop_name: &str,
 ) -> bool {
-    if !global_ident_pristine(state, container_name) {
+    if !global_ident_pristine(state, container_name, None) {
         return false;
     }
     let Some(global) = state.global_object else {
@@ -304,11 +317,7 @@ fn array_proto_pristine(
 /// args: [family, wire_id] 解析站点全局名（GLOBAL_IDENT 为站点名、
 /// STATIC_MEMBER 为容器名）；[family, wire_id, receiver] 解析 receiver 上
 /// 的站点属性成员。
-fn intrinsic_resolve(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    args: &[i64],
-) -> i64 {
+fn intrinsic_resolve(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [family, wire, rest @ ..] = args else {
         return runtime::fail_dispatch(ctx);
     };

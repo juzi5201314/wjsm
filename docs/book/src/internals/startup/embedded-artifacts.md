@@ -20,7 +20,7 @@
 
 ## 与磁盘缓存
 
-native cache 是另一条 opt-in 路径（`WJSM_CACHE_DIR`），按需生成 `.wnat`，不替代启动种子。`wjsm-bench --cold` 只清空该缓存。
+native cache 是另一条按需生成 `.wnat` 的路径（目录经 `resolve_cache_dir()` 解析，默认回落 XDG/HOME），不替代启动种子。`wjsm-bench --cold` 只清空该缓存。
 
 ## 深入了解
 

@@ -1,9 +1,11 @@
 // wjsm-module: ES Module / CommonJS bundling support
 // 将多个模块 lower 为单一 semantic IR program
 
+mod artifact_cache;
 mod builtin_cache;
 mod builtin_modules;
 mod bundler;
+mod cache_dir;
 mod cjs_require_analysis;
 pub mod cjs_transform;
 mod exports;
@@ -15,11 +17,16 @@ mod resolver;
 mod runtime_resolution;
 mod semantic;
 mod source_store;
+mod source_trace;
 mod static_runtime_entries;
 use swc_core::ecma::ast;
 
+pub use artifact_cache::{
+    ArtifactCacheHit, ArtifactCacheRequest, lookup_portable_artifact, store_portable_artifact,
+};
 pub use builtin_modules::builtin_module_names;
 pub use bundler::{ModuleBundler, RuntimeEntryBundle, logical_url_from_path, logical_url_path};
+pub use cache_dir::resolve_cache_dir;
 pub use graph::{ModuleGraph, ModuleId};
 pub use resolution_options::ResolutionOptions;
 pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
@@ -33,6 +40,7 @@ pub use source_store::{
     ModuleSourceStore, SNAPSHOT_FILE_URL_PREFIX, SNAPSHOT_VIRTUAL_ROOT, is_snapshot_fs_path,
     snapshot_file_url, snapshot_virtual_path, snapshot_virtual_root,
 };
+pub use source_trace::{SourceFact, SourceReadTrace};
 pub use static_runtime_entries::include_static_runtime_entries;
 
 use anyhow::{Context, Result};
@@ -96,7 +104,8 @@ pub fn lower_artifact_input_with_store(
 }
 
 /// 同 [`lower_bundle_with_debug`]，但 builtin 依赖闭包走独立 lower + 磁盘缓存
-/// （`${WJSM_CACHE_DIR}/builtin_ir`，issue #344）。`WJSM_CACHE_DIR` 未设置时构建段但不落盘；
+/// （`${cache_dir}/builtin_ir`，issue #344；目录经 [`resolve_cache_dir`] 解析，
+/// 缺省回落用户缓存目录）。磁盘缓存被禁用时构建段但不落盘；
 /// `WJSM_NO_BUILTIN_CACHE` 非空时整体退化为 [`lower_bundle_with_debug`]。
 pub fn lower_bundle_cached(entry: &Path, root_path: &Path) -> Result<wjsm_ir::Program> {
     lower_bundle_cached_with_options(entry, root_path, ResolutionOptions::default())

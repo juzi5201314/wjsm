@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 fn run_inline(source: &str) -> (i32, String, String) {
+    crate::test_env::ensure_test_cache_dir();
     let (exit, stdout, stderr) = wjsm_cli::run_source_in_process(source);
     (
         exit,
@@ -23,9 +24,38 @@ fn inline_dynamic_import_builtin_fulfills_namespace() {
 }
 
 #[test]
+fn inline_dynamic_import_namespace_is_exotic() {
+    // §10.4.6：runtime 路径兑现的命名空间同样是 exotic——null 原型、不可
+    // 扩展、导出呈现 writable=true/configurable=false 数据描述符、[[Set]]
+    // 恒 false、@@toStringTag 为 "Module"。
+    let (exit, stdout, stderr) = run_inline(
+        r#"import("node:querystring").then((ns) => {
+  const desc = Object.getOwnPropertyDescriptor(ns, "stringify");
+  console.log(
+    Object.getPrototypeOf(ns),
+    Object.isExtensible(ns),
+    Object.prototype.toString.call(ns),
+    desc.writable,
+    desc.enumerable,
+    desc.configurable,
+    "get" in desc,
+    Reflect.set(ns, "stringify", 1),
+    Reflect.deleteProperty(ns, "stringify"),
+  );
+});"#,
+    );
+    assert_eq!(exit, 0, "stderr: {stderr}");
+    assert_eq!(
+        stdout,
+        "null false [object Module] true true false false false false\n"
+    );
+}
+
+#[test]
 fn inline_dynamic_import_relative_resolves_against_module_root() {
     // 显式 root 模拟从该目录执行 `run -e`：相对说明符以模块根为解析基址
     //（对齐 Node `--eval` 以 cwd 为基址）。
+    crate::test_env::ensure_test_cache_dir();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/modules/dynamic_import_builtin_runtime");
     let (exit, stdout, stderr) = wjsm_cli::run_source_in_process_with_root(

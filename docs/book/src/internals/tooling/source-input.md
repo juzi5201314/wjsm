@@ -23,9 +23,9 @@
 3. 调用 pipeline 编出 portable `.wjsm`。
 4. `create_native_runtime` 后执行 `NativeRuntime::execute`。
 
-`create_native_runtime` 只在 `WJSM_CACHE_DIR` 有值时打开磁盘缓存。不同 subcommand 在步骤 3/4 之间有差异：`build` 只编译不执行，`check` 只到 semantic IR，`dump-*` 在不同阶段输出。
+`create_native_runtime` 用 `wjsm-module` 的 `resolve_cache_dir()` 解析磁盘缓存目录（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。不同 subcommand 在步骤 3/4 之间有差异：`build` 只编译不执行，`check` 只到 semantic IR，`dump-*` 在不同阶段输出。
 
-没有 `PrecompiledEntry` / `--precompiled`。要跨进程复用机器码，设置 `WJSM_CACHE_DIR` 走 native image cache。详见[预编译执行与磁盘缓存](precompiled-execution.md)。
+没有 `PrecompiledEntry` / `--precompiled`。跨进程复用机器码走 native image cache（磁盘缓存默认可用）。详见[预编译执行与磁盘缓存](precompiled-execution.md)。
 
 ## 多文件入口
 

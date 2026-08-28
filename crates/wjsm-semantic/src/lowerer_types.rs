@@ -169,21 +169,23 @@ pub(crate) struct Lowerer {
     /// 动态 import specifier → ModuleId 映射：(当前模块 ID, specifier) → 目标 ModuleId
     pub(crate) dynamic_import_specifier_map:
         std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ModuleId>,
-    /// 需要构建命名空间对象的模块集合
-    pub(crate) dynamic_import_namespace_modules: std::collections::HashSet<wjsm_ir::ModuleId>,
-    /// 命名空间对象的 ValueId：ModuleId → ValueId（在模块体执行前创建，模块体执行后填充属性）
-    pub(crate) dynamic_import_namespace_objects:
-        std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
+    /// 需要构建命名空间对象的模块集合（动态 import 目标 ∪ 静态 `import * as`
+    /// 来源）。每个模块只创建一个命名空间对象（§10.4.6.12 GetModuleNamespace
+    /// 的缓存语义）：静态导入局部与动态 import 结果共享同一对象身份。
+    pub(crate) namespace_object_modules: std::collections::HashSet<wjsm_ir::ModuleId>,
+    /// 每模块唯一命名空间对象的 ValueId：ModuleId → ValueId（在模块体执行前
+    /// 创建并注册，来源模块体执行后安装 live binding getter 并收口为 exotic）。
+    pub(crate) namespace_objects: std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
     pub(crate) module_export_names:
         std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
     /// 重导出声明（来自 analyze_module_links）
     pub(crate) re_export_map:
         std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
-    /// 静态 `import * as ns` 的命名空间对象 ValueId：(导入方模块 ID, local_name) → ValueId
+    /// 静态 `import * as ns` 的局部登记：(导入方模块 ID, local_name) → 来源
+    /// 模块的唯一命名空间 ValueId。用于标识符读取快路径与 intrinsic 遮蔽 /
+    /// with 回退判定；对象身份以 [`Self::namespace_objects`] 为准。
     pub(crate) static_namespace_import_objects:
         std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ValueId>,
-    /// 静态命名空间导入来源：(导入方模块 ID, local_name, 来源模块 ID)
-    pub(crate) static_namespace_import_sources: Vec<(wjsm_ir::ModuleId, String, wjsm_ir::ModuleId)>,
 
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,

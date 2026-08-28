@@ -719,7 +719,7 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
             | NativeCallableKind::PromiseReject(handle) => {
                 add(owner, value::encode_object_handle(*handle));
             }
-            NativeCallableKind::            ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
+            NativeCallableKind::ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
                 add(owner, value::encode_proxy_handle(*handle));
             }
             // fetch/stream 方法值不再携带实例句柄（按实际 this 分派），

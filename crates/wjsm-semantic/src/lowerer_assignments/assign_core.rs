@@ -61,13 +61,24 @@ impl Lowerer {
         let module_id = self.current_module_id;
 
         // 命名空间局部（`import * as ns`）按 (导入方模块, local) 查找，避免跨模块同名覆盖（#44）。
+        // 登记的 ValueId 属于 `$module_main`：只有当前降级函数就是绑定所有者
+        // 且未进入共享 env 时才可直接复用；闭包内读取必须走捕获/共享 env
+        // 机制，否则会跨函数引用未定义 ValueId（IR 校验失败）。
         if let Some(mid) = module_id
             && let Some(ns_obj) = self
                 .static_namespace_import_objects
                 .get(&(mid, name.clone()))
                 .copied()
+            && let Ok((scope_id, _)) = self.scopes.lookup(&name)
         {
-            return Ok(ns_obj);
+            let binding = CapturedBinding::new(name.clone(), scope_id);
+            if self.binding_belongs_to_current_function(&binding)
+                && !self.is_shared_binding(&binding)
+            {
+                return Ok(ns_obj);
+            }
+            // 命名空间绑定在入口块即初始化，无 TDZ；直接经 env 读取。
+            return self.load_captured_binding(block, &binding);
         }
 
         // 命名导入别名按 (导入方模块, local) 查找。读取时复用 lower_ident 对捕获/共享 env
@@ -144,6 +155,13 @@ impl Lowerer {
         let (scope_id, _kind) = match self.lookup_binding_for_read(&name) {
             Ok(found) => found,
             Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
+                // Web 平台全局是全局对象上真实的可配置自有属性：裸读须按全局
+                // 环境记录语义（GlobalEnvGet）解析——被 delete 后读取抛
+                // "X is not defined"，属性被改写后读到新值；普通 GetProp 对
+                // 缺失属性静默返回 undefined，不满足 ResolveBinding 语义。
+                if wjsm_ir::intrinsic_sites::web_global_property(&name).is_some() {
+                    return self.lower_script_global_read(block, &name, false);
+                }
                 // 变量查找失败 → 从全局对象按名读取属性
                 // 全局对象已在模块初始化阶段通过 CreateGlobalObject 创建并存入 $0.$global
                 let global_obj = self.alloc_value();

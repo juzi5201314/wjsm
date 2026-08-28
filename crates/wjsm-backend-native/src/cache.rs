@@ -307,7 +307,9 @@ impl NativeImageRepository {
             .compile_program_with_slots(program, variable_slots)?;
         let image = CompiledImage::load(&object, key.image_id(), resolver)?;
         if let Some(directory) = &self.cache_dir {
-            store_cache_entry(directory, key, &object)?;
+            // 缓存写入是 best-effort：缺省回落目录可能不可写（只读 $HOME 等），
+            // 落盘失败只损失后续命中，绝不能让本次执行失败。
+            let _ = store_cache_entry(directory, key, &object);
         }
         Ok(image)
     }
@@ -571,6 +573,33 @@ fn hex(bytes: &[u8]) -> String {
     output
 }
 
+/// 缓存子目录与各自条目扩展名：`builtin_ir/*.bin`（wjsm-module 的 lower 产物
+/// 缓存）、`artifact/*.{wjsm,dep}`（输入寻址 artifact 缓存）。顶层只认 `*.wnat`。
+/// 统计与 LRU 淘汰共用此定义，`wjsm cache stats|clear|prune` 保持同一范围。
+fn cache_subdir_extensions(name: &str) -> Option<&'static [&'static str]> {
+    match name {
+        "builtin_ir" => Some(&["bin"]),
+        "artifact" => Some(&["wjsm", "dep"]),
+        _ => None,
+    }
+}
+
+/// 判断文件是否属于缓存条目：按所在目录选择扩展名白名单。
+fn is_cache_entry_path(path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    match path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .and_then(cache_subdir_extensions)
+    {
+        Some(allowed) => allowed.contains(&extension),
+        None => extension == "wnat",
+    }
+}
+
 fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
     let mut entries = 0_u64;
     let mut bytes = 0_u64;
@@ -582,20 +611,20 @@ fn cache_dir_stats(directory: &Path) -> Option<(u64, u64)> {
             .map(|file_type| file_type.is_dir())
             .unwrap_or(false)
         {
-            // builtin_ir 子目录（wjsm-module 的 lower 产物缓存）纳入统计与淘汰。
-            if path.file_name().and_then(|name| name.to_str()) == Some("builtin_ir") {
+            // 已知缓存子目录纳入统计与淘汰。
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(cache_subdir_extensions)
+                .is_some()
+            {
                 let (sub_entries, sub_bytes) = cache_dir_stats(&path)?;
                 entries = entries.saturating_add(sub_entries);
                 bytes = bytes.saturating_add(sub_bytes);
             }
             continue;
         }
-        let path = entry.path();
-        let extension = path.extension().and_then(|extension| extension.to_str());
-        let is_builtin_ir = is_builtin_ir_path(&path);
-        let is_cache_file =
-            extension == Some("wnat") || (extension == Some("bin") && is_builtin_ir);
-        if !is_cache_file {
+        if !is_cache_entry_path(&path) {
             continue;
         }
         let metadata = entry.metadata().ok()?;
@@ -664,7 +693,7 @@ fn parse_cache_max_bytes(value: Option<std::ffi::OsString>) -> Option<u64> {
     }
 }
 
-/// 递归收集目录下所有缓存条目（顶层 `.wnat` + `builtin_ir/*.bin`），
+/// 递归收集目录下所有缓存条目（顶层 `.wnat` + 已知缓存子目录内的对应扩展名），
 /// 记录路径、字节数与 mtime 纳秒。
 fn collect_cache_entries(directory: &Path, out: &mut Vec<CacheEntry>) {
     let Ok(read_dir) = fs::read_dir(directory) else {
@@ -676,17 +705,17 @@ fn collect_cache_entries(directory: &Path, out: &mut Vec<CacheEntry>) {
             continue;
         };
         if file_type.is_dir() {
-            if path.file_name().and_then(|name| name.to_str()) == Some("builtin_ir") {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(cache_subdir_extensions)
+                .is_some()
+            {
                 collect_cache_entries(&path, out);
             }
             continue;
         }
-        let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
-            continue;
-        };
-        let is_cache_file =
-            extension == "wnat" || (extension == "bin" && is_builtin_ir_path(&path));
-        if !is_cache_file {
+        if !is_cache_entry_path(&path) {
             continue;
         }
         let Ok(metadata) = entry.metadata() else {
@@ -703,13 +732,6 @@ fn collect_cache_entries(directory: &Path, out: &mut Vec<CacheEntry>) {
                 .unwrap_or(0),
         });
     }
-}
-
-fn is_builtin_ir_path(path: &Path) -> bool {
-    path.parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        == Some("builtin_ir")
 }
 
 struct CacheEntry {
@@ -843,6 +865,26 @@ mod tests {
     }
 
     #[test]
+    fn evict_oldest_includes_artifact_cache_entries() {
+        let dir = temp_cache_dir("artifact");
+        let artifact = dir.join("artifact");
+        fs::create_dir_all(&artifact).expect("artifact dir should be created");
+        let wjsm = artifact.join("a.wjsm");
+        let dep = artifact.join("a.dep");
+        let wnat = dir.join("a.wnat");
+        touch_at(&wjsm, 10, 1);
+        touch_at(&dep, 10, 2);
+        touch_at(&wnat, 10, 3);
+
+        // 上限 10：最旧的 artifact/*.{wjsm,dep} 先被淘汰。
+        evict_oldest(&dir, 10);
+        assert!(!wjsm.exists(), "artifact/*.wjsm 应参与淘汰");
+        assert!(!dep.exists(), "artifact/*.dep 应参与淘汰");
+        assert!(wnat.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn evict_oldest_keeps_unrelated_files() {
         let dir = temp_cache_dir("keep");
         touch(&dir.join("a.wnat"), 20);
@@ -854,17 +896,25 @@ mod tests {
     }
 
     #[test]
-    fn cache_dir_stats_counts_wnat_and_builtin_ir() {
+    fn cache_dir_stats_counts_wnat_builtin_ir_and_artifact() {
         let dir = temp_cache_dir("stats");
         let builtin_ir = dir.join("builtin_ir");
         fs::create_dir_all(&builtin_ir).expect("builtin_ir dir should be created");
+        let artifact = dir.join("artifact");
+        fs::create_dir_all(&artifact).expect("artifact dir should be created");
         touch(&dir.join("a.wnat"), 4);
         touch(&builtin_ir.join("b.bin"), 6);
+        touch(&artifact.join("c.wjsm"), 8);
+        touch(&artifact.join("c.dep"), 2);
         fs::write(dir.join("ignore.txt"), b"x").expect("unrelated file should be written");
+        fs::write(artifact.join("ignore.txt"), b"x").expect("unrelated file should be written");
 
         let (entries, bytes) = cache_dir_stats(&dir).expect("stats should be readable");
-        assert_eq!(entries, 2, "wnat 与 builtin_ir/*.bin 各计一个");
-        assert_eq!(bytes, 10, "统计字节数应覆盖两者");
+        assert_eq!(
+            entries, 4,
+            "wnat、builtin_ir/*.bin 与 artifact/*.{{wjsm,dep}}"
+        );
+        assert_eq!(bytes, 20, "统计字节数应覆盖全部缓存条目");
         let _ = fs::remove_dir_all(&dir);
     }
 

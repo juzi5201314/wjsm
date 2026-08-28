@@ -14,7 +14,7 @@ CLI 不再按 `Target::Wasm` / `Target::Jit` 分发。`run` / `run_file_in_proce
 
 ## 磁盘缓存
 
-`cache_dir` 来自 `NativeRuntimeConfig`。CLI 与 in-process 测试只在 `WJSM_CACHE_DIR` 有值时传入；默认 `None`，编译产物不落盘。打开后 miss 写入 `.wnat`，损坏 / stale / 权限不安全的条目 invalidated 后重编译。
+`cache_dir` 来自 `NativeRuntimeConfig`。CLI 与 in-process 测试经 `resolve_cache_dir()` 传入（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。缓存可用时 miss 写入 `.wnat`，损坏 / stale / 权限不安全的条目 invalidated 后重编译；写入失败静默降级，不影响编译。
 
 ## 后端侧入口
 

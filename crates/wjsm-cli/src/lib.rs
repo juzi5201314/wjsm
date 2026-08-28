@@ -39,6 +39,8 @@ use cli_config::parse_cli;
 use cli_lint::lint_module;
 use ir_output::{print_ir, print_ir_dot, print_ir_func, print_stats};
 
+include!(concat!(env!("OUT_DIR"), "/cli_pipeline_hash.rs"));
+
 // ============================================================================
 // Exit Codes
 // ============================================================================
@@ -887,7 +889,7 @@ fn hex_digest(bytes: [u8; 32]) -> String {
     output
 }
 fn create_native_runtime(cli: &Cli) -> Result<wjsm_host_native::NativeRuntime> {
-    let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
+    let cache_dir = wjsm_module::resolve_cache_dir();
     let runtime_config = wjsm_host_native::NativeRuntimeConfig::from_environment(cache_dir)
         .map_err(anyhow::Error::msg)?
         .with_max_heap_size(cli.max_heap_size)
@@ -1652,6 +1654,7 @@ fn run_file_input_pipeline(
                         &root,
                         &resolution_options,
                         cli.wants_debug_codegen(),
+                        None,
                     )?;
                     result.artifact =
                         Some(PortableArtifact::from_input(&input).map_err(|error| {
@@ -2003,6 +2006,38 @@ fn compile_source_to_pipeline_result_with_identity(
     Ok(result)
 }
 
+/// 输入寻址 artifact 缓存的管线盐：CLI 源码指纹 + 影响 artifact 字节的编译开关
+/// （script/verify-ir/debug）。任一变化都会切换缓存命名空间（issue #376）。
+fn artifact_pipeline_salt(flags: PipelineFlags) -> Vec<u8> {
+    let mut salt = Vec::with_capacity(35);
+    salt.extend_from_slice(&CLI_PIPELINE_SOURCE_HASH);
+    salt.push(u8::from(flags.script));
+    salt.push(u8::from(flags.verify_ir));
+    salt.push(u8::from(flags.debug_codegen));
+    salt
+}
+
+/// 命中路径：解码缓存的 portable artifact，parse/lower 完全跳过。
+/// 解码失败按 miss 处理（冷路径重编译并覆盖写入）。
+fn load_cached_pipeline_result(
+    request: &wjsm_module::ArtifactCacheRequest,
+    verbose: bool,
+) -> Option<PipelineResult> {
+    let hit = wjsm_module::lookup_portable_artifact(request)?;
+    let artifact =
+        PortableArtifact::decode(hit.artifact_bytes.into(), &ArtifactLimits::default()).ok()?;
+    if verbose {
+        eprintln!("Loaded portable artifact from input-addressed cache (parse/lower skipped)");
+    }
+    Some(PipelineResult {
+        ast: None,
+        program: None,
+        artifact: Some(artifact),
+        module_root: hit.module_root,
+        timings: PipelineTimings::default(),
+    })
+}
+
 fn compile_file_input_to_pipeline_result(
     input: &Path,
     root: Option<&Path>,
@@ -2011,8 +2046,23 @@ fn compile_file_input_to_pipeline_result(
     verbose: bool,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<PipelineResult> {
+    // 输入寻址缓存：入口 canonical 身份在 parse 前可得，命中即跳过 parse/lower。
+    let cache_request = wjsm_module::ArtifactCacheRequest::for_entry(
+        input,
+        root,
+        logical_root,
+        resolution_options,
+        &artifact_pipeline_salt(flags),
+    );
+    if let Some(request) = &cache_request
+        && let Some(result) = load_cached_pipeline_result(request, verbose)
+    {
+        return Ok(result);
+    }
+    let trace = Arc::new(wjsm_module::SourceReadTrace::default());
+
     let plan = build_compile_plan(input, root)?;
-    match plan {
+    let result = match plan {
         CompilePlan::Bundle { entry, root } => {
             if verbose {
                 eprintln!("Bundling modules...");
@@ -2030,13 +2080,14 @@ fn compile_file_input_to_pipeline_result(
                 &root,
                 resolution_options,
                 flags.debug_codegen,
+                Some(Arc::clone(&trace)),
             )?;
             result.artifact =
                 Some(PortableArtifact::from_input(&input).map_err(|error| {
                     anyhow::anyhow!("portable artifact encoding failed: {error}")
                 })?);
             result.timings.compile_us = start.elapsed().as_micros() as u64;
-            Ok(result)
+            result
         }
         CompilePlan::SingleSource {
             source,
@@ -2045,6 +2096,9 @@ fn compile_file_input_to_pipeline_result(
             source_path,
             module_root,
         } => {
+            // 单文件计划不经 store：入口内容事实手动入读集（lossy 解码改变过
+            // 字节的文件回放必然 miss——宁可永不命中，不可脏命中）。
+            trace.record_content(&source_path, source.as_bytes());
             let (logical_url, module_root) = if let Some(root) = logical_root {
                 let root = root.canonicalize().with_context(|| {
                     format!("Failed to canonicalize logical root '{}'", root.display())
@@ -2069,9 +2123,19 @@ fn compile_file_input_to_pipeline_result(
                 },
                 flags,
                 verbose,
-            )
+            )?
         }
+    };
+
+    if let (Some(request), Some(artifact)) = (&cache_request, result.artifact.as_ref()) {
+        wjsm_module::store_portable_artifact(
+            request,
+            &trace,
+            &result.module_root,
+            artifact.bytes(),
+        );
     }
+    Ok(result)
 }
 
 fn compile_from_file_input(
@@ -2080,40 +2144,15 @@ fn compile_from_file_input(
     flags: PipelineFlags,
     resolution_options: &wjsm_module::ResolutionOptions,
 ) -> Result<(Vec<u8>, PathBuf)> {
-    let plan = build_compile_plan(input, root)?;
-    match plan {
-        CompilePlan::Bundle { entry, root } => {
-            let input = lower_bundle_artifact_input(
-                &entry,
-                &root,
-                resolution_options,
-                flags.debug_codegen,
-            )?;
-            let bytes = PortableArtifact::from_input(&input)
-                .map_err(|error| anyhow::anyhow!("portable artifact encoding failed: {error}"))?
-                .bytes()
-                .to_vec();
-            Ok((bytes, resolved_module_root(root)))
-        }
-        CompilePlan::SingleSource {
-            source,
-            filename,
-            logical_url,
-            source_path: _,
-            module_root,
-        } => {
-            let bytes = compile_source_with_identity(
-                SourceIdentity {
-                    source: &source,
-                    filename: Some(filename.as_str()),
-                    logical_url: &logical_url,
-                    module_root: module_root.clone(),
-                },
-                flags,
-            )?;
-            Ok((bytes, resolved_module_root(module_root)))
-        }
-    }
+    let result =
+        compile_file_input_to_pipeline_result(input, root, None, flags, false, resolution_options)?;
+    let bytes = result
+        .artifact
+        .as_ref()
+        .context("compile stage produced no portable artifact")?
+        .bytes()
+        .to_vec();
+    Ok((bytes, resolved_module_root(result.module_root)))
 }
 
 fn lower_bundle_artifact_input(
@@ -2121,10 +2160,17 @@ fn lower_bundle_artifact_input(
     root: &Path,
     resolution_options: &wjsm_module::ResolutionOptions,
     debug_codegen: bool,
+    trace: Option<Arc<wjsm_module::SourceReadTrace>>,
 ) -> Result<ArtifactBuildInput> {
-    wjsm_module::lower_artifact_input_with_options(
+    // 带读集追踪的磁盘 store 与普通磁盘 store 走同一 lower 路径，
+    // 只多记录文件系统事实供 artifact 缓存回放校验。
+    let store = match trace {
+        Some(trace) => wjsm_module::ModuleSourceStore::disk_traced(root, trace),
+        None => wjsm_module::ModuleSourceStore::disk(root),
+    };
+    wjsm_module::lower_artifact_input_with_store(
         entry,
-        root,
+        store,
         resolution_options.clone(),
         debug_codegen,
     )
@@ -2253,7 +2299,7 @@ fn execute_artifact_in_process_with_config(
     IN_PROCESS_RUNTIME.with(|runtime| {
         let mut runtime = runtime.borrow_mut();
         if runtime.is_none() {
-            let cache_dir = std::env::var_os("WJSM_CACHE_DIR").map(PathBuf::from);
+            let cache_dir = wjsm_module::resolve_cache_dir();
             match wjsm_host_native::NativeRuntime::new(cache_dir) {
                 Ok(created) => *runtime = Some(created),
                 Err(error) => {
@@ -2608,6 +2654,192 @@ mod tests {
             ExitCode::from(EXIT_SUCCESS)
         );
     }
+    /// 独占设置 `WJSM_CACHE_DIR` 的测试守卫；drop 时恢复原值。
+    /// nextest 每个测试独立进程，进程内无并发写。
+    struct CacheDirGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl CacheDirGuard {
+        fn set(dir: &Path) -> Self {
+            let previous = std::env::var_os("WJSM_CACHE_DIR");
+            // SAFETY: 本测试进程独占该环境变量，结束时恢复。
+            unsafe { std::env::set_var("WJSM_CACHE_DIR", dir) };
+            Self { previous }
+        }
+    }
+
+    impl Drop for CacheDirGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                // SAFETY: 恢复进入测试前的值。
+                Some(value) => unsafe { std::env::set_var("WJSM_CACHE_DIR", value) },
+                None => unsafe { std::env::remove_var("WJSM_CACHE_DIR") },
+            }
+        }
+    }
+
+    fn artifact_bytes(result: &PipelineResult) -> Vec<u8> {
+        result
+            .artifact
+            .as_ref()
+            .expect("compile should produce an artifact")
+            .bytes()
+            .to_vec()
+    }
+
+    #[test]
+    fn artifact_cache_hits_skip_parse_lower_and_invalidate_on_edit() {
+        let root = TestProject::new("artifact_cache_single");
+        let cache_dir = root.join("cache");
+        let _guard = CacheDirGuard::set(&cache_dir);
+        write_file(&root, "main.js", "console.log(40 + 2);\n");
+        let main = root.join("main.js");
+        let options = wjsm_module::ResolutionOptions::default();
+        let flags = PipelineFlags::default();
+
+        // 冷路径：单文件计划走 parse/lower，program 保留在结果里。
+        let cold = compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+            .expect("cold compile should succeed");
+        assert!(cold.program.is_some(), "冷路径应经过 lower");
+        let cold_bytes = artifact_bytes(&cold);
+
+        // 冷路径落盘后，输入寻址查找必须命中。
+        let request = wjsm_module::ArtifactCacheRequest::for_entry(
+            &main,
+            None,
+            None,
+            &options,
+            &artifact_pipeline_salt(flags),
+        )
+        .expect("入口应可 canonical 化");
+        assert!(
+            wjsm_module::lookup_portable_artifact(&request).is_some(),
+            "首次编译后缓存应命中"
+        );
+
+        // 命中路径：parse/lower 完全跳过（program 为 None），字节与冷路径一致。
+        let hit = compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+            .expect("cached compile should succeed");
+        assert!(hit.program.is_none(), "命中路径不得经过 lower");
+        assert_eq!(artifact_bytes(&hit), cold_bytes, "命中字节必须与冷路径一致");
+
+        // 编辑源文件 → 内容事实失效 → miss（重新 lower），产物随之更新。
+        write_file(&root, "main.js", "console.log(43);\n");
+        let edited =
+            compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+                .expect("recompile should succeed");
+        assert!(edited.program.is_some(), "源码编辑后必须重新 lower");
+        assert_ne!(artifact_bytes(&edited), cold_bytes);
+
+        // 恢复原内容：.dep 索引仍指向编辑版读集 → 回放失败 miss 一次
+        // （宁可 miss 不可脏命中），重编译后索引指回原 content key。
+        write_file(&root, "main.js", "console.log(40 + 2);\n");
+        let restored =
+            compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+                .expect("restored compile should succeed");
+        assert!(
+            restored.program.is_some(),
+            "索引被编辑版覆盖后应 miss 重编译"
+        );
+        assert_eq!(artifact_bytes(&restored), cold_bytes);
+
+        // miss 重编译已把索引写回原读集 → 再次编译重新命中。
+        let rehit =
+            compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+                .expect("re-hit compile should succeed");
+        assert!(rehit.program.is_none(), "索引恢复后应重新命中");
+        assert_eq!(artifact_bytes(&rehit), cold_bytes);
+    }
+
+    #[test]
+    fn artifact_cache_bundle_invalidates_on_dependency_and_probe_changes() {
+        let root = TestProject::new("artifact_cache_bundle");
+        let cache_dir = root.join("cache");
+        let _guard = CacheDirGuard::set(&cache_dir);
+        write_file(&root, "package.json", r#"{"type":"module"}"#);
+        write_file(
+            &root,
+            "main.js",
+            "import { value } from './lib.js';\nconsole.log(value);\n",
+        );
+        write_file(&root, "lib.js", "export const value = 1;\n");
+        let main = root.join("main.js");
+        let options = wjsm_module::ResolutionOptions::default();
+        let flags = PipelineFlags::default();
+
+        let cold = compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+            .expect("cold bundle compile should succeed");
+        let cold_bytes = artifact_bytes(&cold);
+        let hit = compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+            .expect("cached bundle compile should succeed");
+        assert_eq!(artifact_bytes(&hit), cold_bytes);
+
+        // 依赖（非入口）编辑必须失效——读集覆盖整个源码闭包。
+        write_file(&root, "lib.js", "export const value = 2;\n");
+        let edited =
+            compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+                .expect("dependency edit recompile should succeed");
+        assert_ne!(artifact_bytes(&edited), cold_bytes, "依赖编辑后不得脏命中");
+
+        // 恢复依赖 → 重新命中。
+        write_file(&root, "lib.js", "export const value = 1;\n");
+        let restored =
+            compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+                .expect("restored bundle compile should succeed");
+        assert_eq!(artifact_bytes(&restored), cold_bytes);
+
+        // 解析探测事实：曾以 .js 命中的说明符出现同名 .ts 不影响解析结果，
+        // 但 package.json（解析输入之一）变化必须失效。
+        write_file(
+            &root,
+            "package.json",
+            r#"{"type":"module","sideEffects":false}"#,
+        );
+        let request = wjsm_module::ArtifactCacheRequest::for_entry(
+            &main,
+            None,
+            None,
+            &options,
+            &artifact_pipeline_salt(flags),
+        )
+        .expect("入口应可 canonical 化");
+        assert!(
+            wjsm_module::lookup_portable_artifact(&request).is_none(),
+            "package.json 变化后必须 miss"
+        );
+    }
+
+    #[test]
+    fn artifact_cache_respects_no_builtin_cache_switch() {
+        let root = TestProject::new("artifact_cache_switch");
+        let cache_dir = root.join("cache");
+        let _guard = CacheDirGuard::set(&cache_dir);
+        write_file(&root, "main.js", "console.log(1);\n");
+        let main = root.join("main.js");
+        let options = wjsm_module::ResolutionOptions::default();
+        let flags = PipelineFlags::default();
+
+        compile_file_input_to_pipeline_result(&main, None, None, flags, false, &options)
+            .expect("cold compile should succeed");
+        let request = wjsm_module::ArtifactCacheRequest::for_entry(
+            &main,
+            None,
+            None,
+            &options,
+            &artifact_pipeline_salt(flags),
+        )
+        .expect("入口应可 canonical 化");
+        assert!(wjsm_module::lookup_portable_artifact(&request).is_some());
+
+        // WJSM_NO_BUILTIN_CACHE 强制冷 lower 调试路径：artifact 缓存一并停用。
+        // SAFETY: 本测试进程独占该环境变量，结束时清除。
+        unsafe { std::env::set_var("WJSM_NO_BUILTIN_CACHE", "1") };
+        let gated = wjsm_module::lookup_portable_artifact(&request);
+        unsafe { std::env::remove_var("WJSM_NO_BUILTIN_CACHE") };
+        assert!(gated.is_none(), "WJSM_NO_BUILTIN_CACHE 下不得命中");
+    }
+
     #[test]
     fn cli_validates_artifacts_and_rejects_corruption() {
         let root = TestProject::new("validate_artifact");

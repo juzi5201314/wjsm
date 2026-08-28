@@ -685,6 +685,28 @@ impl Lowerer {
                         self.publish_expr_continuation(block, current_block);
                         return Ok(dest);
                     }
+                    // Web 平台全局是可配置的真实全局属性：typeof 经容忍读
+                    //（被 delete 后返回 "undefined" 而非 ReferenceError；
+                    // 被改写后按新值分类）。
+                    if !has_module_alias
+                        && wjsm_ir::intrinsic_sites::web_global_property(&name).is_some()
+                        && self.scopes.lookup(&name).is_err()
+                    {
+                        let value = self.lower_script_global_read(block, &name, true)?;
+                        let mut current_block = block;
+                        self.resolve_expr_continuations(&mut current_block);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            current_block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::TypeOf,
+                                args: vec![value],
+                            },
+                        );
+                        self.publish_expr_continuation(block, current_block);
+                        return Ok(dest);
+                    }
                     if !has_module_alias
                         && !self.eval_scope_bridge_active()
                         && name != "eval"

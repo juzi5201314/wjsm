@@ -1,0 +1,40 @@
+exit_code: 0
+--- stdout ---
+proto null
+extensible false
+toString [object Module]
+desc 0 true true false false
+tagDesc Module false false false
+keys bump,counter,default,name
+names bump,counter,default,name
+symbols 1
+values function,number,number,string
+entries bump:function,counter:number,default:number,name:string
+reflectSet false
+reflectSetNew false
+strictAssign TypeError Cannot assign to read only property 'counter' of object '[object Module]'
+strictAssignNew TypeError Cannot add property zzz, object is not extensible
+reflectDelete false
+reflectDeleteMissing true
+strictDelete TypeError Cannot delete property 'counter' of [object Module]
+reflectDefineSame true
+reflectDefineDiff false
+reflectDefineWritFalse false
+reflectDefineNew false
+defineDiff TypeError Cannot redefine property: counter
+defineTag ok true
+defineTagDiff TypeError Cannot redefine property: Symbol(Symbol.toStringTag)
+setProtoObj TypeError [object Module] is not extensible
+setProtoNull ok true
+reflectSetProto false true
+freeze TypeError Cannot redefine property: bump
+seal ok true
+isSealed true isFrozen false
+preventExt ok true
+live0 0
+live1 1 1
+in true false
+sameIdentity true
+spread {"counter":1,"default":42,"name":"mod"}
+forIn bump,counter,default,name
+--- stderr ---

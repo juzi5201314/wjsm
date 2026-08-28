@@ -22,7 +22,7 @@ flowchart TD
 1. 解析源码；
 2. 作用域分析、early error 与 semantic lowering；
 3. 构造并验证 portable artifact；
-4. 若设置了 `WJSM_CACHE_DIR` 则查 native cache；否则（或 miss 时）由当前宿主把 IR 直接编译为 CLIF/native image；
+4. 磁盘缓存可用时（默认回落 XDG/HOME）查 native cache；被禁用或 miss 时由当前宿主把 IR 直接编译为 CLIF/native image；
 5. `NativeRuntime` 调用入口并排空 Promise、微任务与外部事件。
 
 解析与 early error 在执行前完成，因此失败的程序不会产生先行副作用。

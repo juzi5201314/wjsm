@@ -186,11 +186,53 @@ fn create_global_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState)
         match state.allocate_object_with_gc_retry(ctx, 0, false) {
             Ok(global) => {
                 state.global_object = Some(global);
+                if install_web_global_properties(ctx, state, global).is_none() {
+                    return fail_dispatch(ctx);
+                }
                 global
             }
             Err(_) => fail_dispatch(ctx),
         }
     }
+}
+
+/// Web 平台全局（fetch / Headers / Streams / Abort / Events）在 Node 与浏览
+/// 器中都是全局对象上真实的自有数据属性。realm 全局创建时按共享槽位表
+/// 急切物化，使 own descriptor / 枚举 / 删除 / 重定义全部走普通对象属性
+/// 协议。启动快照恢复路径（`restore_startup_snapshot`）另行安装。
+fn install_web_global_properties(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    global: i64,
+) -> Option<()> {
+    let handle = value::decode_handle(global);
+    for (key, stored, flags) in state.web_global_property_slots()? {
+        match state
+            .gc
+            .heap()
+            .define_data_property(handle, key, stored, flags)
+        {
+            Ok(()) => {}
+            Err(wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+                state.gc.flush_native_tlab(ctx).ok()?;
+                state
+                    .gc
+                    .heap()
+                    .define_data_property(handle, key, stored, flags)
+                    .ok()?;
+            }
+            Err(wjsm_gc::HeapAccessV2Error::HeapExhausted { .. }) => {
+                state.collect_garbage(ctx).ok()?;
+                state
+                    .gc
+                    .heap()
+                    .define_data_property(handle, key, stored, flags)
+                    .ok()?;
+            }
+            Err(_) => return None,
+        }
+    }
+    Some(())
 }
 
 pub(crate) fn construct_object(
@@ -506,21 +548,52 @@ fn enumerate(
     let Some(properties) = own_keys(state, object, !matches!(kind, EnumerationKind::Names)) else {
         return fail_dispatch(ctx);
     };
+    // Object.keys 对模块命名空间也要逐键 [[GetOwnProperty]]（§7.3.24 步骤
+    // 4.a），其内部 [[Get]] 对未初始化导出抛 ReferenceError（循环导入窗口，
+    // 与 Node 一致）；getOwnPropertyNames（Names）只走 [[OwnPropertyKeys]]，
+    // 不触发取值。
+    let keys_via_get = matches!(kind, EnumerationKind::Keys)
+        && value::is_object(object)
+        && state
+            .module_namespace_objects
+            .contains(&value::decode_handle(object));
     let mut values = Vec::with_capacity(properties.len());
-    for (key, property_value) in properties {
+    for (key, _) in properties {
         if value::is_symbol(key) {
             continue;
         }
         match kind {
-            EnumerationKind::Keys | EnumerationKind::Names => values.push(key),
-            EnumerationKind::Values => values.push(property_value),
-            EnumerationKind::Entries => {
-                let Ok(entry) =
-                    state.allocate_array_values_with_gc_retry(ctx, &[key, property_value])
-                else {
-                    return fail_dispatch(ctx);
+            EnumerationKind::Keys if keys_via_get => {
+                let live = match super::runtime::get_property(ctx, state, object, key) {
+                    Ok(live) => live,
+                    Err(()) => return fail_dispatch(ctx),
                 };
-                values.push(entry);
+                if value::is_exception(live) {
+                    return live;
+                }
+                values.push(key);
+            }
+            EnumerationKind::Keys | EnumerationKind::Names => values.push(key),
+            EnumerationKind::Values | EnumerationKind::Entries => {
+                // EnumerableOwnPropertyNames（§7.3.24）步骤 4.a.ii.2.a 对
+                // values/entries 逐键 ? Get(O, key)：访问器槽（含模块命名
+                // 空间的 live binding getter）必须经 [[Get]] 取实时值。
+                let live = match super::runtime::get_property(ctx, state, object, key) {
+                    Ok(live) => live,
+                    Err(()) => return fail_dispatch(ctx),
+                };
+                if value::is_exception(live) {
+                    return live;
+                }
+                if matches!(kind, EnumerationKind::Values) {
+                    values.push(live);
+                } else {
+                    let Ok(entry) = state.allocate_array_values_with_gc_retry(ctx, &[key, live])
+                    else {
+                        return fail_dispatch(ctx);
+                    };
+                    values.push(entry);
+                }
             }
         }
     }
@@ -937,6 +1010,12 @@ pub(super) fn set_prototype(
     if current == *prototype {
         return *object;
     }
+    // Module Namespace 的 [[SetPrototypeOf]]（§10.4.6.1 SetImmutablePrototype）：
+    // V 与当前原型（null）相同已在上方短路返回 true，其余一律失败；
+    // Object.setPrototypeOf 抛 V8 口径 "[object Module] is not extensible"。
+    if handle.is_some_and(|handle| state.module_namespace_objects.contains(&handle)) {
+        return type_error(ctx, state, "[object Module] is not extensible");
+    }
     if handle.is_some_and(|handle| state.non_extensible_objects.contains(&handle)) {
         return type_error(
             ctx,
@@ -1107,7 +1186,61 @@ pub(crate) fn get_own_property_descriptor(
     let Ok(Some(property)) = state.gc.heap().get_property_slot(handle, key) else {
         return value::encode_undefined();
     };
+    // Module Namespace 的 [[GetOwnProperty]]（§10.4.6.4）：字符串键导出对外
+    // 呈现为 { value: [[Get]](P), writable: true, enumerable: true,
+    // configurable: false } 数据描述符（内部 live binding getter 不可见）；
+    // 符号键（@@toStringTag）走 ordinary。未初始化导出（循环导入窗口）按
+    // V8 口径抛 ReferenceError "{key} is not defined"（getter 只可能抛 TDZ）。
+    if !key.is_symbol() && state.module_namespace_objects.contains(&handle) {
+        let live = match namespace_export_live_value(ctx, state, *object, property) {
+            Ok(live) => live,
+            Err(_) => {
+                let rendered =
+                    super::runtime::render_value(state, super::runtime::encoded_property_key(key));
+                return super::runtime::reference_error(
+                    ctx,
+                    state,
+                    &format!("{rendered} is not defined"),
+                );
+            }
+        };
+        return descriptor_object(
+            ctx,
+            state,
+            wjsm_gc::HeapAccessV2Property {
+                flags: WRITABLE | ENUMERABLE,
+                value: live as u64,
+                getter: value::encode_undefined() as u64,
+                setter: value::encode_undefined() as u64,
+            },
+        );
+    }
     descriptor_object(ctx, state, property)
+}
+
+/// 命名空间导出槽的 live 值（§10.4.6.8 [[Get]]）：accessor 槽经 live binding
+/// getter 调用取当前值；`Err` 携带 getter 抛出的异常（循环导入 TDZ 的
+/// ReferenceError）。
+fn namespace_export_live_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    property: wjsm_gc::HeapAccessV2Property,
+) -> Result<i64, i64> {
+    if property.flags & ACCESSOR == 0 {
+        return Ok(property.value as i64);
+    }
+    let getter = property.getter as i64;
+    if !value::is_callable(getter) {
+        return Ok(value::encode_undefined());
+    }
+    let result = state
+        .invoke_callable(ctx, getter, object, &[])
+        .ok_or_else(|| fail_dispatch(ctx))?;
+    if value::is_exception(result) {
+        return Err(result);
+    }
+    Ok(result)
 }
 
 fn descriptor_object(
@@ -1550,7 +1683,88 @@ pub(crate) fn define_property(
     if value::is_array(*object) {
         return define_array_property(ctx, state, *object, handle, key, encoded_key, descriptor);
     }
+    if state.module_namespace_objects.contains(&handle) {
+        return define_namespace_property(ctx, state, *object, handle, key, descriptor);
+    }
     define_ordinary_property(ctx, state, *object, handle, key, descriptor)
+}
+
+/// Module Namespace 的 [[DefineOwnProperty]]（§10.4.6.6）：
+/// - 符号键走 OrdinaryDefineOwnProperty 语义（对象不可扩展 + @@toStringTag
+///   全 false 数据属性）——新键按不可扩展拒绝，既有键只允许不改变任何字段；
+/// - 字符串键：键不存在、访问器描述符、configurable:true、enumerable:false、
+///   writable:false 一律拒绝；带 [[Value]] 时按 SameValue(值, [[Get]](P))
+///   判定。成功路径不发生任何实际修改。
+/// 失败按 V8 文案抛 "Cannot redefine property: {key}"（Reflect 入口由调用方
+/// 转换为 false）。
+fn define_namespace_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    handle: u32,
+    key: PropertyKey,
+    descriptor_handle: u32,
+) -> i64 {
+    let descriptor = match read_descriptor(ctx, state, descriptor_handle) {
+        Ok(descriptor) => descriptor,
+        Err(exception) => return exception,
+    };
+    let current = match state.gc.heap().get_property_slot(handle, key) {
+        Ok(current) => current,
+        Err(_) => return fail_dispatch(ctx),
+    };
+    if key.is_symbol() {
+        let Some(current) = current else {
+            let rendered =
+                super::runtime::render_value(state, super::runtime::encoded_property_key(key));
+            return type_error(
+                ctx,
+                state,
+                &format!("Cannot define property {rendered}, object is not extensible"),
+            );
+        };
+        let unchanged = descriptor.configurable != Some(true)
+            && descriptor.enumerable != Some(true)
+            && !descriptor.is_accessor()
+            && descriptor.writable != Some(true)
+            && descriptor
+                .value
+                .is_none_or(|stored| same_value(state, stored, current.value as i64));
+        if unchanged {
+            return object;
+        }
+        return namespace_redefine_error(ctx, state, key);
+    }
+    let Some(current) = current else {
+        return namespace_redefine_error(ctx, state, key);
+    };
+    if descriptor.is_accessor()
+        || descriptor.configurable == Some(true)
+        || descriptor.enumerable == Some(false)
+        || descriptor.writable == Some(false)
+    {
+        return namespace_redefine_error(ctx, state, key);
+    }
+    if let Some(stored) = descriptor.value {
+        let live = match namespace_export_live_value(ctx, state, object, current) {
+            Ok(live) => live,
+            Err(exception) => return exception,
+        };
+        if !same_value(state, stored, live) {
+            return namespace_redefine_error(ctx, state, key);
+        }
+    }
+    object
+}
+
+/// 命名空间 [[DefineOwnProperty]] 拒绝的 TypeError（V8 文案）。
+fn namespace_redefine_error(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    key: PropertyKey,
+) -> i64 {
+    let rendered = super::runtime::render_value(state, super::runtime::encoded_property_key(key));
+    type_error(ctx, state, &format!("Cannot redefine property: {rendered}"))
 }
 
 /// callable 的 [[DefineOwnProperty]]：惰性自有属性先物化参与校验；属性缺失
@@ -2083,6 +2297,25 @@ fn seal_or_freeze(
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
+    // Module Namespace：SetIntegrityLevel 对每个自有键做 DefinePropertyOrThrow。
+    // seal（{configurable:false}）对导出与 @@toStringTag 均无变化、恒成功；
+    // freeze（数据属性追加 writable:false）被 §10.4.6.6 步骤 7 拒绝——存在
+    // 字符串导出时按 [[OwnPropertyKeys]] 序（导出名升序在符号之前）对首个
+    // 导出抛 "Cannot redefine property"。两种成功路径都不改动底层槽特性，
+    // [[GetOwnProperty]] 的虚拟化描述符保持 writable:true。
+    if state.module_namespace_objects.contains(&handle) {
+        let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
+            return fail_dispatch(ctx);
+        };
+        let first_export = properties
+            .iter()
+            .map(|(key, _)| *key)
+            .find(|key| !key.is_symbol());
+        if freeze && let Some(key) = first_export {
+            return namespace_redefine_error(ctx, state, key);
+        }
+        return object;
+    }
     if value::is_array(object) && seal_or_freeze_array(state, handle, freeze).is_none() {
         return fail_dispatch(ctx);
     }
@@ -2264,6 +2497,16 @@ fn is_sealed_or_frozen(
     };
     if !state.non_extensible_objects.contains(&handle) {
         return value::encode_bool(false);
+    }
+    // Module Namespace：TestIntegrityLevel 读到的是 [[GetOwnProperty]] 虚拟化
+    // 描述符——导出恒 { writable: true, configurable: false }，@@toStringTag
+    // 全 false。sealed 恒 true；frozen 仅当无字符串导出。
+    if state.module_namespace_objects.contains(&handle) {
+        let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
+            return fail_dispatch(ctx);
+        };
+        let has_export = properties.iter().any(|(key, _)| !key.is_symbol());
+        return value::encode_bool(!(frozen && has_export));
     }
     if value::is_array(object) {
         return match array_integrity_level(state, handle, frozen) {

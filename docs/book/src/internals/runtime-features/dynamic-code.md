@@ -16,7 +16,7 @@ eval 代码与主模块共用同一个 `NativeRuntime` 和 `ManagedHeap`。它�
 
 `execute_eval_script`（`dispatch/modules.rs`）接收源码，经 `lower_eval_module_with_scope_and_strict` 得到 IR，打成 `PortableArtifact`，再由 `NativeImageRepository::prepare` 交给 `NativeCompiler` 生成 native image 并执行。结果是 NaN-box `i64`。
 
-若设置了 `WJSM_CACHE_DIR`，相同 IR digest 的重复 eval 可以命中 native image 磁盘缓存。
+磁盘缓存可用时，相同 IR digest 的重复 eval 可以命中 native image 磁盘缓存。
 
 ## 动态 import
 

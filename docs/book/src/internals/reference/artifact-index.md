@@ -4,14 +4,15 @@
 
 ## 构建期生成
 
-开发构建当前不生成嵌入工件；native cache 只在设置了 `WJSM_CACHE_DIR` 时按需落盘。
+开发构建当前不生成嵌入工件；native cache 在磁盘缓存目录可解析时按需落盘（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。
 
 ## 运行时缓存
 
 | 工件 | 位置 | 键 |
 | --- | --- | --- |
-| Native image cache | `$WJSM_CACHE_DIR/*.wnat`（未设置则关闭） | artifact digest + native ABI + codegen source hash + target + Cranelift + settings |
-| Builtin IR 段缓存 | `$WJSM_CACHE_DIR/builtin_ir/`（未设置则不落盘） | sha256(version ‖ debug ‖ builtin source hashes) |
+| Native image cache | `${cache_dir}/*.wnat` | artifact digest + native ABI + codegen source hash + target + Cranelift + settings |
+| Builtin IR 段缓存 | `${cache_dir}/builtin_ir/` | sha256(ABI hash ‖ debug ‖ builtin canonical 名) |
+| 输入寻址 artifact 缓存 | `${cache_dir}/artifact/` | sha256(源码闭包读集 ‖ 选项 ‖ 语义 ABI) |
 | Portable artifact | `.wjsm` 文件 | verified semantic IR |
 
 ## 测试生成

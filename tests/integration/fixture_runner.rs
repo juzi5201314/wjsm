@@ -13,7 +13,7 @@ const VERIFY_ORACLE_ENV: &str = "WJSM_VERIFY_ORACLE";
 /// chrono 读 TZ 决定 Local 偏移，必须在任何 Date 逻辑运行前设好。
 static ENV_INIT: Once = Once::new();
 
-fn ensure_test_env() {
+pub fn ensure_test_env() {
     ENV_INIT.call_once(|| {
         // SAFETY: 在测试初始化早期、首个 fixture 运行前设置一次；
         // call_once 保证无并发写。后续只读。
@@ -21,20 +21,11 @@ fn ensure_test_env() {
             env::set_var("TZ", "UTC");
             // 默认禁用 child_process，避免会话环境污染 fixture 期望。
             env::remove_var("WJSM_CHILD_PROCESS_ALLOW");
-            if env::var_os("WJSM_CACHE_DIR").is_none() {
-                // 跨 nextest 进程共享 native / builtin IR 缓存，让同一 frontier
-                // 的后续 fixture 命中已编好的 builtin 段。
-                env::set_var("WJSM_CACHE_DIR", fixture_cache_dir());
-            }
         }
+        // 跨 nextest 进程共享 native / builtin IR / artifact 缓存，让同一
+        // frontier / 同一 fixture 的后续用例命中已编好的条目。
+        crate::test_env::ensure_test_cache_dir();
     });
-}
-
-fn fixture_cache_dir() -> PathBuf {
-    // 与 cluster IPC 测试共享统一缓存根：/tmp/wjsm-test-cache/native。
-    let dir = env::temp_dir().join("wjsm-test-cache").join("native");
-    let _ = fs::create_dir_all(&dir);
-    dir
 }
 
 pub struct FixtureRunner {

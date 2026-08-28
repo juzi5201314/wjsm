@@ -31,7 +31,7 @@
 
 ## 嵌入工件
 
-开发构建把种子编进 `wjsm-host-native`。native image 磁盘缓存只在设置了 `WJSM_CACHE_DIR` 时按需生成，不替代启动种子。
+开发构建把种子编进 `wjsm-host-native`。native image 磁盘缓存按需生成（缓存目录默认回落 XDG/HOME），不替代启动种子。
 
 ## 深入了解
 
