@@ -955,7 +955,10 @@ fn execute_module_bundle(
         return Err(ModuleLoadFailure::JavaScript(result));
     }
     if state.promises.contains_key(&value::decode_handle(result)) {
-        let drained = drain_microtasks(ctx, state);
+        // 模块加载机制本身消费入口 promise 的结果，标记 handled，
+        // 避免其 rejection 再被 unhandled rejection 检查点重复报告。
+        super::promise::mark_promise_handled(state, value::decode_handle(result));
+        let drained = drain_microtasks(ctx, state, super::promise::RejectionCheckpoint::Defer);
         if value::is_exception(drained) {
             remove_cached_module(state, &resolved.key);
             return Err(ModuleLoadFailure::JavaScript(drained));
