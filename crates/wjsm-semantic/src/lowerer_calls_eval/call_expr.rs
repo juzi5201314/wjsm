@@ -1054,10 +1054,28 @@ impl Lowerer {
         let this_val: ValueId;
         let callee_block: BasicBlockId;
 
+        // 成员形态的 callee（含 `a?.b()` / `a?.b.c()` 的 OptChain 包装）：
+        // receiver 求值一次并复用为 this（EvaluateCall 的 thisValue 取自
+        // Reference base，`f().m?.()` 不得二次求值）；`?.` 短路点按包装节点的
+        // optional 发 OptionalGetProp，短路产出 undefined 后 OptionalCall 再次
+        // 短路，与规范链式短路一致。
+        let callee_member = match &call.callee {
+            swc_ast::Callee::Expr(expr) => match expr.as_ref() {
+                swc_ast::Expr::Member(member_expr) => Some((member_expr, false)),
+                swc_ast::Expr::OptChain(oc) => match oc.base.as_ref() {
+                    swc_ast::OptChainBase::Member(member_expr) => {
+                        Some((member_expr, oc.optional))
+                    }
+                    swc_ast::OptChainBase::Call(_) => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
-                if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
-                    // receiver 求值一次并复用为 this（`f().m?.()` 不得二次求值）；
+                if let Some((member_expr, member_optional)) = callee_member {
                     // 方法查找（getter）抛出必须先于调用分叉传播，哨兵不得作为
                     // callee 流入 OptionalCall。
                     let mut member_block = block;
@@ -1067,7 +1085,7 @@ impl Lowerer {
                         member_expr,
                         this_val,
                         &mut member_block,
-                        false,
+                        member_optional,
                     )?;
                     if self.expr_exception_fork_allowed() {
                         member_block =

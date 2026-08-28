@@ -111,6 +111,29 @@ const mkReceiver = () => {
 console.log("optcall value: " + mkReceiver().m?.());
 console.log("receiver evals: " + receiverEvals);
 
+// 可选链调用的 this 绑定：EvaluateCall 的 thisValue 取自 Reference base，
+// OptChain 包装的成员 callee（a?.b() / a?.b.c() / a.b?.c() / 链式续段）
+// 均以 receiver 为 this；null 起点整链短路为 undefined。
+const thisProbe = {
+  tag: "probe",
+  m() {
+    return this === thisProbe ? "this-ok" : "this-bad";
+  },
+};
+console.log("optchain this: " + thisProbe?.m());
+const deep = {
+  x: {
+    y() {
+      return this === deep.x ? "deep-ok" : "deep-bad";
+    },
+  },
+};
+console.log("optchain deep: " + deep?.x.y());
+console.log("optchain mid: " + deep.x?.y());
+console.log("optchain chained: " + [3, 1, 2].sort?.().join(","));
+const nothing = null;
+console.log("optchain shortcircuit: " + nothing?.x.y());
+
 suite("sync ");
 
 async function main() {

@@ -2,6 +2,11 @@ exit_code: 0
 --- stdout ---
 optcall value: 42
 receiver evals: 1
+optchain this: this-ok
+optchain deep: deep-ok
+optchain mid: deep-ok
+optchain chained: 1,2,3
+optchain shortcircuit: undefined
 sync cond-test caught: cond
 sync while-test caught: while
 sync dowhile-test caught: dowhile-n1
