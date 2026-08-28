@@ -1016,11 +1016,14 @@ fn compile_program_inner(
         .copied()
         .map(|id| id.map(|id| DeclaredFunction::snapshot(module.declarations(), id)))
         .collect();
+    // 类构造器排除在 Call 站点直调之外：[[Call]]（无 new）必须经宿主
+    // PrepareCall 抛 TypeError（ES §10.2.1 步骤 2）；ConstructCall 站点
+    // 恒走 PrepareConstruct，不受影响。
     let direct_callable_functions: HashSet<FunctionId> = program
         .functions()
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.direct_callable())
+        .filter(|(_, f)| f.direct_callable() && !f.is_class_constructor())
         .map(|(i, _)| FunctionId(u32::try_from(i).expect("function index fits u32")))
         .collect();
     let safepoint_free_functions = infer_safepoint_free_functions(program, variable_slots);

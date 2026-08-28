@@ -790,6 +790,10 @@ pub struct Function {
     /// 该函数是否可直接调用（函数体不依赖 env/this/new.target，且无 eval）。
     /// 由语义层 direct_call pass 计算，后端据此对调用点发射直接 `call`（跳过动态分派）。
     direct_callable: bool,
+    /// 类构造器元数据（ES [[IsClassConstructor]]）：Some 表示本函数是类构造器，
+    /// [[Call]] 调用（无 new）必须抛 TypeError；值为错误文案用的类显示名
+    /// （类声明/命名类表达式的 ident，匿名类表达式为空串）。
+    class_ctor_name: Option<String>,
 }
 impl Function {
     pub fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
@@ -805,6 +809,7 @@ impl Function {
             needs_prototype: false,
             source_span: None,
             direct_callable: false,
+            class_ctor_name: None,
         }
     }
 
@@ -943,6 +948,20 @@ impl Function {
         self.direct_callable = v;
     }
 
+    /// 类构造器的错误文案显示名（None = 非类构造器；Some("") = 匿名类）。
+    pub fn class_ctor_name(&self) -> Option<&str> {
+        self.class_ctor_name.as_deref()
+    }
+
+    pub fn set_class_ctor_name(&mut self, name: impl Into<String>) {
+        self.class_ctor_name = Some(name.into());
+    }
+
+    /// 该函数是否为类构造器（[[Call]] 必须抛 TypeError，ES §10.2.1 步骤 2）。
+    pub fn is_class_constructor(&self) -> bool {
+        self.class_ctor_name.is_some()
+    }
+
     /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。
     pub fn known_callee_vars(&self) -> &std::collections::HashMap<String, FunctionId> {
         &self.known_callee_vars
@@ -1008,6 +1027,9 @@ impl Function {
         }
         if self.direct_callable {
             let _ = write!(out, " [direct_callable]");
+        }
+        if let Some(name) = &self.class_ctor_name {
+            let _ = write!(out, " [class_ctor \"{name}\"]");
         }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");
