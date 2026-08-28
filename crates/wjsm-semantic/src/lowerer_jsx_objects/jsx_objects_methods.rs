@@ -71,7 +71,11 @@ impl Lowerer {
                                 AccessorPrefix::None,
                             );
                         }
-                        self.emit_set_prop(block, obj_dest, key_dest, val_dest);
+                        // PropertyDefinitionEvaluation 用 CreateDataPropertyOrThrow
+                        // 定义自有属性：计算键求出 "__proto__" 或先装原型再写同名
+                        // 键时不得触发链上 setter（含 %Object.prototype% 的
+                        // __proto__ 访问器）。
+                        self.emit_create_data_property(block, obj_dest, key_dest, val_dest);
                     }
                     swc_ast::Prop::Shorthand(ident) => {
                         let val_dest = self.lower_ident(ident, block)?;
@@ -86,7 +90,10 @@ impl Lowerer {
                                 constant: key_const,
                             },
                         );
-                        self.emit_set_prop(block, obj_dest, key_dest, val_dest);
+                        // 简写 `{ __proto__ }` 属于自有属性定义而非原型设置
+                        // （§B.3.1 只覆盖 `__proto__:` 冒号产生式），统一走
+                        // CreateDataPropertyOrThrow。
+                        self.emit_create_data_property(block, obj_dest, key_dest, val_dest);
                     }
                     swc_ast::Prop::Getter(getter) => {
                         let key_dest = self.lower_prop_name_checked(&getter.key, &mut block)?;
@@ -222,7 +229,9 @@ impl Lowerer {
                             key_dest,
                             AccessorPrefix::None,
                         );
-                        self.emit_set_prop(block, obj_dest, key_dest, fn_value);
+                        // 方法定义（MethodDefinitionEvaluation）同样走
+                        // DefineOwnProperty，`{ __proto__() {} }` 不设置原型。
+                        self.emit_create_data_property(block, obj_dest, key_dest, fn_value);
                     }
                     _ => {
                         return Err(

@@ -1,0 +1,21 @@
+exit_code: 0
+--- stdout ---
+true hi
+null true
+true
+true
+true hi
+null
+undefined true
+TypeError Cannot convert undefined or null to object
+42
+42
+function undefined true true
+function undefined
+undefined function
+undefined
+function
+undefined
+TypeError Object.prototype.__defineGetter__: Expecting function
+TypeError Object.prototype.__defineSetter__: Expecting function
+--- stderr ---

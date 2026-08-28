@@ -2826,7 +2826,7 @@ module {
       %131 = new_object(capacity=4)
       %132 = const c324
       %133 = const c328
-      %134 = set_prop %131, %132, %133
+      %134 = create_data_property %131, %132, %133
       store var $0.base, %131
       %135 = new_object(capacity=4)
       %136 = load var $0.base
@@ -2839,7 +2839,7 @@ module {
       %141 = const c364
       %142 = set_prop %140, %141, %135
       %143 = call builtin.create_closure(%138, %140)
-      %144 = set_prop %135, %137, %143
+      %144 = create_data_property %135, %137, %143
       %145 = const c365
       %146 = const c389
       %147 = load var $env
@@ -2848,7 +2848,7 @@ module {
       %149 = const c390
       %150 = set_prop %148, %149, %135
       %151 = call builtin.create_closure(%146, %148)
-      %152 = set_prop %135, %145, %151
+      %152 = create_data_property %135, %145, %151
       store var $0.derived, %135
       %153 = const c391
       %154 = const c486

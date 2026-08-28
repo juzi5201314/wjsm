@@ -2751,7 +2751,7 @@ module {
       %644 = new_object(capacity=4)
       %645 = const c160
       %646 = const c165
-      %647 = set_prop %644, %645, %646
+      %647 = create_data_property %644, %645, %646
       %648 = call builtin.proxy.create(%643, %644)
       %649 = is_exception %648
       branch %649, bb357, bb356
@@ -2904,7 +2904,7 @@ module {
       %681 = const c175
       %682 = const c176
       call builtin.function.set_name(%681, %678, %682)
-      %683 = set_prop %673, %678, %681
+      %683 = create_data_property %673, %678, %681
       store var $0.hiThrow, %673
       jump bb375
     bb374:

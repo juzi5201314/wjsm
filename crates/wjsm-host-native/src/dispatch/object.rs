@@ -936,7 +936,11 @@ fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
     object
 }
 
-fn get_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+pub(super) fn get_prototype(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
     let Some(object) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
@@ -987,7 +991,11 @@ fn get_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     }
 }
 
-fn set_prototype(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+pub(super) fn set_prototype(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
     let [object, prototype] = args else {
         return fail_dispatch(ctx);
     };

@@ -342,7 +342,7 @@ module {
       set_proto %8, %9
       store var $5.$shared_env, %8
       %10 = call builtin.create_closure(%6, %8)
-      %11 = set_prop %4, %5, %10
+      %11 = create_data_property %4, %5, %10
       %12 = const c71
       %13 = const c76
       %14 = call builtin.create_closure(%13, %8)
@@ -539,11 +539,11 @@ module {
       %28 = const c30
       %29 = set_prop %25, %28, %27
       %30 = call builtin.create_closure(%23, %25)
-      %31 = set_prop %21, %22, %30
+      %31 = create_data_property %21, %22, %30
       %32 = const c31
       %33 = const c36
       %34 = call builtin.create_closure(%33, %25)
-      %35 = set_prop %21, %32, %34
+      %35 = create_data_property %21, %32, %34
       %36 = const c37
       %37 = const c42
       %38 = call builtin.create_closure(%37, %25)
@@ -573,7 +573,7 @@ module {
       %60 = const c61
       %61 = const c82
       %62 = call builtin.create_closure(%61, %25)
-      %63 = set_prop %21, %60, %62
+      %63 = create_data_property %21, %60, %62
       store var $0.set, %21
       %64 = const c83
       %65 = set_prop %25, %64, %21
@@ -1014,7 +1014,7 @@ module {
       %289 = const c145
       %290 = set_prop %287, %289, %288
       %291 = call builtin.create_closure(%286, %287)
-      %292 = set_prop %284, %285, %291
+      %292 = create_data_property %284, %285, %291
       store var $0.assigned, %284
       %293 = const c146
       %294 = set_prop %287, %293, %284
@@ -1088,7 +1088,7 @@ module {
       %332 = const c168
       %333 = set_prop %330, %332, %331
       %334 = call builtin.create_closure(%329, %330)
-      %335 = set_prop %327, %328, %334
+      %335 = create_data_property %327, %328, %334
       store var $0.updated, %327
       %336 = const c169
       %337 = set_prop %330, %336, %327

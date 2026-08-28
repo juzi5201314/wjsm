@@ -628,6 +628,34 @@ pub enum Builtin {
     /// 索引属性（对 `arguments[i]` 立即可见），解除映射后写侧表绑定槽。
     /// args: [arguments, index, value]，dest 回传写入值。
     MappedArgumentsBindingWrite,
+    /// `Object.prototype.isPrototypeOf`（ES §20.1.3.3）：V 非对象直接 false，
+    /// 否则 ToObject(this) 后沿 V 的 [[GetPrototypeOf]] 链查 SameValue。
+    /// args: [this, value]。
+    ObjectProtoIsPrototypeOf,
+    /// `Object.prototype.toLocaleString`（ES §20.1.3.5）：等价于
+    /// `Invoke(this, "toString")`，转发到 this 的 toString。args: [this]。
+    ObjectProtoToLocaleString,
+    /// `get Object.prototype.__proto__`（ES §B.2.2.1.1）：ToObject(this) 后
+    /// 返回 [[GetPrototypeOf]]()。args: [this]。
+    ObjectProtoGetProto,
+    /// `set Object.prototype.__proto__`（ES §B.2.2.1.2）：RequireObjectCoercible
+    /// 后仅对象接收者且 proto 为对象/null 时执行 [[SetPrototypeOf]]，失败抛
+    /// TypeError，恒返回 undefined。args: [this, proto]。
+    ObjectProtoSetProto,
+    /// `Object.prototype.__defineGetter__`（ES §B.2.2.2）：getter 非 callable
+    /// 抛 TypeError，否则定义 {get, enumerable: true, configurable: true}。
+    /// args: [this, key, getter]。
+    ObjectProtoDefineGetter,
+    /// `Object.prototype.__defineSetter__`（ES §B.2.2.3）：setter 非 callable
+    /// 抛 TypeError，否则定义 {set, enumerable: true, configurable: true}。
+    /// args: [this, key, setter]。
+    ObjectProtoDefineSetter,
+    /// `Object.prototype.__lookupGetter__`（ES §B.2.2.4）：沿原型链查首个自有
+    /// 属性，访问器返回其 [[Get]]，数据属性返回 undefined。args: [this, key]。
+    ObjectProtoLookupGetter,
+    /// `Object.prototype.__lookupSetter__`（ES §B.2.2.5）：沿原型链查首个自有
+    /// 属性，访问器返回其 [[Set]]，数据属性返回 undefined。args: [this, key]。
+    ObjectProtoLookupSetter,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -663,7 +691,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::MappedArgumentsBindingWrite as u16
+        Self::ObjectProtoLookupSetter as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1175,6 +1203,14 @@ impl Builtin {
             Self::DataViewProtoSetBigUint64 => "DataView.prototype.setBigUint64",
             Self::MappedArgumentsBindingRead => "mapped_arguments_binding_read",
             Self::MappedArgumentsBindingWrite => "mapped_arguments_binding_write",
+            Self::ObjectProtoIsPrototypeOf => "Object.prototype.isPrototypeOf",
+            Self::ObjectProtoToLocaleString => "Object.prototype.toLocaleString",
+            Self::ObjectProtoGetProto => "get Object.prototype.__proto__",
+            Self::ObjectProtoSetProto => "set Object.prototype.__proto__",
+            Self::ObjectProtoDefineGetter => "Object.prototype.__defineGetter__",
+            Self::ObjectProtoDefineSetter => "Object.prototype.__defineSetter__",
+            Self::ObjectProtoLookupGetter => "Object.prototype.__lookupGetter__",
+            Self::ObjectProtoLookupSetter => "Object.prototype.__lookupSetter__",
         }
     }
 }

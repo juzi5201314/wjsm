@@ -1033,7 +1033,7 @@ module {
       %308 = new_object(capacity=4)
       %309 = const c107
       %310 = const c112
-      %311 = set_prop %308, %309, %310
+      %311 = create_data_property %308, %309, %310
       store var $0.badValueOf, %308
       jump bb145
     bb132:

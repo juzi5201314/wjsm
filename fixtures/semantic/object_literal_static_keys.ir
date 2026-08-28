@@ -499,58 +499,58 @@ module {
       %179 = new_object(capacity=18)
       %180 = const c63
       %181 = const c64
-      %182 = set_prop %179, %180, %181
+      %182 = create_data_property %179, %180, %181
       %183 = const c65
       %184 = const c66
-      %185 = set_prop %179, %183, %184
+      %185 = create_data_property %179, %183, %184
       %186 = const c67
       %187 = const c68
-      %188 = set_prop %179, %186, %187
+      %188 = create_data_property %179, %186, %187
       %189 = const c69
       %190 = const c70
-      %191 = set_prop %179, %189, %190
+      %191 = create_data_property %179, %189, %190
       %192 = const c71
       %193 = const c72
-      %194 = set_prop %179, %192, %193
+      %194 = create_data_property %179, %192, %193
       %195 = const c73
       %196 = const c74
-      %197 = set_prop %179, %195, %196
+      %197 = create_data_property %179, %195, %196
       %198 = const c75
       %199 = const c76
-      %200 = set_prop %179, %198, %199
+      %200 = create_data_property %179, %198, %199
       %201 = const c77
       %202 = const c78
-      %203 = set_prop %179, %201, %202
+      %203 = create_data_property %179, %201, %202
       %204 = const c79
       %205 = const c80
-      %206 = set_prop %179, %204, %205
+      %206 = create_data_property %179, %204, %205
       %207 = const c81
       %208 = const c82
-      %209 = set_prop %179, %207, %208
+      %209 = create_data_property %179, %207, %208
       %210 = const c83
       %211 = const c84
-      %212 = set_prop %179, %210, %211
+      %212 = create_data_property %179, %210, %211
       %213 = const c85
       %214 = const c86
-      %215 = set_prop %179, %213, %214
+      %215 = create_data_property %179, %213, %214
       %216 = const c87
       %217 = const c88
-      %218 = set_prop %179, %216, %217
+      %218 = create_data_property %179, %216, %217
       %219 = const c89
       %220 = const c90
-      %221 = set_prop %179, %219, %220
+      %221 = create_data_property %179, %219, %220
       %222 = const c91
       %223 = const c92
-      %224 = set_prop %179, %222, %223
+      %224 = create_data_property %179, %222, %223
       %225 = const c93
       %226 = const c94
-      %227 = set_prop %179, %225, %226
+      %227 = create_data_property %179, %225, %226
       %228 = const c95
       %229 = const c96
-      %230 = set_prop %179, %228, %229
+      %230 = create_data_property %179, %228, %229
       %231 = const c97
       %232 = const c98
-      %233 = set_prop %179, %231, %232
+      %233 = create_data_property %179, %231, %232
       store var $0.many, %179
       %234 = const c99
       %237 = load var $0.many
@@ -590,7 +590,7 @@ module {
       set_proto %259, %261
       %262 = const c109
       %263 = const c110
-      %264 = set_prop %259, %262, %263
+      %264 = create_data_property %259, %262, %263
       store var $0.proto, %259
       %265 = const c111
       %266 = load var $0.proto
@@ -630,7 +630,7 @@ module {
       throw %278
     bb81:
       %285 = const c115
-      %286 = set_prop %280, %282, %285
+      %286 = create_data_property %280, %282, %285
       store var $0.computed, %280
       %287 = const c116
       %288 = load var $0.computed
@@ -692,7 +692,7 @@ module {
     bb91:
       %323 = const c133
       %324 = const c134
-      %325 = set_prop %317, %323, %324
+      %325 = create_data_property %317, %323, %324
       store var $0.spread, %317
       %326 = const c135
       %327 = load var $0.spread

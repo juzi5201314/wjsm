@@ -736,7 +736,7 @@ module {
       %53 = call builtin.exception_value(%51)
       throw %53
     bb11:
-      %61 = set_prop %43, %51, %57
+      %61 = create_data_property %43, %51, %57
       store var $7.o, %43
       %62 = load var $0.$shared_env
       %63 = const c35
@@ -833,7 +833,7 @@ module {
       %109 = call builtin.exception_value(%107)
       throw %109
     bb35:
-      %117 = set_prop %99, %107, %113
+      %117 = create_data_property %99, %107, %113
       %118 = const c50
       %121 = const c52
       %122 = const c53
@@ -842,7 +842,7 @@ module {
     bb36:
       unreachable
     bb37:
-      %126 = set_prop %99, %118, %122
+      %126 = create_data_property %99, %118, %122
       %129 = const c55
       %130 = const c56
       %895 = const c0
@@ -864,7 +864,7 @@ module {
       %136 = call builtin.exception_value(%134)
       throw %136
     bb43:
-      %144 = set_prop %99, %134, %140
+      %144 = create_data_property %99, %134, %140
       store var $8.o, %99
       %145 = load var $0.$shared_env
       %146 = const c60
@@ -979,7 +979,7 @@ module {
       %202 = call builtin.exception_value(%200)
       throw %202
     bb71:
-      %210 = set_prop %192, %200, %206
+      %210 = create_data_property %192, %200, %206
       %213 = const c78
       %214 = const c80
       %215 = init_object_literal(c79, values=[%214])
@@ -1016,7 +1016,7 @@ module {
       %231 = call builtin.exception_value(%229)
       throw %231
     bb81:
-      %239 = set_prop %192, %229, %235
+      %239 = create_data_property %192, %229, %235
       store var $9.o, %192
       %240 = load var $0.$shared_env
       %241 = const c87
@@ -1155,7 +1155,7 @@ module {
       store var $tmp.0, %298
       jump bb107
     bb112:
-      %306 = set_prop %290, %296, %302
+      %306 = create_data_property %290, %296, %302
       store var $13.o, %290
       %307 = const c108
       %308 = load var $13.o
@@ -1282,7 +1282,7 @@ module {
       store var $tmp.1, %364
       jump bb136
     bb141:
-      %370 = set_prop %354, %362, %367
+      %370 = create_data_property %354, %362, %367
       %371 = const c129
       %372 = load var $0.trace
       %373 = const c130
@@ -1304,7 +1304,7 @@ module {
       jump bb136
     bb145:
       %381 = const c132
-      %382 = set_prop %354, %378, %381
+      %382 = create_data_property %354, %378, %381
       store var $19.o, %354
       %383 = const c133
       %384 = load var $19.o
@@ -1424,7 +1424,7 @@ module {
       %439 = const c154
       %440 = const c155
       call builtin.function.set_name(%439, %436, %440)
-      %441 = set_prop %430, %436, %439
+      %441 = create_data_property %430, %436, %439
       store var $25.o, %430
       %442 = const c156
       %443 = load var $25.o
@@ -1783,7 +1783,7 @@ module {
       %631 = const c228
       %632 = const c229
       call builtin.function.set_name(%631, %628, %632)
-      %633 = set_prop %620, %628, %631
+      %633 = create_data_property %620, %628, %631
       %634 = const c230
       %635 = load var $0.trace
       %636 = const c231
@@ -1844,7 +1844,7 @@ module {
       %664 = call builtin.exception_value(%662)
       throw %664
     bb260:
-      %672 = set_prop %620, %662, %669
+      %672 = create_data_property %620, %662, %669
       store var $42.o, %620
       %673 = load var $0.$shared_env
       %674 = const c249
@@ -1932,7 +1932,7 @@ module {
       throw %709
     bb280:
       %717 = load var $45.proto
-      %718 = set_prop %712, %714, %717
+      %718 = create_data_property %712, %714, %717
       store var $45.viaComputed, %712
       %719 = new_object(capacity=4)
       %720 = load var $45.proto
@@ -2030,7 +2030,7 @@ module {
       %762 = call builtin.exception_value(%760)
       throw %762
     bb302:
-      %770 = set_prop %754, %760, %767
+      %770 = create_data_property %754, %760, %767
       %771 = const c268
       %772 = load var $46.n
       %773 = const c269
@@ -2049,7 +2049,7 @@ module {
       throw %776
     bb306:
       %780 = const c270
-      %781 = set_prop %754, %777, %780
+      %781 = create_data_property %754, %777, %780
       store var $46.o, %754
       %782 = load var $0.$shared_env
       %783 = const c271

@@ -2483,11 +2483,14 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map(|_| ())
     }
 
+    /// 沿原型链查找首个属性槽，命中时连同持有该槽的 holder handle 一并返回；
+    /// 宿主据 holder 区分「链尾 %Object.prototype% 的自有属性」与更近层命中
+    /// （前者可能被宿主合成的家族原型方法遮蔽）。
     pub fn get_property_slot_on_proto_chain(
         &self,
         handle: u32,
         key: PropertyKey,
-    ) -> Result<Option<HeapAccessV2Property>, HeapAccessV2Error> {
+    ) -> Result<Option<(u32, HeapAccessV2Property)>, HeapAccessV2Error> {
         let mut current = handle;
         loop {
             // 高位标记的 proxy handle 不能 resolve 为 V2 heap 地址；
@@ -2505,7 +2508,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             if object_type != u32::from(wjsm_ir::HEAP_TYPE_ARRAY)
                 && let Some(property) = self.get_property_slot(current, key)?
             {
-                return Ok(Some(property));
+                return Ok(Some((current, property)));
             }
             let prototype = header as u32;
             if prototype == PROTO_NULL_SENTINEL || prototype == current {
@@ -2626,7 +2629,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<Option<u64>, HeapAccessV2Error> {
         Ok(self
             .get_property_slot_on_proto_chain(handle, key)?
-            .map(|property| property.value))
+            .map(|(_, property)| property.value))
     }
 
     /// 写自有属性：命中现有 shape 槽则原地覆写，否则按默认数据属性 flags 定义。
