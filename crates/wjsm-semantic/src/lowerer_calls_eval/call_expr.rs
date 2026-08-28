@@ -454,9 +454,7 @@ impl Lowerer {
                             builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
                         && (self.scopes.lookup(&obj_ident.sym).is_err()
                             || self.eval_scope_bridge_active())
-                        && self
-                            .with_scopes_for_ident(obj_ident.sym.as_ref())
-                            .is_empty()
+                        && self.with_scopes_for_ident(obj_ident.sym.as_ref()).is_empty()
                     {
                         // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
                         if matches!(
@@ -1029,9 +1027,7 @@ impl Lowerer {
             && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
             && let Some(builtin) = builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
             && self.scopes.lookup(&obj_ident.sym).is_err()
-            && self
-                .with_scopes_for_ident(obj_ident.sym.as_ref())
-                .is_empty()
+            && self.with_scopes_for_ident(obj_ident.sym.as_ref()).is_empty()
         {
             // 静态方法在引擎中恒存在；可选链只是语法糖，语义等于直接 CallBuiltin。
             return self.lower_host_builtin_call_expr(call, block, builtin);

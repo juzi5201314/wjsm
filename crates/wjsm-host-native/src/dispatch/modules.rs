@@ -224,10 +224,9 @@ pub(crate) fn scope_record_add_with_layer(
     let Some(scope) = state.scope_records.get_mut(&record) else {
         return false;
     };
-    scope.with_layers.push(NativeWithLayer {
-        object,
-        inner_names,
-    });
+    scope
+        .with_layers
+        .push(NativeWithLayer { object, inner_names });
     true
 }
 
