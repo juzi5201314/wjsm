@@ -1,0 +1,25 @@
+exit_code: 0
+--- stdout ---
+recursion: done
+typeof inside: function
+identity: f
+name invisible: undefined
+callee match: true
+default param: true
+sloppy writes: function 42
+strict write: caught:true
+destructuring: function
+for-in head: function
+delete: false
+var shadow: 1
+param shadow: 9
+loop capture: 0,1,2
+loop identity: true false
+nested: function,function
+new recursion: 2
+generator: 0,1,2
+generator name invisible: undefined
+eval: function
+async: async-base
+async gen: function,7
+--- stderr ---
