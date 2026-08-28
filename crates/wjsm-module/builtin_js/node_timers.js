@@ -6,13 +6,11 @@ function assertCallback(callback) {
   }
 }
 
+// 裸 setTimeout 标识符只在直接调用形式下被识别为 builtin，spread 调用需经
+// globalThis 属性路径；宿主层完整转发全部额外参数（含显式 undefined）。
 function timersSetTimeout(callback, delay, ...args) {
   assertCallback(callback);
-  if (args.length === 0) return setTimeout(callback, delay);
-  if (args.length === 1) return setTimeout(callback, delay, args[0]);
-  if (args.length === 2) return setTimeout(callback, delay, args[0], args[1]);
-  if (args.length === 3) return setTimeout(callback, delay, args[0], args[1], args[2]);
-  return setTimeout(callback, delay, args[0], args[1], args[2], args[3]);
+  return globalThis.setTimeout(callback, delay, ...args);
 }
 
 function timersClearTimeout(handle) {
@@ -21,11 +19,7 @@ function timersClearTimeout(handle) {
 
 function timersSetInterval(callback, delay, ...args) {
   assertCallback(callback);
-  if (args.length === 0) return setInterval(callback, delay);
-  if (args.length === 1) return setInterval(callback, delay, args[0]);
-  if (args.length === 2) return setInterval(callback, delay, args[0], args[1]);
-  if (args.length === 3) return setInterval(callback, delay, args[0], args[1], args[2]);
-  return setInterval(callback, delay, args[0], args[1], args[2], args[3]);
+  return globalThis.setInterval(callback, delay, ...args);
 }
 
 function timersClearInterval(handle) {

@@ -3,5 +3,7 @@ exit_code: 0
 true
 function
 cjs timeout ok
-cjs interval tick
+cjs variadic 6 1,2,3,4,5,6
+cjs explicit undefined true kept
+cjs interval tick|extra1|extra2|extra3|extra4
 --- stderr ---
