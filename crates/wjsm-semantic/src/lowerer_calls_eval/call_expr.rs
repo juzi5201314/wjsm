@@ -402,6 +402,17 @@ impl Lowerer {
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // 裸标识符 callee 解析穿越 with 作用域：callee/this 按对象环境记录
+        // 动态分派（含 `eval` 名字被 with 对象遮蔽时退化为普通调用）。
+        if let swc_ast::Callee::Expr(expr) = &call.callee
+            && let swc_ast::Expr::Ident(ident) = expr.as_ref()
+        {
+            let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+            if !crossed.is_empty() {
+                return self.lower_with_ident_call(call, ident, &crossed, block);
+            }
+        }
+
         let callee_val: ValueId;
         let this_val: ValueId;
         let mut callee_block = block;
@@ -431,12 +442,14 @@ impl Lowerer {
                     }
 
                     // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
+                    // 对象名解析穿越 with 作用域时禁用（with 对象可能提供同名属性）。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(builtin) =
                             builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
                         && (self.scopes.lookup(&obj_ident.sym).is_err()
                             || self.eval_scope_bridge_active())
+                        && self.with_scopes_for_ident(obj_ident.sym.as_ref()).is_empty()
                     {
                         // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
                         if matches!(
@@ -838,6 +851,30 @@ impl Lowerer {
                         false,
                     )?;
                     callee_block = member_block;
+                } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
+                    && self.eval_scope_record
+                    && self.eval_scope_bridge_active()
+                    && self.scopes.lookup(&ident.sym).is_err()
+                {
+                    // eval 代码的自由名 callee：ScopeRecord 可能携带调用方的
+                    // with 链，this 绑定按 WithBaseObject（§9.1.1.2.10）由宿主
+                    // 解析（无 with 层时恒 undefined）。
+                    let env = self.load_eval_scope_env(block);
+                    let key = self.append_eval_env_key_const(block, ident.sym.as_ref());
+                    this_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(this_val),
+                            builtin: Builtin::EvalWithBase,
+                            args: vec![env, key],
+                        },
+                    );
+                    let this_cont = self.lower_value_exception_branch(block, this_val)?;
+                    let mut callee_eval_block = this_cont;
+                    callee_val =
+                        self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
+                    callee_block = callee_eval_block;
                 } else {
                     // 普通调用 → this = undefined
                     let undef_const = self.module.add_constant(Constant::Undefined);
@@ -974,6 +1011,7 @@ impl Lowerer {
             && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
             && let Some(builtin) = builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
             && self.scopes.lookup(&obj_ident.sym).is_err()
+            && self.with_scopes_for_ident(obj_ident.sym.as_ref()).is_empty()
         {
             // 静态方法在引擎中恒存在；可选链只是语法糖，语义等于直接 CallBuiltin。
             return self.lower_host_builtin_call_expr(call, block, builtin);
@@ -992,6 +1030,17 @@ impl Lowerer {
                     if let Some(mb) = self.expr_merge_block.take() {
                         callee_block = mb;
                     }
+                } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
+                    && !self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()
+                {
+                    // 裸标识符可选调用穿越 with 作用域：callee/this 动态分派，
+                    // 命中 with 对象时 this 绑定为该对象（§9.1.1.2.10）。
+                    let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+                    let (callee, this, post) =
+                        self.lower_with_callee_resolution(ident, &crossed, block)?;
+                    callee_val = callee;
+                    this_val = this;
+                    callee_block = post;
                 } else {
                     this_val = self.alloc_value();
                     let undef = self.module.add_constant(Constant::Undefined);
@@ -1108,7 +1157,12 @@ impl Lowerer {
             let value_from_env = !self.binding_belongs_to_current_function(&binding)
                 || self.is_shared_binding(&binding);
             let value = if value_from_env {
-                self.load_captured_binding(eval_block, &binding)?
+                // 共享/捕获绑定读取会分叉（shared env 探测 branch + phi），
+                // 必须消化续接并推进插入点，否则后续指令覆盖分支终结器、
+                // phi 结果悬空（invalid IR）。
+                let value = self.load_captured_binding(eval_block, &binding)?;
+                self.resolve_expr_continuations(&mut eval_block);
+                value
             } else {
                 let value = self.alloc_value();
                 self.current_function.append_instruction(
@@ -1143,6 +1197,37 @@ impl Lowerer {
                     dest: None,
                     builtin: Builtin::ScopeRecordAddBinding,
                     args: vec![scope_record, name_val, value, is_tdz, is_const],
+                },
+            );
+        }
+
+        // 4b. 包围 eval 站点的 with 链（§9.1.1.2 对象环境记录）：按解析序
+        // （由内到外）追加。inner_names 为声明于该层内侧的可见绑定名——
+        // 解析这些名字时静态绑定先于该层对象命中，宿主 EvalGet/Set/HasBinding
+        // 据此在静态绑定与 with 对象之间正确插层。
+        for with_scope_id in self.enclosing_with_scopes() {
+            let object = self.load_with_object(&mut eval_block, with_scope_id)?;
+            let inner_names = all_bindings
+                .iter()
+                .filter(|(scope_id, ..)| self.scopes.is_strict_ancestor(with_scope_id, *scope_id))
+                .map(|(_, name, ..)| name.as_str())
+                .collect::<Vec<_>>()
+                .join("\0");
+            let names_const = self.module.add_constant(Constant::String(inner_names));
+            let names_val = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::Const {
+                    dest: names_val,
+                    constant: names_const,
+                },
+            );
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ScopeRecordAddWithLayer,
+                    args: vec![scope_record, object, names_val],
                 },
             );
         }
@@ -1321,12 +1406,14 @@ impl Lowerer {
                 },
             );
 
+            // 回写必须平面读取自有绑定：经 EvalGetBinding 会被 with 层拦截，
+            // 把 with 对象属性错误回写进调用方静态绑定。
             let value = self.alloc_value();
             self.current_function.append_instruction(
                 continue_block,
                 Instruction::CallBuiltin {
                     dest: Some(value),
-                    builtin: Builtin::EvalGetBinding,
+                    builtin: Builtin::ScopeRecordGetBinding,
                     args: vec![scope_record, name_val],
                 },
             );

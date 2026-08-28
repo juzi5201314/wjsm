@@ -560,6 +560,7 @@ fn root_values(
     queue.extend(state.global_object);
     queue.extend(state.object_prototype);
     queue.extend(state.array_prototype);
+    queue.extend(state.array_unscopables);
     queue.extend(state.regexp_prototype);
     queue.extend(state.map_prototype);
     queue.extend(state.set_prototype);

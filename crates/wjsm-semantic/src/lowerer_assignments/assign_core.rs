@@ -14,7 +14,21 @@ impl Lowerer {
         Ok(block)
     }
 
+    /// 标识符读取入口：解析穿越 with 作用域时先走对象环境记录动态分派
+    /// （§9.1.1.2.1），全链未命中回退静态解析；无 with 时零成本直达静态路径。
     pub(crate) fn lower_ident(
+        &mut self,
+        ident: &swc_ast::Ident,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
+        if !crossed.is_empty() {
+            return self.lower_with_ident_read(ident, &crossed, block);
+        }
+        self.lower_ident_static(ident, block)
+    }
+
+    pub(crate) fn lower_ident_static(
         &mut self,
         ident: &swc_ast::Ident,
         block: BasicBlockId,
@@ -357,6 +371,16 @@ impl Lowerer {
         let name = match &assign.left {
             swc_ast::AssignTarget::Simple(simple) => match simple {
                 swc_ast::SimpleAssignTarget::Ident(binding_ident) => {
+                    // 解析穿越 with 作用域：赋值须按对象环境记录动态分派。
+                    let crossed = self.with_scopes_for_ident(binding_ident.id.sym.as_ref());
+                    if !crossed.is_empty() {
+                        return self.lower_with_ident_assign(
+                            assign,
+                            &binding_ident.id,
+                            &crossed,
+                            block,
+                        );
+                    }
                     binding_ident.id.sym.to_string()
                 }
                 _ => {

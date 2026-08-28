@@ -14,18 +14,6 @@ impl Lowerer {
         Ok(StmtFlow::Open(block))
     }
 
-    pub(crate) fn lower_with(
-        &self,
-        _with_stmt: &swc_ast::WithStmt,
-        flow: StmtFlow,
-    ) -> Result<StmtFlow, LoweringError> {
-        let _block = self.ensure_open(flow)?;
-        Err(self.error(
-            _with_stmt.span(),
-            "with statement is not supported in strict/static scope mode",
-        ))
-    }
-
     // ── Variable declarations ───────────────────────────────────────────────
 
     pub(crate) fn lower_var_decl(
