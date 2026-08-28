@@ -476,10 +476,16 @@ module {
       %10 = is_exception %9
       branch %10, bb7, bb6
     bb6:
-      throw %9
+      %12 = is_exception %9
+      branch %12, bb9, bb8
     bb7:
       %11 = call builtin.exception_value(%9)
       throw %11
+    bb8:
+      throw %9
+    bb9:
+      %13 = call builtin.exception_value(%9)
+      throw %13
 
   fn @throwError [needs_prototype] [direct_callable] [params: $49.$env, $49.$this, $49.message] [entry=bb0]:
     bb0:
@@ -507,10 +513,16 @@ module {
       %10 = is_exception %9
       branch %10, bb7, bb6
     bb6:
-      throw %9
+      %12 = is_exception %9
+      branch %12, bb9, bb8
     bb7:
       %11 = call builtin.exception_value(%9)
       throw %11
+    bb8:
+      throw %9
+    bb9:
+      %13 = call builtin.exception_value(%9)
+      throw %13
 
   fn @arrow_3 [direct_callable] [params: $80.$env, $80.$this] [entry=bb0]:
     bb0:
@@ -559,10 +571,16 @@ module {
       %14 = is_exception %13
       branch %14, bb7, bb6
     bb6:
-      throw %13
+      %16 = is_exception %13
+      branch %16, bb9, bb8
     bb7:
       %15 = call builtin.exception_value(%13)
       throw %15
+    bb8:
+      throw %13
+    bb9:
+      %17 = call builtin.exception_value(%13)
+      throw %17
 
   fn @$0.anonymous [params: $107.$env, $107.$this] [entry=bb0]:
     bb0:
@@ -595,10 +613,16 @@ module {
       %14 = is_exception %13
       branch %14, bb7, bb6
     bb6:
-      throw %13
+      %16 = is_exception %13
+      branch %16, bb9, bb8
     bb7:
       %15 = call builtin.exception_value(%13)
       throw %15
+    bb8:
+      throw %13
+    bb9:
+      %17 = call builtin.exception_value(%13)
+      throw %17
 
   fn @gen$gen [params: $111.$env, $111.$this] [entry=bb0]:
     bb0:
@@ -627,8 +651,8 @@ module {
     bb1:
       %14 = const c204
       store var $111.$shared_env, %14
-      %57 = load var $111.$state
-      switch %57 [case c214 -> bb2, case c215 -> bb8, case c216 -> bb15], default bb20, exit bb21
+      %63 = load var $111.$state
+      switch %63 [case c214 -> bb2, case c215 -> bb10, case c216 -> bb19], default bb24, exit bb25
     bb2:
       jump bb3
     bb3:
@@ -638,81 +662,96 @@ module {
       %18 = is_exception %17
       branch %18, bb7, bb6
     bb4:
-      %54 = load var $111.$generator
-      %55 = const c213
-      %56 = call builtin.generator.return(%54, %55)
-      return %56
+      %60 = load var $111.$generator
+      %61 = const c213
+      %62 = call builtin.generator.return(%60, %61)
+      return %62
     bb5:
-      %31 = load var $tmp.0
-      store var $114.e, %31
-      %32 = const c209
-      %33 = load var $114.e
-      %34 = const c210
-      %35 = get_prop %33, %34
-      %36 = is_exception %35
-      branch %36, bb14, bb13
+      %33 = load var $tmp.0
+      store var $114.e, %33
+      %34 = const c209
+      %35 = load var $114.e
+      %36 = const c210
+      %37 = get_prop %35, %36
+      %38 = is_exception %37
+      branch %38, bb16, bb15
     bb6:
-      %20 = load var $111.$generator
-      %21 = call builtin.generator.next(%20, %17)
-      generator_suspend %21, state=1
-      jump bb10
+      %20 = is_exception %17
+      branch %20, bb9, bb8
     bb7:
       %19 = call builtin.exception_value(%17)
       store var $tmp.0, %19
       jump bb5
     bb8:
-      %22 = load var $111.$resume_val
-      %23 = load var $111.$is_rejected
-      %24 = const c207
-      %25 = stricteq %23, %24
-      branch %25, bb9, bb12
+      %22 = load var $111.$generator
+      %23 = call builtin.generator.next(%22, %17)
+      generator_suspend %23, state=1
+      jump bb12
     bb9:
-      store var $tmp.0, %22
+      %21 = call builtin.exception_value(%17)
+      store var $tmp.0, %21
       jump bb5
     bb10:
-      jump bb4
+      %24 = load var $111.$resume_val
+      %25 = load var $111.$is_rejected
+      %26 = const c207
+      %27 = stricteq %25, %26
+      branch %27, bb11, bb14
     bb11:
-      %28 = load var $111.$generator
-      %29 = call builtin.generator.return(%28, %22)
-      return %29
+      store var $tmp.0, %24
+      jump bb5
     bb12:
-      %26 = const c208
-      %27 = stricteq %23, %26
-      branch %27, bb11, bb10
-    bb13:
-      %40 = add %32, %35
-      %41 = load var $111.$generator
-      %42 = call builtin.generator.next(%41, %40)
-      generator_suspend %42, state=2
-      jump bb17
-    bb14:
-      %37 = call builtin.exception_value(%35)
-      %38 = load var $111.$generator
-      %39 = call builtin.generator.throw(%38, %37)
-      return %39
-    bb15:
-      %43 = load var $111.$resume_val
-      %44 = load var $111.$is_rejected
-      %45 = const c211
-      %46 = stricteq %44, %45
-      branch %46, bb16, bb19
-    bb16:
-      %49 = load var $111.$generator
-      %50 = call builtin.generator.throw(%49, %43)
-      return %50
-    bb17:
       jump bb4
+    bb13:
+      %30 = load var $111.$generator
+      %31 = call builtin.generator.return(%30, %24)
+      return %31
+    bb14:
+      %28 = const c208
+      %29 = stricteq %25, %28
+      branch %29, bb13, bb12
+    bb15:
+      %42 = add %34, %37
+      %43 = is_exception %42
+      branch %43, bb18, bb17
+    bb16:
+      %39 = call builtin.exception_value(%37)
+      %40 = load var $111.$generator
+      %41 = call builtin.generator.throw(%40, %39)
+      return %41
+    bb17:
+      %47 = load var $111.$generator
+      %48 = call builtin.generator.next(%47, %42)
+      generator_suspend %48, state=2
+      jump bb21
     bb18:
-      %51 = load var $111.$generator
-      %52 = call builtin.generator.return(%51, %43)
-      return %52
+      %44 = call builtin.exception_value(%42)
+      %45 = load var $111.$generator
+      %46 = call builtin.generator.throw(%45, %44)
+      return %46
     bb19:
-      %47 = const c212
-      %48 = stricteq %44, %47
-      branch %48, bb18, bb17
+      %49 = load var $111.$resume_val
+      %50 = load var $111.$is_rejected
+      %51 = const c211
+      %52 = stricteq %50, %51
+      branch %52, bb20, bb23
     bb20:
-      return
+      %55 = load var $111.$generator
+      %56 = call builtin.generator.throw(%55, %49)
+      return %56
     bb21:
+      jump bb4
+    bb22:
+      %57 = load var $111.$generator
+      %58 = call builtin.generator.return(%57, %49)
+      return %58
+    bb23:
+      %53 = const c212
+      %54 = stricteq %50, %53
+      branch %54, bb22, bb21
+    bb24:
+      return
+    bb25:
       unreachable
 
   fn @gen [needs_prototype] [params: $116.$env, $116.$this] [entry=bb0]:
@@ -777,36 +816,60 @@ module {
     bb1:
       %14 = const c240
       store var $117.$shared_env, %14
-      %30 = load var $117.$state
-      switch %30 [case c246 -> bb2, case c247 -> bb3], default bb6, exit bb7
+      %39 = load var $117.$state
+      switch %39 [case c246 -> bb2, case c247 -> bb5], default bb12, exit bb13
     bb2:
       %15 = const c241
       %16 = const c241
       %17 = call builtin.promise.resolve_static(%15, %16)
-      %19 = const c242
-      %18 = call builtin.promise.resolve_static(%19, %17)
-      suspend %18, state=1
-      jump bb5
+      %18 = is_exception %17
+      branch %18, bb4, bb3
     bb3:
-      %20 = load var $117.$resume_val
-      %21 = load var $117.$is_rejected
-      %22 = const c243
-      %23 = stricteq %21, %22
-      branch %23, bb4, bb5
+      %22 = const c242
+      %21 = call builtin.promise.resolve_static(%22, %17)
+      suspend %21, state=1
+      jump bb7
     bb4:
-      %24 = load var $117.$promise
-      promise_reject %24, %20
+      %19 = call builtin.exception_value(%17)
+      %20 = load var $117.$promise
+      promise_reject %20, %19
       return
     bb5:
-      %26 = const c244
-      %27 = const c245
-      %28 = call builtin.op_in(%27, %26)
-      %29 = load var $117.$promise
-      promise_resolve %29, %28
-      return
+      %23 = load var $117.$resume_val
+      %24 = load var $117.$is_rejected
+      %25 = const c243
+      %26 = stricteq %24, %25
+      branch %26, bb6, bb7
     bb6:
+      %27 = load var $117.$promise
+      promise_reject %27, %23
       return
     bb7:
+      %29 = const c244
+      %30 = const c245
+      %31 = call builtin.op_in(%30, %29)
+      %32 = is_exception %31
+      branch %32, bb9, bb8
+    bb8:
+      %35 = is_exception %31
+      branch %35, bb11, bb10
+    bb9:
+      %33 = call builtin.exception_value(%31)
+      %34 = load var $117.$promise
+      promise_reject %34, %33
+      return
+    bb10:
+      %38 = load var $117.$promise
+      promise_resolve %38, %31
+      return
+    bb11:
+      %36 = call builtin.exception_value(%31)
+      %37 = load var $117.$promise
+      promise_reject %37, %36
+      return
+    bb12:
+      return
+    bb13:
       unreachable
 
   fn @asyncIn [needs_prototype] [params: $118.$env, $118.$this] [entry=bb0]:
@@ -881,36 +944,60 @@ module {
     bb1:
       %14 = const c273
       store var $119.$shared_env, %14
-      %30 = load var $119.$state
-      switch %30 [case c279 -> bb2, case c280 -> bb3], default bb6, exit bb7
+      %39 = load var $119.$state
+      switch %39 [case c279 -> bb2, case c280 -> bb5], default bb12, exit bb13
     bb2:
       %15 = const c274
       %16 = const c274
       %17 = call builtin.promise.resolve_static(%15, %16)
-      %19 = const c275
-      %18 = call builtin.promise.resolve_static(%19, %17)
-      suspend %18, state=1
-      jump bb5
+      %18 = is_exception %17
+      branch %18, bb4, bb3
     bb3:
-      %20 = load var $119.$resume_val
-      %21 = load var $119.$is_rejected
-      %22 = const c276
-      %23 = stricteq %21, %22
-      branch %23, bb4, bb5
+      %22 = const c275
+      %21 = call builtin.promise.resolve_static(%22, %17)
+      suspend %21, state=1
+      jump bb7
     bb4:
-      %24 = load var $119.$promise
-      promise_reject %24, %20
+      %19 = call builtin.exception_value(%17)
+      %20 = load var $119.$promise
+      promise_reject %20, %19
       return
     bb5:
-      %26 = init_object_literal(c277)
-      %27 = const c278
-      %28 = call builtin.op_instanceof(%26, %27)
-      %29 = load var $119.$promise
-      promise_resolve %29, %28
-      return
+      %23 = load var $119.$resume_val
+      %24 = load var $119.$is_rejected
+      %25 = const c276
+      %26 = stricteq %24, %25
+      branch %26, bb6, bb7
     bb6:
+      %27 = load var $119.$promise
+      promise_reject %27, %23
       return
     bb7:
+      %29 = init_object_literal(c277)
+      %30 = const c278
+      %31 = call builtin.op_instanceof(%29, %30)
+      %32 = is_exception %31
+      branch %32, bb9, bb8
+    bb8:
+      %35 = is_exception %31
+      branch %35, bb11, bb10
+    bb9:
+      %33 = call builtin.exception_value(%31)
+      %34 = load var $119.$promise
+      promise_reject %34, %33
+      return
+    bb10:
+      %38 = load var $119.$promise
+      promise_resolve %38, %31
+      return
+    bb11:
+      %36 = call builtin.exception_value(%31)
+      %37 = load var $119.$promise
+      promise_reject %37, %36
+      return
+    bb12:
+      return
+    bb13:
       unreachable
 
   fn @asyncInstanceof [needs_prototype] [params: $120.$env, $120.$this] [entry=bb0]:
@@ -985,41 +1072,73 @@ module {
     bb1:
       %14 = const c306
       store var $121.$shared_env, %14
-      %35 = load var $121.$state
-      switch %35 [case c314 -> bb2, case c315 -> bb3], default bb6, exit bb7
+      %47 = load var $121.$state
+      switch %47 [case c314 -> bb2, case c315 -> bb5], default bb14, exit bb15
     bb2:
       %15 = const c307
       %16 = const c307
       %17 = call builtin.promise.resolve_static(%15, %16)
-      %19 = const c308
-      %18 = call builtin.promise.resolve_static(%19, %17)
-      suspend %18, state=1
-      jump bb5
+      %18 = is_exception %17
+      branch %18, bb4, bb3
     bb3:
-      %20 = load var $121.$resume_val
-      %21 = load var $121.$is_rejected
-      %22 = const c309
-      %23 = stricteq %21, %22
-      branch %23, bb4, bb5
+      %22 = const c308
+      %21 = call builtin.promise.resolve_static(%22, %17)
+      suspend %21, state=1
+      jump bb7
     bb4:
-      %24 = load var $121.$promise
-      promise_reject %24, %20
+      %19 = call builtin.exception_value(%17)
+      %20 = load var $121.$promise
+      promise_reject %20, %19
       return
     bb5:
-      %26 = const c310
-      %27 = const c311
-      %28 = load var $121.$closure_env
-      %29 = const c312
-      %30 = get_prop %28, %29
-      %31 = const c313
-      %32 = call %30, this=%27, args=[%31]
-      %33 = call builtin.op_in(%32, %26)
-      %34 = load var $121.$promise
-      promise_resolve %34, %33
-      return
+      %23 = load var $121.$resume_val
+      %24 = load var $121.$is_rejected
+      %25 = const c309
+      %26 = stricteq %24, %25
+      branch %26, bb6, bb7
     bb6:
+      %27 = load var $121.$promise
+      promise_reject %27, %23
       return
     bb7:
+      %29 = const c310
+      %30 = const c311
+      %31 = load var $121.$closure_env
+      %32 = const c312
+      %33 = get_prop %31, %32
+      %34 = const c313
+      %35 = call %33, this=%30, args=[%34]
+      %36 = is_exception %35
+      branch %36, bb9, bb8
+    bb8:
+      %39 = call builtin.op_in(%35, %29)
+      %40 = is_exception %39
+      branch %40, bb11, bb10
+    bb9:
+      %37 = call builtin.exception_value(%35)
+      %38 = load var $121.$promise
+      promise_reject %38, %37
+      return
+    bb10:
+      %43 = is_exception %39
+      branch %43, bb13, bb12
+    bb11:
+      %41 = call builtin.exception_value(%39)
+      %42 = load var $121.$promise
+      promise_reject %42, %41
+      return
+    bb12:
+      %46 = load var $121.$promise
+      promise_resolve %46, %39
+      return
+    bb13:
+      %44 = call builtin.exception_value(%39)
+      %45 = load var $121.$promise
+      promise_reject %45, %44
+      return
+    bb14:
+      return
+    bb15:
       unreachable
 
   fn @asyncRhsThrow [needs_prototype] [captures: $0.throwRange] [params: $122.$env, $122.$this] [entry=bb0]:

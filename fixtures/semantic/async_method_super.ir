@@ -628,8 +628,16 @@ module {
       %17 = const c58
       %18 = call builtin.reflect.get(%16, %17, %15)
       %19 = call %18, this=%15
-      %20 = load var $9.$promise
-      promise_resolve %20, %19
+      %20 = is_exception %19
+      branch %20, bb4, bb3
+    bb3:
+      %23 = load var $9.$promise
+      promise_resolve %23, %19
+      return
+    bb4:
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $9.$promise
+      promise_reject %22, %21
       return
 
   fn @callBeforeAwait [home_object=@5.prototype] [needs_prototype] [params: $10.$env, $10.$this] [entry=bb0]:
@@ -693,40 +701,64 @@ module {
     bb1:
       %14 = const c84
       store var $11.$shared_env, %14
-      %34 = load var $11.$state
-      switch %34 [case c90 -> bb2, case c91 -> bb3], default bb6, exit bb7
+      %43 = load var $11.$state
+      switch %43 [case c90 -> bb2, case c91 -> bb5], default bb12, exit bb13
     bb2:
       %15 = const c85
       %16 = const c85
       %17 = call builtin.promise.resolve_static(%15, %16)
-      %19 = const c86
-      %18 = call builtin.promise.resolve_static(%19, %17)
-      suspend %18, state=1
-      jump bb5
+      %18 = is_exception %17
+      branch %18, bb4, bb3
     bb3:
-      %20 = load var $11.$resume_val
-      %21 = load var $11.$is_rejected
-      %22 = const c87
-      %23 = stricteq %21, %22
-      branch %23, bb4, bb5
+      %22 = const c86
+      %21 = call builtin.promise.resolve_static(%22, %17)
+      suspend %21, state=1
+      jump bb7
     bb4:
-      %24 = load var $11.$promise
-      promise_reject %24, %20
+      %19 = call builtin.exception_value(%17)
+      %20 = load var $11.$promise
+      promise_reject %20, %19
       return
     bb5:
-      %26 = load var $11.$this
-      %27 = get_super_base
-      %28 = const c88
-      %29 = call builtin.reflect.get(%27, %28, %26)
-      %30 = call %29, this=%26
-      %31 = const c89
-      %32 = add %30, %31
-      %33 = load var $11.$promise
-      promise_resolve %33, %32
-      return
+      %23 = load var $11.$resume_val
+      %24 = load var $11.$is_rejected
+      %25 = const c87
+      %26 = stricteq %24, %25
+      branch %26, bb6, bb7
     bb6:
+      %27 = load var $11.$promise
+      promise_reject %27, %23
       return
     bb7:
+      %29 = load var $11.$this
+      %30 = get_super_base
+      %31 = const c88
+      %32 = call builtin.reflect.get(%30, %31, %29)
+      %33 = call %32, this=%29
+      %34 = is_exception %33
+      branch %34, bb9, bb8
+    bb8:
+      %37 = const c89
+      %38 = add %33, %37
+      %39 = is_exception %38
+      branch %39, bb11, bb10
+    bb9:
+      %35 = call builtin.exception_value(%33)
+      %36 = load var $11.$promise
+      promise_reject %36, %35
+      return
+    bb10:
+      %42 = load var $11.$promise
+      promise_resolve %42, %38
+      return
+    bb11:
+      %40 = call builtin.exception_value(%38)
+      %41 = load var $11.$promise
+      promise_reject %41, %40
+      return
+    bb12:
+      return
+    bb13:
       unreachable
 
   fn @callAfterAwait [home_object=@5.prototype] [needs_prototype] [params: $12.$env, $12.$this] [entry=bb0]:
@@ -868,8 +900,16 @@ module {
       %17 = const c145
       %18 = call builtin.reflect.get(%16, %17, %15)
       %19 = call %18, this=%15
-      %20 = load var $15.$promise
-      promise_resolve %20, %19
+      %20 = is_exception %19
+      branch %20, bb4, bb3
+    bb3:
+      %23 = load var $15.$promise
+      promise_resolve %23, %19
+      return
+    bb4:
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $15.$promise
+      promise_reject %22, %21
       return
 
   fn @thisReceiver [home_object=@5.prototype] [needs_prototype] [params: $16.$env, $16.$this] [entry=bb0]:
@@ -940,11 +980,23 @@ module {
       %17 = const c172
       %18 = const c173
       call builtin.reflect.set(%16, %17, %18, %15)
-      %19 = load var $17.$this
-      %20 = const c174
-      %21 = get_prop %19, %20
-      %22 = load var $17.$promise
-      promise_resolve %22, %21
+      jump bb3
+    bb3:
+      %22 = load var $17.$this
+      %23 = const c174
+      %24 = get_prop %22, %23
+      %25 = is_exception %24
+      branch %25, bb6, bb5
+    bb4:
+      unreachable
+    bb5:
+      %28 = load var $17.$promise
+      promise_resolve %28, %24
+      return
+    bb6:
+      %26 = call builtin.exception_value(%24)
+      %27 = load var $17.$promise
+      promise_reject %27, %26
       return
 
   fn @assignThrough [home_object=@5.prototype] [needs_prototype] [params: $18.$env, $18.$this] [entry=bb0]:
@@ -1019,8 +1071,8 @@ module {
     bb1:
       %14 = const c200
       store var $19.$shared_env, %14
-      %45 = load var $19.$state
-      switch %45 [case c212 -> bb2, case c213 -> bb3], default bb6, exit bb7
+      %54 = load var $19.$state
+      switch %54 [case c212 -> bb2, case c213 -> bb5], default bb12, exit bb13
     bb2:
       %15 = const c203
       %16 = new_object(capacity=1)
@@ -1035,40 +1087,64 @@ module {
       %22 = const c205
       %23 = const c205
       %24 = call builtin.promise.resolve_static(%22, %23)
-      %26 = const c206
-      %25 = call builtin.promise.resolve_static(%26, %24)
-      %39 = load var $19.$env
-      %40 = const c210
-      %41 = load var $19.f
-      call builtin.continuation.save_var(%39, %40, %41)
-      suspend %25, state=1
-      jump bb5
+      %25 = is_exception %24
+      branch %25, bb4, bb3
     bb3:
-      %42 = load var $19.$env
-      %43 = const c211
-      %44 = call builtin.continuation.load_var(%42, %43)
-      store var $19.f, %44
-      %27 = load var $19.$resume_val
-      %28 = load var $19.$is_rejected
-      %29 = const c207
-      %30 = stricteq %28, %29
-      branch %30, bb4, bb5
+      %29 = const c206
+      %28 = call builtin.promise.resolve_static(%29, %24)
+      %48 = load var $19.$env
+      %49 = const c210
+      %50 = load var $19.f
+      call builtin.continuation.save_var(%48, %49, %50)
+      suspend %28, state=1
+      jump bb7
     bb4:
-      %31 = load var $19.$promise
-      promise_reject %31, %27
+      %26 = call builtin.exception_value(%24)
+      %27 = load var $19.$promise
+      promise_reject %27, %26
       return
     bb5:
-      %33 = const c208
-      %34 = load var $19.f
-      %35 = call %34, this=%33
-      %36 = const c209
-      %37 = add %35, %36
-      %38 = load var $19.$promise
-      promise_resolve %38, %37
-      return
+      %51 = load var $19.$env
+      %52 = const c211
+      %53 = call builtin.continuation.load_var(%51, %52)
+      store var $19.f, %53
+      %30 = load var $19.$resume_val
+      %31 = load var $19.$is_rejected
+      %32 = const c207
+      %33 = stricteq %31, %32
+      branch %33, bb6, bb7
     bb6:
+      %34 = load var $19.$promise
+      promise_reject %34, %30
       return
     bb7:
+      %36 = const c208
+      %37 = load var $19.f
+      %38 = call %37, this=%36
+      %39 = is_exception %38
+      branch %39, bb9, bb8
+    bb8:
+      %42 = const c209
+      %43 = add %38, %42
+      %44 = is_exception %43
+      branch %44, bb11, bb10
+    bb9:
+      %40 = call builtin.exception_value(%38)
+      %41 = load var $19.$promise
+      promise_reject %41, %40
+      return
+    bb10:
+      %47 = load var $19.$promise
+      promise_resolve %47, %43
+      return
+    bb11:
+      %45 = call builtin.exception_value(%43)
+      %46 = load var $19.$promise
+      promise_reject %46, %45
+      return
+    bb12:
+      return
+    bb13:
       unreachable
 
   fn @arrowAfterResume [home_object=@5.prototype] [needs_prototype] [params: $21.$env, $21.$this] [entry=bb0]:
@@ -1151,20 +1227,28 @@ module {
       %22 = const c241
       %23 = get_prop %17, %22
       %24 = pos %23
-      %25 = const c242
-      %26 = add %24, %25
-      %27 = set_prop %17, %22, %26
-      %28 = is_exception %27
-      branch %28, bb8, bb7
+      %25 = is_exception %24
+      branch %25, bb8, bb7
     bb7:
-      %31 = const c243
-      %32 = load var $22.$promise
-      promise_resolve %32, %31
-      return
+      %28 = const c242
+      %29 = add %24, %28
+      %30 = set_prop %17, %22, %29
+      %31 = is_exception %30
+      branch %31, bb10, bb9
     bb8:
-      %29 = call builtin.exception_value(%27)
-      %30 = load var $22.$promise
-      promise_reject %30, %29
+      %26 = call builtin.exception_value(%24)
+      %27 = load var $22.$promise
+      promise_reject %27, %26
+      return
+    bb9:
+      %34 = const c243
+      %35 = load var $22.$promise
+      promise_resolve %35, %34
+      return
+    bb10:
+      %32 = call builtin.exception_value(%30)
+      %33 = load var $22.$promise
+      promise_reject %33, %32
       return
 
   fn @writeCaptured [home_object=@5.prototype] [needs_prototype] [captures: $0.counter] [params: $23.$env, $23.$this] [entry=bb0]:
@@ -1236,8 +1320,16 @@ module {
       %17 = const c271
       %18 = call builtin.reflect.get(%16, %17, %15)
       %19 = call %18, this=%15
-      %20 = load var $24.$promise
-      promise_resolve %20, %19
+      %20 = is_exception %19
+      branch %20, bb4, bb3
+    bb3:
+      %23 = load var $24.$promise
+      promise_resolve %23, %19
+      return
+    bb4:
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $24.$promise
+      promise_reject %22, %21
       return
 
   fn @staticSuper [home_object=@5] [needs_prototype] [params: $25.$env, $25.$this] [entry=bb0]:
@@ -1301,92 +1393,124 @@ module {
     bb1:
       %14 = const c297
       store var $26.$shared_env, %14
-      %62 = load var $26.$state
-      switch %62 [case c309 -> bb2, case c310 -> bb3, case c311 -> bb8, case c312 -> bb11], default bb16, exit bb17
+      %74 = load var $26.$state
+      switch %74 [case c309 -> bb2, case c310 -> bb5, case c311 -> bb12, case c312 -> bb19], default bb24, exit bb25
     bb2:
       %15 = load var $26.$this
       %16 = get_super_base
       %17 = const c298
       %18 = call builtin.reflect.get(%16, %17, %15)
       %19 = call %18, this=%15
-      %20 = load var $26.$generator
-      %21 = call builtin.async_generator.next(%20, %19)
-      suspend %21, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %22 = load var $26.$resume_val
-      %23 = load var $26.$is_rejected
-      %24 = const c299
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb7
+      %23 = load var $26.$generator
+      %24 = call builtin.async_generator.next(%23, %19)
+      suspend %24, state=1
+      jump bb7
     bb4:
-      %28 = load var $26.$generator
-      call builtin.async_generator.throw(%28, %22)
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $26.$generator
+      call builtin.async_generator.throw(%22, %21)
       return
     bb5:
-      %31 = const c301
-      %32 = const c301
-      %33 = call builtin.promise.resolve_static(%31, %32)
-      %35 = const c302
-      %34 = call builtin.promise.resolve_static(%35, %33)
-      suspend %34, state=2
-      jump bb10
+      %25 = load var $26.$resume_val
+      %26 = load var $26.$is_rejected
+      %27 = const c299
+      %28 = stricteq %26, %27
+      branch %28, bb6, bb9
     bb6:
-      %29 = load var $26.$generator
-      call builtin.async_generator.return(%29, %22)
+      %31 = load var $26.$generator
+      call builtin.async_generator.throw(%31, %25)
       return
     bb7:
-      %26 = const c300
-      %27 = stricteq %23, %26
-      branch %27, bb6, bb5
+      %34 = const c301
+      %35 = const c301
+      %36 = call builtin.promise.resolve_static(%34, %35)
+      %37 = is_exception %36
+      branch %37, bb11, bb10
     bb8:
-      %36 = load var $26.$resume_val
-      %37 = load var $26.$is_rejected
-      %38 = const c303
-      %39 = stricteq %37, %38
-      branch %39, bb9, bb10
+      %32 = load var $26.$generator
+      call builtin.async_generator.return(%32, %25)
+      return
     bb9:
-      %40 = load var $26.$generator
-      call builtin.async_generator.throw(%40, %36)
-      return
+      %29 = const c300
+      %30 = stricteq %26, %29
+      branch %30, bb8, bb7
     bb10:
-      %42 = load var $26.$this
-      %43 = get_super_base
-      %44 = const c304
-      %45 = call builtin.reflect.get(%43, %44, %42)
-      %46 = call %45, this=%42
-      %47 = const c305
-      %48 = add %46, %47
-      %49 = load var $26.$generator
-      %50 = call builtin.async_generator.next(%49, %48)
-      suspend %50, state=3
-      jump bb13
+      %41 = const c302
+      %40 = call builtin.promise.resolve_static(%41, %36)
+      suspend %40, state=2
+      jump bb14
     bb11:
-      %51 = load var $26.$resume_val
-      %52 = load var $26.$is_rejected
-      %53 = const c306
-      %54 = stricteq %52, %53
-      branch %54, bb12, bb15
-    bb12:
-      %57 = load var $26.$generator
-      call builtin.async_generator.throw(%57, %51)
+      %38 = call builtin.exception_value(%36)
+      %39 = load var $26.$generator
+      call builtin.async_generator.throw(%39, %38)
       return
+    bb12:
+      %42 = load var $26.$resume_val
+      %43 = load var $26.$is_rejected
+      %44 = const c303
+      %45 = stricteq %43, %44
+      branch %45, bb13, bb14
     bb13:
-      %60 = load var $26.$generator
-      %61 = const c308
-      call builtin.async_generator.return(%60, %61)
+      %46 = load var $26.$generator
+      call builtin.async_generator.throw(%46, %42)
       return
     bb14:
-      %58 = load var $26.$generator
-      call builtin.async_generator.return(%58, %51)
-      return
+      %48 = load var $26.$this
+      %49 = get_super_base
+      %50 = const c304
+      %51 = call builtin.reflect.get(%49, %50, %48)
+      %52 = call %51, this=%48
+      %53 = is_exception %52
+      branch %53, bb16, bb15
     bb15:
-      %55 = const c307
-      %56 = stricteq %52, %55
-      branch %56, bb14, bb13
+      %56 = const c305
+      %57 = add %52, %56
+      %58 = is_exception %57
+      branch %58, bb18, bb17
     bb16:
+      %54 = call builtin.exception_value(%52)
+      %55 = load var $26.$generator
+      call builtin.async_generator.throw(%55, %54)
       return
     bb17:
+      %61 = load var $26.$generator
+      %62 = call builtin.async_generator.next(%61, %57)
+      suspend %62, state=3
+      jump bb21
+    bb18:
+      %59 = call builtin.exception_value(%57)
+      %60 = load var $26.$generator
+      call builtin.async_generator.throw(%60, %59)
+      return
+    bb19:
+      %63 = load var $26.$resume_val
+      %64 = load var $26.$is_rejected
+      %65 = const c306
+      %66 = stricteq %64, %65
+      branch %66, bb20, bb23
+    bb20:
+      %69 = load var $26.$generator
+      call builtin.async_generator.throw(%69, %63)
+      return
+    bb21:
+      %72 = load var $26.$generator
+      %73 = const c308
+      call builtin.async_generator.return(%72, %73)
+      return
+    bb22:
+      %70 = load var $26.$generator
+      call builtin.async_generator.return(%70, %63)
+      return
+    bb23:
+      %67 = const c307
+      %68 = stricteq %64, %67
+      branch %68, bb22, bb21
+    bb24:
+      return
+    bb25:
       unreachable
 
   fn @genSuper [home_object=@5.prototype] [needs_prototype] [params: $27.$env, $27.$this] [entry=bb0]:
@@ -1450,54 +1574,86 @@ module {
     bb1:
       %14 = const c336
       store var $29.$shared_env, %14
-      %45 = load var $29.$state
-      switch %45 [case c344 -> bb2, case c345 -> bb3], default bb6, exit bb7
+      %57 = load var $29.$state
+      switch %57 [case c344 -> bb2, case c345 -> bb7], default bb14, exit bb15
     bb2:
       %15 = load var $29.$this
       %16 = get_super_base
       %17 = const c337
       %18 = call builtin.reflect.get(%16, %17, %15)
       %19 = call %18, this=%15
-      store var $29.before, %19
-      %20 = const c338
-      %21 = const c338
-      %22 = call builtin.promise.resolve_static(%20, %21)
-      %24 = const c339
-      %23 = call builtin.promise.resolve_static(%24, %22)
-      %39 = load var $29.$env
-      %40 = const c342
-      %41 = load var $29.before
-      call builtin.continuation.save_var(%39, %40, %41)
-      suspend %23, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %42 = load var $29.$env
-      %43 = const c343
-      %44 = call builtin.continuation.load_var(%42, %43)
-      store var $29.before, %44
-      %25 = load var $29.$resume_val
-      %26 = load var $29.$is_rejected
-      %27 = const c340
-      %28 = stricteq %26, %27
-      branch %28, bb4, bb5
+      store var $29.before, %19
+      %23 = const c338
+      %24 = const c338
+      %25 = call builtin.promise.resolve_static(%23, %24)
+      %26 = is_exception %25
+      branch %26, bb6, bb5
     bb4:
-      %29 = load var $29.$promise
-      promise_reject %29, %25
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $29.$promise
+      promise_reject %22, %21
       return
     bb5:
-      %31 = load var $29.before
-      %32 = load var $29.$this
-      %33 = get_super_base
-      %34 = const c341
-      %35 = call builtin.reflect.get(%33, %34, %32)
-      %36 = call %35, this=%32
-      %37 = add %31, %36
-      %38 = load var $29.$promise
-      promise_resolve %38, %37
-      return
+      %30 = const c339
+      %29 = call builtin.promise.resolve_static(%30, %25)
+      %51 = load var $29.$env
+      %52 = const c342
+      %53 = load var $29.before
+      call builtin.continuation.save_var(%51, %52, %53)
+      suspend %29, state=1
+      jump bb9
     bb6:
+      %27 = call builtin.exception_value(%25)
+      %28 = load var $29.$promise
+      promise_reject %28, %27
       return
     bb7:
+      %54 = load var $29.$env
+      %55 = const c343
+      %56 = call builtin.continuation.load_var(%54, %55)
+      store var $29.before, %56
+      %31 = load var $29.$resume_val
+      %32 = load var $29.$is_rejected
+      %33 = const c340
+      %34 = stricteq %32, %33
+      branch %34, bb8, bb9
+    bb8:
+      %35 = load var $29.$promise
+      promise_reject %35, %31
+      return
+    bb9:
+      %37 = load var $29.before
+      %38 = load var $29.$this
+      %39 = get_super_base
+      %40 = const c341
+      %41 = call builtin.reflect.get(%39, %40, %38)
+      %42 = call %41, this=%38
+      %43 = is_exception %42
+      branch %43, bb11, bb10
+    bb10:
+      %46 = add %37, %42
+      %47 = is_exception %46
+      branch %47, bb13, bb12
+    bb11:
+      %44 = call builtin.exception_value(%42)
+      %45 = load var $29.$promise
+      promise_reject %45, %44
+      return
+    bb12:
+      %50 = load var $29.$promise
+      promise_resolve %50, %46
+      return
+    bb13:
+      %48 = call builtin.exception_value(%46)
+      %49 = load var $29.$promise
+      promise_reject %49, %48
+      return
+    bb14:
+      return
+    bb15:
       unreachable
 
   fn @m [needs_prototype] [params: $30.$env, $30.$this] [entry=bb0]:
@@ -1565,44 +1721,52 @@ module {
     bb1:
       %14 = const c372
       store var $31.$shared_env, %14
-      %33 = load var $31.$state
-      switch %33 [case c377 -> bb2, case c378 -> bb3], default bb8, exit bb9
+      %36 = load var $31.$state
+      switch %36 [case c377 -> bb2, case c378 -> bb5], default bb10, exit bb11
     bb2:
       %15 = load var $31.$this
       %16 = get_super_base
       %17 = const c373
       %18 = call builtin.reflect.get(%16, %17, %15)
       %19 = call %18, this=%15
-      %20 = load var $31.$generator
-      %21 = call builtin.async_generator.next(%20, %19)
-      suspend %21, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %22 = load var $31.$resume_val
-      %23 = load var $31.$is_rejected
-      %24 = const c374
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb7
+      %23 = load var $31.$generator
+      %24 = call builtin.async_generator.next(%23, %19)
+      suspend %24, state=1
+      jump bb7
     bb4:
-      %28 = load var $31.$generator
-      call builtin.async_generator.throw(%28, %22)
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $31.$generator
+      call builtin.async_generator.throw(%22, %21)
       return
     bb5:
-      %31 = load var $31.$generator
-      %32 = const c376
-      call builtin.async_generator.return(%31, %32)
-      return
+      %25 = load var $31.$resume_val
+      %26 = load var $31.$is_rejected
+      %27 = const c374
+      %28 = stricteq %26, %27
+      branch %28, bb6, bb9
     bb6:
-      %29 = load var $31.$generator
-      call builtin.async_generator.return(%29, %22)
+      %31 = load var $31.$generator
+      call builtin.async_generator.throw(%31, %25)
       return
     bb7:
-      %26 = const c375
-      %27 = stricteq %23, %26
-      branch %27, bb6, bb5
+      %34 = load var $31.$generator
+      %35 = const c376
+      call builtin.async_generator.return(%34, %35)
+      return
     bb8:
+      %32 = load var $31.$generator
+      call builtin.async_generator.return(%32, %25)
       return
     bb9:
+      %29 = const c375
+      %30 = stricteq %26, %29
+      branch %30, bb8, bb7
+    bb10:
+      return
+    bb11:
       unreachable
 
   fn @g [needs_prototype] [params: $32.$env, $32.$this] [entry=bb0]:
@@ -1654,8 +1818,8 @@ module {
     bb1:
       %10 = const c396
       store var $33.$shared_env, %10
-      %290 = load var $33.$state
-      switch %290 [case c462 -> bb2, case c463 -> bb8, case c464 -> bb13, case c465 -> bb18, case c466 -> bb23, case c467 -> bb28, case c468 -> bb33, case c469 -> bb38, case c470 -> bb43, case c471 -> bb48, case c472 -> bb53, case c473 -> bb58, case c474 -> bb63], default bb68, exit bb69
+      %347 = load var $33.$state
+      switch %347 [case c462 -> bb2, case c463 -> bb14, case c464 -> bb21, case c465 -> bb28, case c466 -> bb35, case c467 -> bb42, case c468 -> bb49, case c469 -> bb56, case c470 -> bb63, case c471 -> bb72, case c472 -> bb81, case c473 -> bb90, case c474 -> bb99], default bb106, exit bb107
     bb2:
       %11 = load var $33.$closure_env
       %12 = const c397
@@ -1677,456 +1841,608 @@ module {
       jump bb7
     bb7:
       %19 = phi [(bb3, %16), (bb5, %16), (bb6, %14)]
-      store var $33.b, %19
-      %20 = load var $33.b
-      %21 = const c398
-      %22 = get_prop %20, %21
-      %23 = call %22, this=%20
-      %25 = const c399
-      %24 = call builtin.promise.resolve_static(%25, %23)
-      %236 = load var $33.$env
-      %237 = const c444
-      %238 = load var $33.b
-      call builtin.continuation.save_var(%236, %237, %238)
-      suspend %24, state=1
-      jump bb10
+      %20 = is_exception %19
+      branch %20, bb9, bb8
     bb8:
-      %239 = load var $33.$env
-      %240 = const c445
-      %241 = call builtin.continuation.load_var(%239, %240)
-      store var $33.b, %241
-      %26 = load var $33.$resume_val
-      %27 = load var $33.$is_rejected
-      %28 = const c400
-      %29 = stricteq %27, %28
-      branch %29, bb9, bb10
+      %23 = is_exception %19
+      branch %23, bb11, bb10
     bb9:
-      %30 = load var $33.$promise
-      promise_reject %30, %26
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $33.$promise
+      promise_reject %22, %21
       return
     bb10:
-      %31 = load var $33.$resume_val
-      %32 = call builtin.console.log(%31)
-      %33 = is_exception %32
-      branch %33, bb12, bb11
+      store var $33.b, %19
+      %26 = load var $33.b
+      %27 = const c398
+      %28 = get_prop %26, %27
+      %29 = call %28, this=%26
+      %30 = is_exception %29
+      branch %30, bb13, bb12
     bb11:
-      %36 = load var $33.b
-      %37 = const c401
-      %38 = get_prop %36, %37
-      %39 = call %38, this=%36
-      %41 = const c402
-      %40 = call builtin.promise.resolve_static(%41, %39)
-      %242 = load var $33.$env
-      %243 = const c446
-      %244 = load var $33.b
-      call builtin.continuation.save_var(%242, %243, %244)
-      suspend %40, state=2
-      jump bb15
+      %24 = call builtin.exception_value(%19)
+      %25 = load var $33.$promise
+      promise_reject %25, %24
+      return
     bb12:
-      %34 = call builtin.exception_value(%32)
-      %35 = load var $33.$promise
-      promise_reject %35, %34
-      return
+      %34 = const c399
+      %33 = call builtin.promise.resolve_static(%34, %29)
+      %293 = load var $33.$env
+      %294 = const c444
+      %295 = load var $33.b
+      call builtin.continuation.save_var(%293, %294, %295)
+      suspend %33, state=1
+      jump bb16
     bb13:
-      %245 = load var $33.$env
-      %246 = const c447
-      %247 = call builtin.continuation.load_var(%245, %246)
-      store var $33.b, %247
-      %42 = load var $33.$resume_val
-      %43 = load var $33.$is_rejected
-      %44 = const c403
-      %45 = stricteq %43, %44
-      branch %45, bb14, bb15
-    bb14:
-      %46 = load var $33.$promise
-      promise_reject %46, %42
+      %31 = call builtin.exception_value(%29)
+      %32 = load var $33.$promise
+      promise_reject %32, %31
       return
+    bb14:
+      %296 = load var $33.$env
+      %297 = const c445
+      %298 = call builtin.continuation.load_var(%296, %297)
+      store var $33.b, %298
+      %35 = load var $33.$resume_val
+      %36 = load var $33.$is_rejected
+      %37 = const c400
+      %38 = stricteq %36, %37
+      branch %38, bb15, bb16
     bb15:
-      %47 = load var $33.$resume_val
-      %48 = call builtin.console.log(%47)
-      %49 = is_exception %48
-      branch %49, bb17, bb16
+      %39 = load var $33.$promise
+      promise_reject %39, %35
+      return
     bb16:
-      %52 = load var $33.b
-      %53 = const c404
-      %54 = get_prop %52, %53
-      %55 = call %54, this=%52
-      %57 = const c405
-      %56 = call builtin.promise.resolve_static(%57, %55)
-      %248 = load var $33.$env
-      %249 = const c448
-      %250 = load var $33.b
-      call builtin.continuation.save_var(%248, %249, %250)
-      suspend %56, state=3
-      jump bb20
+      %40 = load var $33.$resume_val
+      %41 = call builtin.console.log(%40)
+      %42 = is_exception %41
+      branch %42, bb18, bb17
     bb17:
+      %45 = load var $33.b
+      %46 = const c401
+      %47 = get_prop %45, %46
+      %48 = call %47, this=%45
+      %49 = is_exception %48
+      branch %49, bb20, bb19
+    bb18:
+      %43 = call builtin.exception_value(%41)
+      %44 = load var $33.$promise
+      promise_reject %44, %43
+      return
+    bb19:
+      %53 = const c402
+      %52 = call builtin.promise.resolve_static(%53, %48)
+      %299 = load var $33.$env
+      %300 = const c446
+      %301 = load var $33.b
+      call builtin.continuation.save_var(%299, %300, %301)
+      suspend %52, state=2
+      jump bb23
+    bb20:
       %50 = call builtin.exception_value(%48)
       %51 = load var $33.$promise
       promise_reject %51, %50
       return
-    bb18:
-      %251 = load var $33.$env
-      %252 = const c449
-      %253 = call builtin.continuation.load_var(%251, %252)
-      store var $33.b, %253
-      %58 = load var $33.$resume_val
-      %59 = load var $33.$is_rejected
-      %60 = const c406
-      %61 = stricteq %59, %60
-      branch %61, bb19, bb20
-    bb19:
-      %62 = load var $33.$promise
-      promise_reject %62, %58
-      return
-    bb20:
-      %63 = load var $33.$resume_val
-      %64 = call builtin.console.log(%63)
-      %65 = is_exception %64
-      branch %65, bb22, bb21
     bb21:
-      %68 = load var $33.b
-      %69 = const c407
-      %70 = get_prop %68, %69
-      %71 = call %70, this=%68
-      %73 = const c408
-      %72 = call builtin.promise.resolve_static(%73, %71)
-      %254 = load var $33.$env
-      %255 = const c450
-      %256 = load var $33.b
-      call builtin.continuation.save_var(%254, %255, %256)
-      suspend %72, state=4
-      jump bb25
+      %302 = load var $33.$env
+      %303 = const c447
+      %304 = call builtin.continuation.load_var(%302, %303)
+      store var $33.b, %304
+      %54 = load var $33.$resume_val
+      %55 = load var $33.$is_rejected
+      %56 = const c403
+      %57 = stricteq %55, %56
+      branch %57, bb22, bb23
     bb22:
-      %66 = call builtin.exception_value(%64)
-      %67 = load var $33.$promise
-      promise_reject %67, %66
+      %58 = load var $33.$promise
+      promise_reject %58, %54
       return
     bb23:
-      %257 = load var $33.$env
-      %258 = const c451
-      %259 = call builtin.continuation.load_var(%257, %258)
-      store var $33.b, %259
-      %74 = load var $33.$resume_val
-      %75 = load var $33.$is_rejected
-      %76 = const c409
-      %77 = stricteq %75, %76
-      branch %77, bb24, bb25
+      %59 = load var $33.$resume_val
+      %60 = call builtin.console.log(%59)
+      %61 = is_exception %60
+      branch %61, bb25, bb24
     bb24:
-      %78 = load var $33.$promise
-      promise_reject %78, %74
-      return
+      %64 = load var $33.b
+      %65 = const c404
+      %66 = get_prop %64, %65
+      %67 = call %66, this=%64
+      %68 = is_exception %67
+      branch %68, bb27, bb26
     bb25:
-      %79 = load var $33.$resume_val
-      %80 = call builtin.console.log(%79)
-      %81 = is_exception %80
-      branch %81, bb27, bb26
+      %62 = call builtin.exception_value(%60)
+      %63 = load var $33.$promise
+      promise_reject %63, %62
+      return
     bb26:
-      %84 = load var $33.b
-      %85 = const c410
-      %86 = get_prop %84, %85
-      %87 = call %86, this=%84
-      %89 = const c411
-      %88 = call builtin.promise.resolve_static(%89, %87)
-      %260 = load var $33.$env
-      %261 = const c452
-      %262 = load var $33.b
-      call builtin.continuation.save_var(%260, %261, %262)
-      suspend %88, state=5
+      %72 = const c405
+      %71 = call builtin.promise.resolve_static(%72, %67)
+      %305 = load var $33.$env
+      %306 = const c448
+      %307 = load var $33.b
+      call builtin.continuation.save_var(%305, %306, %307)
+      suspend %71, state=3
       jump bb30
     bb27:
-      %82 = call builtin.exception_value(%80)
-      %83 = load var $33.$promise
-      promise_reject %83, %82
+      %69 = call builtin.exception_value(%67)
+      %70 = load var $33.$promise
+      promise_reject %70, %69
       return
     bb28:
-      %263 = load var $33.$env
-      %264 = const c453
-      %265 = call builtin.continuation.load_var(%263, %264)
-      store var $33.b, %265
-      %90 = load var $33.$resume_val
-      %91 = load var $33.$is_rejected
-      %92 = const c412
-      %93 = stricteq %91, %92
-      branch %93, bb29, bb30
+      %308 = load var $33.$env
+      %309 = const c449
+      %310 = call builtin.continuation.load_var(%308, %309)
+      store var $33.b, %310
+      %73 = load var $33.$resume_val
+      %74 = load var $33.$is_rejected
+      %75 = const c406
+      %76 = stricteq %74, %75
+      branch %76, bb29, bb30
     bb29:
-      %94 = load var $33.$promise
-      promise_reject %94, %90
+      %77 = load var $33.$promise
+      promise_reject %77, %73
       return
     bb30:
-      %95 = load var $33.$resume_val
-      %96 = call builtin.console.log(%95)
-      %97 = is_exception %96
-      branch %97, bb32, bb31
+      %78 = load var $33.$resume_val
+      %79 = call builtin.console.log(%78)
+      %80 = is_exception %79
+      branch %80, bb32, bb31
     bb31:
-      %100 = load var $33.b
-      %101 = const c413
-      %102 = get_prop %100, %101
-      %103 = call %102, this=%100
-      %105 = const c414
-      %104 = call builtin.promise.resolve_static(%105, %103)
-      %266 = load var $33.$env
-      %267 = const c454
-      %268 = load var $33.b
-      call builtin.continuation.save_var(%266, %267, %268)
-      suspend %104, state=6
-      jump bb35
+      %83 = load var $33.b
+      %84 = const c407
+      %85 = get_prop %83, %84
+      %86 = call %85, this=%83
+      %87 = is_exception %86
+      branch %87, bb34, bb33
     bb32:
-      %98 = call builtin.exception_value(%96)
-      %99 = load var $33.$promise
-      promise_reject %99, %98
+      %81 = call builtin.exception_value(%79)
+      %82 = load var $33.$promise
+      promise_reject %82, %81
       return
     bb33:
-      %269 = load var $33.$env
-      %270 = const c455
-      %271 = call builtin.continuation.load_var(%269, %270)
-      store var $33.b, %271
-      %106 = load var $33.$resume_val
-      %107 = load var $33.$is_rejected
-      %108 = const c415
-      %109 = stricteq %107, %108
-      branch %109, bb34, bb35
+      %91 = const c408
+      %90 = call builtin.promise.resolve_static(%91, %86)
+      %311 = load var $33.$env
+      %312 = const c450
+      %313 = load var $33.b
+      call builtin.continuation.save_var(%311, %312, %313)
+      suspend %90, state=4
+      jump bb37
     bb34:
-      %110 = load var $33.$promise
-      promise_reject %110, %106
+      %88 = call builtin.exception_value(%86)
+      %89 = load var $33.$promise
+      promise_reject %89, %88
       return
     bb35:
-      %111 = load var $33.$resume_val
-      %112 = call builtin.console.log(%111)
-      %113 = is_exception %112
-      branch %113, bb37, bb36
+      %314 = load var $33.$env
+      %315 = const c451
+      %316 = call builtin.continuation.load_var(%314, %315)
+      store var $33.b, %316
+      %92 = load var $33.$resume_val
+      %93 = load var $33.$is_rejected
+      %94 = const c409
+      %95 = stricteq %93, %94
+      branch %95, bb36, bb37
     bb36:
-      %116 = load var $33.b
-      %117 = const c416
-      %118 = get_prop %116, %117
-      %119 = call %118, this=%116
-      %121 = const c417
-      %120 = call builtin.promise.resolve_static(%121, %119)
-      %272 = load var $33.$env
-      %273 = const c456
-      %274 = load var $33.b
-      call builtin.continuation.save_var(%272, %273, %274)
-      suspend %120, state=7
-      jump bb40
-    bb37:
-      %114 = call builtin.exception_value(%112)
-      %115 = load var $33.$promise
-      promise_reject %115, %114
+      %96 = load var $33.$promise
+      promise_reject %96, %92
       return
+    bb37:
+      %97 = load var $33.$resume_val
+      %98 = call builtin.console.log(%97)
+      %99 = is_exception %98
+      branch %99, bb39, bb38
     bb38:
-      %275 = load var $33.$env
-      %276 = const c457
-      %277 = call builtin.continuation.load_var(%275, %276)
-      store var $33.b, %277
-      %122 = load var $33.$resume_val
-      %123 = load var $33.$is_rejected
-      %124 = const c418
-      %125 = stricteq %123, %124
-      branch %125, bb39, bb40
+      %102 = load var $33.b
+      %103 = const c410
+      %104 = get_prop %102, %103
+      %105 = call %104, this=%102
+      %106 = is_exception %105
+      branch %106, bb41, bb40
     bb39:
-      %126 = load var $33.$promise
-      promise_reject %126, %122
+      %100 = call builtin.exception_value(%98)
+      %101 = load var $33.$promise
+      promise_reject %101, %100
       return
     bb40:
-      %128 = load var $33.$closure_env
-      %129 = const c419
-      %130 = get_prop %128, %129
-      %131 = call builtin.console.log(%130)
-      %132 = is_exception %131
-      branch %132, bb42, bb41
+      %110 = const c411
+      %109 = call builtin.promise.resolve_static(%110, %105)
+      %317 = load var $33.$env
+      %318 = const c452
+      %319 = load var $33.b
+      call builtin.continuation.save_var(%317, %318, %319)
+      suspend %109, state=5
+      jump bb44
     bb41:
-      %135 = load var $33.$closure_env
-      %136 = const c420
-      %137 = get_prop %135, %136
-      %138 = const c421
-      %139 = get_prop %137, %138
-      %140 = call %139, this=%137
-      %142 = const c422
-      %141 = call builtin.promise.resolve_static(%142, %140)
-      %278 = load var $33.$env
-      %279 = const c458
-      %280 = load var $33.b
-      call builtin.continuation.save_var(%278, %279, %280)
-      suspend %141, state=8
-      jump bb45
+      %107 = call builtin.exception_value(%105)
+      %108 = load var $33.$promise
+      promise_reject %108, %107
+      return
     bb42:
-      %133 = call builtin.exception_value(%131)
-      %134 = load var $33.$promise
-      promise_reject %134, %133
-      return
+      %320 = load var $33.$env
+      %321 = const c453
+      %322 = call builtin.continuation.load_var(%320, %321)
+      store var $33.b, %322
+      %111 = load var $33.$resume_val
+      %112 = load var $33.$is_rejected
+      %113 = const c412
+      %114 = stricteq %112, %113
+      branch %114, bb43, bb44
     bb43:
-      %281 = load var $33.$env
-      %282 = const c459
-      %283 = call builtin.continuation.load_var(%281, %282)
-      store var $33.b, %283
-      %143 = load var $33.$resume_val
-      %144 = load var $33.$is_rejected
-      %145 = const c423
-      %146 = stricteq %144, %145
-      branch %146, bb44, bb45
+      %115 = load var $33.$promise
+      promise_reject %115, %111
+      return
     bb44:
-      %147 = load var $33.$promise
-      promise_reject %147, %143
-      return
+      %116 = load var $33.$resume_val
+      %117 = call builtin.console.log(%116)
+      %118 = is_exception %117
+      branch %118, bb46, bb45
     bb45:
-      %148 = load var $33.$resume_val
-      %149 = call builtin.console.log(%148)
-      %150 = is_exception %149
-      branch %150, bb47, bb46
+      %121 = load var $33.b
+      %122 = const c413
+      %123 = get_prop %121, %122
+      %124 = call %123, this=%121
+      %125 = is_exception %124
+      branch %125, bb48, bb47
     bb46:
-      %153 = load var $33.b
-      %154 = const c424
-      %155 = get_prop %153, %154
-      %156 = call %155, this=%153
-      store var $33.it, %156
-      %157 = load var $33.it
-      %158 = const c425
-      %159 = get_prop %157, %158
-      %160 = call %159, this=%157
-      %162 = const c426
-      %161 = call builtin.promise.resolve_static(%162, %160)
-      %284 = load var $33.$env
-      %285 = const c460
-      %286 = load var $33.it
-      call builtin.continuation.save_var(%284, %285, %286)
-      suspend %161, state=9
-      jump bb50
+      %119 = call builtin.exception_value(%117)
+      %120 = load var $33.$promise
+      promise_reject %120, %119
+      return
     bb47:
-      %151 = call builtin.exception_value(%149)
-      %152 = load var $33.$promise
-      promise_reject %152, %151
-      return
+      %129 = const c414
+      %128 = call builtin.promise.resolve_static(%129, %124)
+      %323 = load var $33.$env
+      %324 = const c454
+      %325 = load var $33.b
+      call builtin.continuation.save_var(%323, %324, %325)
+      suspend %128, state=6
+      jump bb51
     bb48:
-      %287 = load var $33.$env
-      %288 = const c461
-      %289 = call builtin.continuation.load_var(%287, %288)
-      store var $33.it, %289
-      %163 = load var $33.$resume_val
-      %164 = load var $33.$is_rejected
-      %165 = const c427
-      %166 = stricteq %164, %165
-      branch %166, bb49, bb50
+      %126 = call builtin.exception_value(%124)
+      %127 = load var $33.$promise
+      promise_reject %127, %126
+      return
     bb49:
-      %167 = load var $33.$promise
-      promise_reject %167, %163
-      return
+      %326 = load var $33.$env
+      %327 = const c455
+      %328 = call builtin.continuation.load_var(%326, %327)
+      store var $33.b, %328
+      %130 = load var $33.$resume_val
+      %131 = load var $33.$is_rejected
+      %132 = const c415
+      %133 = stricteq %131, %132
+      branch %133, bb50, bb51
     bb50:
-      %168 = load var $33.$resume_val
-      %169 = const c428
-      %170 = get_prop %168, %169
-      %171 = call builtin.console.log(%170)
-      %172 = is_exception %171
-      branch %172, bb52, bb51
+      %134 = load var $33.$promise
+      promise_reject %134, %130
+      return
     bb51:
-      %175 = load var $33.it
-      %176 = const c429
-      %177 = get_prop %175, %176
-      %178 = call %177, this=%175
-      %180 = const c430
-      %179 = call builtin.promise.resolve_static(%180, %178)
-      suspend %179, state=10
-      jump bb55
+      %135 = load var $33.$resume_val
+      %136 = call builtin.console.log(%135)
+      %137 = is_exception %136
+      branch %137, bb53, bb52
     bb52:
-      %173 = call builtin.exception_value(%171)
-      %174 = load var $33.$promise
-      promise_reject %174, %173
-      return
+      %140 = load var $33.b
+      %141 = const c416
+      %142 = get_prop %140, %141
+      %143 = call %142, this=%140
+      %144 = is_exception %143
+      branch %144, bb55, bb54
     bb53:
-      %181 = load var $33.$resume_val
-      %182 = load var $33.$is_rejected
-      %183 = const c431
-      %184 = stricteq %182, %183
-      branch %184, bb54, bb55
-    bb54:
-      %185 = load var $33.$promise
-      promise_reject %185, %181
+      %138 = call builtin.exception_value(%136)
+      %139 = load var $33.$promise
+      promise_reject %139, %138
       return
+    bb54:
+      %148 = const c417
+      %147 = call builtin.promise.resolve_static(%148, %143)
+      %329 = load var $33.$env
+      %330 = const c456
+      %331 = load var $33.b
+      call builtin.continuation.save_var(%329, %330, %331)
+      suspend %147, state=7
+      jump bb58
     bb55:
-      %186 = load var $33.$resume_val
-      %187 = const c432
-      %188 = get_prop %186, %187
-      %189 = call builtin.console.log(%188)
-      %190 = is_exception %189
-      branch %190, bb57, bb56
+      %145 = call builtin.exception_value(%143)
+      %146 = load var $33.$promise
+      promise_reject %146, %145
+      return
     bb56:
-      %193 = load var $33.$closure_env
-      %194 = const c433
-      %195 = get_prop %193, %194
-      %196 = const c434
-      %197 = get_prop %195, %196
-      %198 = call %197, this=%195
-      %200 = const c435
-      %199 = call builtin.promise.resolve_static(%200, %198)
-      suspend %199, state=11
-      jump bb60
+      %332 = load var $33.$env
+      %333 = const c457
+      %334 = call builtin.continuation.load_var(%332, %333)
+      store var $33.b, %334
+      %149 = load var $33.$resume_val
+      %150 = load var $33.$is_rejected
+      %151 = const c418
+      %152 = stricteq %150, %151
+      branch %152, bb57, bb58
     bb57:
-      %191 = call builtin.exception_value(%189)
-      %192 = load var $33.$promise
-      promise_reject %192, %191
+      %153 = load var $33.$promise
+      promise_reject %153, %149
       return
     bb58:
-      %201 = load var $33.$resume_val
-      %202 = load var $33.$is_rejected
-      %203 = const c436
-      %204 = stricteq %202, %203
-      branch %204, bb59, bb60
+      %155 = load var $33.$closure_env
+      %156 = const c419
+      %157 = get_prop %155, %156
+      %158 = call builtin.console.log(%157)
+      %159 = is_exception %158
+      branch %159, bb60, bb59
     bb59:
-      %205 = load var $33.$promise
-      promise_reject %205, %201
-      return
+      %162 = load var $33.$closure_env
+      %163 = const c420
+      %164 = get_prop %162, %163
+      %165 = const c421
+      %166 = get_prop %164, %165
+      %167 = call %166, this=%164
+      %168 = is_exception %167
+      branch %168, bb62, bb61
     bb60:
-      %206 = load var $33.$resume_val
-      %207 = call builtin.console.log(%206)
-      %208 = is_exception %207
-      branch %208, bb62, bb61
+      %160 = call builtin.exception_value(%158)
+      %161 = load var $33.$promise
+      promise_reject %161, %160
+      return
     bb61:
-      %211 = load var $33.$closure_env
-      %212 = const c437
-      %213 = get_prop %211, %212
-      %214 = const c438
-      %215 = get_prop %213, %214
-      %216 = call %215, this=%213
-      %217 = const c439
-      %218 = get_prop %216, %217
-      %219 = call %218, this=%216
-      %221 = const c440
-      %220 = call builtin.promise.resolve_static(%221, %219)
-      suspend %220, state=12
+      %172 = const c422
+      %171 = call builtin.promise.resolve_static(%172, %167)
+      %335 = load var $33.$env
+      %336 = const c458
+      %337 = load var $33.b
+      call builtin.continuation.save_var(%335, %336, %337)
+      suspend %171, state=8
       jump bb65
     bb62:
-      %209 = call builtin.exception_value(%207)
-      %210 = load var $33.$promise
-      promise_reject %210, %209
+      %169 = call builtin.exception_value(%167)
+      %170 = load var $33.$promise
+      promise_reject %170, %169
       return
     bb63:
-      %222 = load var $33.$resume_val
-      %223 = load var $33.$is_rejected
-      %224 = const c441
-      %225 = stricteq %223, %224
-      branch %225, bb64, bb65
+      %338 = load var $33.$env
+      %339 = const c459
+      %340 = call builtin.continuation.load_var(%338, %339)
+      store var $33.b, %340
+      %173 = load var $33.$resume_val
+      %174 = load var $33.$is_rejected
+      %175 = const c423
+      %176 = stricteq %174, %175
+      branch %176, bb64, bb65
     bb64:
-      %226 = load var $33.$promise
-      promise_reject %226, %222
+      %177 = load var $33.$promise
+      promise_reject %177, %173
       return
     bb65:
-      %227 = load var $33.$resume_val
-      %228 = const c442
-      %229 = get_prop %227, %228
-      %230 = call builtin.console.log(%229)
-      %231 = is_exception %230
-      branch %231, bb67, bb66
+      %178 = load var $33.$resume_val
+      %179 = call builtin.console.log(%178)
+      %180 = is_exception %179
+      branch %180, bb67, bb66
     bb66:
-      %234 = const c443
-      %235 = load var $33.$promise
-      promise_resolve %235, %234
-      return
+      %183 = load var $33.b
+      %184 = const c424
+      %185 = get_prop %183, %184
+      %186 = call %185, this=%183
+      %187 = is_exception %186
+      branch %187, bb69, bb68
     bb67:
+      %181 = call builtin.exception_value(%179)
+      %182 = load var $33.$promise
+      promise_reject %182, %181
+      return
+    bb68:
+      store var $33.it, %186
+      %190 = load var $33.it
+      %191 = const c425
+      %192 = get_prop %190, %191
+      %193 = call %192, this=%190
+      %194 = is_exception %193
+      branch %194, bb71, bb70
+    bb69:
+      %188 = call builtin.exception_value(%186)
+      %189 = load var $33.$promise
+      promise_reject %189, %188
+      return
+    bb70:
+      %198 = const c426
+      %197 = call builtin.promise.resolve_static(%198, %193)
+      %341 = load var $33.$env
+      %342 = const c460
+      %343 = load var $33.it
+      call builtin.continuation.save_var(%341, %342, %343)
+      suspend %197, state=9
+      jump bb74
+    bb71:
+      %195 = call builtin.exception_value(%193)
+      %196 = load var $33.$promise
+      promise_reject %196, %195
+      return
+    bb72:
+      %344 = load var $33.$env
+      %345 = const c461
+      %346 = call builtin.continuation.load_var(%344, %345)
+      store var $33.it, %346
+      %199 = load var $33.$resume_val
+      %200 = load var $33.$is_rejected
+      %201 = const c427
+      %202 = stricteq %200, %201
+      branch %202, bb73, bb74
+    bb73:
+      %203 = load var $33.$promise
+      promise_reject %203, %199
+      return
+    bb74:
+      %204 = load var $33.$resume_val
+      %205 = const c428
+      %206 = get_prop %204, %205
+      %207 = is_exception %206
+      branch %207, bb76, bb75
+    bb75:
+      %210 = call builtin.console.log(%206)
+      %211 = is_exception %210
+      branch %211, bb78, bb77
+    bb76:
+      %208 = call builtin.exception_value(%206)
+      %209 = load var $33.$promise
+      promise_reject %209, %208
+      return
+    bb77:
+      %214 = load var $33.it
+      %215 = const c429
+      %216 = get_prop %214, %215
+      %217 = call %216, this=%214
+      %218 = is_exception %217
+      branch %218, bb80, bb79
+    bb78:
+      %212 = call builtin.exception_value(%210)
+      %213 = load var $33.$promise
+      promise_reject %213, %212
+      return
+    bb79:
+      %222 = const c430
+      %221 = call builtin.promise.resolve_static(%222, %217)
+      suspend %221, state=10
+      jump bb83
+    bb80:
+      %219 = call builtin.exception_value(%217)
+      %220 = load var $33.$promise
+      promise_reject %220, %219
+      return
+    bb81:
+      %223 = load var $33.$resume_val
+      %224 = load var $33.$is_rejected
+      %225 = const c431
+      %226 = stricteq %224, %225
+      branch %226, bb82, bb83
+    bb82:
+      %227 = load var $33.$promise
+      promise_reject %227, %223
+      return
+    bb83:
+      %228 = load var $33.$resume_val
+      %229 = const c432
+      %230 = get_prop %228, %229
+      %231 = is_exception %230
+      branch %231, bb85, bb84
+    bb84:
+      %234 = call builtin.console.log(%230)
+      %235 = is_exception %234
+      branch %235, bb87, bb86
+    bb85:
       %232 = call builtin.exception_value(%230)
       %233 = load var $33.$promise
       promise_reject %233, %232
       return
-    bb68:
+    bb86:
+      %238 = load var $33.$closure_env
+      %239 = const c433
+      %240 = get_prop %238, %239
+      %241 = const c434
+      %242 = get_prop %240, %241
+      %243 = call %242, this=%240
+      %244 = is_exception %243
+      branch %244, bb89, bb88
+    bb87:
+      %236 = call builtin.exception_value(%234)
+      %237 = load var $33.$promise
+      promise_reject %237, %236
       return
-    bb69:
+    bb88:
+      %248 = const c435
+      %247 = call builtin.promise.resolve_static(%248, %243)
+      suspend %247, state=11
+      jump bb92
+    bb89:
+      %245 = call builtin.exception_value(%243)
+      %246 = load var $33.$promise
+      promise_reject %246, %245
+      return
+    bb90:
+      %249 = load var $33.$resume_val
+      %250 = load var $33.$is_rejected
+      %251 = const c436
+      %252 = stricteq %250, %251
+      branch %252, bb91, bb92
+    bb91:
+      %253 = load var $33.$promise
+      promise_reject %253, %249
+      return
+    bb92:
+      %254 = load var $33.$resume_val
+      %255 = call builtin.console.log(%254)
+      %256 = is_exception %255
+      branch %256, bb94, bb93
+    bb93:
+      %259 = load var $33.$closure_env
+      %260 = const c437
+      %261 = get_prop %259, %260
+      %262 = const c438
+      %263 = get_prop %261, %262
+      %264 = call %263, this=%261
+      %265 = is_exception %264
+      branch %265, bb96, bb95
+    bb94:
+      %257 = call builtin.exception_value(%255)
+      %258 = load var $33.$promise
+      promise_reject %258, %257
+      return
+    bb95:
+      %268 = const c439
+      %269 = get_prop %264, %268
+      %270 = call %269, this=%264
+      %271 = is_exception %270
+      branch %271, bb98, bb97
+    bb96:
+      %266 = call builtin.exception_value(%264)
+      %267 = load var $33.$promise
+      promise_reject %267, %266
+      return
+    bb97:
+      %275 = const c440
+      %274 = call builtin.promise.resolve_static(%275, %270)
+      suspend %274, state=12
+      jump bb101
+    bb98:
+      %272 = call builtin.exception_value(%270)
+      %273 = load var $33.$promise
+      promise_reject %273, %272
+      return
+    bb99:
+      %276 = load var $33.$resume_val
+      %277 = load var $33.$is_rejected
+      %278 = const c441
+      %279 = stricteq %277, %278
+      branch %279, bb100, bb101
+    bb100:
+      %280 = load var $33.$promise
+      promise_reject %280, %276
+      return
+    bb101:
+      %281 = load var $33.$resume_val
+      %282 = const c442
+      %283 = get_prop %281, %282
+      %284 = is_exception %283
+      branch %284, bb103, bb102
+    bb102:
+      %287 = call builtin.console.log(%283)
+      %288 = is_exception %287
+      branch %288, bb105, bb104
+    bb103:
+      %285 = call builtin.exception_value(%283)
+      %286 = load var $33.$promise
+      promise_reject %286, %285
+      return
+    bb104:
+      %291 = const c443
+      %292 = load var $33.$promise
+      promise_resolve %292, %291
+      return
+    bb105:
+      %289 = call builtin.exception_value(%287)
+      %290 = load var $33.$promise
+      promise_reject %290, %289
+      return
+    bb106:
+      return
+    bb107:
       unreachable
 
   fn @arrow_30 [captures: $0.B, $0.counter, $0.derived] [params: $34.$env, $34.$this] [entry=bb0]:

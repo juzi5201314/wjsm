@@ -417,8 +417,8 @@ module {
     bb1:
       %14 = const c118
       store var $9.$shared_env, %14
-      %44 = load var $9.$state
-      switch %44 [case c127 -> bb2, case c128 -> bb7], default bb12, exit bb13
+      %47 = load var $9.$state
+      switch %47 [case c127 -> bb2, case c128 -> bb9], default bb14, exit bb15
     bb2:
       %15 = load var $9.$closure_env
       %16 = const c119
@@ -440,39 +440,47 @@ module {
       %25 = add %23, %24
       %26 = const c122
       %27 = set_prop %17, %26, %25
-      %28 = load var $9.$closure_env
-      %29 = const c123
-      %30 = get_prop %28, %29
-      %31 = load var $9.$generator
-      %32 = call builtin.async_generator.next(%31, %30)
-      suspend %32, state=1
-      jump bb9
+      %28 = is_exception %27
+      branch %28, bb8, bb7
     bb7:
-      %33 = load var $9.$resume_val
-      %34 = load var $9.$is_rejected
-      %35 = const c124
-      %36 = stricteq %34, %35
-      branch %36, bb8, bb11
+      %31 = load var $9.$closure_env
+      %32 = const c123
+      %33 = get_prop %31, %32
+      %34 = load var $9.$generator
+      %35 = call builtin.async_generator.next(%34, %33)
+      suspend %35, state=1
+      jump bb11
     bb8:
-      %39 = load var $9.$generator
-      call builtin.async_generator.throw(%39, %33)
+      %29 = call builtin.exception_value(%27)
+      %30 = load var $9.$generator
+      call builtin.async_generator.throw(%30, %29)
       return
     bb9:
-      %42 = load var $9.$generator
-      %43 = const c126
-      call builtin.async_generator.return(%42, %43)
-      return
+      %36 = load var $9.$resume_val
+      %37 = load var $9.$is_rejected
+      %38 = const c124
+      %39 = stricteq %37, %38
+      branch %39, bb10, bb13
     bb10:
-      %40 = load var $9.$generator
-      call builtin.async_generator.return(%40, %33)
+      %42 = load var $9.$generator
+      call builtin.async_generator.throw(%42, %36)
       return
     bb11:
-      %37 = const c125
-      %38 = stricteq %34, %37
-      branch %38, bb10, bb9
+      %45 = load var $9.$generator
+      %46 = const c126
+      call builtin.async_generator.return(%45, %46)
+      return
     bb12:
+      %43 = load var $9.$generator
+      call builtin.async_generator.return(%43, %36)
       return
     bb13:
+      %40 = const c125
+      %41 = stricteq %37, %40
+      branch %41, bb12, bb11
+    bb14:
+      return
+    bb15:
       unreachable
 
   fn @tick [home_object=@5.prototype] [needs_prototype] [captures: $0.lCount] [params: $10.$env, $10.$this] [entry=bb0]:

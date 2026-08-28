@@ -331,10 +331,16 @@ module {
       %19 = is_exception %18
       branch %19, bb9, bb8
     bb8:
-      throw %18
+      %21 = is_exception %18
+      branch %21, bb11, bb10
     bb9:
       %20 = call builtin.exception_value(%18)
       throw %20
+    bb10:
+      throw %18
+    bb11:
+      %22 = call builtin.exception_value(%18)
+      throw %22
 
   fn @boomValue [needs_prototype] [captures: $0.log] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
@@ -375,10 +381,16 @@ module {
       %19 = is_exception %18
       branch %19, bb9, bb8
     bb8:
-      throw %18
+      %21 = is_exception %18
+      branch %21, bb11, bb10
     bb9:
       %20 = call builtin.exception_value(%18)
       throw %20
+    bb10:
+      throw %18
+    bb11:
+      %22 = call builtin.exception_value(%18)
+      throw %22
 
   fn @methodKeyBoom [needs_prototype] [captures: $0.log] [params: $24.$env, $24.$this] [entry=bb0]:
     bb0:
@@ -419,10 +431,16 @@ module {
       %19 = is_exception %18
       branch %19, bb9, bb8
     bb8:
-      throw %18
+      %21 = is_exception %18
+      branch %21, bb11, bb10
     bb9:
       %20 = call builtin.exception_value(%18)
       throw %20
+    bb10:
+      throw %18
+    bb11:
+      %22 = call builtin.exception_value(%18)
+      throw %22
 
   fn @$0.anonymous [params: $26.$env, $26.$this] [entry=bb0]:
     bb0:
@@ -473,10 +491,16 @@ module {
       %19 = is_exception %18
       branch %19, bb9, bb8
     bb8:
-      throw %18
+      %21 = is_exception %18
+      branch %21, bb11, bb10
     bb9:
       %20 = call builtin.exception_value(%18)
       throw %20
+    bb10:
+      throw %18
+    bb11:
+      %22 = call builtin.exception_value(%18)
+      throw %22
 
   fn @$0.anonymous [params: $34.$env, $34.$this] [entry=bb0]:
     bb0:
@@ -527,10 +551,16 @@ module {
       %19 = is_exception %18
       branch %19, bb9, bb8
     bb8:
-      throw %18
+      %21 = is_exception %18
+      branch %21, bb11, bb10
     bb9:
       %20 = call builtin.exception_value(%18)
       throw %20
+    bb10:
+      throw %18
+    bb11:
+      %22 = call builtin.exception_value(%18)
+      throw %22
 
   fn @$0.anonymous [params: $39.$env, $39.$this, $39.v] [entry=bb0]:
     bb0:

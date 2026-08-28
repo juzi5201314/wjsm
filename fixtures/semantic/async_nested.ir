@@ -191,50 +191,66 @@ module {
     bb1:
       %14 = const c53
       store var $3.$shared_env, %14
-      %37 = load var $3.$state
-      switch %37 [case c60 -> bb2, case c61 -> bb3], default bb8, exit bb9
+      %43 = load var $3.$state
+      switch %43 [case c60 -> bb2, case c61 -> bb5], default bb12, exit bb13
     bb2:
       %15 = const c54
       %16 = load var $3.$closure_env
       %17 = const c55
       %18 = get_prop %16, %17
       %19 = call %18, this=%15
-      %21 = const c56
-      %20 = call builtin.promise.resolve_static(%21, %19)
-      suspend %20, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %22 = load var $3.$resume_val
-      %23 = load var $3.$is_rejected
-      %24 = const c57
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb5
+      %24 = const c56
+      %23 = call builtin.promise.resolve_static(%24, %19)
+      suspend %23, state=1
+      jump bb7
     bb4:
-      %26 = load var $3.$promise
-      promise_reject %26, %22
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $3.$promise
+      promise_reject %22, %21
       return
     bb5:
-      %27 = load var $3.$resume_val
-      store var $3.v, %27
-      %28 = load var $3.v
-      %29 = const c58
-      %30 = add %28, %29
-      %31 = call builtin.console.log(%30)
-      %32 = is_exception %31
-      branch %32, bb7, bb6
+      %25 = load var $3.$resume_val
+      %26 = load var $3.$is_rejected
+      %27 = const c57
+      %28 = stricteq %26, %27
+      branch %28, bb6, bb7
     bb6:
-      %35 = const c59
-      %36 = load var $3.$promise
-      promise_resolve %36, %35
+      %29 = load var $3.$promise
+      promise_reject %29, %25
       return
     bb7:
-      %33 = call builtin.exception_value(%31)
-      %34 = load var $3.$promise
-      promise_reject %34, %33
-      return
+      %30 = load var $3.$resume_val
+      store var $3.v, %30
+      %31 = load var $3.v
+      %32 = const c58
+      %33 = add %31, %32
+      %34 = is_exception %33
+      branch %34, bb9, bb8
     bb8:
-      return
+      %37 = call builtin.console.log(%33)
+      %38 = is_exception %37
+      branch %38, bb11, bb10
     bb9:
+      %35 = call builtin.exception_value(%33)
+      %36 = load var $3.$promise
+      promise_reject %36, %35
+      return
+    bb10:
+      %41 = const c59
+      %42 = load var $3.$promise
+      promise_resolve %42, %41
+      return
+    bb11:
+      %39 = call builtin.exception_value(%37)
+      %40 = load var $3.$promise
+      promise_reject %40, %39
+      return
+    bb12:
+      return
+    bb13:
       unreachable
 
   fn @outer [needs_prototype] [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
