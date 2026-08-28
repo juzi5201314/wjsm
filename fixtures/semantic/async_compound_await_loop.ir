@@ -94,8 +94,8 @@ module {
     bb1:
       %14 = const c26
       store var $1.$shared_env, %14
-      %52 = load var $1.$state
-      switch %52 [case c41 -> bb2, case c42 -> bb7], default bb10, exit bb11
+      %67 = load var $1.$state
+      switch %67 [case c41 -> bb2, case c42 -> bb13], default bb20, exit bb21
     bb2:
       %15 = const c27
       store var $1.s, %15
@@ -108,65 +108,105 @@ module {
       %20 = const c30
       %21 = const c31
       %19 = call builtin.abstract_compare(%17, %18, %20, %21)
-      branch %19, bb4, bb6
+      %22 = is_exception %19
+      branch %22, bb8, bb7
     bb4:
-      %22 = load var $1.s
-      store var $suspend_spill_1_0, %22
-      %23 = const c32
-      %24 = const c33
-      %25 = call builtin.promise.resolve_static(%23, %24)
-      %27 = const c34
-      %26 = call builtin.promise.resolve_static(%27, %25)
-      %42 = load var $1.$env
-      %43 = const c37
-      %44 = load var $2.i
-      call builtin.continuation.save_var(%42, %43, %44)
-      %45 = const c38
-      %46 = load var $suspend_spill_1_0
-      call builtin.continuation.save_var(%42, %45, %46)
-      suspend %26, state=1
-      jump bb9
+      %28 = load var $1.s
+      store var $suspend_spill_1_0, %28
+      %29 = const c32
+      %30 = const c33
+      %31 = call builtin.promise.resolve_static(%29, %30)
+      %32 = is_exception %31
+      branch %32, bb12, bb11
     bb5:
-      %35 = load var $2.i
-      %36 = pos %35
-      %37 = const c36
-      %38 = add %36, %37
-      store var $2.i, %38
-      jump bb3
+      %47 = load var $2.i
+      %48 = pos %47
+      %49 = is_exception %48
+      branch %49, bb19, bb18
     bb6:
-      %39 = load var $1.s
-      %40 = load var $1.$promise
-      promise_resolve %40, %39
+      %54 = load var $1.s
+      %55 = load var $1.$promise
+      promise_resolve %55, %54
       return
     bb7:
-      %47 = load var $1.$env
-      %48 = const c39
-      %49 = call builtin.continuation.load_var(%47, %48)
-      store var $2.i, %49
-      %50 = const c40
-      %51 = call builtin.continuation.load_var(%47, %50)
-      store var $suspend_spill_1_0, %51
-      %28 = load var $1.$resume_val
-      %29 = load var $1.$is_rejected
-      %30 = const c35
-      %31 = stricteq %29, %30
-      branch %31, bb8, bb9
+      %25 = is_exception %19
+      branch %25, bb10, bb9
     bb8:
-      %32 = load var $1.$promise
-      promise_reject %32, %28
+      %23 = call builtin.exception_value(%19)
+      %24 = load var $1.$promise
+      promise_reject %24, %23
       return
     bb9:
-      %33 = load var $1.$resume_val
-      %41 = load var $suspend_spill_1_0
-      %34 = add %41, %33
-      store var $1.s, %34
-      jump bb5
+      branch %19, bb4, bb6
     bb10:
+      %26 = call builtin.exception_value(%19)
+      %27 = load var $1.$promise
+      promise_reject %27, %26
       return
     bb11:
+      %36 = const c34
+      %35 = call builtin.promise.resolve_static(%36, %31)
+      %57 = load var $1.$env
+      %58 = const c37
+      %59 = load var $2.i
+      call builtin.continuation.save_var(%57, %58, %59)
+      %60 = const c38
+      %61 = load var $suspend_spill_1_0
+      call builtin.continuation.save_var(%57, %60, %61)
+      suspend %35, state=1
+      jump bb15
+    bb12:
+      %33 = call builtin.exception_value(%31)
+      %34 = load var $1.$promise
+      promise_reject %34, %33
+      return
+    bb13:
+      %62 = load var $1.$env
+      %63 = const c39
+      %64 = call builtin.continuation.load_var(%62, %63)
+      store var $2.i, %64
+      %65 = const c40
+      %66 = call builtin.continuation.load_var(%62, %65)
+      store var $suspend_spill_1_0, %66
+      %37 = load var $1.$resume_val
+      %38 = load var $1.$is_rejected
+      %39 = const c35
+      %40 = stricteq %38, %39
+      branch %40, bb14, bb15
+    bb14:
+      %41 = load var $1.$promise
+      promise_reject %41, %37
+      return
+    bb15:
+      %42 = load var $1.$resume_val
+      %56 = load var $suspend_spill_1_0
+      %43 = add %56, %42
+      store var $1.s, %43
+      %44 = is_exception %43
+      branch %44, bb17, bb16
+    bb16:
+      jump bb5
+    bb17:
+      %45 = call builtin.exception_value(%43)
+      %46 = load var $1.$promise
+      promise_reject %46, %45
+      return
+    bb18:
+      %52 = const c36
+      %53 = add %48, %52
+      store var $2.i, %53
+      jump bb3
+    bb19:
+      %50 = call builtin.exception_value(%48)
+      %51 = load var $1.$promise
+      promise_reject %51, %50
+      return
+    bb20:
+      return
+    bb21:
       unreachable
 
-  fn @total [needs_prototype] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @total [needs_prototype] [js_name "total"] [js_length 0] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c43
@@ -211,7 +251,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $5.$env, $5.$this, $5.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $5.$env, $5.$this, $5.v] [entry=bb0]:
     bb0:
       %0 = load var $5.v
       %1 = call builtin.console.log(%0)

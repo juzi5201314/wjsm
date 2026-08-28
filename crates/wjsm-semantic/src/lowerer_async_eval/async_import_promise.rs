@@ -104,7 +104,7 @@ impl Lowerer {
                 args,
             },
         );
-        if matches!(builtin, Builtin::JsonParse) && !self.exception_fork_suppressed() {
+        if matches!(builtin, Builtin::JsonParse) {
             let is_exc = self.alloc_value();
             self.current_function.append_instruction(
                 call_block,
@@ -271,51 +271,16 @@ impl Lowerer {
         first_arg: &swc_ast::ExprOrSpread,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // ImportCall（ES §13.3.10.1）步骤 2-3 的 `? Evaluation` / `? GetValue`：
+        // specifier 求值抛出同步传播（本地 try/catch 或状态机 rejection 终结器），
+        // 不转为返回 promise 的 rejection——仅 ToString(specifier) 起才
+        // IfAbruptRejectPromise（由宿主 DynamicImportRuntime 处理）。
         let mut call_block = block;
-        let (specifier_val, abrupt_specifiers) = self
-            .lower_expr_collecting_exception_forks_then_continue(
-                &first_arg.expr,
-                &mut call_block,
-            )?;
+        let specifier_val =
+            self.lower_call_operand_then_continue(&first_arg.expr, &mut call_block)?;
         let normal_promise = self.emit_runtime_dynamic_import_call(call_block, specifier_val);
-
-        if abrupt_specifiers.is_empty() {
-            self.expr_merge_block = Some(call_block);
-            return Ok(normal_promise);
-        }
-
-        let merge_block = self.current_function.new_block();
-        self.current_function.set_terminator(
-            call_block,
-            Terminator::Jump {
-                target: merge_block,
-            },
-        );
-        let mut sources = Vec::with_capacity(abrupt_specifiers.len() + 1);
-        sources.push(PhiSource {
-            predecessor: call_block,
-            value: normal_promise,
-        });
-
-        for (abrupt_block, abrupt_specifier) in abrupt_specifiers {
-            let promise = self.emit_runtime_dynamic_import_call(abrupt_block, abrupt_specifier);
-            self.current_function.set_terminator(
-                abrupt_block,
-                Terminator::Jump {
-                    target: merge_block,
-                },
-            );
-            sources.push(PhiSource {
-                predecessor: abrupt_block,
-                value: promise,
-            });
-        }
-
-        let dest = self.alloc_value();
-        self.current_function
-            .append_instruction(merge_block, Instruction::Phi { dest, sources });
-        self.expr_merge_block = Some(merge_block);
-        Ok(dest)
+        self.expr_merge_block = Some(call_block);
+        Ok(normal_promise)
     }
 
     fn emit_runtime_dynamic_import_call(

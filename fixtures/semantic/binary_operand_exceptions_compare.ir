@@ -218,7 +218,7 @@ module {
     c215 = bool(false)
     c216 = bool(false)
 
-  fn @caught [needs_prototype] [direct_callable] [params: $14.$env, $14.$this, $14.label, $14.e] [entry=bb0]:
+  fn @caught [needs_prototype] [direct_callable] [js_length 2] [params: $14.$env, $14.$this, $14.label, $14.e] [entry=bb0]:
     bb0:
       %0 = load var $14.label
       %1 = const c20
@@ -280,7 +280,7 @@ module {
       %29 = call builtin.exception_value(%27)
       throw %29
 
-  fn @throwError [needs_prototype] [direct_callable] [params: $15.$env, $15.$this, $15.message] [entry=bb0]:
+  fn @throwError [needs_prototype] [direct_callable] [js_length 1] [params: $15.$env, $15.$this, $15.message] [entry=bb0]:
     bb0:
       %0 = load var $0.$global
       %1 = const c26
@@ -306,12 +306,18 @@ module {
       %10 = is_exception %9
       branch %10, bb7, bb6
     bb6:
-      throw %9
+      %12 = is_exception %9
+      branch %12, bb9, bb8
     bb7:
       %11 = call builtin.exception_value(%9)
       throw %11
+    bb8:
+      throw %9
+    bb9:
+      %13 = call builtin.exception_value(%9)
+      throw %13
 
-  fn @throwRange [needs_prototype] [direct_callable] [params: $16.$env, $16.$this, $16.message] [entry=bb0]:
+  fn @throwRange [needs_prototype] [direct_callable] [js_length 1] [params: $16.$env, $16.$this, $16.message] [entry=bb0]:
     bb0:
       %0 = load var $0.$global
       %1 = const c28
@@ -337,12 +343,18 @@ module {
       %10 = is_exception %9
       branch %10, bb7, bb6
     bb6:
-      throw %9
+      %12 = is_exception %9
+      branch %12, bb9, bb8
     bb7:
       %11 = call builtin.exception_value(%9)
       throw %11
+    bb8:
+      throw %9
+    bb9:
+      %13 = call builtin.exception_value(%9)
+      throw %13
 
-  fn @$0.p [params: $41.$env, $41.$this] [entry=bb0]:
+  fn @$0.p [js_name "get p"] [js_length 0] [params: $41.$env, $41.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c87
@@ -373,12 +385,18 @@ module {
       %14 = is_exception %13
       branch %14, bb7, bb6
     bb6:
-      throw %13
+      %16 = is_exception %13
+      branch %16, bb9, bb8
     bb7:
       %15 = call builtin.exception_value(%13)
       throw %15
+    bb8:
+      throw %13
+    bb9:
+      %17 = call builtin.exception_value(%13)
+      throw %17
 
-  fn @$0.valueOf [params: $48.$env, $48.$this] [entry=bb0]:
+  fn @$0.valueOf [js_name "valueOf"] [js_length 0] [params: $48.$env, $48.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c108
@@ -409,10 +427,16 @@ module {
       %14 = is_exception %13
       branch %14, bb7, bb6
     bb6:
-      throw %13
+      %16 = is_exception %13
+      branch %16, bb9, bb8
     bb7:
       %15 = call builtin.exception_value(%13)
       throw %15
+    bb8:
+      throw %13
+    bb9:
+      %17 = call builtin.exception_value(%13)
+      throw %17
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:

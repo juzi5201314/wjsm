@@ -27,7 +27,7 @@ module {
     c24 = bool(true)
     c25 = bool(false)
 
-  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.values] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [js_name ""] [js_length 1] [params: $1.$env, $1.$this, $1.values] [entry=bb0]:
     bb0:
       %0 = load var $1.values
       %1 = const c21

@@ -56,6 +56,8 @@ impl Lowerer {
                             name: ir_name.clone(),
                         },
                     );
+                    // NamedEvaluation：`f(x = <匿名函数定义>)` 按形参名命名。
+                    self.stage_named_eval_for_binding(&assign.left, &assign.right);
                     let resolved = self.lower_default_value_check(raw, &assign.right, block)?;
                     let store_block = self.resolve_store_block(block);
                     self.current_function.append_instruction(
@@ -152,6 +154,8 @@ impl Lowerer {
                 self.lower_array_destructure(array_pat, src_val, block, kind)
             }
             swc_ast::Pat::Assign(assign_pat) => {
+                // NamedEvaluation：解构默认值 `{ a: f = <匿名函数定义> }` 按目标标识符命名。
+                self.stage_named_eval_for_binding(&assign_pat.left, &assign_pat.right);
                 let resolved = self.lower_default_value_check(src_val, &assign_pat.right, block)?;
                 let store_block = self.resolve_store_block(block);
                 self.lower_destructure_pattern(&assign_pat.left, resolved, store_block, kind)
@@ -247,9 +251,7 @@ impl Lowerer {
             }
         };
         // PutValue 失败（strict TypeError）或 setter 抛出须传播。
-        if self.expr_exception_fork_allowed() {
-            current_block = self.lower_value_exception_branch(current_block, result)?;
-        }
+        current_block = self.lower_value_exception_branch(current_block, result)?;
         Ok(current_block)
     }
 
@@ -279,9 +281,7 @@ impl Lowerer {
                         },
                     );
                     // getter 可能抛出：异常须先于后续绑定/写入传播。
-                    if self.expr_exception_fork_allowed() {
-                        block = self.lower_value_exception_branch(block, dest)?;
-                    }
+                    block = self.lower_value_exception_branch(block, dest)?;
                     block = self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
                 }
                 swc_ast::ObjectPatProp::Assign(assign) => {
@@ -307,12 +307,14 @@ impl Lowerer {
                         },
                     );
                     // getter 可能抛出：异常须先于默认值判定/绑定传播。
-                    if self.expr_exception_fork_allowed() {
-                        block = self.lower_value_exception_branch(block, dest)?;
-                    }
+                    block = self.lower_value_exception_branch(block, dest)?;
 
                     // 如果有默认值 { key = default }
                     if let Some(default_expr) = &assign.value {
+                        // NamedEvaluation：`{ f = <匿名函数定义> }` 按绑定标识符命名。
+                        if Self::is_anonymous_fn_definition(default_expr) {
+                            self.named_eval_hint = Some(name.clone());
+                        }
                         let resolved = self.lower_default_value_check(dest, default_expr, block)?;
                         block = self.resolve_store_block(block);
                         let scope_id = self
@@ -436,6 +438,8 @@ impl Lowerer {
             );
 
             if let swc_ast::Pat::Assign(assign) = elem {
+                // NamedEvaluation：`[f = <匿名函数定义>]` 按目标标识符命名。
+                self.stage_named_eval_for_binding(&assign.left, &assign.right);
                 let resolved = self.lower_default_value_check(elem_val, &assign.right, block)?;
                 block = self.resolve_store_block(block);
                 block = self.lower_destructure_pattern(&assign.left, resolved, block, kind)?;

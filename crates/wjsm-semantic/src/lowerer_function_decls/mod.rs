@@ -64,7 +64,7 @@ impl Lowerer {
     }
 
     /// 将 wrapper 函数存储到外层作用域（处理闭包创建）
-    fn store_wrapper_in_outer_scope(
+    pub(crate) fn store_wrapper_in_outer_scope(
         &mut self,
         flow: StmtFlow,
         name: &str,

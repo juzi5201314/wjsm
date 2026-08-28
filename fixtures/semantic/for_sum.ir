@@ -83,33 +83,41 @@ module {
       %25 = lteq %23, %24
       jump bb5
     bb2:
-      %30 = load var $0.sum
-      %31 = load var $1.i
-      %32 = add %30, %31
-      store var $0.sum, %32
-      jump bb7
+      %32 = load var $0.sum
+      %33 = load var $1.i
+      %34 = add %32, %33
+      store var $0.sum, %34
+      jump bb9
     bb3:
-      %35 = load var $1.i
-      %36 = const c25
-      %37 = add %35, %36
-      store var $1.i, %37
-      jump bb1
+      %37 = load var $1.i
+      %38 = const c25
+      %39 = add %37, %38
+      store var $1.i, %39
+      jump bb11
     bb4:
-      %38 = load var $0.sum
-      %39 = call builtin.console.log(%38)
-      %40 = is_exception %39
-      branch %40, bb10, bb9
+      %42 = load var $0.sum
+      %43 = call builtin.console.log(%42)
+      %44 = is_exception %43
+      branch %44, bb14, bb13
     bb5:
-      branch %25, bb2, bb4
+      jump bb7
     bb6:
       unreachable
     bb7:
-      jump bb3
+      branch %25, bb2, bb4
     bb8:
       unreachable
     bb9:
-      return
+      jump bb3
     bb10:
-      %41 = call builtin.exception_value(%39)
-      throw %41
+      unreachable
+    bb11:
+      jump bb1
+    bb12:
+      unreachable
+    bb13:
+      return
+    bb14:
+      %45 = call builtin.exception_value(%43)
+      throw %45
 }

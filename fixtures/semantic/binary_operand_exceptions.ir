@@ -133,7 +133,7 @@ module {
     c130 = string("lt-order")
     c131 = string("ltRhsRan: ")
 
-  fn @caught [needs_prototype] [direct_callable] [params: $17.$env, $17.$this, $17.label, $17.e] [entry=bb0]:
+  fn @caught [needs_prototype] [direct_callable] [js_length 2] [params: $17.$env, $17.$this, $17.label, $17.e] [entry=bb0]:
     bb0:
       %0 = load var $17.label
       %1 = const c20
@@ -195,7 +195,7 @@ module {
       %29 = call builtin.exception_value(%27)
       throw %29
 
-  fn @throwError [needs_prototype] [direct_callable] [params: $18.$env, $18.$this, $18.message] [entry=bb0]:
+  fn @throwError [needs_prototype] [direct_callable] [js_length 1] [params: $18.$env, $18.$this, $18.message] [entry=bb0]:
     bb0:
       %0 = load var $0.$global
       %1 = const c26
@@ -221,10 +221,16 @@ module {
       %10 = is_exception %9
       branch %10, bb7, bb6
     bb6:
-      throw %9
+      %12 = is_exception %9
+      branch %12, bb9, bb8
     bb7:
       %11 = call builtin.exception_value(%9)
       throw %11
+    bb8:
+      throw %9
+    bb9:
+      %13 = call builtin.exception_value(%9)
+      throw %13
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:

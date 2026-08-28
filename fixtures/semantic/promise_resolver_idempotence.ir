@@ -45,7 +45,7 @@ module {
     c42 = bool(true)
     c43 = bool(false)
 
-  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [js_name ""] [js_length 2] [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = load var $1.resolve
@@ -79,7 +79,7 @@ module {
       %17 = call builtin.exception_value(%15)
       throw %17
 
-  fn @arrow_1 [captures: $0.calls] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+  fn @arrow_1 [js_name ""] [js_length 1] [captures: $0.calls] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c29
@@ -105,7 +105,7 @@ module {
       %13 = call builtin.exception_value(%11)
       throw %13
 
-  fn @arrow_2 [captures: $0.calls] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @arrow_2 [js_name ""] [js_length 0] [captures: $0.calls] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c37

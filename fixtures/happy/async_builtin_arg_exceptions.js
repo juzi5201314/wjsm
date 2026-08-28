@@ -1,9 +1,8 @@
-// async 状态机体内宿主 builtin 的实参异常哨兵透传（ES ArgumentListEvaluation
-// 的 `? GetValue`）：async / async generator 体内不插表达式级异常分叉，实参
-// 求值异常以 TAG_EXCEPTION 流入消费型宿主 builtin。宿主 dispatch 入口按求值
-// 顺序透传第一个哨兵，调用点的 is_exception 检查再把它路由到本地 try/catch
-// 或 promise rejection——异常对象不得被 render/转换/比较当普通值吞掉（此前
-// console.log 会打印 "[object Object]" 且 promise 误 resolve）。
+// async 状态机体内实参求值异常按 ES ArgumentListEvaluation 的 `? GetValue`
+// 在语义层就地分叉传播：async / async generator 体内的表达式级异常分叉把
+// TAG_EXCEPTION 路由到最近的本地 try/catch，未捕获时 reject 返回的 promise
+// ——异常对象不得流入消费型宿主 builtin 被 render/转换/比较当普通值吞掉
+// （此前 console.log 会打印 "[object Object]" 且 promise 误 resolve）。
 // 用例串行 await 驱动，输出与 Node 逐行一致。
 
 function caught(label, e) {

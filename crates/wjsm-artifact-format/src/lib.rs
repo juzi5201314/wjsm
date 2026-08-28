@@ -15,7 +15,9 @@ const MAGIC: &[u8; 8] = b"WJSMART\0";
 // v8：ObjectSpread 指令新增结果槽（2→3 个 value id），旧artifact必须重新构建。
 // v9：SetProp/SetElem 指令新增 strict 位，旧artifact必须重新构建。
 // v10：Function 新增类构造器元数据（class_ctor_name），旧artifact必须重新构建。
-const FORMAT_VERSION: u16 = 10;
+// v11：Function 新增 JS 可见 name/length 元数据（js_name/js_length），并新增
+//      FunctionSetName builtin，旧artifact必须重新构建。
+const FORMAT_VERSION: u16 = 11;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

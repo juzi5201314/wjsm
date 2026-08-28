@@ -90,106 +90,115 @@ module {
     bb1:
       %14 = const c26
       store var $1.$shared_env, %14
-      %59 = load var $1.$state
-      switch %59 [case c37 -> bb2, case c38 -> bb7], default bb20, exit bb21
+      %62 = load var $1.$state
+      switch %62 [case c37 -> bb2, case c38 -> bb9], default bb22, exit bb23
     bb2:
       jump bb3
     bb3:
       %15 = const c27
       %16 = const c28
       %17 = call builtin.promise.reject_static(%15, %16)
-      %19 = const c29
-      %18 = call builtin.promise.resolve_static(%19, %17)
-      suspend %18, state=1
-      jump bb9
+      %18 = is_exception %17
+      branch %18, bb8, bb7
     bb4:
-      %52 = const c35
-      %53 = call builtin.console.log(%52)
-      %54 = is_exception %53
-      branch %54, bb19, bb18
+      %55 = const c35
+      %56 = call builtin.console.log(%55)
+      %57 = is_exception %56
+      branch %57, bb21, bb20
     bb5:
-      %57 = const c36
-      %58 = load var $1.$promise
-      promise_resolve %58, %57
+      %60 = const c36
+      %61 = load var $1.$promise
+      promise_resolve %61, %60
       return
     bb6:
-      %31 = load var $tmp.0
-      store var $4.e, %31
-      %32 = load var $4.e
-      %33 = call builtin.console.log(%32)
-      %34 = is_exception %33
-      branch %34, bb13, bb12
+      %34 = load var $tmp.0
+      store var $4.e, %34
+      %35 = load var $4.e
+      %36 = call builtin.console.log(%35)
+      %37 = is_exception %36
+      branch %37, bb15, bb14
     bb7:
-      %20 = load var $1.$resume_val
-      %21 = load var $1.$is_rejected
-      %22 = const c30
-      %23 = stricteq %21, %22
-      branch %23, bb8, bb9
+      %22 = const c29
+      %21 = call builtin.promise.resolve_static(%22, %17)
+      suspend %21, state=1
+      jump bb11
     bb8:
-      store var $3.$abrupt_completion_1, %20
-      %24 = load var $3.$abrupt_completion_1
-      store var $tmp.0, %24
+      %19 = call builtin.exception_value(%17)
+      store var $3.$abrupt_completion_1, %19
+      %20 = load var $3.$abrupt_completion_1
+      store var $tmp.0, %20
       jump bb6
     bb9:
-      %26 = const c31
-      %27 = call builtin.console.log(%26)
-      %28 = is_exception %27
-      branch %28, bb11, bb10
+      %23 = load var $1.$resume_val
+      %24 = load var $1.$is_rejected
+      %25 = const c30
+      %26 = stricteq %24, %25
+      branch %26, bb10, bb11
     bb10:
-      jump bb4
-    bb11:
-      %29 = call builtin.exception_value(%27)
-      store var $3.$abrupt_completion_2, %29
-      %30 = load var $3.$abrupt_completion_2
-      store var $tmp.0, %30
+      store var $3.$abrupt_completion_2, %23
+      %27 = load var $3.$abrupt_completion_2
+      store var $tmp.0, %27
       jump bb6
+    bb11:
+      %29 = const c31
+      %30 = call builtin.console.log(%29)
+      %31 = is_exception %30
+      branch %31, bb13, bb12
     bb12:
-      %43 = const c33
-      store var $5.$abrupt_completion_4, %43
-      %44 = const c34
-      %45 = call builtin.console.log(%44)
-      %46 = is_exception %45
-      branch %46, bb17, bb16
+      jump bb4
     bb13:
-      %35 = call builtin.exception_value(%33)
-      store var $5.$abrupt_completion_3, %35
-      %36 = const c32
-      %37 = call builtin.console.log(%36)
-      %38 = is_exception %37
-      branch %38, bb15, bb14
+      %32 = call builtin.exception_value(%30)
+      store var $3.$abrupt_completion_3, %32
+      %33 = load var $3.$abrupt_completion_3
+      store var $tmp.0, %33
+      jump bb6
     bb14:
-      %41 = load var $5.$abrupt_completion_3
-      %42 = load var $1.$promise
-      promise_reject %42, %41
-      return
+      %46 = const c33
+      store var $5.$abrupt_completion_5, %46
+      %47 = const c34
+      %48 = call builtin.console.log(%47)
+      %49 = is_exception %48
+      branch %49, bb19, bb18
     bb15:
-      %39 = call builtin.exception_value(%37)
-      %40 = load var $1.$promise
-      promise_reject %40, %39
-      return
+      %38 = call builtin.exception_value(%36)
+      store var $5.$abrupt_completion_4, %38
+      %39 = const c32
+      %40 = call builtin.console.log(%39)
+      %41 = is_exception %40
+      branch %41, bb17, bb16
     bb16:
-      %50 = load var $5.$abrupt_completion_4
-      %51 = load var $1.$promise
-      promise_resolve %51, %50
+      %44 = load var $5.$abrupt_completion_4
+      %45 = load var $1.$promise
+      promise_reject %45, %44
       return
     bb17:
-      %47 = call builtin.exception_value(%45)
-      %48 = load var $1.$promise
-      promise_reject %48, %47
+      %42 = call builtin.exception_value(%40)
+      %43 = load var $1.$promise
+      promise_reject %43, %42
       return
     bb18:
-      jump bb5
+      %53 = load var $5.$abrupt_completion_5
+      %54 = load var $1.$promise
+      promise_resolve %54, %53
+      return
     bb19:
-      %55 = call builtin.exception_value(%53)
-      %56 = load var $1.$promise
-      promise_reject %56, %55
+      %50 = call builtin.exception_value(%48)
+      %51 = load var $1.$promise
+      promise_reject %51, %50
       return
     bb20:
-      return
+      jump bb5
     bb21:
+      %58 = call builtin.exception_value(%56)
+      %59 = load var $1.$promise
+      promise_reject %59, %58
+      return
+    bb22:
+      return
+    bb23:
       unreachable
 
-  fn @run [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @run [needs_prototype] [js_name "run"] [js_length 0] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c39
@@ -234,7 +243,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $10.$env, $10.$this, $10.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $10.$env, $10.$this, $10.v] [entry=bb0]:
     bb0:
       %0 = load var $10.v
       %1 = call builtin.console.log(%0)

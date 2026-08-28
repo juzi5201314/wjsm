@@ -82,6 +82,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        // SetFunctionLength：按 ExpectedArgumentCount，默认值/rest 不计入。
+        ir_function.set_js_length(Self::expected_param_count(&fn_decl.function.params));
         if let Some(span) = self.span_to_source_span(fn_decl.span()) {
             ir_function.set_source_span(span);
         }

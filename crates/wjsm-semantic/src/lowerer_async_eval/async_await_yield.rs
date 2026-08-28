@@ -7,7 +7,10 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut block = block;
-        let value = self.lower_expr_then_continue(&await_expr.arg, &mut block)?;
+        // AwaitExpression 的 `? GetValue(exprRef)`：操作数求值抛出必须先于
+        // Await 传播（进入本地 try/catch 或 reject 返回的 promise），异常
+        // 哨兵不得作为普通值流入 PromiseResolveStatic。
+        let value = self.lower_call_operand_then_continue(&await_expr.arg, &mut block)?;
 
         let promised = self.alloc_value();
         {
@@ -126,8 +129,10 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut block = block;
+        // YieldExpression 的 `? GetValue(exprRef)`：操作数求值抛出必须先于
+        // yield 挂起传播（本地 try/catch 或 GeneratorThrow / AsyncGeneratorThrow）。
         let value = if let Some(arg) = &yield_expr.arg {
-            self.lower_expr_then_continue(arg, &mut block)?
+            self.lower_call_operand_then_continue(arg, &mut block)?
         } else {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();
@@ -680,39 +685,8 @@ impl Lowerer {
                     },
                 );
 
-                if self.expr_exception_fork_allowed() {
-                    let is_exc = self.alloc_value();
-                    self.current_function.append_instruction(
-                        call_block,
-                        Instruction::IsException {
-                            dest: is_exc,
-                            value: dest,
-                        },
-                    );
-                    let continue_block = self.current_function.new_block();
-                    let exc_block = self.current_function.new_block();
-                    self.current_function.set_terminator(
-                        call_block,
-                        Terminator::Branch {
-                            condition: is_exc,
-                            true_block: exc_block,
-                            false_block: continue_block,
-                        },
-                    );
-                    let thrown_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        exc_block,
-                        Instruction::CallBuiltin {
-                            dest: Some(thrown_val),
-                            builtin: Builtin::ExceptionValue,
-                            args: vec![dest],
-                        },
-                    );
-                    self.emit_throw_value(exc_block, thrown_val)?;
-                    return Ok((dest, self.resolve_store_block(continue_block)));
-                }
-
-                return Ok((dest, call_block));
+                let continue_block = self.lower_value_exception_branch(call_block, dest)?;
+                return Ok((dest, continue_block));
             }
             // WeakRef / FinalizationRegistry constructors (can throw — need exception checking)
             if self.scopes.lookup(&ident.sym).is_err()
@@ -846,7 +820,10 @@ impl Lowerer {
         }
 
         let mut call_block = block;
-        let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
+        // 构造器求值（`new o.C()` 的 getter 等）抛出必须先于 Construct 分叉
+        // 传播，哨兵不得作为 callee 流入（否则误报 "... is not a constructor"）。
+        let callee_val =
+            self.lower_call_operand_then_continue(&new_expr.callee, &mut call_block)?;
         if let Some(args) = new_expr.args.as_deref()
             && Self::call_args_have_spread(args)
         {
@@ -861,9 +838,7 @@ impl Lowerer {
                     args: vec![callee_val, args_array, callee_val],
                 },
             );
-            if self.expr_exception_fork_allowed() {
-                call_block = self.lower_value_exception_branch(call_block, result)?;
-            }
+            call_block = self.lower_value_exception_branch(call_block, result)?;
             return Ok((result, call_block));
         }
 
@@ -933,37 +908,8 @@ impl Lowerer {
         );
 
         let (result, end_block) = self.select_construct_result(call_block, ctor_result, obj_val);
-        if self.expr_exception_fork_allowed() {
-            let is_exc = self.alloc_value();
-            self.current_function.append_instruction(
-                end_block,
-                Instruction::IsException {
-                    dest: is_exc,
-                    value: result,
-                },
-            );
-            let continue_block = self.current_function.new_block();
-            let exc_block = self.current_function.new_block();
-            self.current_function.set_terminator(
-                end_block,
-                Terminator::Branch {
-                    condition: is_exc,
-                    true_block: exc_block,
-                    false_block: continue_block,
-                },
-            );
-            let thrown_val = self.alloc_value();
-            self.current_function.append_instruction(
-                exc_block,
-                Instruction::CallBuiltin {
-                    dest: Some(thrown_val),
-                    builtin: Builtin::ExceptionValue,
-                    args: vec![result],
-                },
-            );
-            self.emit_throw_value(exc_block, thrown_val)?;
-            return Ok((result, self.resolve_store_block(continue_block)));
-        }
-        Ok((result, end_block))
+        // Construct 异常（构造器抛出 / callee 非构造器）分叉传播。
+        let continue_block = self.lower_value_exception_branch(end_block, result)?;
+        Ok((result, continue_block))
     }
 }

@@ -102,107 +102,131 @@ module {
     bb1:
       %16 = const c27
       store var $1.$shared_env, %16
-      %70 = load var $1.$state
-      switch %70 [case c42 -> bb2, case c43 -> bb3, case c44 -> bb6, case c45 -> bb11], default bb16, exit bb17
+      %79 = load var $1.$state
+      switch %79 [case c42 -> bb2, case c43 -> bb7, case c44 -> bb10, case c45 -> bb17], default bb22, exit bb23
     bb2:
       %17 = const c28
       %18 = load var $1.input
       %19 = const c29
       %20 = add %18, %19
-      %21 = call builtin.promise.resolve_static(%17, %20)
-      %23 = const c30
-      %22 = call builtin.promise.resolve_static(%23, %21)
-      %58 = load var $1.$env
-      %59 = const c38
-      %60 = load var $1.input
-      call builtin.continuation.save_var(%58, %59, %60)
-      suspend %22, state=1
-      jump bb5
+      %21 = is_exception %20
+      branch %21, bb4, bb3
     bb3:
-      %61 = load var $1.$env
-      %62 = const c39
-      %63 = call builtin.continuation.load_var(%61, %62)
-      store var $1.input, %63
-      %24 = load var $1.$resume_val
-      %25 = load var $1.$is_rejected
-      %26 = const c31
-      %27 = stricteq %25, %26
-      branch %27, bb4, bb5
+      %24 = call builtin.promise.resolve_static(%17, %20)
+      %25 = is_exception %24
+      branch %25, bb6, bb5
     bb4:
-      %28 = load var $1.$generator
-      call builtin.async_generator.throw(%28, %24)
+      %22 = call builtin.exception_value(%20)
+      %23 = load var $1.$generator
+      call builtin.async_generator.throw(%23, %22)
       return
     bb5:
-      %29 = load var $1.$resume_val
-      store var $1.awaited, %29
-      %30 = load var $1.awaited
-      %31 = load var $1.$generator
-      %32 = call builtin.async_generator.next(%31, %30)
-      %64 = load var $1.$env
-      %65 = const c40
-      %66 = load var $1.input
-      call builtin.continuation.save_var(%64, %65, %66)
-      suspend %32, state=2
-      jump bb8
-    bb6:
+      %29 = const c30
+      %28 = call builtin.promise.resolve_static(%29, %24)
       %67 = load var $1.$env
-      %68 = const c41
-      %69 = call builtin.continuation.load_var(%67, %68)
-      store var $1.input, %69
-      %33 = load var $1.$resume_val
-      %34 = load var $1.$is_rejected
-      %35 = const c32
-      %36 = stricteq %34, %35
-      branch %36, bb7, bb10
+      %68 = const c38
+      %69 = load var $1.input
+      call builtin.continuation.save_var(%67, %68, %69)
+      suspend %28, state=1
+      jump bb9
+    bb6:
+      %26 = call builtin.exception_value(%24)
+      %27 = load var $1.$generator
+      call builtin.async_generator.throw(%27, %26)
+      return
     bb7:
-      %39 = load var $1.$generator
-      call builtin.async_generator.throw(%39, %33)
-      return
+      %70 = load var $1.$env
+      %71 = const c39
+      %72 = call builtin.continuation.load_var(%70, %71)
+      store var $1.input, %72
+      %30 = load var $1.$resume_val
+      %31 = load var $1.$is_rejected
+      %32 = const c31
+      %33 = stricteq %31, %32
+      branch %33, bb8, bb9
     bb8:
-      %42 = load var $1.input
-      %43 = const c34
-      %44 = add %42, %43
-      %45 = load var $1.$generator
-      %46 = call builtin.async_generator.next(%45, %44)
-      suspend %46, state=3
-      jump bb13
+      %34 = load var $1.$generator
+      call builtin.async_generator.throw(%34, %30)
+      return
     bb9:
-      %40 = load var $1.$generator
-      call builtin.async_generator.return(%40, %33)
-      return
+      %35 = load var $1.$resume_val
+      store var $1.awaited, %35
+      %36 = load var $1.awaited
+      %37 = load var $1.$generator
+      %38 = call builtin.async_generator.next(%37, %36)
+      %73 = load var $1.$env
+      %74 = const c40
+      %75 = load var $1.input
+      call builtin.continuation.save_var(%73, %74, %75)
+      suspend %38, state=2
+      jump bb12
     bb10:
-      %37 = const c33
-      %38 = stricteq %34, %37
-      branch %38, bb9, bb8
+      %76 = load var $1.$env
+      %77 = const c41
+      %78 = call builtin.continuation.load_var(%76, %77)
+      store var $1.input, %78
+      %39 = load var $1.$resume_val
+      %40 = load var $1.$is_rejected
+      %41 = const c32
+      %42 = stricteq %40, %41
+      branch %42, bb11, bb14
     bb11:
-      %47 = load var $1.$resume_val
-      %48 = load var $1.$is_rejected
-      %49 = const c35
-      %50 = stricteq %48, %49
-      branch %50, bb12, bb15
-    bb12:
-      %53 = load var $1.$generator
-      call builtin.async_generator.throw(%53, %47)
+      %45 = load var $1.$generator
+      call builtin.async_generator.throw(%45, %39)
       return
+    bb12:
+      %48 = load var $1.input
+      %49 = const c34
+      %50 = add %48, %49
+      %51 = is_exception %50
+      branch %51, bb16, bb15
     bb13:
-      %56 = load var $1.$generator
-      %57 = const c37
-      call builtin.async_generator.return(%56, %57)
+      %46 = load var $1.$generator
+      call builtin.async_generator.return(%46, %39)
       return
     bb14:
-      %54 = load var $1.$generator
-      call builtin.async_generator.return(%54, %47)
-      return
+      %43 = const c33
+      %44 = stricteq %40, %43
+      branch %44, bb13, bb12
     bb15:
-      %51 = const c36
-      %52 = stricteq %48, %51
-      branch %52, bb14, bb13
+      %54 = load var $1.$generator
+      %55 = call builtin.async_generator.next(%54, %50)
+      suspend %55, state=3
+      jump bb19
     bb16:
+      %52 = call builtin.exception_value(%50)
+      %53 = load var $1.$generator
+      call builtin.async_generator.throw(%53, %52)
       return
     bb17:
+      %56 = load var $1.$resume_val
+      %57 = load var $1.$is_rejected
+      %58 = const c35
+      %59 = stricteq %57, %58
+      branch %59, bb18, bb21
+    bb18:
+      %62 = load var $1.$generator
+      call builtin.async_generator.throw(%62, %56)
+      return
+    bb19:
+      %65 = load var $1.$generator
+      %66 = const c37
+      call builtin.async_generator.return(%65, %66)
+      return
+    bb20:
+      %63 = load var $1.$generator
+      call builtin.async_generator.return(%63, %56)
+      return
+    bb21:
+      %60 = const c36
+      %61 = stricteq %57, %60
+      branch %61, bb20, bb19
+    bb22:
+      return
+    bb23:
       unreachable
 
-  fn @gen [needs_prototype] [params: $2.$env, $2.$this, $2.input] [entry=bb0]:
+  fn @gen [needs_prototype] [js_name "gen"] [js_length 1] [params: $2.$env, $2.$this, $2.input] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c46
@@ -240,7 +264,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.result] [entry=bb0]:
     bb0:
       %0 = load var $3.result
       %1 = const c62
@@ -254,7 +278,7 @@ module {
       %4 = call builtin.exception_value(%2)
       throw %4
 
-  fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
     bb0:
       %0 = load var $4.result
       %1 = const c66
@@ -325,43 +349,55 @@ module {
       %28 = load var $0.g
       %29 = const c61
       %30 = get_prop %28, %29
-      %31 = call %30, this=%28
-      %32 = is_exception %31
-      branch %32, bb4, bb3
+      %31 = is_exception %30
+      branch %31, bb4, bb3
     bb2:
       %27 = call builtin.exception_value(%25)
       throw %27
     bb3:
-      %34 = const c63
-      %35 = const c64
-      %36 = call builtin.promise.then(%31, %34, %35)
-      %37 = is_exception %36
-      branch %37, bb6, bb5
+      %33 = call %30, this=%28
+      %34 = is_exception %33
+      branch %34, bb6, bb5
     bb4:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      %32 = call builtin.exception_value(%30)
+      throw %32
     bb5:
-      %39 = load var $0.g
-      %40 = const c65
-      %41 = get_prop %39, %40
-      %42 = call %41, this=%39
-      %43 = is_exception %42
-      branch %43, bb8, bb7
+      %36 = const c63
+      %37 = const c64
+      %38 = call builtin.promise.then(%33, %36, %37)
+      %39 = is_exception %38
+      branch %39, bb8, bb7
     bb6:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %35 = call builtin.exception_value(%33)
+      throw %35
     bb7:
-      %45 = const c67
-      %46 = const c68
-      %47 = call builtin.promise.then(%42, %45, %46)
-      %48 = is_exception %47
-      branch %48, bb10, bb9
+      %41 = load var $0.g
+      %42 = const c65
+      %43 = get_prop %41, %42
+      %44 = is_exception %43
+      branch %44, bb10, bb9
     bb8:
-      %44 = call builtin.exception_value(%42)
-      throw %44
+      %40 = call builtin.exception_value(%38)
+      throw %40
     bb9:
-      return
+      %46 = call %43, this=%41
+      %47 = is_exception %46
+      branch %47, bb12, bb11
     bb10:
-      %49 = call builtin.exception_value(%47)
-      throw %49
+      %45 = call builtin.exception_value(%43)
+      throw %45
+    bb11:
+      %49 = const c67
+      %50 = const c68
+      %51 = call builtin.promise.then(%46, %49, %50)
+      %52 = is_exception %51
+      branch %52, bb14, bb13
+    bb12:
+      %48 = call builtin.exception_value(%46)
+      throw %48
+    bb13:
+      return
+    bb14:
+      %53 = call builtin.exception_value(%51)
+      throw %53
 }

@@ -967,6 +967,8 @@ struct NativeProgramState {
     function_slots: Vec<Vec<usize>>,
     function_lengths: Vec<u32>,
     function_names: Vec<String>,
+    /// JS 可见的 `name` 属性值（SetFunctionName 结果；内部名仅供诊断）。
+    function_js_names: Vec<String>,
     function_source_spans: Vec<Option<wjsm_ir::SourceSpan>>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     function_needs_prototype: Vec<bool>,
@@ -1025,6 +1027,8 @@ struct NativeAgentState {
     specialization: Option<SpecializationCoordinator>,
     function_lengths: Vec<u32>,
     function_names: Vec<String>,
+    /// 当前 image 的 JS 可见 `name` 属性值（见 `NativeProgramState::function_js_names`）。
+    function_js_names: Vec<String>,
     function_source_spans: Vec<Option<wjsm_ir::SourceSpan>>,
     images: HashMap<u64, Arc<CompiledImage>>,
     image_source_files: HashMap<u64, String>,
@@ -1239,6 +1243,7 @@ impl NativeAgentState {
             function_lengths: Vec::new(),
             retained_images: HashMap::new(),
             function_names: Vec::new(),
+            function_js_names: Vec::new(),
             function_source_spans: Vec::new(),
             image_source_files: HashMap::new(),
             functions: Vec::new(),
@@ -1402,13 +1407,27 @@ impl NativeAgentState {
                 .functions()
                 .iter()
                 .map(|function| {
-                    u32::try_from(function.params().len().saturating_sub(2)).unwrap_or(0)
+                    // SetFunctionLength（ES §10.2.10）：语义层按 ExpectedArgumentCount
+                    // 写入 js_length；缺席时按 IR 形参槽数（扣 $env/$this）推导。
+                    function.js_length().unwrap_or_else(|| {
+                        u32::try_from(function.params().len().saturating_sub(2)).unwrap_or(0)
+                    })
                 })
                 .collect(),
             function_names: program
                 .functions()
                 .iter()
                 .map(|function| function.name().to_owned())
+                .collect(),
+            function_js_names: program
+                .functions()
+                .iter()
+                .map(|function| {
+                    function
+                        .js_name()
+                        .unwrap_or_else(|| function.name())
+                        .to_owned()
+                })
                 .collect(),
             function_source_spans: program
                 .functions()
@@ -1527,6 +1546,7 @@ impl NativeAgentState {
         self.function_home_objects.clear();
         self.function_lengths.clear();
         self.function_names.clear();
+        self.function_js_names.clear();
         self.function_source_spans.clear();
         self.current_image_id = 0;
         self.current_feedback_region = (0, 0);
@@ -1671,6 +1691,7 @@ impl NativeAgentState {
             constants: std::mem::take(&mut self.constants),
             function_lengths: std::mem::take(&mut self.function_lengths),
             function_names: std::mem::take(&mut self.function_names),
+            function_js_names: std::mem::take(&mut self.function_js_names),
             function_source_spans: std::mem::take(&mut self.function_source_spans),
             materialized_constants: std::mem::take(&mut self.materialized_constants),
             string_constants: std::mem::take(&mut self.string_constants),
@@ -1690,6 +1711,7 @@ impl NativeAgentState {
         self.function_slots = state.function_slots;
         self.function_lengths = state.function_lengths;
         self.function_names = state.function_names;
+        self.function_js_names = state.function_js_names;
         self.function_source_spans = state.function_source_spans;
         self.function_needs_prototype = state.function_needs_prototype;
         self.function_class_ctor_names = state.function_class_ctor_names;
@@ -4074,18 +4096,19 @@ impl NativeAgentState {
             function.image_id == self.current_image_id && function.function_index == function_index
         })
     }
-    /// callable 的展示名（函数 name 元数据）：用户函数取镜像函数表，
-    /// 原生 callable 取内建元数据。用于 `name` 属性与诊断消息渲染。
-    fn callable_display_name(&self, callable: i64) -> Option<String> {
+    /// callable 的 JS 可见 `name`（SetFunctionName，ES §10.2.9）：用户函数取
+    /// 镜像 js_name 表（类构造器为类名、方法为属性名、匿名函数为
+    /// NamedEvaluation 绑定名或空串），原生 callable 取内建元数据。
+    pub(crate) fn callable_js_name(&self, callable: i64) -> Option<String> {
         let callable = value::strip_gc_color(callable);
         if let Some(function) = self.callable_function(callable) {
             let index = usize::try_from(function.function_index).ok()?;
             let name = if function.image_id == self.current_image_id {
-                self.function_names.get(index)?
+                self.function_js_names.get(index)?
             } else {
                 self.programs
                     .get(&function.image_id)?
-                    .function_names
+                    .function_js_names
                     .get(index)?
             };
             Some(name.clone())
@@ -4101,7 +4124,7 @@ impl NativeAgentState {
             return Some(value);
         }
         if self.text_matches(key.to_value(), "name") {
-            let name = self.callable_display_name(callable)?;
+            let name = self.callable_js_name(callable)?;
             let stored = self.intern_text(name, value::TAG_STRING)?;
             self.callable_properties.insert((callable, key), stored);
             self.callable_property_flags

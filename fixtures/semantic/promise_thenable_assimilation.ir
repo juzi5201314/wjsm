@@ -30,7 +30,7 @@ module {
     c27 = bool(true)
     c28 = bool(false)
 
-  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [js_name "then"] [js_length 1] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
       %0 = const c21
       %1 = load var $1.resolve
@@ -38,7 +38,7 @@ module {
       %3 = call %1, this=%0, args=[%2]
       return %3
 
-  fn @arrow_1 [direct_callable] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+  fn @arrow_1 [direct_callable] [js_name ""] [js_length 1] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = load var $2.v
       %1 = call builtin.console.log(%0)

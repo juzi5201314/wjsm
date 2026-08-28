@@ -56,7 +56,7 @@ module {
     c53 = undefined
     c54 = bool(true)
 
-  fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [js_name "then"] [js_length 1] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
       %0 = const c28
       %1 = load var $2.resolve
@@ -107,7 +107,7 @@ module {
       promise_resolve %19, %18
       return
 
-  fn @foo [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @foo [needs_prototype] [js_name "foo"] [js_length 0] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c32
@@ -152,7 +152,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_3 [direct_callable] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = load var $4.v
       %1 = call builtin.console.log(%0)

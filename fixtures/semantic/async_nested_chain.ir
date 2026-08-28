@@ -153,7 +153,7 @@ module {
       promise_resolve %16, %15
       return
 
-  fn @c [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @c [needs_prototype] [js_name "c"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c28
@@ -225,43 +225,59 @@ module {
     bb1:
       %14 = const c53
       store var $3.$shared_env, %14
-      %32 = load var $3.$state
-      switch %32 [case c59 -> bb2, case c60 -> bb3], default bb6, exit bb7
+      %38 = load var $3.$state
+      switch %38 [case c59 -> bb2, case c60 -> bb5], default bb10, exit bb11
     bb2:
       %15 = const c54
       %16 = load var $3.$closure_env
       %17 = const c55
       %18 = get_prop %16, %17
       %19 = call %18, this=%15
-      %21 = const c56
-      %20 = call builtin.promise.resolve_static(%21, %19)
-      suspend %20, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %22 = load var $3.$resume_val
-      %23 = load var $3.$is_rejected
-      %24 = const c57
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb5
+      %24 = const c56
+      %23 = call builtin.promise.resolve_static(%24, %19)
+      suspend %23, state=1
+      jump bb7
     bb4:
-      %26 = load var $3.$promise
-      promise_reject %26, %22
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $3.$promise
+      promise_reject %22, %21
       return
     bb5:
-      %27 = load var $3.$resume_val
-      store var $3.v, %27
-      %28 = load var $3.v
-      %29 = const c58
-      %30 = add %28, %29
-      %31 = load var $3.$promise
-      promise_resolve %31, %30
-      return
+      %25 = load var $3.$resume_val
+      %26 = load var $3.$is_rejected
+      %27 = const c57
+      %28 = stricteq %26, %27
+      branch %28, bb6, bb7
     bb6:
+      %29 = load var $3.$promise
+      promise_reject %29, %25
       return
     bb7:
+      %30 = load var $3.$resume_val
+      store var $3.v, %30
+      %31 = load var $3.v
+      %32 = const c58
+      %33 = add %31, %32
+      %34 = is_exception %33
+      branch %34, bb9, bb8
+    bb8:
+      %37 = load var $3.$promise
+      promise_resolve %37, %33
+      return
+    bb9:
+      %35 = call builtin.exception_value(%33)
+      %36 = load var $3.$promise
+      promise_reject %36, %35
+      return
+    bb10:
+      return
+    bb11:
       unreachable
 
-  fn @b [needs_prototype] [captures: $0.c] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @b [needs_prototype] [js_name "b"] [js_length 0] [captures: $0.c] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c61
@@ -334,43 +350,59 @@ module {
     bb1:
       %14 = const c87
       store var $5.$shared_env, %14
-      %32 = load var $5.$state
-      switch %32 [case c93 -> bb2, case c94 -> bb3], default bb6, exit bb7
+      %38 = load var $5.$state
+      switch %38 [case c93 -> bb2, case c94 -> bb5], default bb10, exit bb11
     bb2:
       %15 = const c88
       %16 = load var $5.$closure_env
       %17 = const c89
       %18 = get_prop %16, %17
       %19 = call %18, this=%15
-      %21 = const c90
-      %20 = call builtin.promise.resolve_static(%21, %19)
-      suspend %20, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %22 = load var $5.$resume_val
-      %23 = load var $5.$is_rejected
-      %24 = const c91
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb5
+      %24 = const c90
+      %23 = call builtin.promise.resolve_static(%24, %19)
+      suspend %23, state=1
+      jump bb7
     bb4:
-      %26 = load var $5.$promise
-      promise_reject %26, %22
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $5.$promise
+      promise_reject %22, %21
       return
     bb5:
-      %27 = load var $5.$resume_val
-      store var $5.v, %27
-      %28 = load var $5.v
-      %29 = const c92
-      %30 = add %28, %29
-      %31 = load var $5.$promise
-      promise_resolve %31, %30
-      return
+      %25 = load var $5.$resume_val
+      %26 = load var $5.$is_rejected
+      %27 = const c91
+      %28 = stricteq %26, %27
+      branch %28, bb6, bb7
     bb6:
+      %29 = load var $5.$promise
+      promise_reject %29, %25
       return
     bb7:
+      %30 = load var $5.$resume_val
+      store var $5.v, %30
+      %31 = load var $5.v
+      %32 = const c92
+      %33 = add %31, %32
+      %34 = is_exception %33
+      branch %34, bb9, bb8
+    bb8:
+      %37 = load var $5.$promise
+      promise_resolve %37, %33
+      return
+    bb9:
+      %35 = call builtin.exception_value(%33)
+      %36 = load var $5.$promise
+      promise_reject %36, %35
+      return
+    bb10:
+      return
+    bb11:
       unreachable
 
-  fn @a [needs_prototype] [captures: $0.b] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @a [needs_prototype] [js_name "a"] [js_length 0] [captures: $0.b] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c95
@@ -416,7 +448,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_6 [direct_callable] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
+  fn @arrow_6 [direct_callable] [js_name ""] [js_length 1] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
     bb0:
       %0 = load var $7.v
       %1 = call builtin.console.log(%0)

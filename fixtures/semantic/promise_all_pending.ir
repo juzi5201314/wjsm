@@ -48,7 +48,7 @@ module {
     c45 = bool(true)
     c46 = bool(false)
 
-  fn @arrow_0 [captures: $0.resolveA] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
+  fn @arrow_0 [js_name ""] [js_length 1] [captures: $0.resolveA] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c22
@@ -62,7 +62,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @arrow_1 [captures: $0.resolveB] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
+  fn @arrow_1 [js_name ""] [js_length 1] [captures: $0.resolveB] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c27
@@ -76,7 +76,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.values] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.values] [entry=bb0]:
     bb0:
       %0 = load var $3.values
       %1 = const c32
@@ -112,7 +112,7 @@ module {
       %15 = call builtin.exception_value(%13)
       throw %15
 
-  fn @arrow_3 [captures: $0.resolveB, $0.resolveA] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @arrow_3 [js_name ""] [js_length 0] [captures: $0.resolveB, $0.resolveA] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = const c38
       %1 = load var $env

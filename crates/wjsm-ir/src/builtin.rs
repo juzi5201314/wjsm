@@ -565,6 +565,10 @@ pub enum Builtin {
     /// 说明 super() 已成功执行过一次，再次调用抛 ReferenceError；仍为未初始化
     /// 哨兵时原样返回。args: [value(当前 this 绑定)]。
     SuperCallOnceCheck,
+    /// SetFunctionName（ES §10.2.9）的运行时形态：计算属性键的方法/访问器与
+    /// 匿名函数定义在键求值后设置 `name`。args: [function, key(ToPropertyKey
+    /// 后的字符串或 symbol), prefix(0=无 1="get " 2="set ")]。无返回值。
+    FunctionSetName,
     // ── 全局环境记录（ES §9.1.1.4，脚本模式 GlobalDeclarationInstantiation）──
     /// GlobalDeclarationInstantiation（§16.1.7）步骤 1–6 的声明冲突预检：
     /// kind=0（词法名）检查 HasVarDeclaration / HasLexicalDeclaration /
@@ -1128,6 +1132,7 @@ impl Builtin {
             Self::EvalWithBase => "eval.with_base",
             Self::ThisTdzCheck => "this_tdz_check",
             Self::SuperCallOnceCheck => "super_call_once_check",
+            Self::FunctionSetName => "function.set_name",
             Self::GlobalEnvCheck => "global_env.check",
             Self::GlobalEnvDeclareVar => "global_env.declare_var",
             Self::GlobalEnvDeclareFunc => "global_env.declare_func",

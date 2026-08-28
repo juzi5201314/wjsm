@@ -86,47 +86,54 @@ module {
     bb1:
       %14 = const c26
       store var $1.$shared_env, %14
-      %30 = load var $1.$state
-      switch %30 [case c33 -> bb2, case c34 -> bb6], default bb9, exit bb10
+      %32 = load var $1.$state
+      switch %32 [case c33 -> bb2, case c34 -> bb8], default bb11, exit bb12
     bb2:
       jump bb3
     bb3:
       %15 = const c27
       %16 = const c28
       %17 = call builtin.promise.reject_static(%15, %16)
-      %19 = const c29
-      %18 = call builtin.promise.resolve_static(%19, %17)
-      suspend %18, state=1
-      jump bb8
+      %18 = is_exception %17
+      branch %18, bb7, bb6
     bb4:
-      %28 = const c32
+      %30 = const c32
+      %31 = load var $1.$promise
+      promise_resolve %31, %30
+      return
+    bb5:
+      %27 = load var $tmp.0
+      store var $4.e, %27
+      %28 = const c31
       %29 = load var $1.$promise
       promise_resolve %29, %28
       return
-    bb5:
-      %25 = load var $tmp.0
-      store var $4.e, %25
-      %26 = const c31
-      %27 = load var $1.$promise
-      promise_resolve %27, %26
-      return
     bb6:
-      %20 = load var $1.$resume_val
-      %21 = load var $1.$is_rejected
-      %22 = const c30
-      %23 = stricteq %21, %22
-      branch %23, bb7, bb8
+      %21 = const c29
+      %20 = call builtin.promise.resolve_static(%21, %17)
+      suspend %20, state=1
+      jump bb10
     bb7:
-      store var $tmp.0, %20
+      %19 = call builtin.exception_value(%17)
+      store var $tmp.0, %19
       jump bb5
     bb8:
-      jump bb4
+      %22 = load var $1.$resume_val
+      %23 = load var $1.$is_rejected
+      %24 = const c30
+      %25 = stricteq %23, %24
+      branch %25, bb9, bb10
     bb9:
-      return
+      store var $tmp.0, %22
+      jump bb5
     bb10:
+      jump bb4
+    bb11:
+      return
+    bb12:
       unreachable
 
-  fn @recover [needs_prototype] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @recover [needs_prototype] [js_name "recover"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c35
@@ -171,7 +178,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
     bb0:
       %0 = load var $7.v
       %1 = call builtin.console.log(%0)

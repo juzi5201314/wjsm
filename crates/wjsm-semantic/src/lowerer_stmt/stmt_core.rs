@@ -88,12 +88,11 @@ impl Lowerer {
             let value = self.lower_expr_then_continue(&expr_stmt.expr, &mut current_block)?;
             // 调用等可抛表达式的返回值可能是 TAG_EXCEPTION：先分叉异常路径，
             // 只在正常路径把值写入完成值槽（异常路径经 emit_throw_value 传播）。
-            let continuation =
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(&expr_stmt.expr) {
-                    self.lower_value_exception_branch(current_block, value)?
-                } else {
-                    self.resolve_store_block(current_block)
-                };
+            let continuation = if self.expr_can_throw(&expr_stmt.expr) {
+                self.lower_value_exception_branch(current_block, value)?
+            } else {
+                self.resolve_store_block(current_block)
+            };
             self.emit_eval_completion_store(continuation, value);
             return Ok(StmtFlow::Open(continuation));
         }
@@ -103,7 +102,7 @@ impl Lowerer {
             expr => {
                 let mut continuation = block;
                 let value = self.lower_expr_then_continue(expr, &mut continuation)?;
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+                if self.expr_can_throw(expr) {
                     self.lower_value_exception_branch(continuation, value)?
                 } else {
                     continuation
@@ -148,6 +147,28 @@ impl Lowerer {
         );
         self.emit_throw_value(exc_block, thrown_val)?;
         Ok(self.resolve_store_block(continue_block))
+    }
+
+    /// 按 `? GetValue` 语义降低分支条件表达式（if/while/do-while/for/三元）：
+    /// 条件求值可能抛出时先插入异常分叉（哨兵路由到最近 catch / promise
+    /// rejection），返回条件值与可安全设置 Branch 终结器的延续块。
+    pub(crate) fn lower_branch_condition(
+        &mut self,
+        test: &swc_ast::Expr,
+        block: BasicBlockId,
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
+        let fork = self.expr_can_throw(test);
+        let mut cond_entry = block;
+        let cond = if fork {
+            self.lower_expr_then_continue(test, &mut cond_entry)?
+        } else {
+            self.lower_expr(test, cond_entry)?
+        };
+        let mut branch_block = self.resolve_store_block(cond_entry);
+        if fork {
+            branch_block = self.lower_value_exception_branch(branch_block, cond)?;
+        }
+        Ok((cond, branch_block))
     }
 
     fn is_unqualified_direct_eval_call(call: &swc_ast::CallExpr) -> bool {
@@ -259,20 +280,7 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
-        let mut cond_entry = block;
-
-        let cond = if self.expr_exception_fork_allowed() && self.expr_can_throw(&if_stmt.test) {
-            self.lower_expr_then_continue(&if_stmt.test, &mut cond_entry)?
-        } else {
-            self.lower_expr(&if_stmt.test, cond_entry)?
-        };
-        let branch_block =
-            if self.expr_exception_fork_allowed() && self.expr_can_throw(&if_stmt.test) {
-                let resolved = self.resolve_store_block(cond_entry);
-                self.lower_value_exception_branch(resolved, cond)?
-            } else {
-                self.resolve_store_block(cond_entry)
-            };
+        let (cond, branch_block) = self.lower_branch_condition(&if_stmt.test, block)?;
         let then_block = self.current_function.new_block();
         let else_or_merge = self.current_function.new_block();
 
@@ -348,8 +356,7 @@ impl Lowerer {
             },
         );
 
-        let cond = self.lower_expr(&while_stmt.test, header)?;
-        let branch_header = self.resolve_store_block(header);
+        let (cond, branch_header) = self.lower_branch_condition(&while_stmt.test, header)?;
         self.current_function.set_terminator(
             branch_header,
             Terminator::Branch {
@@ -411,8 +418,7 @@ impl Lowerer {
             .current_function
             .ensure_jump_or_terminated(body_flow, condition);
 
-        let cond = self.lower_expr(&do_while.test, condition)?;
-        let branch_condition = self.resolve_store_block(condition);
+        let (cond, branch_condition) = self.lower_branch_condition(&do_while.test, condition)?;
         self.current_function.set_terminator(
             branch_condition,
             Terminator::Branch {
@@ -475,8 +481,14 @@ impl Lowerer {
                     }
                 }
                 swc_ast::VarDeclOrExpr::Expr(expr) => {
-                    let _ = self.lower_expr(expr, block)?;
-                    block
+                    // 头部初始化表达式抛出（getter/调用）时必须在进入循环前
+                    // 分叉传播，哨兵不得被当普通值丢弃。
+                    let mut init_cont = block;
+                    let value = self.lower_expr_then_continue(expr, &mut init_cont)?;
+                    if self.expr_can_throw(expr) {
+                        init_cont = self.lower_value_exception_branch(init_cont, value)?;
+                    }
+                    init_cont
                 }
             }
         } else {
@@ -528,8 +540,7 @@ impl Lowerer {
         });
 
         if let Some(test) = &for_stmt.test {
-            let condition = self.lower_expr(test, header)?;
-            let branch_header = self.resolve_store_block(header);
+            let (condition, branch_header) = self.lower_branch_condition(test, header)?;
             self.current_function.set_terminator(
                 branch_header,
                 Terminator::Branch {
@@ -562,10 +573,15 @@ impl Lowerer {
                 .set_terminator(per_iteration, Terminator::Jump { target: update });
         }
 
+        let mut update_end = update;
         if let Some(update_expr) = &for_stmt.update {
-            let _ = self.lower_expr(update_expr, update)?;
+            // 更新表达式抛出时必须在回边前分叉传播，否则异常被吞且循环继续。
+            let value = self.lower_expr_then_continue(update_expr, &mut update_end)?;
+            if self.expr_can_throw(update_expr) {
+                update_end = self.lower_value_exception_branch(update_end, value)?;
+            }
         }
-        let update_end = self.resolve_store_block(update);
+        let update_end = self.resolve_store_block(update_end);
         self.current_function
             .set_terminator(update_end, Terminator::Jump { target: header });
 

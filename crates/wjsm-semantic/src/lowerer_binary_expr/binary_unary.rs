@@ -74,21 +74,6 @@ impl Lowerer {
             _ => false,
         }
     }
-
-    /// 表达式位置的异常检查分叉在 async / async-generator 函数体内会破坏其状态机的
-    /// 基本块枚举与续延结构，故此类分叉仅在普通（非状态机）函数体及顶层代码中插入。
-    /// async 函数体内的同步抛出沿用原有 promise rejection 路径（不在此处理）。
-    /// 动态 import(expr) 等规范拥有者会临时压制此分叉，让 TAG_EXCEPTION 作为表达式值
-    /// 流向 owning host builtin，由它创建 Promise rejection。
-    pub(crate) fn expr_exception_fork_allowed(&self) -> bool {
-        self.exception_fork_suppression_depth == 0
-            && !self.is_async_fn
-            && !self.is_async_generator_fn
-    }
-
-    pub(crate) fn exception_fork_suppressed(&self) -> bool {
-        self.exception_fork_suppression_depth != 0
-    }
 }
 
 impl Lowerer {
@@ -108,16 +93,13 @@ impl Lowerer {
                 *block = next;
             }
         }
-        if self.exception_fork_suppressed() && self.expr_can_throw(expr) {
-            *block = self.defer_value_exception_branch(*block, value);
-        }
         Ok(value)
     }
 
     /// 按 ArgumentListEvaluation / `? GetValue` 求值单个实参/操作数：求值后若该
-    /// 表达式可能直接产生 TAG_EXCEPTION 且允许表达式级异常分叉，则立即检查并
-    /// 传播异常。用于调用/构造实参、方法 receiver、被调用者，以及二元运算的
-    /// 左右操作数（LHS 抛出须短路 RHS 求值，异常哨兵不得作为普通值流入
+    /// 表达式可能直接产生 TAG_EXCEPTION 则立即检查并传播异常。用于调用/构造
+    /// 实参、方法 receiver、被调用者，以及二元运算的左右操作数（LHS 抛出须
+    /// 短路 RHS 求值，异常哨兵不得作为普通值流入
     /// ApplyStringOrNumericBinaryOperator / IsLooselyEqual / IsLessThan）。
     pub(crate) fn lower_call_operand_then_continue(
         &mut self,
@@ -125,82 +107,16 @@ impl Lowerer {
         block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let value = self.lower_expr_then_continue(expr, block)?;
-        if self.expr_exception_fork_allowed() && self.expr_can_throw(expr) {
+        if self.expr_can_throw(expr) {
             *block = self.lower_value_exception_branch(*block, value)?;
         }
         Ok(value)
     }
 
-    /// 对可能为异常哨兵的值做三态检查：普通体内立即分叉传播；规范拥有者
-    /// （动态 import 等）抑制期间延迟分叉交拥有者处理；async 状态机体内
-    /// 不插入表达式级分叉（见 `expr_exception_fork_allowed`）。
-    pub(crate) fn fork_or_defer_exception_branch(
-        &mut self,
-        block: BasicBlockId,
-        value: ValueId,
-    ) -> Result<BasicBlockId, LoweringError> {
-        if self.expr_exception_fork_allowed() {
-            return self.lower_value_exception_branch(block, value);
-        }
-        if self.exception_fork_suppressed() {
-            return Ok(self.defer_value_exception_branch(block, value));
-        }
-        Ok(block)
-    }
-
-    pub(crate) fn lower_expr_collecting_exception_forks_then_continue(
-        &mut self,
-        expr: &swc_ast::Expr,
-        block: &mut BasicBlockId,
-    ) -> Result<(ValueId, Vec<(BasicBlockId, ValueId)>), LoweringError> {
-        self.exception_fork_suppression_depth += 1;
-        self.deferred_exception_forks_stack.push(Vec::new());
-        let result = self.lower_expr_then_continue(expr, block);
-        let forks = self
-            .deferred_exception_forks_stack
-            .pop()
-            .expect("exception fork collection frame");
-        self.exception_fork_suppression_depth -= 1;
-        result.map(|value| (value, forks))
-    }
-
-    fn defer_value_exception_branch(
-        &mut self,
-        block: BasicBlockId,
-        value: ValueId,
-    ) -> BasicBlockId {
-        let working_block = self.resolve_store_block(block);
-        let is_exception = self.alloc_value();
-        self.current_function.append_instruction(
-            working_block,
-            Instruction::IsException {
-                dest: is_exception,
-                value,
-            },
-        );
-        let continue_block = self.current_function.new_block();
-        let abrupt_block = self.current_function.new_block();
-        self.current_function.set_terminator(
-            working_block,
-            Terminator::Branch {
-                condition: is_exception,
-                true_block: abrupt_block,
-                false_block: continue_block,
-            },
-        );
-        self.deferred_exception_forks_stack
-            .last_mut()
-            .expect("exception fork collection frame")
-            .push((abrupt_block, value));
-        continue_block
-    }
-
     /// 发射 `ArrayPushSpread` 并检查其返回值：GetIterator 对不可迭代值抛
     /// TypeError、迭代器 next()/value 读取抛错都会以 TAG_EXCEPTION 返回，
-    /// 必须按 ECMAScript ArrayAccumulation / ArgumentListEvaluation 传播，
-    /// 不得丢弃后静默产生空数组。普通函数体内直接分叉抛出；规范拥有者
-    /// （动态 import 等）抑制期间延迟分叉交拥有者处理；async 状态机体内
-    /// 沿用整体约定不插入表达式级分叉（见 expr_exception_fork_allowed）。
+    /// 必须按 ECMAScript ArrayAccumulation / ArgumentListEvaluation 分叉传播，
+    /// 不得丢弃后静默产生空数组。
     pub(crate) fn emit_array_push_spread_checked(
         &mut self,
         block: BasicBlockId,
@@ -216,14 +132,12 @@ impl Lowerer {
                 args: vec![array, source],
             },
         );
-        self.fork_or_defer_exception_branch(block, result)
+        self.lower_value_exception_branch(block, result)
     }
 
     /// 发射 `ObjectSpread` 并检查其结果：CopyDataProperties 读取 source 自有
     /// 属性时 getter/Proxy trap 抛错会以 TAG_EXCEPTION 返回，必须按
-    /// ECMAScript CopyDataProperties 传播，不得丢弃后静默产生残缺对象。
-    /// 三态处理与 `emit_array_push_spread_checked` 一致：普通函数体直接分叉
-    /// 抛出；规范拥有者抑制期间延迟分叉；async 状态机体内不插表达式级分叉。
+    /// ECMAScript CopyDataProperties 分叉传播，不得丢弃后静默产生残缺对象。
     pub(crate) fn emit_object_spread_checked(
         &mut self,
         block: BasicBlockId,
@@ -239,13 +153,7 @@ impl Lowerer {
                 source,
             },
         );
-        if self.expr_exception_fork_allowed() {
-            return self.lower_value_exception_branch(block, result);
-        }
-        if self.exception_fork_suppressed() {
-            return Ok(self.defer_value_exception_branch(block, result));
-        }
-        Ok(block)
+        self.lower_value_exception_branch(block, result)
     }
 
     pub(crate) fn lower_binary(
@@ -347,10 +255,8 @@ impl Lowerer {
                     let object =
                         self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                     // `? GetValue(rref)`：RHS 求值异常必须先传播，不得流入 brand 检查
-                    // 被误报为 TypeError（抑制上下文的延迟分叉由 lower_expr_then_continue
-                    // 处理，async 状态机内由 PrivateHas 宿主端透传异常值）。
-                    if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref())
-                    {
+                    // 被误报为 TypeError。
+                    if self.expr_can_throw(bin.right.as_ref()) {
                         current_block = self.lower_value_exception_branch(current_block, object)?;
                     }
                     let key = self.emit_string_const(current_block, &field_name);
@@ -365,29 +271,22 @@ impl Lowerer {
                         },
                     );
                     // brand 检查自身的 TypeError（receiver 非对象）须在本函数内分叉，
-                    // 方法体内 try/catch 才能本地捕获；抑制上下文由
-                    // lower_expr_then_continue 的延迟分叉兜底（expr_can_throw 含 In）。
-                    if self.expr_exception_fork_allowed() {
-                        let continue_block =
-                            self.lower_value_exception_branch(current_block, dest)?;
-                        self.expr_merge_block = Some(continue_block);
-                    } else if current_block != block {
-                        self.expr_merge_block = Some(current_block);
-                    }
+                    // 方法体内 try/catch 才能本地捕获。
+                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                    self.expr_merge_block = Some(continue_block);
                     return Ok(dest);
                 }
                 let mut current_block = block;
                 let prop = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
                 // ES §13.10.1 步骤 2 `? GetValue(lref)`：LHS 求值异常必须先传播并
                 // 短路 RHS 求值，不得作为普通键值流入 HasProperty。
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref()) {
+                if self.expr_can_throw(bin.left.as_ref()) {
                     current_block = self.lower_value_exception_branch(current_block, prop)?;
                 }
                 let object =
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
-                // 步骤 4 `? GetValue(rref)`：RHS 求值异常传播，不得被吞掉返回 false
-                //（抑制上下文的延迟分叉由 lower_expr_then_continue 处理）。
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
+                // 步骤 4 `? GetValue(rref)`：RHS 求值异常传播，不得被吞掉返回 false。
+                if self.expr_can_throw(bin.right.as_ref()) {
                     current_block = self.lower_value_exception_branch(current_block, object)?;
                 }
                 let dest = self.alloc_value();
@@ -400,14 +299,9 @@ impl Lowerer {
                     },
                 );
                 // 步骤 5：RHS 非对象的 TypeError 与 Proxy has trap 异常须在本函数内
-                // 分叉抛出，try/catch 才能本地捕获；抑制上下文由延迟分叉兜底
-                //（expr_can_throw 含 In），async 状态机内由宿主端透传异常值。
-                if self.expr_exception_fork_allowed() {
-                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
-                    self.expr_merge_block = Some(continue_block);
-                } else if current_block != block {
-                    self.expr_merge_block = Some(current_block);
-                }
+                // 分叉抛出，try/catch 才能本地捕获。
+                let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                self.expr_merge_block = Some(continue_block);
                 Ok(dest)
             }
             // instanceof 操作符：检查原型链
@@ -415,13 +309,13 @@ impl Lowerer {
                 let mut current_block = block;
                 let value = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
                 // ES §13.10.1 步骤 2：LHS 求值异常先传播并短路 RHS 求值。
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref()) {
+                if self.expr_can_throw(bin.left.as_ref()) {
                     current_block = self.lower_value_exception_branch(current_block, value)?;
                 }
                 let constructor =
                     self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 // 步骤 4：RHS 求值异常传播，不得被吞掉返回 false。
-                if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.right.as_ref()) {
+                if self.expr_can_throw(bin.right.as_ref()) {
                     current_block =
                         self.lower_value_exception_branch(current_block, constructor)?;
                 }
@@ -435,13 +329,9 @@ impl Lowerer {
                     },
                 );
                 // InstanceofOperator 自身的 TypeError（RHS 非对象/非可调用、非对象
-                // prototype）与 @@hasInstance 用户码异常须分叉传播；三态处理同 In。
-                if self.expr_exception_fork_allowed() {
-                    let continue_block = self.lower_value_exception_branch(current_block, dest)?;
-                    self.expr_merge_block = Some(continue_block);
-                } else if current_block != block {
-                    self.expr_merge_block = Some(current_block);
-                }
+                // prototype）与 @@hasInstance 用户码异常须分叉传播。
+                let continue_block = self.lower_value_exception_branch(current_block, dest)?;
+                self.expr_merge_block = Some(continue_block);
                 Ok(dest)
             }
         }
@@ -475,9 +365,7 @@ impl Lowerer {
                         args: vec![lhs, rhs],
                     },
                 );
-                if self.expr_exception_fork_allowed() {
-                    current_block = self.lower_value_exception_branch(current_block, dest)?;
-                }
+                current_block = self.lower_value_exception_branch(current_block, dest)?;
             }
             // != 使用 abstract_eq builtin 然后 Not
             swc_ast::BinaryOp::NotEq => {
@@ -491,7 +379,7 @@ impl Lowerer {
                     },
                 );
                 // 分叉必须先于 Not：Not(异常哨兵) 会把异常折叠为布尔值丢失。
-                current_block = self.fork_or_defer_exception_branch(current_block, eq_result)?;
+                current_block = self.lower_value_exception_branch(current_block, eq_result)?;
                 self.current_function.append_instruction(
                     current_block,
                     Instruction::Unary {
@@ -523,9 +411,7 @@ impl Lowerer {
                         args: vec![lhs, rhs, reverse, invert],
                     },
                 );
-                if self.expr_exception_fork_allowed() {
-                    current_block = self.lower_value_exception_branch(current_block, dest)?;
-                }
+                current_block = self.lower_value_exception_branch(current_block, dest)?;
             }
             swc_ast::BinaryOp::EqEqEq => {
                 self.current_function.append_instruction(
@@ -576,8 +462,7 @@ impl Lowerer {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
         // 左操作数抛出时必须中止整个逻辑表达式：异常哨兵的原始位恒为真值，
         // 直接作为 Branch 条件会让 `&&` 错误地继续求值右侧并丢失异常。
-        let block = if self.expr_exception_fork_allowed() && self.expr_can_throw(bin.left.as_ref())
-        {
+        let block = if self.expr_can_throw(bin.left.as_ref()) {
             self.lower_value_exception_branch(block, lhs)?
         } else {
             block
@@ -1034,7 +919,7 @@ impl Lowerer {
                     },
                 );
                 // 成员读取可触发用户 getter 抛出，必须在 ToNumeric 前中止传播。
-                block = self.fork_or_defer_exception_branch(block, old_val)?;
+                block = self.lower_value_exception_branch(block, old_val)?;
             }
         }
         if let Some(name) = &tdz_checked_name {
@@ -1102,7 +987,7 @@ impl Lowerer {
                 value: old_val,
             },
         );
-        let block = self.fork_or_defer_exception_branch(block, num_val)?;
+        let block = self.lower_value_exception_branch(block, num_val)?;
 
         let one = self.module.add_constant(Constant::Number(1.0));
         let one_val = self.alloc_value();

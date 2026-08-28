@@ -29,7 +29,7 @@ module {
     c26 = string("x")
     c27 = bool(false)
 
-  fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [js_name "deleteProperty"] [js_length 2] [params: $1.$env, $1.$this, $1.t, $1.p] [entry=bb0]:
     bb0:
       %0 = const c23
       return %0

@@ -28,7 +28,7 @@ module {
     c25 = bool(true)
     c26 = bool(false)
 
-  fn @makeResource [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
+  fn @makeResource [needs_prototype] [direct_callable] [js_length 1] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
       %1 = load var $1.value
