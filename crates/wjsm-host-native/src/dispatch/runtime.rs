@@ -2844,9 +2844,18 @@ pub(super) fn iterator_value(
     let Some(iterator) = state.array_iterators.get(&handle).copied() else {
         return fail_dispatch(ctx);
     };
-    // [[Done]] 为 true 时按 §7.4.8 直接返回 DONE（映射为 undefined），不得
-    // 读取迭代结果的 value 属性——done 结果对象的 value getter 不可观察。
-    if iterator.done {
+    // [[Done]] 为 true 时步进语义（advance = IteratorStepValue，§7.4.8）直接
+    // 返回 DONE（映射为 undefined），不得读取迭代结果的 value 属性——done
+    // 结果对象的 value getter 不可观察。非步进的 IteratorValue 是对当前
+    // result 的普通 Get（§7.4.5）：yield* 委托在 done 后仍须读取最终
+    // result.value 作为委托表达式的值（§27.5.3.7 步骤 7.a.iii）。
+    if iterator.done
+        && (advance
+            || !matches!(
+                iterator.source,
+                super::super::NativeIteratorSource::Custom(_)
+            ))
+    {
         return value::encode_undefined();
     }
     let (result, step) = match iterator.source {

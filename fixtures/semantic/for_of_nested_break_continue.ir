@@ -157,7 +157,7 @@ module {
       branch %56, bb22, bb21
     bb18:
       %49 = call builtin.exception_value(%47)
-      %50 = call builtin.iterator.close(%23, %49)
+      %50 = call builtin.iterator.close_throw(%23, %49)
       %51 = is_exception %50
       branch %51, bb20, bb19
     bb19:
@@ -169,7 +169,7 @@ module {
       jump bb26
     bb22:
       %57 = call builtin.exception_value(%55)
-      %58 = call builtin.iterator.close(%23, %57)
+      %58 = call builtin.iterator.close_throw(%23, %57)
       %59 = is_exception %58
       branch %59, bb24, bb23
     bb23:
@@ -196,7 +196,7 @@ module {
       jump bb5
     bb30:
       %69 = call builtin.exception_value(%67)
-      %70 = call builtin.iterator.close(%23, %69)
+      %70 = call builtin.iterator.close_throw(%23, %69)
       %71 = is_exception %70
       branch %71, bb32, bb31
     bb31:

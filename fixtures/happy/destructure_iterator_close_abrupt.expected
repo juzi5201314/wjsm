@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+setter: setter-boom
+setter return calls: 1
+default: default-boom
+default return calls: 1
+assign default: assign-default-boom
+assign default return calls: 1
+nested: nested-getter-boom
+nested return calls: 1
+param: param-default-boom
+param return calls: 1
+elision: after-hole-boom
+elision next calls: 2 return calls: 1
+nested arrays: inner-ret,outer-ret,catch:deep-boom
+close before catch: return(),catch
+generator: set1,gen-finally,catch:gen-boom
+for-of nesting: inner-ret,outer-ret,catch
+--- stderr ---
