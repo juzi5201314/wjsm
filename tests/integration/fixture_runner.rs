@@ -270,19 +270,16 @@ fn verify_oracle(
 
 /// 为 oracle 对比做归一化：去除 wjsm 特有的渲染差异。
 fn normalize_for_oracle(text: &str) -> String {
-    // 去除对象句柄数字：[object Type:123] → [object Type]
+    // 去除对象句柄数字：[object Type:123] → [object Type]。
+    // 必须按 char 边界推进：逐字节 push 会把多字节 UTF-8 按 Latin-1 重编码。
     let mut result = String::with_capacity(text.len());
-    let bytes = text.as_bytes();
-    let len = bytes.len();
     let mut i = 0;
 
-    while i < len {
-        if i + 8 <= len
-            && bytes[i] == b'['
-            && &bytes[i + 1..i + 8] == b"object "
-            && let Some(close) = bytes[i..].iter().position(|&b| b == b']')
+    while i < text.len() {
+        if text[i..].starts_with("[object ")
+            && let Some(close_rel) = text[i..].find(']')
         {
-            let close_abs = i + close;
+            let close_abs = i + close_rel;
             let inner = &text[i + 1..close_abs];
             if let Some(colon) = inner.rfind(':') {
                 let suffix = &inner[colon + 1..];
@@ -295,8 +292,9 @@ fn normalize_for_oracle(text: &str) -> String {
                 }
             }
         }
-        result.push(bytes[i] as char);
-        i += 1;
+        let ch = text[i..].chars().next().expect("UTF-8 char 边界");
+        result.push(ch);
+        i += ch.len_utf8();
     }
 
     // 去除不稳定的 native 地址 0xNNNN。
