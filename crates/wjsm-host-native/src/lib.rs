@@ -728,10 +728,6 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             "toSorted" => Builtin::ArrayToSorted,
             "unshift" => Builtin::ArrayUnshiftVa,
             "with" => Builtin::ArrayWith,
-            "hasOwnProperty" => Builtin::HasOwnProperty,
-            "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
-            "toString" => Builtin::ObjectProtoToString,
-            "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
         }
     } else if value::is_regexp(receiver) {
@@ -754,15 +750,10 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
         }
-    } else if value::is_js_object(receiver) {
-        match key {
-            "hasOwnProperty" => Builtin::HasOwnProperty,
-            "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
-            "toString" => Builtin::ObjectProtoToString,
-            "valueOf" => Builtin::ObjectProtoValueOf,
-            _ => return None,
-        }
     } else {
+        // 普通堆对象不再合成 Object.prototype 系方法：它们是
+        // %Object.prototype% 上的真实自有属性，由堆原型链查找命中；
+        // null 原型对象自然缺失（与 Node 一致）。
         return None;
     };
     Some(builtin)
@@ -2306,25 +2297,6 @@ impl NativeAgentState {
         }
         false
     }
-    fn heap_chain_contains(&self, current: i64, target: i64) -> bool {
-        let mut current = value::decode_handle(current);
-        let target = value::decode_handle(target);
-        let mut visited = HashSet::new();
-        while visited.insert(current) {
-            if current == target {
-                return true;
-            }
-            let Ok(parent) = self.gc.heap().prototype(current) else {
-                return false;
-            };
-            if parent == PROTO_NULL_SENTINEL {
-                return false;
-            }
-            current = parent;
-        }
-        false
-    }
-
     fn primitive_property(&mut self, receiver: i64, key: i64) -> Option<i64> {
         if value::is_regexp(receiver)
             && let Some(builtin) = dispatch::regexp::symbol_builtin(key)
@@ -2602,17 +2574,6 @@ impl NativeAgentState {
         {
             return self.native_callable(NativeCallableKind::ErrorToString);
         }
-        if (value::is_object(receiver) || value::is_array(receiver))
-            && matches!(
-                key.as_str(),
-                "hasOwnProperty" | "propertyIsEnumerable" | "toString" | "valueOf"
-            )
-            && self
-                .object_prototype
-                .is_none_or(|prototype| !self.heap_chain_contains(receiver, prototype))
-        {
-            return None;
-        }
         if let Some(property) = dispatch::intl::primitive_locale_property(self, receiver, &key) {
             return Some(property);
         }
@@ -2788,8 +2749,10 @@ impl NativeAgentState {
         let object_prototype = if let Some(prototype) = self.object_prototype {
             prototype
         } else {
-            let prototype = self.allocate_object_with_prototype(0, false, PROTO_NULL_SENTINEL)?;
+            let prototype = self.allocate_object_with_prototype(12, false, PROTO_NULL_SENTINEL)?;
             self.object_prototype = Some(prototype);
+            self.install_object_prototype_members(prototype)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
             prototype
         };
         if self.array_prototype.is_none() {
@@ -2866,16 +2829,99 @@ impl NativeAgentState {
         Some(object)
     }
 
+    /// `Object` 全局名解析：constructor / prototype 反向链接已在
+    /// `ensure_intrinsic_prototypes` 创建 %Object.prototype% 时一次性安装，
+    /// 这里只保证固有原型存在并返回同一 native callable。
     fn ensure_object_constructor(&mut self) -> Option<i64> {
         self.ensure_intrinsic_prototypes().ok()?;
+        self.native_callable(NativeCallableKind::ObjectConstructor)
+    }
+
+    /// 按 Node v22 的自有属性顺序装齐 %Object.prototype%（§20.1.3、§B.2.2）：
+    /// `constructor` 与全部原型方法为 {[[Writable]], [[Configurable]]} 数据
+    /// 属性，`__proto__` 为 {[[Configurable]]} 访问器对；同时安装
+    /// `Object.prototype` 反向链接，使其不依赖全局名 `Object` 的解析时机。
+    fn install_object_prototype_members(&mut self, prototype: i64) -> Option<()> {
+        let handle = value::decode_handle(prototype);
         let constructor = self.native_callable(NativeCallableKind::ObjectConstructor)?;
         let prototype_key = self.intern_property_string("prototype".into())?;
         self.callable_properties
-            .insert((constructor, prototype_key), self.object_prototype?);
+            .insert((constructor, prototype_key), prototype);
         self.callable_property_flags
             .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
-        self.install_prototype_constructor(self.object_prototype?, constructor)?;
-        Some(constructor)
+        self.install_prototype_constructor(prototype, constructor)?;
+        for (name, builtin) in [
+            (
+                "__defineGetter__",
+                wjsm_ir::Builtin::ObjectProtoDefineGetter,
+            ),
+            (
+                "__defineSetter__",
+                wjsm_ir::Builtin::ObjectProtoDefineSetter,
+            ),
+            ("hasOwnProperty", wjsm_ir::Builtin::HasOwnProperty),
+            (
+                "__lookupGetter__",
+                wjsm_ir::Builtin::ObjectProtoLookupGetter,
+            ),
+            (
+                "__lookupSetter__",
+                wjsm_ir::Builtin::ObjectProtoLookupSetter,
+            ),
+            ("isPrototypeOf", wjsm_ir::Builtin::ObjectProtoIsPrototypeOf),
+            (
+                "propertyIsEnumerable",
+                wjsm_ir::Builtin::PropertyIsEnumerable,
+            ),
+            ("toString", wjsm_ir::Builtin::ObjectProtoToString),
+            ("valueOf", wjsm_ir::Builtin::ObjectProtoValueOf),
+        ] {
+            let key = self.intern_property_string(name.into())?;
+            let callable = self.native_callable(NativeCallableKind::Builtin(builtin, true))?;
+            self.gc
+                .heap()
+                .define_data_property(
+                    handle,
+                    key,
+                    callable as u64,
+                    BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+                )
+                .ok()?;
+        }
+        let proto_key = self.intern_property_string("__proto__".into())?;
+        let getter = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::ObjectProtoGetProto,
+            true,
+        ))?;
+        let setter = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::ObjectProtoSetProto,
+            true,
+        ))?;
+        self.gc
+            .heap()
+            .define_accessor_property_with_flags(
+                handle,
+                proto_key,
+                getter as u64,
+                setter as u64,
+                wjsm_ir::constants::FLAG_CONFIGURABLE as u32,
+            )
+            .ok()?;
+        let locale_key = self.intern_property_string("toLocaleString".into())?;
+        let locale = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::ObjectProtoToLocaleString,
+            true,
+        ))?;
+        self.gc
+            .heap()
+            .define_data_property(
+                handle,
+                locale_key,
+                locale as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        Some(())
     }
 
     fn ensure_regexp_constructor(&mut self) -> Option<i64> {

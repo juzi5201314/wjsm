@@ -390,15 +390,18 @@ pub(super) fn dispatch_runtime(
             }
         }
         NativeRuntimeOp::SetProto => {
-            let [object, proto] = args else {
+            let [_, proto] = args else {
                 return fail_dispatch(ctx);
             };
-            if value::is_undefined(*proto) || value::is_null(*proto) {
-                if let Some(handle) = object_handle(*object) {
-                    let _ = state.gc.heap().set_prototype(handle, 0);
-                }
-                value::encode_undefined()
-            } else {
+            // 字面量 `__proto__:` 三态（§B.3.1）：对象或 null 走
+            // [[SetPrototypeOf]]（null 由其写入 PROTO_NULL_SENTINEL，
+            // 不可写 0——0 是合法句柄），其余值静默忽略。
+            if value::is_null(*proto)
+                || value::is_object(*proto)
+                || value::is_array(*proto)
+                || value::is_callable(*proto)
+                || value::is_proxy(*proto)
+            {
                 let result = super::object::dispatch_object(
                     ctx,
                     state,
@@ -407,11 +410,10 @@ pub(super) fn dispatch_runtime(
                 )
                 .unwrap_or_else(|| fail_dispatch(ctx));
                 if value::is_exception(result) {
-                    result
-                } else {
-                    value::encode_undefined()
+                    return result;
                 }
             }
+            value::encode_undefined()
         }
         NativeRuntimeOp::GetSuperBase => super_base(state).unwrap_or_else(value::encode_undefined),
         NativeRuntimeOp::GetSuperConstructor => {
@@ -1615,6 +1617,15 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
         .get_property_slot_on_proto_chain_for_ic(handle, name_id)
     {
         Ok(Some((holder_handle, value_slot_index, property))) => {
+            // 命中链尾 %Object.prototype% 且宿主家族合成认领该名（Date 的
+            // toString 等）时不可缓存 PROTO_DATA/ACCESSOR：快路径会绕过
+            // 合成层直读 holder 槽，永久退化 MEGAMORPHIC 走完整 [[Get]]。
+            if state.object_prototype.map(value::decode_handle) == Some(holder_handle)
+                && state.primitive_property(object, key).is_some()
+            {
+                unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
+                return;
+            }
             if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
                 let getter = property.getter as i64;
                 if value::is_callable(getter) {
@@ -1819,8 +1830,15 @@ pub(super) fn get_property_with_receiver(
         return Ok(super::proxy::get(ctx, state, object, key, receiver));
     }
     if value::is_regexp(object) {
-        return Ok(super::regexp::get_property(ctx, state, object, key)
-            .unwrap_or_else(value::encode_undefined));
+        if let Some(property) = super::regexp::get_property(ctx, state, object, key) {
+            return Ok(property);
+        }
+        // 旁挂标志位与合成方法未命中：沿 %RegExp.prototype%（堆对象，父为
+        // %Object.prototype%）上行，使 hasOwnProperty 等继承成员可见。
+        if let Some(prototype) = state.regexp_prototype {
+            return get_property_with_receiver(ctx, state, prototype, key, receiver);
+        }
+        return Ok(value::encode_undefined());
     }
     if value::is_string(object) && state.text_matches(key, "length") {
         return state
@@ -1911,9 +1929,23 @@ pub(super) fn get_property_with_receiver(
                 get_property_with_receiver(ctx, state, prototype, encoded_key, receiver)
             }
             CallableChainHit::Null => Ok(value::encode_undefined()),
-            CallableChainHit::Implicit { tail } => Ok(state
-                .primitive_property(tail, encoded_key)
-                .unwrap_or_else(value::encode_undefined)),
+            CallableChainHit::Implicit { tail } => {
+                if let Some(property) = state.primitive_property(tail, encoded_key) {
+                    return Ok(property);
+                }
+                // 隐式 %Function.prototype% 的自有 constructor（§20.2.3.1）。
+                if state.text_matches(encoded_key, "constructor") {
+                    return Ok(state
+                        .native_callable(crate::NativeCallableKind::FunctionConstructor)
+                        .unwrap_or_else(value::encode_undefined));
+                }
+                // %Function.prototype% 的 [[Prototype]] 是 %Object.prototype%
+                // （§20.2.3）：链尾继续上行，使继承成员对 callable 可见。
+                let Some(prototype) = state.object_prototype else {
+                    return Ok(value::encode_undefined());
+                };
+                get_property_with_receiver(ctx, state, prototype, encoded_key, receiver)
+            }
         };
     }
     let handle = object_handle(object).ok_or(())?;
@@ -1922,15 +1954,27 @@ pub(super) fn get_property_with_receiver(
         .heap()
         .get_property_slot_on_proto_chain(handle, key);
     match lookup {
-        Ok(Some(property)) if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 => {
-            let getter = property.getter as i64;
-            if value::is_callable(getter) {
-                state.invoke_callable(ctx, getter, receiver, &[]).ok_or(())
-            } else {
-                Ok(value::encode_undefined())
+        Ok(Some((holder, property))) => {
+            // holder 为链尾 %Object.prototype% 时先让宿主家族合成认领：
+            // Date / Error / Buffer / TypedArray 等的"原型层"在实例与
+            // %Object.prototype% 之间（规范中是真实的中间原型对象），其
+            // toString / valueOf / toLocaleString 必须遮蔽 %Object.prototype%
+            // 的自有属性；更近层的用户属性 holder 不同，不受影响。
+            if state.object_prototype.map(value::decode_handle) == Some(holder)
+                && let Some(synthesized) = state.primitive_property(object, encoded_key)
+            {
+                return Ok(synthesized);
             }
+            if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
+                let getter = property.getter as i64;
+                return if value::is_callable(getter) {
+                    state.invoke_callable(ctx, getter, receiver, &[]).ok_or(())
+                } else {
+                    Ok(value::encode_undefined())
+                };
+            }
+            Ok(property.value as i64)
         }
-        Ok(Some(property)) => Ok(property.value as i64),
         Ok(None) => {
             if let Some(property) = state.primitive_property(object, encoded_key) {
                 return Ok(property);
@@ -2161,22 +2205,36 @@ pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_ke
         let Some(key) = property_key(state, encoded_key) else {
             return false;
         };
-        return state.array_properties.contains_key(&(handle, key))
+        if state.array_properties.contains_key(&(handle, key))
             || state.array_accessors.contains_key(&(handle, key))
-            || state.primitive_property(object, encoded_key).is_some();
+            || state.primitive_property(object, encoded_key).is_some()
+        {
+            return true;
+        }
+        // 数组合成方法未命中：沿堆原型链上行（%Array.prototype% →
+        // %Object.prototype%），使 hasOwnProperty 等继承成员对 in 可见。
+        return heap_prototype_value(state, object)
+            .ok()
+            .flatten()
+            .is_some_and(|prototype| has_property(state, prototype, encoded_key));
     }
     let Some(key) = property_key(state, encoded_key) else {
         return false;
     };
     if value::is_callable(object) {
         // HasProperty 与 [[Get]] 同链：逐层自有属性 → 非 callable 原型递归
-        // 对象路径 → 显式 null 缺失 → 链尾隐式 Function.prototype 内建。
+        // 对象路径 → 显式 null 缺失 → 链尾隐式 Function.prototype 内建，
+        // 再沿 %Object.prototype% 上行（§20.2.3）。
         return match callable_chain::resolve(state, object, key) {
             CallableChainHit::Accessor { .. } | CallableChainHit::Data { .. } => true,
             CallableChainHit::Object { prototype } => has_property(state, prototype, encoded_key),
             CallableChainHit::Null => false,
             CallableChainHit::Implicit { tail } => {
                 state.primitive_property(tail, encoded_key).is_some()
+                    || state.text_matches(encoded_key, "constructor")
+                    || state
+                        .object_prototype
+                        .is_some_and(|prototype| has_property(state, prototype, encoded_key))
             }
         };
     }

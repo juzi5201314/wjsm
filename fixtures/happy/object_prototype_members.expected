@@ -1,0 +1,28 @@
+exit_code: 0
+--- stdout ---
+true
+true
+true
+true
+["constructor","__defineGetter__","__defineSetter__","hasOwnProperty","__lookupGetter__","__lookupSetter__","isPrototypeOf","propertyIsEnumerable","toString","valueOf","__proto__","toLocaleString"]
+true false true true
+hasOwnProperty true false true function hasOwnProperty 1
+isPrototypeOf true false true function isPrototypeOf 1
+propertyIsEnumerable true false true function propertyIsEnumerable 1
+toString true false true function toString 0
+valueOf true false true function valueOf 0
+toLocaleString true false true function toLocaleString 0
+function function false true
+false false
+get __proto__ 0 set __proto__ 1
+true
+true
+true
+true
+true
+false
+false
+false
+[object Object]
+custom-tag
+--- stderr ---
