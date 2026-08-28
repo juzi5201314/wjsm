@@ -159,9 +159,7 @@ impl Lowerer {
             swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) => Constant::Number(num.value),
             // 与 lower_literal 同一转换：孤立代理项经 Utf16String 保留，否则
             // 捕获读取折叠会把 U+FFFD 版本替换进闭包体。
-            swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) => {
-                string_literal_constant(&string.value)
-            }
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) => string_literal_constant(&string.value),
             swc_ast::Expr::Lit(swc_ast::Lit::Bool(b)) => Constant::Bool(b.value),
             swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => Constant::Null,
             _ => return,

@@ -1072,11 +1072,13 @@ impl Lowerer {
                 let name = s.value.to_string_lossy().into_owned();
                 let key_const = self.module.add_constant(string_literal_constant(&s.value));
                 let key_dest = self.alloc_value();
-                self.current_function
-                    .append_instruction(*block, Instruction::Const {
+                self.current_function.append_instruction(
+                    *block,
+                    Instruction::Const {
                         dest: key_dest,
                         constant: key_const,
-                    });
+                    },
+                );
                 Ok((name, key_dest))
             }
             swc_ast::PropName::Computed(_)
