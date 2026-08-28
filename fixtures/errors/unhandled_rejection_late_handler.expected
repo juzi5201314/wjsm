@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+main-done
+--- stderr ---
+UnhandledPromiseRejection: Error: late

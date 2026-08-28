@@ -1079,8 +1079,9 @@ struct NativeAgentState {
     async_iterator_objects: HashSet<i64>,
     async_generator_resume_completions: HashMap<u32, f64>,
     promise_reactions: HashMap<u32, Vec<dispatch::promise::NativeScheduledReaction>>,
-    /// 待报告的 unhandled rejection: (promise_handle, reason)
-    /// GC 可能回收 promise 对象，但 reason 必须留存到事件循环结束时报告
+    /// 待报告的 unhandled rejection: (promise_handle, reason)。
+    /// 微任务队列排空检查点报告第一个仍未处理的条目并终止（Node throw 语义）；
+    /// GC 可能回收 promise 对象，故 reason 在 settle 时即格式化为文本留存。
     pending_unhandled_rejections: Vec<(u32, String)>,
     microtasks: VecDeque<dispatch::promise::NativeScheduledMicrotask>,
     iterator_next: HashMap<u32, u32>,

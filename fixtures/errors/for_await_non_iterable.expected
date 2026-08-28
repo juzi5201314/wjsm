@@ -1,3 +1,4 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
 --- stderr ---
+UnhandledPromiseRejection: TypeError: value is not iterable

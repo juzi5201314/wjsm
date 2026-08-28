@@ -57,6 +57,15 @@ fn main() {
     out.truncate(out.trim_end().len());
     out.push('\n');
 
+    // 全新 clone 没有 tests/gen 目录（git 不追踪空目录），写入前先确保存在
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|e| {
+            panic!(
+                "Failed to create generated test dir at {}: {e}",
+                parent.display()
+            );
+        });
+    }
     fs::write(&output_path, &out).unwrap_or_else(|e| {
         panic!(
             "Failed to write generated test file at {}: {e}",

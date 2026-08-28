@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+main-done
+caught-a a
+caught-c c
+caught-b b
+--- stderr ---
