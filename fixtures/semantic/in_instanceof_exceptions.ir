@@ -536,7 +536,7 @@ module {
     bb0:
       return
 
-  fn @BoundBase.constructor [home_object=@6.prototype] [needs_prototype] [direct_callable] [params: $93.$env, $93.$this] [entry=bb0]:
+  fn @BoundBase.constructor [home_object=@6.prototype] [needs_prototype] [direct_callable] [class_ctor "BoundBase"] [params: $93.$env, $93.$this] [entry=bb0]:
     bb0:
       return
 

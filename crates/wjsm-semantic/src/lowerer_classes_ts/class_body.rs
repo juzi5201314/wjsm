@@ -359,6 +359,10 @@ impl Lowerer {
         let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
+        // [[IsClassConstructor]]（ES §10.2.1 步骤 2）：运行时 [[Call]] 路径据此
+        // 抛 TypeError。显示名取源码 ident（匿名类表达式为空串，文案对齐 V8
+        // 的 "Class constructors cannot be invoked without 'new'"）。
+        ir_function.set_class_ctor_name(decorator_name.unwrap_or(""));
         ir_function.set_has_eval(has_eval);
         if let Some(span) =
             self.span_to_source_span(constructor.map(|c| c.span()).unwrap_or_else(|| class_span))

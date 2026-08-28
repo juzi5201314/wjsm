@@ -1398,7 +1398,7 @@ module {
       call builtin.continuation.save_var(%7, %14, %13)
       return %8
 
-  fn @Seq.constructor [home_object=@14.prototype] [needs_prototype] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3, $1.$private_function#1_4] [params: $16.$env, $16.$this] [entry=bb0]:
+  fn @Seq.constructor [home_object=@14.prototype] [needs_prototype] [class_ctor "Seq"] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3, $1.$private_function#1_4] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = const c223
       %1 = const c224

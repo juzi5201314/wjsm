@@ -331,6 +331,13 @@ fn encode_function(encoder: &mut Encoder, function: &Function) -> Result<(), Art
         }
     }
     encoder.bool(function.direct_callable());
+    match function.class_ctor_name() {
+        None => encoder.bool(false),
+        Some(name) => {
+            encoder.bool(true);
+            encoder.string(name)?;
+        }
+    }
     encoder.len(function.blocks().len())?;
     for block in function.blocks() {
         encode_block(encoder, block)?;
@@ -365,6 +372,9 @@ fn decode_function(
         function.set_source_span(SourceSpan::new(decoder.u32()?, decoder.u32()?));
     }
     function.set_direct_callable(decoder.bool()?);
+    if decoder.bool()? {
+        function.set_class_ctor_name(decoder.string()?);
+    }
     let block_count = decoder.count(limits.max_blocks_per_function)?;
     for _ in 0..block_count {
         function.push_block(decode_block(decoder, limits)?);

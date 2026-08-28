@@ -14,7 +14,8 @@ const MAGIC: &[u8; 8] = b"WJSMART\0";
 // v5：运行时NaN-box/属性键布局进入ABI域，旧artifact必须重新构建。
 // v8：ObjectSpread 指令新增结果槽（2→3 个 value id），旧artifact必须重新构建。
 // v9：SetProp/SetElem 指令新增 strict 位，旧artifact必须重新构建。
-const FORMAT_VERSION: u16 = 9;
+// v10：Function 新增类构造器元数据（class_ctor_name），旧artifact必须重新构建。
+const FORMAT_VERSION: u16 = 10;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

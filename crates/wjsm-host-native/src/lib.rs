@@ -949,6 +949,9 @@ struct NativeFunctionRef {
     image_id: u64,
     function_index: u32,
     needs_prototype: bool,
+    /// 类构造器标记（ES [[IsClassConstructor]]）：[[Call]] 路径必须抛 TypeError。
+    /// 错误文案显示名冷路径经 `class_ctor_display_name` 查 program state。
+    is_class_constructor: bool,
     home_object: Option<wjsm_ir::HomeObject>,
     source_span: Option<wjsm_ir::SourceSpan>,
 }
@@ -967,6 +970,8 @@ struct NativeProgramState {
     function_source_spans: Vec<Option<wjsm_ir::SourceSpan>>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     function_needs_prototype: Vec<bool>,
+    /// 类构造器的错误文案显示名（None = 非类构造器；Some("") = 匿名类）。
+    function_class_ctor_names: Vec<Option<String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -999,6 +1004,8 @@ struct NativeAgentState {
     object_template_meta: Vec<u32>,
     function_slots: Vec<Vec<usize>>,
     function_needs_prototype: Vec<bool>,
+    /// 当前 image 的类构造器显示名（见 `NativeProgramState::function_class_ctor_names`）。
+    function_class_ctor_names: Vec<Option<String>>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     current_image_id: u64,
     /// 当前 image 反馈区的 `(基址, 字节长度)`，随 image 激活刷新。
@@ -1033,6 +1040,10 @@ struct NativeAgentState {
     latin1_char_strings: Box<[i64; LATIN1_CHAR_COUNT]>,
     activations: Vec<NativeActivation>,
     pending_stack_trace: Option<String>,
+    /// 类构造器 [[Call]] 拒绝的显示名（prepare 时解析，reject handler 取走；
+    /// 匿名类为空串）。宿主 invoke 路径的 entry 二参是 environment 而非
+    /// callee，handler 无法从 C-ABI 实参回查名字，故经 state 传递。
+    pending_class_ctor_name: Option<String>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
     sets: HashMap<u32, Vec<i64>>,
     weak: dispatch::weak::NativeWeakState,
@@ -1211,6 +1222,7 @@ impl NativeAgentState {
             object_template_meta: Vec::new(),
             function_slots: Vec::new(),
             function_needs_prototype: Vec::new(),
+            function_class_ctor_names: Vec::new(),
             function_home_objects: Vec::new(),
             current_image_id: 0,
             current_feedback_region: (0, 0),
@@ -1230,6 +1242,7 @@ impl NativeAgentState {
             functions: Vec::new(),
             function_ids: HashMap::new(),
             pending_stack_trace: None,
+            pending_class_ctor_name: None,
             function_closures: HashMap::new(),
             latest_function_closures: HashMap::new(),
             repository,
@@ -1372,6 +1385,11 @@ impl NativeAgentState {
                 .iter()
                 .map(wjsm_ir::Function::needs_prototype)
                 .collect(),
+            function_class_ctor_names: program
+                .functions()
+                .iter()
+                .map(|function| function.class_ctor_name().map(str::to_owned))
+                .collect(),
             function_home_objects: program
                 .functions()
                 .iter()
@@ -1502,6 +1520,7 @@ impl NativeAgentState {
         self.string_constants.clear();
         self.function_slots.clear();
         self.function_needs_prototype.clear();
+        self.function_class_ctor_names.clear();
         self.function_home_objects.clear();
         self.function_lengths.clear();
         self.function_names.clear();
@@ -1654,6 +1673,7 @@ impl NativeAgentState {
             object_template_meta: std::mem::take(&mut self.object_template_meta),
             function_slots: std::mem::take(&mut self.function_slots),
             function_needs_prototype: std::mem::take(&mut self.function_needs_prototype),
+            function_class_ctor_names: std::mem::take(&mut self.function_class_ctor_names),
             function_home_objects: std::mem::take(&mut self.function_home_objects),
         }
     }
@@ -1668,6 +1688,7 @@ impl NativeAgentState {
         self.function_names = state.function_names;
         self.function_source_spans = state.function_source_spans;
         self.function_needs_prototype = state.function_needs_prototype;
+        self.function_class_ctor_names = state.function_class_ctor_names;
         self.function_home_objects = state.function_home_objects;
     }
 
@@ -1899,25 +1920,32 @@ impl NativeAgentState {
             return Some(value::encode_function_idx(function_id));
         }
         let local_index = usize::try_from(function_index).ok()?;
-        let (needs_prototype, home_object, source_span) = if image_id == self.current_image_id {
-            (
-                *self.function_needs_prototype.get(local_index)?,
-                *self.function_home_objects.get(local_index)?,
-                *self.function_source_spans.get(local_index)?,
-            )
-        } else {
-            let program = self.programs.get(&image_id)?;
-            (
-                *program.function_needs_prototype.get(local_index)?,
-                *program.function_home_objects.get(local_index)?,
-                *program.function_source_spans.get(local_index)?,
-            )
-        };
+        let (needs_prototype, is_class_constructor, home_object, source_span) =
+            if image_id == self.current_image_id {
+                (
+                    *self.function_needs_prototype.get(local_index)?,
+                    self.function_class_ctor_names.get(local_index)?.is_some(),
+                    *self.function_home_objects.get(local_index)?,
+                    *self.function_source_spans.get(local_index)?,
+                )
+            } else {
+                let program = self.programs.get(&image_id)?;
+                (
+                    *program.function_needs_prototype.get(local_index)?,
+                    program
+                        .function_class_ctor_names
+                        .get(local_index)?
+                        .is_some(),
+                    *program.function_home_objects.get(local_index)?,
+                    *program.function_source_spans.get(local_index)?,
+                )
+            };
         let function_id = u32::try_from(self.functions.len()).ok()?;
         let function = NativeFunctionRef {
             image_id,
             function_index,
             needs_prototype,
+            is_class_constructor,
             home_object,
             source_span,
         };
@@ -3619,6 +3647,18 @@ impl NativeAgentState {
         } else {
             return None;
         };
+        // [[Call]] 步骤 2（ES §10.2.1）：类构造器不可作为函数调用。此处是全部
+        // 动态 [[Call]] 的收口（PrepareCall 站点、Function.prototype.call/apply、
+        // bind 产物、Reflect.apply、宿主回调、Proxy apply 转发均经 prepare_call
+        // 且 construct=false）；[[Construct]] 路径（PrepareConstruct/SuperCall/
+        // Reflect.construct 的显式 newTarget，见 invoke_callable_with_environment_
+        // and_new_target 的 construct 判定）不受影响。
+        if !construct
+            && let Some(function) = function
+            && function.is_class_constructor
+        {
+            return self.prepare_class_ctor_rejected_call(ctx, function, arguments);
+        }
         if ctx.js_call_depth >= MAX_JS_CALL_DEPTH {
             return None;
         }
@@ -3742,6 +3782,61 @@ impl NativeAgentState {
             dispatch::native_rejected_call as *const ()
         };
         i64::try_from(rejected as usize).expect("native rejected call address fits i64")
+    }
+
+    /// 类构造器 [[Call]] 的拒绝入口：显示名在此处（prepare 时）解析并存入
+    /// `pending_class_ctor_name`，拒绝 handler 取走后生成 TypeError 文案——
+    /// 机器路径与宿主 invoke 路径的 entry 二参含义不同（callee vs
+    /// environment），经 state 传递才对两条路径都正确。实参照常写入
+    /// call arena：prepare_call 成功返回后调用方（机器码与宿主 invoke）都
+    /// 按 `active_len - argc` 反推 args_base，拒绝入口不读实参但协议必须
+    /// 一致，否则实参多于当前 arena 水位时下溢。
+    fn prepare_class_ctor_rejected_call(
+        &mut self,
+        ctx: &mut NativeVmContext,
+        function: NativeFunctionRef,
+        arguments: &[i64],
+    ) -> Option<i64> {
+        if ctx.js_call_depth >= MAX_JS_CALL_DEPTH {
+            self.pending_stack_trace = Some(self.native_stack_trace());
+            ctx.pending_exception_kind = PendingExceptionKind::StackOverflow;
+        }
+        let active_len = ctx.call_arena_active_len;
+        let argument_count = u32::try_from(arguments.len()).ok()?;
+        let end = active_len.checked_add(argument_count)?;
+        if end > ctx.call_arena_capacity {
+            ctx.pending_exception_kind = PendingExceptionKind::CallArenaOverflow;
+            return None;
+        }
+        let base = usize::try_from(active_len).ok()?;
+        self.call_arena
+            .get_mut(base..base + arguments.len())?
+            .copy_from_slice(arguments);
+        self.pending_class_ctor_name = self
+            .class_ctor_display_name(function)
+            .map(str::to_owned)
+            .or(Some(String::new()));
+        self.push_entry_activation(ctx, self.current_image_id);
+        ctx.call_arena_active_len = end;
+        Some(
+            i64::try_from(dispatch::native_class_ctor_rejected as *const () as usize)
+                .expect("native rejected call address fits i64"),
+        )
+    }
+
+    /// 类构造器的错误文案显示名（拒绝冷路径查询）。非类构造器返回 None；
+    /// 匿名类返回 Some("")。
+    fn class_ctor_display_name(&self, function: NativeFunctionRef) -> Option<&str> {
+        let local_index = usize::try_from(function.function_index).ok()?;
+        let names = if function.image_id == self.current_image_id {
+            &self.function_class_ctor_names
+        } else {
+            &self
+                .programs
+                .get(&function.image_id)?
+                .function_class_ctor_names
+        };
+        names.get(local_index)?.as_deref()
     }
 
     fn finish_call(&mut self, ctx: &mut NativeVmContext) -> Option<i64> {
@@ -3890,7 +3985,12 @@ impl NativeAgentState {
         let mut prepared = Vec::with_capacity(arguments.len() + 1);
         prepared.push(callee);
         prepared.extend_from_slice(arguments);
-        let entry = self.prepare_call(ctx, &prepared, false, None)?;
+        // [[Call]] 与 [[Construct]] 由 newTarget 区分（规范上 [[Construct]] 的
+        // newTarget 恒为构造器，[[Call]] 恒为 undefined）：invoke_constructor
+        //（Reflect.construct / bound [[Construct]] 转发）必须走 construct 路径，
+        // 否则类构造器检查会把合法构造误判为无 new 调用。
+        let construct = !value::is_undefined(new_target);
+        let entry = self.prepare_call(ctx, &prepared, construct, None)?;
         self.activations.last_mut()?.new_target = new_target;
         let args_count = u32::try_from(arguments.len()).ok()?;
         let args_base = ctx.call_arena_active_len.checked_sub(args_count)?;
@@ -4178,6 +4278,20 @@ impl NativeAgentState {
             self.callable_property_flags
                 .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
             return Some(prototype);
+        }
+        // bound 函数无自有 "prototype"（BoundFunctionCreate，ES §10.4.1.3 不设
+        // 置该属性），Get 沿 [[Prototype]]（即目标函数）链命中目标的
+        // prototype——逐层解包 bound 链，使 `new (C.bind())()` 的
+        // OrdinaryCreateFromConstructor 取到 C.prototype。
+        if let Some(NativeCallableKind::Bound(index)) = self.native_callable_kind(callable)
+            && self.text_matches(key.to_value(), "prototype")
+        {
+            let target = self
+                .bound_functions
+                .get(usize::try_from(index).ok()?)
+                .and_then(|bound| bound.as_ref())?
+                .target;
+            return self.callable_property(target, key);
         }
         let function = self.callable_function(callable)?;
         if !self.text_matches(key.to_value(), "prototype") || !function.needs_prototype {
@@ -5351,9 +5465,36 @@ unsafe extern "C" fn native_callable_call(
             let mut combined = Vec::with_capacity(bound.arguments.len() + arguments.len());
             combined.extend_from_slice(&bound.arguments);
             combined.extend_from_slice(&arguments);
-            state
-                .invoke_callable(ctx, bound.target, bound.this_value, &combined)
-                .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
+            // bound 函数的 [[Call]] / [[Construct]]（ES §10.4.1.1–10.4.1.2）由
+            // 本次调用的 new.target 区分（PrepareConstruct / Reflect.construct
+            // 已写入本 activation）。[[Construct]] 转发目标构造器：newTarget 与
+            // 自身相同（SameValue）时替换为目标（bound 链逐层解包），boundThis
+            // 仅用于 [[Call]]，构造用 new 站点预创建的 this。
+            let new_target = state
+                .activations
+                .last()
+                .map_or_else(value::encode_undefined, |activation| activation.new_target);
+            if value::is_undefined(new_target) {
+                state
+                    .invoke_callable(ctx, bound.target, bound.this_value, &combined)
+                    .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
+            } else {
+                let resolved_new_target =
+                    if value::strip_gc_color(new_target) == value::strip_gc_color(callee) {
+                        bound.target
+                    } else {
+                        new_target
+                    };
+                state
+                    .invoke_constructor(
+                        ctx,
+                        bound.target,
+                        resolved_new_target,
+                        this_value,
+                        &combined,
+                    )
+                    .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
+            }
         }
         NativeCallableKind::Fetch(callable) => {
             dispatch::fetch::call(ctx, state, callable, &arguments)

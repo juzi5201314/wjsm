@@ -634,6 +634,9 @@ fn store_dead_slots(block: &mut BasicBlock, names: &[String], undefined: ValueId
 }
 
 /// 函数体内是否含无法用简单替换内联的指令（super/rest/async 等）。
+///
+/// `Builtin::NewTarget` 读取宿主 activation 的 new.target；内联后 callee 帧
+/// 消失，读到的是调用方帧的值——静态 Call/ConstructCall 内联都无法复现，排除。
 fn contains_excluded_instruction(function: &wjsm_ir::Function) -> bool {
     function.blocks().iter().any(|block| {
         block.instructions().iter().any(|ins| {
@@ -648,6 +651,10 @@ fn contains_excluded_instruction(function: &wjsm_ir::Function) -> bool {
                     | Instruction::PromiseReject { .. }
                     | Instruction::Suspend { .. }
                     | Instruction::GeneratorSuspend { .. }
+                    | Instruction::CallBuiltin {
+                        builtin: Builtin::NewTarget,
+                        ..
+                    }
             )
         })
     })
@@ -878,10 +885,17 @@ fn static_inline_round(module: &mut Module) -> bool {
         .iter()
         .map(compute_load_var_reaching)
         .collect();
-    let per_func_info: Vec<(bool, bool, usize)> = module
+    let per_func_info: Vec<(bool, bool, usize, bool)> = module
         .functions()
         .iter()
-        .map(|f| (f.direct_callable(), f.has_eval(), f.blocks().len()))
+        .map(|f| {
+            (
+                f.direct_callable(),
+                f.has_eval(),
+                f.blocks().len(),
+                f.is_class_constructor(),
+            )
+        })
         .collect();
     let per_func_max_value: Vec<u32> = module
         .functions()
@@ -922,9 +936,15 @@ fn static_inline_round(module: &mut Module) -> bool {
                 if callee_idx >= per_func_info.len() {
                     continue;
                 }
-                let (direct_callable, has_eval, num_blocks) = per_func_info[callee_idx];
+                let (direct_callable, has_eval, num_blocks, is_class_ctor) =
+                    per_func_info[callee_idx];
                 let can_call = direct_callable || closure_env.is_some();
                 if !can_call || has_eval || num_blocks == 0 || callee_idx == func_idx {
+                    continue;
+                }
+                // 类构造器的 [[Call]]（无 new）必须在运行时抛 TypeError
+                //（ES §10.2.1 步骤 2）：保留动态调用，不得内联函数体。
+                if !is_construct && is_class_ctor {
                     continue;
                 }
                 let callee_func = &module.functions()[callee_idx];
@@ -1577,6 +1597,11 @@ fn speculative_inline_round(module: &mut Module) -> bool {
                     continue;
                 }
                 let target_func = &module.functions()[target_idx];
+                // 阶段 C 只处理 Call 站点：类构造器的 [[Call]] 必须在运行时
+                // 抛 TypeError，不得把构造器体克隆成快路径。
+                if target_func.is_class_constructor() {
+                    continue;
+                }
                 if contains_excluded_instruction(target_func) {
                     continue;
                 }

@@ -310,7 +310,7 @@ module {
       %24 = call builtin.exception_value(%22)
       throw %24
 
-  fn @StaticClosure.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [params: $7.$env, $7.$this] [entry=bb0]:
+  fn @StaticClosure.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [class_ctor "StaticClosure"] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       return
 
@@ -348,7 +348,7 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @AccessorClosure.constructor [home_object=@8.prototype] [needs_prototype] [direct_callable] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @AccessorClosure.constructor [home_object=@8.prototype] [needs_prototype] [direct_callable] [class_ctor "AccessorClosure"] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       return
 
@@ -386,7 +386,7 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @MethodClosure.constructor [home_object=@11.prototype] [needs_prototype] [direct_callable] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @MethodClosure.constructor [home_object=@11.prototype] [needs_prototype] [direct_callable] [class_ctor "MethodClosure"] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       return
 
@@ -417,7 +417,7 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @GeneratorClosure.constructor [home_object=@13.prototype] [needs_prototype] [direct_callable] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @GeneratorClosure.constructor [home_object=@13.prototype] [needs_prototype] [direct_callable] [class_ctor "GeneratorClosure"] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       return
 

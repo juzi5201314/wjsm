@@ -1,0 +1,23 @@
+exit_code: 0
+--- stdout ---
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor C cannot be invoked without 'new'
+TypeError: Class constructor D cannot be invoked without 'new'
+TypeError: Class constructors cannot be invoked without 'new'
+TypeError: Class constructor Inner cannot be invoked without 'new'
+3 true
+5
+3 true
+5 true
+11 true true
+15 x true
+true
+false
+42 true true
+3 19
+--- stderr ---
