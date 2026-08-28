@@ -88,135 +88,133 @@ module {
     c85 = string("gteq")
     c86 = string("p")
     c87 = number(0)
-    c88 = functionref(@3)
-    c89 = string("RangeError")
-    c90 = string("getter-boom")
-    c91 = functionref(@3)
-    c92 = string("get")
-    c93 = string("enumerable")
-    c94 = bool(true)
-    c95 = string("configurable")
-    c96 = bool(true)
-    c97 = string("getter-add ok: ")
-    c98 = string("p")
-    c99 = number(1)
-    c100 = undefined
-    c101 = string("getter-add")
-    c102 = string("getter-eq ok: ")
-    c103 = string("p")
-    c104 = number(1)
-    c105 = undefined
-    c106 = string("getter-eq")
-    c107 = string("valueOf")
-    c108 = number(0)
-    c109 = functionref(@4)
-    c110 = string("RangeError")
-    c111 = string("valueOf-boom")
-    c112 = functionref(@4)
-    c113 = string("valueof-lt ok: ")
-    c114 = number(1)
-    c115 = bool(false)
-    c116 = bool(false)
-    c117 = undefined
-    c118 = string("valueof-lt")
-    c119 = string("valueof-eq ok: ")
-    c120 = number(1)
-    c121 = undefined
-    c122 = string("valueof-eq")
-    c123 = string("valueof-add ok: ")
-    c124 = number(1)
-    c125 = undefined
-    c126 = string("valueof-add")
-    c127 = string("add ok: ")
-    c128 = number(1)
-    c129 = number(2)
-    c130 = string(" ")
-    c131 = string("a")
-    c132 = string("b")
-    c133 = string("arith ok: ")
-    c134 = number(7)
-    c135 = number(3)
-    c136 = string(" ")
-    c137 = number(2)
-    c138 = number(10)
-    c139 = string(" ")
-    c140 = number(7)
-    c141 = number(2)
-    c142 = string(" ")
-    c143 = number(3)
-    c144 = number(4)
-    c145 = string(" ")
-    c146 = number(8)
-    c147 = number(2)
-    c148 = string("bits ok: ")
-    c149 = number(5)
-    c150 = number(2)
-    c151 = string(" ")
-    c152 = number(5)
-    c153 = number(3)
-    c154 = string(" ")
-    c155 = number(5)
+    c88 = string("RangeError")
+    c89 = string("getter-boom")
+    c90 = functionref(@3)
+    c91 = string("get")
+    c92 = string("enumerable")
+    c93 = bool(true)
+    c94 = string("configurable")
+    c95 = bool(true)
+    c96 = string("getter-add ok: ")
+    c97 = string("p")
+    c98 = number(1)
+    c99 = undefined
+    c100 = string("getter-add")
+    c101 = string("getter-eq ok: ")
+    c102 = string("p")
+    c103 = number(1)
+    c104 = undefined
+    c105 = string("getter-eq")
+    c106 = string("valueOf")
+    c107 = number(0)
+    c108 = string("RangeError")
+    c109 = string("valueOf-boom")
+    c110 = functionref(@4)
+    c111 = string("valueof-lt ok: ")
+    c112 = number(1)
+    c113 = bool(false)
+    c114 = bool(false)
+    c115 = undefined
+    c116 = string("valueof-lt")
+    c117 = string("valueof-eq ok: ")
+    c118 = number(1)
+    c119 = undefined
+    c120 = string("valueof-eq")
+    c121 = string("valueof-add ok: ")
+    c122 = number(1)
+    c123 = undefined
+    c124 = string("valueof-add")
+    c125 = string("add ok: ")
+    c126 = number(1)
+    c127 = number(2)
+    c128 = string(" ")
+    c129 = string("a")
+    c130 = string("b")
+    c131 = string("arith ok: ")
+    c132 = number(7)
+    c133 = number(3)
+    c134 = string(" ")
+    c135 = number(2)
+    c136 = number(10)
+    c137 = string(" ")
+    c138 = number(7)
+    c139 = number(2)
+    c140 = string(" ")
+    c141 = number(3)
+    c142 = number(4)
+    c143 = string(" ")
+    c144 = number(8)
+    c145 = number(2)
+    c146 = string("bits ok: ")
+    c147 = number(5)
+    c148 = number(2)
+    c149 = string(" ")
+    c150 = number(5)
+    c151 = number(3)
+    c152 = string(" ")
+    c153 = number(5)
+    c154 = number(1)
+    c155 = string(" ")
     c156 = number(1)
-    c157 = string(" ")
-    c158 = number(1)
-    c159 = number(4)
-    c160 = string(" ")
-    c161 = number(16)
-    c162 = number(2)
-    c163 = string(" ")
-    c164 = number(1)
-    c165 = number(28)
-    c166 = string("cmp ok: ")
-    c167 = number(1)
-    c168 = string("1")
-    c169 = string(" ")
-    c170 = number(1)
-    c171 = number(2)
-    c172 = string(" ")
-    c173 = number(1)
+    c157 = number(4)
+    c158 = string(" ")
+    c159 = number(16)
+    c160 = number(2)
+    c161 = string(" ")
+    c162 = number(1)
+    c163 = number(28)
+    c164 = string("cmp ok: ")
+    c165 = number(1)
+    c166 = string("1")
+    c167 = string(" ")
+    c168 = number(1)
+    c169 = number(2)
+    c170 = string(" ")
+    c171 = number(1)
+    c172 = number(1)
+    c173 = string(" ")
     c174 = number(1)
-    c175 = string(" ")
-    c176 = number(1)
+    c175 = number(1)
+    c176 = string("rel ok: ")
     c177 = number(1)
-    c178 = string("rel ok: ")
-    c179 = number(1)
-    c180 = number(2)
-    c181 = bool(false)
-    c182 = bool(false)
-    c183 = string(" ")
-    c184 = number(2)
-    c185 = number(1)
-    c186 = bool(true)
-    c187 = bool(false)
-    c188 = string(" ")
-    c189 = number(1)
-    c190 = number(1)
-    c191 = bool(true)
-    c192 = bool(true)
-    c193 = string(" ")
-    c194 = number(2)
-    c195 = number(3)
-    c196 = bool(false)
-    c197 = bool(true)
-    c198 = string("nan ok: ")
-    c199 = number(1)
-    c200 = bool(false)
-    c201 = bool(false)
-    c202 = string(" ")
-    c203 = number(0)
-    c204 = bool(true)
-    c205 = bool(true)
-    c206 = string("bigint ok: ")
-    c207 = bigint(2)
-    c208 = bigint(10)
-    c209 = string(" ")
-    c210 = bigint(5)
-    c211 = bigint(3)
-    c212 = string(" ")
-    c213 = bigint(1)
-    c214 = number(2)
-    c215 = bool(false)
-    c216 = bool(false)
+    c178 = number(2)
+    c179 = bool(false)
+    c180 = bool(false)
+    c181 = string(" ")
+    c182 = number(2)
+    c183 = number(1)
+    c184 = bool(true)
+    c185 = bool(false)
+    c186 = string(" ")
+    c187 = number(1)
+    c188 = number(1)
+    c189 = bool(true)
+    c190 = bool(true)
+    c191 = string(" ")
+    c192 = number(2)
+    c193 = number(3)
+    c194 = bool(false)
+    c195 = bool(true)
+    c196 = string("nan ok: ")
+    c197 = number(1)
+    c198 = bool(false)
+    c199 = bool(false)
+    c200 = string(" ")
+    c201 = number(0)
+    c202 = bool(true)
+    c203 = bool(true)
+    c204 = string("bigint ok: ")
+    c205 = bigint(2)
+    c206 = bigint(10)
+    c207 = string(" ")
+    c208 = bigint(5)
+    c209 = bigint(3)
+    c210 = string(" ")
+    c211 = bigint(1)
+    c212 = number(2)
+    c213 = bool(false)
+    c214 = bool(false)
 
   fn @caught [needs_prototype] [direct_callable] [js_length 2] [params: $14.$env, $14.$this, $14.label, $14.e] [entry=bb0]:
     bb0:
@@ -358,85 +356,83 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c87
-      %3 = const c88
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $41.arguments, %2
-      %4 = load var $0.$global
-      %5 = const c89
-      %6 = get_prop %4, %5
-      %7 = new_object(capacity=6)
-      %8 = call builtin.get_prototype_from_constructor(%6)
-      set_proto %7, %8
-      %9 = const c90
-      %10 = construct_call %6, this=%7, args=[%9]
-      %11 = is_exception %10
-      branch %11, bb1, bb2
+      %3 = load var $0.$global
+      %4 = const c88
+      %5 = get_prop %3, %4
+      %6 = new_object(capacity=6)
+      %7 = call builtin.get_prototype_from_constructor(%5)
+      set_proto %6, %7
+      %8 = const c89
+      %9 = construct_call %5, this=%6, args=[%8]
+      %10 = is_exception %9
+      branch %10, bb1, bb2
     bb1:
       jump bb5
     bb2:
-      %12 = call builtin.is_js_object(%10)
-      branch %12, bb3, bb4
+      %11 = call builtin.is_js_object(%9)
+      branch %11, bb3, bb4
     bb3:
       jump bb5
     bb4:
       jump bb5
     bb5:
-      %13 = phi [(bb1, %10), (bb3, %10), (bb4, %7)]
-      %14 = is_exception %13
-      branch %14, bb7, bb6
+      %12 = phi [(bb1, %9), (bb3, %9), (bb4, %6)]
+      %13 = is_exception %12
+      branch %13, bb7, bb6
     bb6:
-      %16 = is_exception %13
-      branch %16, bb9, bb8
+      %15 = is_exception %12
+      branch %15, bb9, bb8
     bb7:
-      %15 = call builtin.exception_value(%13)
-      throw %15
+      %14 = call builtin.exception_value(%12)
+      throw %14
     bb8:
-      throw %13
+      throw %12
     bb9:
-      %17 = call builtin.exception_value(%13)
-      throw %17
+      %16 = call builtin.exception_value(%12)
+      throw %16
 
   fn @$0.valueOf [js_name "valueOf"] [js_length 0] [params: $48.$env, $48.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c108
-      %3 = const c109
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %1 = const c107
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $48.arguments, %2
-      %4 = load var $0.$global
-      %5 = const c110
-      %6 = get_prop %4, %5
-      %7 = new_object(capacity=6)
-      %8 = call builtin.get_prototype_from_constructor(%6)
-      set_proto %7, %8
-      %9 = const c111
-      %10 = construct_call %6, this=%7, args=[%9]
-      %11 = is_exception %10
-      branch %11, bb1, bb2
+      %3 = load var $0.$global
+      %4 = const c108
+      %5 = get_prop %3, %4
+      %6 = new_object(capacity=6)
+      %7 = call builtin.get_prototype_from_constructor(%5)
+      set_proto %6, %7
+      %8 = const c109
+      %9 = construct_call %5, this=%6, args=[%8]
+      %10 = is_exception %9
+      branch %10, bb1, bb2
     bb1:
       jump bb5
     bb2:
-      %12 = call builtin.is_js_object(%10)
-      branch %12, bb3, bb4
+      %11 = call builtin.is_js_object(%9)
+      branch %11, bb3, bb4
     bb3:
       jump bb5
     bb4:
       jump bb5
     bb5:
-      %13 = phi [(bb1, %10), (bb3, %10), (bb4, %7)]
-      %14 = is_exception %13
-      branch %14, bb7, bb6
+      %12 = phi [(bb1, %9), (bb3, %9), (bb4, %6)]
+      %13 = is_exception %12
+      branch %13, bb7, bb6
     bb6:
-      %16 = is_exception %13
-      branch %16, bb9, bb8
+      %15 = is_exception %12
+      branch %15, bb9, bb8
     bb7:
-      %15 = call builtin.exception_value(%13)
-      throw %15
+      %14 = call builtin.exception_value(%12)
+      throw %14
     bb8:
-      throw %13
+      throw %12
     bb9:
-      %17 = call builtin.exception_value(%13)
-      throw %17
+      %16 = call builtin.exception_value(%12)
+      throw %16
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -908,15 +904,15 @@ module {
     bb103:
       %246 = new_object(capacity=4)
       %247 = const c86
-      %248 = const c91
+      %248 = const c90
       %249 = new_object(capacity=4)
-      %250 = const c92
+      %250 = const c91
       %251 = set_prop %249, %250, %248
-      %252 = const c93
-      %253 = const c94
+      %252 = const c92
+      %253 = const c93
       %254 = set_prop %249, %252, %253
-      %255 = const c95
-      %256 = const c96
+      %255 = const c94
+      %256 = const c95
       %257 = set_prop %249, %255, %256
       call builtin.define_property(%246, %247, %249)
       store var $0.badGetter, %246
@@ -972,9 +968,9 @@ module {
     bb116:
       unreachable
     bb117:
-      %258 = const c97
+      %258 = const c96
       %259 = load var $0.badGetter
-      %260 = const c98
+      %260 = const c97
       %261 = get_prop %259, %260
       %262 = is_exception %261
       branch %262, bb121, bb120
@@ -983,12 +979,12 @@ module {
     bb119:
       %274 = load var $tmp.8
       store var $43.e, %274
-      %277 = const c101
+      %277 = const c100
       %278 = load var $43.e
       %850 = const c0
       jump bb421
     bb120:
-      %264 = const c99
+      %264 = const c98
       %265 = add %261, %264
       %266 = is_exception %265
       branch %266, bb123, bb122
@@ -1023,28 +1019,28 @@ module {
     bb129:
       unreachable
     bb130:
-      %282 = const c102
+      %282 = const c101
       %283 = load var $0.badGetter
-      %284 = const c103
+      %284 = const c102
       %285 = get_prop %283, %284
       %286 = is_exception %285
       branch %286, bb134, bb133
     bb131:
       %308 = new_object(capacity=4)
-      %309 = const c107
-      %310 = const c112
+      %309 = const c106
+      %310 = const c110
       %311 = create_data_property %308, %309, %310
       store var $0.badValueOf, %308
       jump bb145
     bb132:
       %300 = load var $tmp.9
       store var $46.e, %300
-      %303 = const c106
+      %303 = const c105
       %304 = load var $46.e
       %819 = const c0
       jump bb405
     bb133:
-      %288 = const c104
+      %288 = const c103
       %289 = call builtin.abstract_eq(%285, %288)
       %290 = is_exception %289
       branch %290, bb136, bb135
@@ -1086,11 +1082,11 @@ module {
     bb144:
       unreachable
     bb145:
-      %312 = const c113
+      %312 = const c111
       %313 = load var $0.badValueOf
-      %314 = const c114
-      %316 = const c115
-      %317 = const c116
+      %314 = const c112
+      %316 = const c113
+      %317 = const c114
       %315 = call builtin.abstract_compare(%313, %314, %316, %317)
       %318 = is_exception %315
       branch %318, bb149, bb148
@@ -1099,7 +1095,7 @@ module {
     bb147:
       %328 = load var $tmp.10
       store var $50.e, %328
-      %331 = const c118
+      %331 = const c116
       %332 = load var $50.e
       %788 = const c0
       jump bb389
@@ -1137,9 +1133,9 @@ module {
     bb157:
       unreachable
     bb158:
-      %336 = const c119
+      %336 = const c117
       %337 = load var $0.badValueOf
-      %338 = const c120
+      %338 = const c118
       %339 = call builtin.abstract_eq(%337, %338)
       %340 = is_exception %339
       branch %340, bb162, bb161
@@ -1148,7 +1144,7 @@ module {
     bb160:
       %350 = load var $tmp.11
       store var $53.e, %350
-      %353 = const c122
+      %353 = const c120
       %354 = load var $53.e
       %757 = const c0
       jump bb373
@@ -1186,22 +1182,22 @@ module {
     bb170:
       unreachable
     bb171:
-      %358 = const c123
+      %358 = const c121
       %359 = load var $0.badValueOf
-      %360 = const c124
+      %360 = const c122
       %361 = add %359, %360
       %362 = is_exception %361
       branch %362, bb175, bb174
     bb172:
-      %378 = const c127
-      %379 = const c128
-      %380 = const c129
+      %378 = const c125
+      %379 = const c126
+      %380 = const c127
       %381 = add %379, %380
       jump bb182
     bb173:
       %370 = load var $tmp.12
       store var $56.e, %370
-      %373 = const c126
+      %373 = const c124
       %374 = load var $56.e
       %726 = const c0
       jump bb357
@@ -1238,7 +1234,7 @@ module {
     bb183:
       unreachable
     bb184:
-      %387 = const c130
+      %387 = const c128
       %388 = add %384, %387
       %389 = is_exception %388
       branch %389, bb187, bb186
@@ -1246,8 +1242,8 @@ module {
       %386 = call builtin.exception_value(%384)
       throw %386
     bb186:
-      %391 = const c131
-      %392 = const c132
+      %391 = const c129
+      %392 = const c130
       %393 = add %391, %392
       %394 = is_exception %393
       branch %394, bb189, bb188
@@ -1269,9 +1265,9 @@ module {
       %398 = call builtin.exception_value(%396)
       throw %398
     bb192:
-      %402 = const c133
-      %403 = const c134
-      %404 = const c135
+      %402 = const c131
+      %403 = const c132
+      %404 = const c133
       %405 = mod %403, %404
       jump bb194
     bb193:
@@ -1284,7 +1280,7 @@ module {
     bb195:
       unreachable
     bb196:
-      %411 = const c136
+      %411 = const c134
       %412 = add %408, %411
       %413 = is_exception %412
       branch %413, bb199, bb198
@@ -1292,8 +1288,8 @@ module {
       %410 = call builtin.exception_value(%408)
       throw %410
     bb198:
-      %415 = const c137
-      %416 = const c138
+      %415 = const c135
+      %416 = const c136
       %417 = exp %415, %416
       jump bb200
     bb199:
@@ -1306,7 +1302,7 @@ module {
     bb201:
       unreachable
     bb202:
-      %423 = const c139
+      %423 = const c137
       %424 = add %420, %423
       %425 = is_exception %424
       branch %425, bb205, bb204
@@ -1314,8 +1310,8 @@ module {
       %422 = call builtin.exception_value(%420)
       throw %422
     bb204:
-      %427 = const c140
-      %428 = const c141
+      %427 = const c138
+      %428 = const c139
       %429 = sub %427, %428
       jump bb206
     bb205:
@@ -1328,7 +1324,7 @@ module {
     bb207:
       unreachable
     bb208:
-      %435 = const c142
+      %435 = const c140
       %436 = add %432, %435
       %437 = is_exception %436
       branch %437, bb211, bb210
@@ -1336,8 +1332,8 @@ module {
       %434 = call builtin.exception_value(%432)
       throw %434
     bb210:
-      %439 = const c143
-      %440 = const c144
+      %439 = const c141
+      %440 = const c142
       %441 = mul %439, %440
       jump bb212
     bb211:
@@ -1350,7 +1346,7 @@ module {
     bb213:
       unreachable
     bb214:
-      %447 = const c145
+      %447 = const c143
       %448 = add %444, %447
       %449 = is_exception %448
       branch %449, bb217, bb216
@@ -1358,8 +1354,8 @@ module {
       %446 = call builtin.exception_value(%444)
       throw %446
     bb216:
-      %451 = const c146
-      %452 = const c147
+      %451 = const c144
+      %452 = const c145
       %453 = div %451, %452
       jump bb218
     bb217:
@@ -1379,9 +1375,9 @@ module {
       %458 = call builtin.exception_value(%456)
       throw %458
     bb222:
-      %462 = const c148
-      %463 = const c149
-      %464 = const c150
+      %462 = const c146
+      %463 = const c147
+      %464 = const c148
       %465 = bitor %463, %464
       jump bb224
     bb223:
@@ -1394,7 +1390,7 @@ module {
     bb225:
       unreachable
     bb226:
-      %471 = const c151
+      %471 = const c149
       %472 = add %468, %471
       %473 = is_exception %472
       branch %473, bb229, bb228
@@ -1402,8 +1398,8 @@ module {
       %470 = call builtin.exception_value(%468)
       throw %470
     bb228:
-      %475 = const c152
-      %476 = const c153
+      %475 = const c150
+      %476 = const c151
       %477 = bitand %475, %476
       jump bb230
     bb229:
@@ -1416,7 +1412,7 @@ module {
     bb231:
       unreachable
     bb232:
-      %483 = const c154
+      %483 = const c152
       %484 = add %480, %483
       %485 = is_exception %484
       branch %485, bb235, bb234
@@ -1424,8 +1420,8 @@ module {
       %482 = call builtin.exception_value(%480)
       throw %482
     bb234:
-      %487 = const c155
-      %488 = const c156
+      %487 = const c153
+      %488 = const c154
       %489 = bitxor %487, %488
       jump bb236
     bb235:
@@ -1438,7 +1434,7 @@ module {
     bb237:
       unreachable
     bb238:
-      %495 = const c157
+      %495 = const c155
       %496 = add %492, %495
       %497 = is_exception %496
       branch %497, bb241, bb240
@@ -1446,8 +1442,8 @@ module {
       %494 = call builtin.exception_value(%492)
       throw %494
     bb240:
-      %499 = const c158
-      %500 = const c159
+      %499 = const c156
+      %500 = const c157
       %501 = shl %499, %500
       jump bb242
     bb241:
@@ -1460,7 +1456,7 @@ module {
     bb243:
       unreachable
     bb244:
-      %507 = const c160
+      %507 = const c158
       %508 = add %504, %507
       %509 = is_exception %508
       branch %509, bb247, bb246
@@ -1468,14 +1464,14 @@ module {
       %506 = call builtin.exception_value(%504)
       throw %506
     bb246:
-      %511 = const c161
+      %511 = const c159
       %512 = neg %511
       jump bb248
     bb247:
       %510 = call builtin.exception_value(%508)
       throw %510
     bb248:
-      %515 = const c162
+      %515 = const c160
       %516 = shr %512, %515
       jump bb250
     bb249:
@@ -1487,7 +1483,7 @@ module {
     bb251:
       unreachable
     bb252:
-      %522 = const c163
+      %522 = const c161
       %523 = add %519, %522
       %524 = is_exception %523
       branch %524, bb255, bb254
@@ -1495,14 +1491,14 @@ module {
       %521 = call builtin.exception_value(%519)
       throw %521
     bb254:
-      %526 = const c164
+      %526 = const c162
       %527 = neg %526
       jump bb256
     bb255:
       %525 = call builtin.exception_value(%523)
       throw %525
     bb256:
-      %530 = const c165
+      %530 = const c163
       %531 = ushr %527, %530
       jump bb258
     bb257:
@@ -1521,9 +1517,9 @@ module {
       %536 = call builtin.exception_value(%534)
       throw %536
     bb262:
-      %540 = const c166
-      %541 = const c167
-      %542 = const c168
+      %540 = const c164
+      %541 = const c165
+      %542 = const c166
       %543 = call builtin.abstract_eq(%541, %542)
       %544 = is_exception %543
       branch %544, bb265, bb264
@@ -1544,7 +1540,7 @@ module {
       %547 = call builtin.exception_value(%543)
       throw %547
     bb268:
-      %551 = const c169
+      %551 = const c167
       %552 = add %548, %551
       %553 = is_exception %552
       branch %553, bb271, bb270
@@ -1552,8 +1548,8 @@ module {
       %550 = call builtin.exception_value(%548)
       throw %550
     bb270:
-      %555 = const c170
-      %556 = const c171
+      %555 = const c168
+      %556 = const c169
       %558 = call builtin.abstract_eq(%555, %556)
       %559 = is_exception %558
       branch %559, bb273, bb272
@@ -1575,7 +1571,7 @@ module {
       %562 = call builtin.exception_value(%557)
       throw %562
     bb276:
-      %566 = const c172
+      %566 = const c170
       %567 = add %563, %566
       %568 = is_exception %567
       branch %568, bb279, bb278
@@ -1583,8 +1579,8 @@ module {
       %565 = call builtin.exception_value(%563)
       throw %565
     bb278:
-      %570 = const c173
-      %571 = const c174
+      %570 = const c171
+      %571 = const c172
       %572 = call builtin.strict_eq(%570, %571)
       %573 = add %567, %572
       %574 = is_exception %573
@@ -1593,7 +1589,7 @@ module {
       %569 = call builtin.exception_value(%567)
       throw %569
     bb280:
-      %576 = const c175
+      %576 = const c173
       %577 = add %573, %576
       %578 = is_exception %577
       branch %578, bb283, bb282
@@ -1601,8 +1597,8 @@ module {
       %575 = call builtin.exception_value(%573)
       throw %575
     bb282:
-      %580 = const c176
-      %581 = const c177
+      %580 = const c174
+      %581 = const c175
       %583 = call builtin.strict_eq(%580, %581)
       %582 = not %583
       %584 = add %577, %582
@@ -1619,9 +1615,9 @@ module {
       %586 = call builtin.exception_value(%584)
       throw %586
     bb286:
-      %590 = const c178
-      %591 = const c179
-      %592 = const c180
+      %590 = const c176
+      %591 = const c177
+      %592 = const c178
       %593 = lt %591, %592
       jump bb288
     bb287:
@@ -1638,7 +1634,7 @@ module {
     bb291:
       unreachable
     bb292:
-      %603 = const c183
+      %603 = const c181
       %604 = add %600, %603
       %605 = is_exception %604
       branch %605, bb295, bb294
@@ -1646,8 +1642,8 @@ module {
       %602 = call builtin.exception_value(%600)
       throw %602
     bb294:
-      %607 = const c184
-      %608 = const c185
+      %607 = const c182
+      %608 = const c183
       %609 = gt %607, %608
       jump bb296
     bb295:
@@ -1664,7 +1660,7 @@ module {
     bb299:
       unreachable
     bb300:
-      %619 = const c188
+      %619 = const c186
       %620 = add %616, %619
       %621 = is_exception %620
       branch %621, bb303, bb302
@@ -1672,8 +1668,8 @@ module {
       %618 = call builtin.exception_value(%616)
       throw %618
     bb302:
-      %623 = const c189
-      %624 = const c190
+      %623 = const c187
+      %624 = const c188
       %625 = lteq %623, %624
       jump bb304
     bb303:
@@ -1690,7 +1686,7 @@ module {
     bb307:
       unreachable
     bb308:
-      %635 = const c193
+      %635 = const c191
       %636 = add %632, %635
       %637 = is_exception %636
       branch %637, bb311, bb310
@@ -1698,8 +1694,8 @@ module {
       %634 = call builtin.exception_value(%632)
       throw %634
     bb310:
-      %639 = const c194
-      %640 = const c195
+      %639 = const c192
+      %640 = const c193
       %641 = gteq %639, %640
       jump bb312
     bb311:
@@ -1723,9 +1719,9 @@ module {
       %650 = call builtin.exception_value(%648)
       throw %650
     bb318:
-      %654 = const c198
+      %654 = const c196
       %655 = load var $0.NaN
-      %656 = const c199
+      %656 = const c197
       %657 = lt %655, %656
       jump bb320
     bb319:
@@ -1742,7 +1738,7 @@ module {
     bb323:
       unreachable
     bb324:
-      %667 = const c202
+      %667 = const c200
       %668 = add %664, %667
       %669 = is_exception %668
       branch %669, bb327, bb326
@@ -1751,9 +1747,9 @@ module {
       throw %666
     bb326:
       %671 = load var $0.undefined
-      %672 = const c203
-      %674 = const c204
-      %675 = const c205
+      %672 = const c201
+      %674 = const c202
+      %675 = const c203
       %673 = call builtin.abstract_compare(%671, %672, %674, %675)
       %676 = is_exception %673
       branch %676, bb329, bb328
@@ -1781,9 +1777,9 @@ module {
       %682 = call builtin.exception_value(%680)
       throw %682
     bb334:
-      %686 = const c206
-      %687 = const c207
-      %688 = const c208
+      %686 = const c204
+      %687 = const c205
+      %688 = const c206
       %689 = exp %687, %688
       %690 = is_exception %689
       branch %690, bb337, bb336
@@ -1798,7 +1794,7 @@ module {
       %691 = call builtin.exception_value(%689)
       throw %691
     bb338:
-      %695 = const c209
+      %695 = const c207
       %696 = add %692, %695
       %697 = is_exception %696
       branch %697, bb341, bb340
@@ -1806,8 +1802,8 @@ module {
       %694 = call builtin.exception_value(%692)
       throw %694
     bb340:
-      %699 = const c210
-      %700 = const c211
+      %699 = const c208
+      %700 = const c209
       %701 = mod %699, %700
       %702 = is_exception %701
       branch %702, bb343, bb342
@@ -1822,7 +1818,7 @@ module {
       %703 = call builtin.exception_value(%701)
       throw %703
     bb344:
-      %707 = const c212
+      %707 = const c210
       %708 = add %704, %707
       %709 = is_exception %708
       branch %709, bb347, bb346
@@ -1830,10 +1826,10 @@ module {
       %706 = call builtin.exception_value(%704)
       throw %706
     bb346:
-      %711 = const c213
-      %712 = const c214
-      %714 = const c215
-      %715 = const c216
+      %711 = const c211
+      %712 = const c212
+      %714 = const c213
+      %715 = const c214
       %713 = call builtin.abstract_compare(%711, %712, %714, %715)
       %716 = is_exception %713
       branch %716, bb349, bb348

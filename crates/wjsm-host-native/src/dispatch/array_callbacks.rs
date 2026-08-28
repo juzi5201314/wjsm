@@ -3,8 +3,10 @@ use std::cmp::Ordering;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
+use super::array_like::{ArrayLikeSource, observable, raw};
 use super::runtime::{
-    allocate_object_or_out_of_memory, fail_dispatch, is_truthy, render_value, to_number, type_error,
+    allocate_object_or_out_of_memory, fail_dispatch, is_truthy, range_error, render_value,
+    to_number, type_error,
 };
 use crate::NativeAgentState;
 
@@ -31,30 +33,6 @@ pub(super) fn dispatch_array_callback(
         Builtin::ArrayToSorted => sort(ctx, state, args, true),
         _ => return None,
     })
-}
-
-fn array(args: &[i64]) -> Option<(i64, u32)> {
-    let encoded = *args.first()?;
-    value::is_array(encoded).then(|| (encoded, value::decode_handle(encoded)))
-}
-
-fn length(state: &NativeAgentState, handle: u32) -> Option<u32> {
-    state.gc.heap().array_length(handle).ok()
-}
-
-fn raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i64> {
-    state
-        .gc
-        .heap()
-        .get_element(handle, index)
-        .ok()
-        .flatten()
-        .map(|value| value as i64)
-}
-
-fn observable(raw: Option<i64>) -> i64 {
-    raw.filter(|value| !value::is_array_hole(*value))
-        .unwrap_or_else(value::encode_undefined)
 }
 
 pub(super) fn set_element_with_gc_retry(
@@ -127,6 +105,35 @@ fn call(
     }
 }
 
+/// 回调实参非 callable 的 TypeError（§23.1.3 各方法 IsCallable 校验，
+/// 文案对齐 V8）：原语带 typeof 词与值渲染（字符串加引号），非 callable
+/// 对象 / symbol / bigint 只报类型词。
+fn callback_type_error(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    callback: i64,
+) -> i64 {
+    let rendered = if value::is_undefined(callback) {
+        "undefined".to_owned()
+    } else if value::is_null(callback) {
+        "object null".to_owned()
+    } else if value::is_f64(callback) {
+        format!("number {}", render_value(state, callback))
+    } else if value::is_string(callback) {
+        format!("string \"{}\"", render_value(state, callback))
+    } else if value::is_bool(callback) {
+        format!("boolean {}", render_value(state, callback))
+    } else if value::is_symbol(callback) {
+        "symbol".to_owned()
+    } else if value::is_bigint(callback) {
+        "bigint".to_owned()
+    } else {
+        "object".to_owned()
+    };
+    let message = format!("{rendered} is not a function");
+    type_error(ctx, state, &message)
+}
+
 #[derive(Clone, Copy)]
 enum IterationKind {
     Every,
@@ -141,80 +148,105 @@ enum IterationKind {
     Some,
 }
 
+/// null/undefined 接收者的 TypeError 文案选择（V8 口径）：flatMap 走
+/// ToObject 通用文案，其余为 `Array.prototype.<name> called on ...`。
+fn null_receiver_method(kind: IterationKind) -> Option<&'static str> {
+    match kind {
+        IterationKind::Every => Some("every"),
+        IterationKind::Filter => Some("filter"),
+        IterationKind::Find => Some("find"),
+        IterationKind::FindIndex => Some("findIndex"),
+        IterationKind::FindLast => Some("findLast"),
+        IterationKind::FindLastIndex => Some("findLastIndex"),
+        IterationKind::FlatMap => None,
+        IterationKind::ForEach => Some("forEach"),
+        IterationKind::Map => Some("map"),
+        IterationKind::Some => Some("some"),
+    }
+}
+
 fn iterate(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
     kind: IterationKind,
 ) -> i64 {
-    let Some((array_value, handle)) = array(args) else {
-        return fail_dispatch(ctx);
-    };
-    let Some(callback) = args
-        .get(1)
+    let receiver = args
+        .first()
         .copied()
-        .filter(|value| value::is_callable(*value))
-    else {
-        return fail_dispatch(ctx);
-    };
-    let this_value = args.get(2).copied().unwrap_or_else(value::encode_undefined);
-    let Some(array_length) = length(state, handle) else {
-        return fail_dispatch(ctx);
-    };
-    let result_array = match kind {
-        IterationKind::Map => {
-            let array = allocate_object_or_out_of_memory(ctx, state, array_length, true);
-            if value::is_exception(array) {
-                return array;
-            }
-            if state
-                .gc
-                .heap()
-                .set_array_length(value::decode_handle(array), array_length)
-                .is_err()
-            {
-                return fail_dispatch(ctx);
-            }
-            Some(array)
-        }
-        IterationKind::Filter | IterationKind::FlatMap => {
-            let array = allocate_object_or_out_of_memory(ctx, state, array_length, true);
-            if value::is_exception(array) {
-                return array;
-            }
-            Some(array)
-        }
-        _ => None,
-    };
-    let visits_holes = matches!(
-        kind,
-        IterationKind::Find
-            | IterationKind::FindIndex
-            | IterationKind::FindLast
-            | IterationKind::FindLastIndex
-    );
-    let reverse = matches!(kind, IterationKind::FindLast | IterationKind::FindLastIndex);
-    let indices: Box<dyn Iterator<Item = u32>> = if reverse {
-        Box::new((0..array_length).rev())
-    } else {
-        Box::new(0..array_length)
-    };
+        .unwrap_or_else(value::encode_undefined);
     let initial_temp_roots = state.temporary_roots.len();
-    if let Some(array) = result_array {
-        state.temporary_roots.push(array);
-    }
-    state.temporary_roots.push(array_value);
-    state.temporary_roots.push(callback);
-    state.temporary_roots.push(this_value);
-
     let res = (|| {
-        for index in indices {
-            let element_raw = raw(state, handle, index);
-            if !visits_holes && element_raw.is_none_or(value::is_array_hole) {
-                continue;
+        let source =
+            match ArrayLikeSource::resolve(ctx, state, receiver, null_receiver_method(kind)) {
+                Ok(source) => source,
+                Err(exception) => return exception,
+            };
+        // §23.1.3.21 等步骤 3：IsCallable 校验在 ToObject / LengthOfArrayLike
+        // 之后（length getter 先于回调形态错误可观察）。
+        let callback = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+        if !value::is_callable(callback) {
+            return callback_type_error(ctx, state, callback);
+        }
+        let this_value = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+        let length = source.length();
+        let result_array = match kind {
+            IterationKind::Map => {
+                // ArraySpeciesCreate(O, len)（步骤 4）：非数组接收者退化为
+                // ArrayCreate(len)。复用 Array(n) 构造以获得洞哨兵填充与
+                // HOLEY kind（未回填的跳过索引必须读出洞，而非未初始化槽），
+                // len 超过 2^32 − 1 由其抛 RangeError。
+                let array =
+                    super::array::construct(ctx, state, &[value::encode_f64(length as f64)]);
+                if value::is_exception(array) {
+                    return array;
+                }
+                Some(array)
             }
-            let element = observable(element_raw);
-            let callback_args = [element, value::encode_f64(f64::from(index)), array_value];
+            IterationKind::Filter | IterationKind::FlatMap => {
+                let array =
+                    allocate_object_or_out_of_memory(ctx, state, source.allocation_hint(), true);
+                if value::is_exception(array) {
+                    return array;
+                }
+                Some(array)
+            }
+            _ => None,
+        };
+        let visits_holes = matches!(
+            kind,
+            IterationKind::Find
+                | IterationKind::FindIndex
+                | IterationKind::FindLast
+                | IterationKind::FindLastIndex
+        );
+        let reverse = matches!(kind, IterationKind::FindLast | IterationKind::FindLastIndex);
+        let indices: Box<dyn Iterator<Item = u64>> = if reverse {
+            Box::new((0..length).rev())
+        } else {
+            Box::new(0..length)
+        };
+        if let Some(array) = result_array {
+            state.temporary_roots.push(array);
+        }
+        state.temporary_roots.push(source.receiver());
+        state.temporary_roots.push(callback);
+        state.temporary_roots.push(this_value);
+
+        for index in indices {
+            // 跳洞方法先 HasProperty（步骤 6.b），find 族读穿洞只做 Get。
+            if !visits_holes {
+                match source.has(ctx, state, index) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(exception) => return exception,
+                }
+            }
+            let element = match source.get(ctx, state, index) {
+                Ok(element) => element,
+                Err(exception) => return exception,
+            };
+            let callback_args = [element, value::encode_f64(index as f64), source.receiver()];
             let callback_result = match call(ctx, state, callback, this_value, &callback_args) {
                 Ok(result) => result,
                 Err(exception) => return exception,
@@ -223,8 +255,14 @@ fn iterate(
                 IterationKind::ForEach => {}
                 IterationKind::Map => {
                     let output = value::decode_handle(result_array.expect("map allocates output"));
-                    if set_element_with_gc_retry(ctx, state, output, index, callback_result as u64)
-                        .is_err()
+                    if set_element_with_gc_retry(
+                        ctx,
+                        state,
+                        output,
+                        index as u32,
+                        callback_result as u64,
+                    )
+                    .is_err()
                     {
                         return fail_dispatch(ctx);
                     }
@@ -243,7 +281,7 @@ fn iterate(
                         value::decode_handle(result_array.expect("flatMap allocates output"));
                     if value::is_array(callback_result) {
                         let inner = value::decode_handle(callback_result);
-                        let Some(inner_length) = length(state, inner) else {
+                        let Ok(inner_length) = state.gc.heap().array_length(inner) else {
                             return fail_dispatch(ctx);
                         };
                         for inner_index in 0..inner_length {
@@ -262,11 +300,11 @@ fn iterate(
                 }
                 IterationKind::Find if is_truthy(state, callback_result) => return element,
                 IterationKind::FindIndex if is_truthy(state, callback_result) => {
-                    return value::encode_f64(f64::from(index));
+                    return value::encode_f64(index as f64);
                 }
                 IterationKind::FindLast if is_truthy(state, callback_result) => return element,
                 IterationKind::FindLastIndex if is_truthy(state, callback_result) => {
-                    return value::encode_f64(f64::from(index));
+                    return value::encode_f64(index as f64);
                 }
                 IterationKind::Some if is_truthy(state, callback_result) => {
                     return value::encode_bool(true);
@@ -303,143 +341,208 @@ fn reduce(
     args: &[i64],
     reverse: bool,
 ) -> i64 {
-    let Some((array_value, handle)) = array(args) else {
-        return fail_dispatch(ctx);
-    };
-    let Some(callback) = args
-        .get(1)
+    let receiver = args
+        .first()
         .copied()
-        .filter(|value| value::is_callable(*value))
-    else {
-        return fail_dispatch(ctx);
-    };
-    let Some(length) = length(state, handle) else {
-        return fail_dispatch(ctx);
-    };
-    let indices: Vec<u32> = if reverse {
-        (0..length).rev().collect()
-    } else {
-        (0..length).collect()
-    };
-    let mut position = 0;
-    let mut accumulator = if let Some(initial) = args.get(2).copied() {
-        initial
-    } else {
-        loop {
-            let Some(index) = indices.get(position).copied() else {
-                return type_error(ctx, state, "Reduce of empty array with no initial value");
-            };
-            position += 1;
-            let Some(element) =
-                raw(state, handle, index).filter(|element| !value::is_array_hole(*element))
-            else {
-                continue;
-            };
-            break element;
-        }
-    };
+        .unwrap_or_else(value::encode_undefined);
     let initial_temp_roots = state.temporary_roots.len();
-    state.temporary_roots.push(array_value);
-    state.temporary_roots.push(callback);
-    state.temporary_roots.push(accumulator);
-
-    for index in indices.into_iter().skip(position) {
-        let Some(element) =
-            raw(state, handle, index).filter(|element| !value::is_array_hole(*element))
-        else {
-            continue;
+    let res = (|| {
+        let method = if reverse { "reduceRight" } else { "reduce" };
+        let source = match ArrayLikeSource::resolve(ctx, state, receiver, Some(method)) {
+            Ok(source) => source,
+            Err(exception) => return exception,
         };
-        let callback_args = [
-            accumulator,
-            element,
-            value::encode_f64(f64::from(index)),
-            array_value,
-        ];
-        accumulator = match call(
-            ctx,
-            state,
-            callback,
-            value::encode_undefined(),
-            &callback_args,
-        ) {
-            Ok(result) => result,
-            Err(exception) => {
-                state.temporary_roots.truncate(initial_temp_roots);
-                return exception;
+        let callback = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+        if !value::is_callable(callback) {
+            return callback_type_error(ctx, state, callback);
+        }
+        let length = source.length();
+        let mut indices: Box<dyn Iterator<Item = u64>> = if reverse {
+            Box::new((0..length).rev())
+        } else {
+            Box::new(0..length)
+        };
+        state.temporary_roots.push(source.receiver());
+        state.temporary_roots.push(callback);
+        // 无初始值：按 §23.1.3.24 步骤 8 用第一个存在的索引播种 accumulator。
+        let mut accumulator = if let Some(initial) = args.get(2).copied() {
+            initial
+        } else {
+            loop {
+                let Some(index) = indices.next() else {
+                    return type_error(ctx, state, "Reduce of empty array with no initial value");
+                };
+                match source.has(ctx, state, index) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(exception) => return exception,
+                }
+                match source.get(ctx, state, index) {
+                    Ok(element) => break element,
+                    Err(exception) => return exception,
+                }
             }
         };
-        if let Some(last) = state.temporary_roots.last_mut() {
-            *last = accumulator;
+        state.temporary_roots.push(accumulator);
+
+        for index in indices {
+            match source.has(ctx, state, index) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(exception) => return exception,
+            }
+            let element = match source.get(ctx, state, index) {
+                Ok(element) => element,
+                Err(exception) => return exception,
+            };
+            let callback_args = [
+                accumulator,
+                element,
+                value::encode_f64(index as f64),
+                source.receiver(),
+            ];
+            accumulator = match call(
+                ctx,
+                state,
+                callback,
+                value::encode_undefined(),
+                &callback_args,
+            ) {
+                Ok(result) => result,
+                Err(exception) => return exception,
+            };
+            if let Some(last) = state.temporary_roots.last_mut() {
+                *last = accumulator;
+            }
         }
-    }
+        accumulator
+    })();
     state.temporary_roots.truncate(initial_temp_roots);
-    accumulator
+    res
 }
 
 fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], copy: bool) -> i64 {
-    let Some((array_value, handle)) = array(args) else {
-        return fail_dispatch(ctx);
-    };
-    let comparator = args
-        .get(1)
-        .copied()
-        .filter(|value| !value::is_undefined(*value));
-    if comparator.is_some_and(|value| !value::is_callable(value)) {
-        return fail_dispatch(ctx);
-    }
-    let Some(length) = length(state, handle) else {
-        return fail_dispatch(ctx);
-    };
-    let mut values: Vec<_> = if copy {
-        (0..length)
-            .map(|index| observable(raw(state, handle, index)))
-            .collect()
-    } else {
-        (0..length)
-            .filter_map(|index| raw(state, handle, index))
-            .filter(|stored| !value::is_array_hole(*stored))
-            .collect()
-    };
     let initial_temp_roots = state.temporary_roots.len();
-    state.temporary_roots.push(array_value);
-    if let Some(comp) = comparator {
-        state.temporary_roots.push(comp);
-    }
-    state.temporary_roots.extend(values.iter().copied());
-
-    let sorted = super::array_sort::stable_sort_by(&mut values, |left, right| {
-        compare(ctx, state, comparator, left, right)
-    });
-    state.temporary_roots.truncate(initial_temp_roots);
-    if let Err(exception) = sorted {
-        return exception;
-    }
-    if copy {
-        state
-            .allocate_array_values_with_gc_retry(ctx, &values)
-            .unwrap_or_else(|_| fail_dispatch(ctx))
-    } else {
-        let present = values.len() as u32;
-        for (index, stored) in values.into_iter().enumerate() {
-            if set_element_with_gc_retry(ctx, state, handle, index as u32, stored as u64).is_err() {
-                return fail_dispatch(ctx);
+    let res = (|| {
+        // §23.1.3.30 步骤 1：comparator 形态校验先于接收者 ToObject。
+        let comparator = args
+            .get(1)
+            .copied()
+            .filter(|value| !value::is_undefined(*value));
+        if let Some(comparator) = comparator
+            && !value::is_callable(comparator)
+        {
+            let message = format!(
+                "The comparison function must be either a function or undefined: {}",
+                render_value(state, comparator)
+            );
+            return type_error(ctx, state, &message);
+        }
+        let receiver = args
+            .first()
+            .copied()
+            .unwrap_or_else(value::encode_undefined);
+        let source = match ArrayLikeSource::resolve(ctx, state, receiver, None) {
+            Ok(source) => source,
+            Err(exception) => return exception,
+        };
+        let length = source.length();
+        // toSorted 的 ArrayCreate(len)（§23.1.3.34 步骤 3）先于元素读取。
+        if copy && u32::try_from(length).is_err() {
+            return range_error(ctx, state, "Invalid array length");
+        }
+        state.temporary_roots.push(source.receiver());
+        if let Some(comparator) = comparator {
+            state.temporary_roots.push(comparator);
+        }
+        // SortIndexedProperties（§23.1.3.30.1）：sort 跳洞收集，toSorted
+        // 读穿洞（缺失索引按 undefined 参与排序）。generic 读取可再入
+        // getter 触发 GC，值随读随锚根。
+        let mut values = Vec::with_capacity(source.allocation_hint() as usize);
+        for index in 0..length {
+            if !copy {
+                match source.has(ctx, state, index) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(exception) => return exception,
+                }
+            }
+            match source.get(ctx, state, index) {
+                Ok(element) => {
+                    state.temporary_roots.push(element);
+                    values.push(element);
+                }
+                Err(exception) => return exception,
             }
         }
-        for index in present..length {
-            if set_element_with_gc_retry(
-                ctx,
-                state,
+        let sorted = super::array_sort::stable_sort_by(&mut values, |left, right| {
+            compare(ctx, state, comparator, left, right)
+        });
+        if let Err(exception) = sorted {
+            return exception;
+        }
+        if copy {
+            return state
+                .allocate_array_values_with_gc_retry(ctx, &values)
+                .unwrap_or_else(|_| fail_dispatch(ctx));
+        }
+        match source {
+            ArrayLikeSource::Fast {
+                encoded,
                 handle,
-                index,
-                value::encode_array_hole() as u64,
-            )
-            .is_err()
-            {
-                return fail_dispatch(ctx);
+                length,
+            } => {
+                let present = values.len() as u32;
+                for (index, stored) in values.into_iter().enumerate() {
+                    if set_element_with_gc_retry(ctx, state, handle, index as u32, stored as u64)
+                        .is_err()
+                    {
+                        return fail_dispatch(ctx);
+                    }
+                }
+                for index in present..length {
+                    if set_element_with_gc_retry(
+                        ctx,
+                        state,
+                        handle,
+                        index,
+                        value::encode_array_hole() as u64,
+                    )
+                    .is_err()
+                    {
+                        return fail_dispatch(ctx);
+                    }
+                }
+                encoded
+            }
+            ArrayLikeSource::Generic { object, length } => {
+                // §23.1.3.30 步骤 7–9：Set 逐键写回，收集数少于 length 的
+                // 尾部索引 DeletePropertyOrThrow。
+                let present = values.len() as u64;
+                for (index, stored) in values.into_iter().enumerate() {
+                    if let Err(exception) = super::array_like::set_index_or_throw(
+                        ctx,
+                        state,
+                        object,
+                        index as u64,
+                        stored,
+                    ) {
+                        return exception;
+                    }
+                }
+                for index in present..length {
+                    if let Err(exception) =
+                        super::array_like::delete_index_or_throw(ctx, state, object, index)
+                    {
+                        return exception;
+                    }
+                }
+                object
             }
         }
-        array_value
-    }
+    })();
+    state.temporary_roots.truncate(initial_temp_roots);
+    res
 }
 
 fn compare(
