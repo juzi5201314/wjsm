@@ -144,7 +144,7 @@ impl Lowerer {
     /// 降序排列即得内层优先；同深度 finally 以 finalizer_index 降序（内层 try 先执行）。
     /// `completion`：IteratorClose 的完成值；`None` 时按 break/continue 语义在首个
     /// IteratorClose 处惰性分配 undefined（无迭代器关闭则不产生多余指令）。
-    fn emit_unwind_for_abrupt(
+    pub(crate) fn emit_unwind_for_abrupt(
         &mut self,
         block: BasicBlockId,
         exit_below: isize,
