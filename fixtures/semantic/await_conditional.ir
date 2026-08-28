@@ -51,23 +51,22 @@ module {
     c48 = number(1)
     c49 = number(2)
     c50 = number(0)
-    c51 = string("$0.demo")
-    c52 = functionref(@0)
-    c53 = number(7)
+    c51 = functionref(@0)
+    c52 = number(7)
+    c53 = number(0)
     c54 = number(0)
-    c55 = number(0)
-    c56 = number(1)
-    c57 = bool(false)
-    c58 = number(2)
-    c59 = number(3)
-    c60 = undefined
-    c61 = number(4)
-    c62 = number(6)
-    c63 = number(0)
-    c64 = undefined
-    c65 = bool(false)
-    c66 = functionref(@1)
-    c67 = undefined
+    c55 = number(1)
+    c56 = bool(false)
+    c57 = number(2)
+    c58 = number(3)
+    c59 = undefined
+    c60 = number(4)
+    c61 = number(6)
+    c62 = number(0)
+    c63 = undefined
+    c64 = bool(false)
+    c65 = functionref(@1)
+    c66 = undefined
 
   fn @demo$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -265,37 +264,34 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c50
-      %4 = load var $env
-      %5 = const c51
-      %3 = get_prop %4, %5
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $6.arguments, %2
-      %6 = new_promise
-      %7 = const c52
-      %8 = const c53
-      %9 = call builtin.continuation.create(%7, %6, %8)
-      %10 = const c54
-      %11 = const c55
-      call builtin.continuation.save_var(%9, %10, %11)
-      %12 = const c56
-      %13 = const c57
-      call builtin.continuation.save_var(%9, %12, %13)
-      %14 = const c58
-      call builtin.continuation.save_var(%9, %14, %6)
-      %15 = const c59
-      %16 = const c60
-      call builtin.continuation.save_var(%9, %15, %16)
-      %17 = load var $6.arguments
-      %18 = const c61
-      call builtin.continuation.save_var(%9, %18, %17)
-      %19 = load var $6.$this
-      %20 = const c62
-      call builtin.continuation.save_var(%9, %20, %19)
-      %21 = const c63
-      %22 = const c64
-      %23 = const c65
-      call builtin.async_function.resume(%7, %9, %21, %22, %23)
-      return %6
+      %3 = new_promise
+      %4 = const c51
+      %5 = const c52
+      %6 = call builtin.continuation.create(%4, %3, %5)
+      %7 = const c53
+      %8 = const c54
+      call builtin.continuation.save_var(%6, %7, %8)
+      %9 = const c55
+      %10 = const c56
+      call builtin.continuation.save_var(%6, %9, %10)
+      %11 = const c57
+      call builtin.continuation.save_var(%6, %11, %3)
+      %12 = const c58
+      %13 = const c59
+      call builtin.continuation.save_var(%6, %12, %13)
+      %14 = load var $6.arguments
+      %15 = const c60
+      call builtin.continuation.save_var(%6, %15, %14)
+      %16 = load var $6.$this
+      %17 = const c61
+      call builtin.continuation.save_var(%6, %17, %16)
+      %18 = const c62
+      %19 = const c63
+      %20 = const c64
+      call builtin.async_function.resume(%4, %6, %18, %19, %20)
+      return %3
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -341,9 +337,9 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c66
+      %21 = const c65
       store var $0.demo, %21
-      %22 = const c67
+      %22 = const c66
       %23 = load var $0.demo
       %24 = call %23, this=%22
       %25 = is_exception %24

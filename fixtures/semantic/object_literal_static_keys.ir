@@ -120,34 +120,33 @@ module {
     c117 = string("dyn")
     c118 = string("x")
     c119 = number(0)
-    c120 = functionref(@1)
-    c121 = number(7)
-    c122 = functionref(@1)
-    c123 = string("get")
-    c124 = string("enumerable")
-    c125 = bool(true)
-    c126 = string("configurable")
-    c127 = bool(true)
-    c128 = string("getter:")
-    c129 = string("x")
-    c130 = string("spreadKey")
-    c131 = object_template([2305843009213694082])
-    c132 = number(99)
-    c133 = string("extra")
-    c134 = number(1)
-    c135 = string("spread:")
-    c136 = string("spreadKey")
-    c137 = string("extra")
-    c138 = string("frozenKey")
-    c139 = object_template([2305843009213694090])
-    c140 = number(1)
-    c141 = string("none")
-    c142 = string("frozenKey")
-    c143 = number(2)
-    c144 = string("name")
-    c145 = string("frozen value:")
-    c146 = string("frozenKey")
-    c147 = bool(false)
+    c120 = number(7)
+    c121 = functionref(@1)
+    c122 = string("get")
+    c123 = string("enumerable")
+    c124 = bool(true)
+    c125 = string("configurable")
+    c126 = bool(true)
+    c127 = string("getter:")
+    c128 = string("x")
+    c129 = string("spreadKey")
+    c130 = object_template([2305843009213694081])
+    c131 = number(99)
+    c132 = string("extra")
+    c133 = number(1)
+    c134 = string("spread:")
+    c135 = string("spreadKey")
+    c136 = string("extra")
+    c137 = string("frozenKey")
+    c138 = object_template([2305843009213694089])
+    c139 = number(1)
+    c140 = string("none")
+    c141 = string("frozenKey")
+    c142 = number(2)
+    c143 = string("name")
+    c144 = string("frozen value:")
+    c145 = string("frozenKey")
+    c146 = bool(false)
 
   fn @get [needs_prototype] [direct_callable] [js_length 2] [params: $2.$env, $2.$this, $2.o, $2.k] [entry=bb0]:
     bb0:
@@ -160,11 +159,10 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c119
-      %3 = const c120
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $3.arguments, %2
-      %4 = const c121
-      return %4
+      %3 = const c120
+      return %3
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -651,21 +649,21 @@ module {
     bb85:
       %296 = new_object(capacity=4)
       %297 = const c118
-      %298 = const c122
+      %298 = const c121
       %299 = new_object(capacity=4)
-      %300 = const c123
+      %300 = const c122
       %301 = set_prop %299, %300, %298
-      %302 = const c124
-      %303 = const c125
+      %302 = const c123
+      %303 = const c124
       %304 = set_prop %299, %302, %303
-      %305 = const c126
-      %306 = const c127
+      %305 = const c125
+      %306 = const c126
       %307 = set_prop %299, %305, %306
       call builtin.define_property(%296, %297, %299)
       store var $0.accessor, %296
-      %308 = const c128
+      %308 = const c127
       %309 = load var $0.accessor
-      %310 = const c129
+      %310 = const c128
       %311 = get_prop %309, %310
       %312 = is_exception %311
       branch %312, bb88, bb87
@@ -681,8 +679,8 @@ module {
       throw %313
     bb89:
       %317 = new_object(capacity=4)
-      %318 = const c132
-      %319 = init_object_literal(c131, values=[%318])
+      %318 = const c131
+      %319 = init_object_literal(c130, values=[%318])
       %320 = object_spread %319 into %317
       %321 = is_exception %320
       branch %321, bb92, bb91
@@ -690,13 +688,13 @@ module {
       %316 = call builtin.exception_value(%314)
       throw %316
     bb91:
-      %323 = const c133
-      %324 = const c134
+      %323 = const c132
+      %324 = const c133
       %325 = create_data_property %317, %323, %324
       store var $0.spread, %317
-      %326 = const c135
+      %326 = const c134
       %327 = load var $0.spread
-      %328 = const c136
+      %328 = const c135
       %329 = get_prop %327, %328
       %330 = is_exception %329
       branch %330, bb94, bb93
@@ -705,7 +703,7 @@ module {
       throw %322
     bb93:
       %332 = load var $0.spread
-      %333 = const c137
+      %333 = const c136
       %334 = get_prop %332, %333
       %335 = is_exception %334
       branch %335, bb96, bb95
@@ -720,8 +718,8 @@ module {
       %336 = call builtin.exception_value(%334)
       throw %336
     bb97:
-      %340 = const c140
-      %341 = init_object_literal(c139, values=[%340])
+      %340 = const c139
+      %341 = init_object_literal(c138, values=[%340])
       store var $0.frozen, %341
       %342 = load var $0.frozen
       %343 = call builtin.object.freeze(%342)
@@ -731,7 +729,7 @@ module {
       %339 = call builtin.exception_value(%337)
       throw %339
     bb99:
-      %346 = const c141
+      %346 = const c140
       store var $0.freezeError, %346
       jump bb101
     bb100:
@@ -739,15 +737,15 @@ module {
       throw %345
     bb101:
       %347 = load var $0.frozen
-      %348 = const c142
-      %349 = const c143
+      %348 = const c141
+      %349 = const c142
       %350 = set_prop %347, %348, %349
       %351 = is_exception %350
       branch %351, bb105, bb104
     bb102:
-      %359 = const c145
+      %359 = const c144
       %360 = load var $0.frozen
-      %361 = const c146
+      %361 = const c145
       %362 = get_prop %360, %361
       %363 = is_exception %362
       branch %363, bb109, bb108
@@ -755,7 +753,7 @@ module {
       %353 = load var $tmp.0
       store var $5.error, %353
       %354 = load var $5.error
-      %355 = const c144
+      %355 = const c143
       %356 = get_prop %354, %355
       store var $0.freezeError, %356
       %357 = is_exception %356
