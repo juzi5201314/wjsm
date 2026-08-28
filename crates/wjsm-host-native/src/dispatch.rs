@@ -62,6 +62,7 @@ pub(crate) mod structured_clone;
 mod symbol;
 mod timer;
 pub(crate) mod typedarray;
+mod typedarray_create;
 pub(crate) mod weak;
 pub(crate) mod web_encoding;
 mod with_env;

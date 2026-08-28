@@ -251,21 +251,48 @@ pub(super) fn dispatch_typed_array(
     builtin: Builtin,
     args: &[i64],
 ) -> Option<i64> {
+    // CallBuiltin 是编译期绑定的直接构造（`new Uint8Array(..)` 快路径）：
+    // newTarget 即构造器本体，实例挂内在原型。此路径不压新激活帧，绝不能
+    // 读取外层函数激活帧的 new.target；子类 super() / Reflect.construct 走
+    // `construct_with_new_target` 的可调用对象路径。
+    let default_target = value::encode_undefined();
     Some(match builtin {
-        Builtin::Int8ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Int8),
-        Builtin::Uint8ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Uint8),
-        Builtin::Uint8ClampedArrayConstructor => {
-            construct(ctx, state, args, TypedArrayKind::Uint8Clamped)
+        Builtin::Int8ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Int8, default_target)
         }
-        Builtin::Int16ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Int16),
-        Builtin::Uint16ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Uint16),
-        Builtin::Int32ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Int32),
-        Builtin::Uint32ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Uint32),
-        Builtin::Float32ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Float32),
-        Builtin::Float64ArrayConstructor => construct(ctx, state, args, TypedArrayKind::Float64),
-        Builtin::BigInt64ArrayConstructor => construct(ctx, state, args, TypedArrayKind::BigInt64),
+        Builtin::Uint8ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Uint8, default_target)
+        }
+        Builtin::Uint8ClampedArrayConstructor => construct(
+            ctx,
+            state,
+            args,
+            TypedArrayKind::Uint8Clamped,
+            default_target,
+        ),
+        Builtin::Int16ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Int16, default_target)
+        }
+        Builtin::Uint16ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Uint16, default_target)
+        }
+        Builtin::Int32ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Int32, default_target)
+        }
+        Builtin::Uint32ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Uint32, default_target)
+        }
+        Builtin::Float32ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Float32, default_target)
+        }
+        Builtin::Float64ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::Float64, default_target)
+        }
+        Builtin::BigInt64ArrayConstructor => {
+            construct(ctx, state, args, TypedArrayKind::BigInt64, default_target)
+        }
         Builtin::BigUint64ArrayConstructor => {
-            construct(ctx, state, args, TypedArrayKind::BigUint64)
+            construct(ctx, state, args, TypedArrayKind::BigUint64, default_target)
         }
         Builtin::TypedArrayProtoLength => property_length(ctx, state, args),
         Builtin::TypedArrayProtoByteLength => property_byte_length(ctx, state, args),
@@ -373,7 +400,7 @@ pub(crate) fn constructor_kind(builtin: Builtin) -> Option<TypedArrayKind> {
 }
 
 /// 元素类型 → 对应 TypedArray 构造器 builtin。
-fn constructor_builtin(kind: TypedArrayKind) -> Builtin {
+pub(super) fn constructor_builtin(kind: TypedArrayKind) -> Builtin {
     match kind {
         TypedArrayKind::Int8 => Builtin::Int8ArrayConstructor,
         TypedArrayKind::Uint8 => Builtin::Uint8ArrayConstructor,
@@ -397,6 +424,26 @@ fn attach_instance_prototype(
     kind: TypedArrayKind,
 ) -> Option<()> {
     state.set_typed_array_instance_prototype(object, constructor_builtin(kind))
+}
+
+/// 实例 [[Prototype]]：无覆盖槽挂对应构造器缺省 prototype（§23.2.5.1）；
+/// newTarget 覆盖槽存在时挂 newTarget.prototype
+/// （OrdinaryCreateFromConstructor，§10.1.13），子类实例的 instanceof
+/// 沿子类原型链成立。
+fn attach_prototype(
+    state: &mut NativeAgentState,
+    object: i64,
+    kind: TypedArrayKind,
+    proto_override: Option<u32>,
+) -> Option<()> {
+    match proto_override {
+        None => attach_instance_prototype(state, object, kind),
+        Some(slot) => state
+            .gc
+            .heap()
+            .set_prototype(value::decode_handle(object), slot)
+            .ok(),
+    }
 }
 
 /// 把 %TypedArray%.prototype 方法作为不可枚举数据属性安装到共享原型对象上，
@@ -572,12 +619,38 @@ pub(super) fn set_element(
     Some(converted)
 }
 
+/// TypedArray 构造器的可调用对象路径入口（类 extends 的 super()、
+/// Reflect.construct）：newTarget 已由调用方归一（undefined 表示缺省形态，
+/// 实例挂内在原型）。
+pub(crate) fn construct_with_new_target(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+    new_target: i64,
+) -> i64 {
+    let Some(kind) = constructor_kind(builtin) else {
+        return fail_dispatch(ctx);
+    };
+    construct(ctx, state, args, kind, new_target)
+}
+
 fn construct(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
     kind: TypedArrayKind,
+    new_target: i64,
 ) -> i64 {
+    // §23.2.5.1 AllocateTypedArray 步骤 1：GetPrototypeFromConstructor 先于
+    // 长度求值与缓冲分配，newTarget.prototype 的 getter（含 Proxy trap）
+    // 异常先行传播。
+    let proto_override = match super::typedarray_create::instance_prototype_slot(
+        ctx, state, new_target,
+    ) {
+        Ok(slot) => slot,
+        Err(exception) => return exception,
+    };
     if let Some(sab) = args
         .first()
         .and_then(|encoded| {
@@ -587,14 +660,14 @@ fn construct(
         })
         .cloned()
     {
-        return construct_shared_buffer_view(ctx, state, args, kind, sab);
+        return construct_shared_buffer_view(ctx, state, args, kind, sab, proto_override);
     }
     if let Some(buffer) = args
         .first()
         .and_then(|encoded| state.array_buffers.get(&value::decode_handle(*encoded)))
         .cloned()
     {
-        return construct_buffer_view(ctx, state, args, kind, buffer);
+        return construct_buffer_view(ctx, state, args, kind, buffer, proto_override);
     }
     let values = args.first().and_then(|input| array_values(state, *input));
     let length = if let Some(values) = &values {
@@ -631,7 +704,7 @@ fn construct(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
-    if attach_instance_prototype(state, object, kind).is_none() {
+    if attach_prototype(state, object, kind, proto_override).is_none() {
         return fail_dispatch(ctx);
     }
     state.typed_arrays.insert(
@@ -664,6 +737,7 @@ fn construct_buffer_view(
     args: &[i64],
     kind: TypedArrayKind,
     buffer: NativeArrayBuffer,
+    proto_override: Option<u32>,
 ) -> i64 {
     let element_size = kind.element_size();
     let total_bytes = buffer.bytes.borrow().len();
@@ -695,7 +769,7 @@ fn construct_buffer_view(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
-    if attach_instance_prototype(state, object, kind).is_none() {
+    if attach_prototype(state, object, kind, proto_override).is_none() {
         return fail_dispatch(ctx);
     }
     state.typed_arrays.insert(
@@ -721,6 +795,7 @@ fn construct_shared_buffer_view(
     args: &[i64],
     kind: TypedArrayKind,
     sab: super::sab::NativeSharedArrayBuffer,
+    proto_override: Option<u32>,
 ) -> i64 {
     let element_size = kind.element_size();
     let total_bytes = sab.byte_length();
@@ -752,7 +827,7 @@ fn construct_shared_buffer_view(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
-    if attach_instance_prototype(state, object, kind).is_none() {
+    if attach_prototype(state, object, kind, proto_override).is_none() {
         return fail_dispatch(ctx);
     }
     state.typed_arrays.insert(
@@ -804,7 +879,7 @@ fn incompatible_receiver(
 /// 形态：基元按值渲染；数组 `[object Array]`；callable 用源文本；原型对象
 /// （各 Ctor.prototype、%TypedArray%.prototype、%Object.prototype%）
 /// `[object Object]`；DataView 实例 `#<DataView>`；其余对象 `#<Object>`。
-fn render_getter_receiver(state: &NativeAgentState, receiver: Option<i64>) -> String {
+pub(super) fn render_getter_receiver(state: &NativeAgentState, receiver: Option<i64>) -> String {
     let Some(receiver) = receiver else {
         return "undefined".into();
     };
@@ -926,10 +1001,60 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     let end = args.get(2).map_or(array.length, |encoded| {
         relative_index(state, Some(*encoded), array.length)
     });
-    let values = (start.min(end)..end.min(array.length))
-        .filter_map(|index| get_element_intern(state, receiver, index))
-        .collect::<Vec<_>>();
-    construct_values(ctx, state, array.kind, &values)
+    let first = start.min(end);
+    let count = end.min(array.length).saturating_sub(first);
+    // §23.2.3.24 步骤 9：A = TypedArraySpeciesCreate(O, «𝔽(count)») 先于
+    // 元素读取（species 构造器可再入用户代码改写源）；构造出的长度不足
+    // count 抛 TypeError（§23.2.4.1 步骤 3）。
+    let decision =
+        match super::typedarray_create::species_constructor(ctx, state, receiver, array.kind) {
+            Ok(decision) => decision,
+            Err(exception) => return exception,
+        };
+    let target = match decision {
+        super::typedarray_create::SpeciesDecision::Default => {
+            let object = construct(
+                ctx,
+                state,
+                &[value::encode_f64(count as f64)],
+                array.kind,
+                value::encode_undefined(),
+            );
+            if value::is_exception(object) {
+                return object;
+            }
+            object
+        }
+        super::typedarray_create::SpeciesDecision::Construct(constructor) => {
+            match super::typedarray_create::species_create(
+                ctx,
+                state,
+                array.kind,
+                constructor,
+                &[value::encode_f64(count as f64)],
+                "slice",
+                Some(count),
+            ) {
+                Ok(result) => result,
+                Err(exception) => return exception,
+            }
+        }
+    };
+    // 步骤 14：逐元素复制；跨元素类型经 set_element 的 ToNumber/ToBigInt
+    // 转换。复制期间 BigInt intern 可分配触发 GC，target 锚根。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(target);
+    for index in 0..count {
+        let Some(stored) = get_element_intern(state, receiver, first + index) else {
+            break;
+        };
+        if set_element(state, target, index, stored).is_none() {
+            state.temporary_roots.truncate(initial_temp_roots);
+            return fail_dispatch(ctx);
+        }
+    }
+    state.temporary_roots.truncate(initial_temp_roots);
+    target
 }
 
 fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -947,6 +1072,21 @@ fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     let end = args.get(2).map_or(array.length, |encoded| {
         relative_index(state, Some(*encoded), array.length)
     });
+    let begin = start.min(end);
+    let new_length = end
+        .saturating_sub(start)
+        .min(array.length.saturating_sub(start));
+    // §23.2.3.28 步骤 13–14：TypedArraySpeciesCreate(O, «buffer,
+    // 𝔽(beginByteOffset), 𝔽(newLength)»)。缺省构造器合流快路径：直接共享
+    // 底层 backing 建视图，与 Construct(default, «buffer, offset, len») 等价。
+    let decision =
+        match super::typedarray_create::species_constructor(ctx, state, receiver, array.kind) {
+            Ok(decision) => decision,
+            Err(exception) => return exception,
+        };
+    if let super::typedarray_create::SpeciesDecision::Construct(constructor) = decision {
+        return subarray_species(ctx, state, receiver, &array, constructor, begin, new_length);
+    }
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
@@ -963,13 +1103,64 @@ fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
             shared_buffer: array.shared_buffer,
             shared_backing_id: array.shared_backing_id,
             is_shared: array.is_shared,
-            offset: array.offset + start.min(end),
-            length: end
-                .saturating_sub(start)
-                .min(array.length.saturating_sub(start)),
+            offset: array.offset + begin,
+            length: new_length,
         },
     );
     object
+}
+
+/// subarray 的自定义 species 路径：以规范实参 «buffer, 𝔽(beginByteOffset),
+/// 𝔽(newLength)» 执行 Construct。宿主内部 storage 视图（流 / 编码器产物）
+/// 无 [[ViewedArrayBuffer]] 对象，物化当前可见字节为新 ArrayBuffer 传入
+/// （内容一致；Node 无此形态，别名关系无从对照）。
+fn subarray_species(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    receiver: i64,
+    array: &NativeTypedArray,
+    constructor: i64,
+    begin: usize,
+    new_length: usize,
+) -> i64 {
+    let element_size = array.kind.element_size();
+    let (buffer, begin_byte_offset) = match array.buffer_object {
+        Some(buffer) => (buffer, (array.offset + begin) * element_size),
+        None => {
+            let Some(bytes) = visible_bytes(state, receiver) else {
+                return fail_dispatch(ctx);
+            };
+            let Some(buffer) = super::buffers::allocate_array_buffer(state, bytes.len()) else {
+                return fail_dispatch(ctx);
+            };
+            let Some(native) = state.array_buffers.get(&value::decode_handle(buffer)) else {
+                return fail_dispatch(ctx);
+            };
+            native.bytes.borrow_mut().copy_from_slice(&bytes);
+            (buffer, begin * element_size)
+        }
+    };
+    // Construct 再入用户代码可触发 GC，buffer 实参锚根。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(buffer);
+    let result = super::typedarray_create::species_create(
+        ctx,
+        state,
+        array.kind,
+        constructor,
+        &[
+            buffer,
+            value::encode_f64(begin_byte_offset as f64),
+            value::encode_f64(new_length as f64),
+        ],
+        "subarray",
+        None,
+    );
+    state.temporary_roots.truncate(initial_temp_roots);
+    match result {
+        Ok(result) => result,
+        Err(exception) => exception,
+    }
 }
 
 fn fill(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -1448,27 +1639,6 @@ fn iterator(
         value::decode_native_callable_idx(next),
     );
     iterator_object
-}
-
-fn construct_values(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    kind: TypedArrayKind,
-    values: &[i64],
-) -> i64 {
-    let object = construct(ctx, state, &[value::encode_f64(values.len() as f64)], kind);
-    if !state
-        .typed_arrays
-        .contains_key(&value::decode_handle(object))
-    {
-        return fail_dispatch(ctx);
-    }
-    for (index, stored) in values.iter().copied().enumerate() {
-        if set_element(state, object, index, stored).is_none() {
-            return fail_dispatch(ctx);
-        }
-    }
-    object
 }
 
 fn relative_index(state: &NativeAgentState, encoded: Option<i64>, length: usize) -> usize {
