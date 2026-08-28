@@ -494,11 +494,11 @@ module {
     c491 = undefined
     c492 = bool(true)
 
-  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [js_name "Base"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @Base.greet [home_object=@0.prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @Base.greet [home_object=@0.prototype] [direct_callable] [js_name "greet"] [js_length 0] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = const c24
       return %0
@@ -597,7 +597,7 @@ module {
     bb11:
       unreachable
 
-  fn @Task.#add [home_object=@25.prototype] [needs_prototype] [captures: $0.outer] [params: $6.$env, $6.$this, $6.extra] [entry=bb0]:
+  fn @Task.#add [home_object=@25.prototype] [needs_prototype] [js_name "Task.#add"] [js_length 1] [captures: $0.outer] [params: $6.$env, $6.$this, $6.extra] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c47
@@ -669,7 +669,7 @@ module {
       promise_resolve %16, %15
       return
 
-  fn @Task.#plain [home_object=@25.prototype] [needs_prototype] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @Task.#plain [home_object=@25.prototype] [needs_prototype] [js_name "Task.#plain"] [js_length 0] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c71
@@ -823,7 +823,7 @@ module {
     bb10:
       unreachable
 
-  fn @Task.#withParams [home_object=@25.prototype] [needs_prototype] [params: $10.$env, $10.$this, $10.a, $10.b] [entry=bb0]:
+  fn @Task.#withParams [home_object=@25.prototype] [needs_prototype] [js_name "Task.#withParams"] [js_length 1] [params: $10.$env, $10.$this, $10.a, $10.b] [entry=bb0]:
     bb0:
       %0 = load var $10.b
       %1 = const c116
@@ -959,7 +959,7 @@ module {
     bb7:
       unreachable
 
-  fn @Task.#viaSuper [home_object=@25.prototype] [needs_prototype] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @Task.#viaSuper [home_object=@25.prototype] [needs_prototype] [js_name "Task.#viaSuper"] [js_length 0] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c154
@@ -993,7 +993,7 @@ module {
       call builtin.async_function.resume(%5, %7, %19, %20, %21)
       return %4
 
-  fn @arrow_10 [home_object=@25.prototype] [captures: $this] [params: $14.$env, $14.$this] [entry=bb0]:
+  fn @arrow_10 [home_object=@25.prototype] [js_name "read"] [js_length 0] [captures: $this] [params: $14.$env, $14.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c170
@@ -1088,7 +1088,7 @@ module {
     bb7:
       unreachable
 
-  fn @Task.#mutate [home_object=@25.prototype] [needs_prototype] [params: $16.$env, $16.$this] [entry=bb0]:
+  fn @Task.#mutate [home_object=@25.prototype] [needs_prototype] [js_name "Task.#mutate"] [js_length 0] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c191
@@ -1215,7 +1215,7 @@ module {
     bb10:
       unreachable
 
-  fn @Task.#chain [home_object=@25.prototype] [needs_prototype] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @Task.#chain [home_object=@25.prototype] [needs_prototype] [js_name "Task.#chain"] [js_length 0] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c226
@@ -1326,7 +1326,7 @@ module {
     bb12:
       unreachable
 
-  fn @Task.#boom [home_object=@25.prototype] [needs_prototype] [params: $20.$env, $20.$this] [entry=bb0]:
+  fn @Task.#boom [home_object=@25.prototype] [needs_prototype] [js_name "Task.#boom"] [js_length 0] [params: $20.$env, $20.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c256
@@ -1432,7 +1432,7 @@ module {
     bb10:
       unreachable
 
-  fn @Task.#recover [home_object=@25.prototype] [needs_prototype] [params: $26.$env, $26.$this] [entry=bb0]:
+  fn @Task.#recover [home_object=@25.prototype] [needs_prototype] [js_name "Task.#recover"] [js_length 0] [params: $26.$env, $26.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c288
@@ -1540,7 +1540,7 @@ module {
     bb7:
       unreachable
 
-  fn @Task.static_#stamp [home_object=@25] [needs_prototype] [params: $28.$env, $28.$this, $28.kind] [entry=bb0]:
+  fn @Task.static_#stamp [home_object=@25] [needs_prototype] [js_name "Task.static_#stamp"] [js_length 1] [params: $28.$env, $28.$this, $28.kind] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c321
@@ -1577,16 +1577,16 @@ module {
       call builtin.async_function.resume(%5, %7, %21, %22, %23)
       return %4
 
-  fn @Probe.constructor [home_object=@22.prototype] [needs_prototype] [direct_callable] [class_ctor "Probe"] [params: $32.$env, $32.$this] [entry=bb0]:
+  fn @Probe.constructor [home_object=@22.prototype] [needs_prototype] [direct_callable] [class_ctor "Probe"] [js_name "Probe"] [js_length 0] [params: $32.$env, $32.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @Probe.tag [home_object=@22.prototype] [direct_callable] [params: $33.$env, $33.$this] [entry=bb0]:
+  fn @Probe.tag [home_object=@22.prototype] [direct_callable] [js_name "tag"] [js_length 0] [params: $33.$env, $33.$this] [entry=bb0]:
     bb0:
       %0 = const c345
       return %0
 
-  fn @arrow_22 [home_object=@25.prototype] [direct_callable] [params: $30.$env, $30.$this] [entry=bb0]:
+  fn @arrow_22 [home_object=@25.prototype] [direct_callable] [js_name ""] [js_length 0] [params: $30.$env, $30.$this] [entry=bb0]:
     bb0:
       %0 = const c342
       %1 = new_object(capacity=4)
@@ -1638,7 +1638,7 @@ module {
     bb14:
       return %25
 
-  fn @Task.constructor [home_object=@25.prototype] [needs_prototype] [class_ctor "Task"] [captures: $4.$private_function#2_0, $4.$private_function#2_1, $4.$private_function#2_2, $4.$private_function#2_3, $4.$private_function#2_4, $4.$private_function#2_5, $4.$private_function#2_6, $4.$private_function#2_7, $4.$private_function#2_8] [params: $29.$env, $29.$this] [entry=bb0]:
+  fn @Task.constructor [home_object=@25.prototype] [needs_prototype] [class_ctor "Task"] [js_name "Task"] [js_length 0] [captures: $4.$private_function#2_0, $4.$private_function#2_1, $4.$private_function#2_2, $4.$private_function#2_3, $4.$private_function#2_4, $4.$private_function#2_5, $4.$private_function#2_6, $4.$private_function#2_7, $4.$private_function#2_8] [params: $29.$env, $29.$this] [entry=bb0]:
     bb0:
       %0 = get_super_constructor
       %1 = load var $29.$this
@@ -1786,7 +1786,7 @@ module {
     bb24:
       jump bb23
 
-  fn @Task.run [home_object=@25.prototype] [direct_callable] [params: $34.$env, $34.$this, $34.extra] [entry=bb0]:
+  fn @Task.run [home_object=@25.prototype] [direct_callable] [js_name "run"] [js_length 1] [params: $34.$env, $34.$this, $34.extra] [entry=bb0]:
     bb0:
       %0 = load var $34.$this
       %1 = const c394
@@ -1795,7 +1795,7 @@ module {
       %4 = call %2, this=%0, args=[%3]
       return %4
 
-  fn @Task.plainIsPromise [home_object=@25.prototype] [direct_callable] [params: $35.$env, $35.$this] [entry=bb0]:
+  fn @Task.plainIsPromise [home_object=@25.prototype] [direct_callable] [js_name "plainIsPromise"] [js_length 0] [params: $35.$env, $35.$this] [entry=bb0]:
     bb0:
       %0 = load var $35.$this
       %1 = const c397
@@ -1822,7 +1822,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @Task.params [home_object=@25.prototype] [captures: $0.undefined] [params: $36.$env, $36.$this] [entry=bb0]:
+  fn @Task.params [home_object=@25.prototype] [js_name "params"] [js_length 0] [captures: $0.undefined] [params: $36.$env, $36.$this] [entry=bb0]:
     bb0:
       %0 = load var $36.$this
       %1 = const c402
@@ -1836,7 +1836,7 @@ module {
       %9 = call %2, this=%0, args=[%3, %6, %7, %8]
       return %9
 
-  fn @Task.callSuper [home_object=@25.prototype] [direct_callable] [params: $37.$env, $37.$this] [entry=bb0]:
+  fn @Task.callSuper [home_object=@25.prototype] [direct_callable] [js_name "callSuper"] [js_length 0] [params: $37.$env, $37.$this] [entry=bb0]:
     bb0:
       %0 = load var $37.$this
       %1 = const c410
@@ -1844,7 +1844,7 @@ module {
       %3 = call %2, this=%0
       return %3
 
-  fn @Task.arrowSuper [home_object=@25.prototype] [direct_callable] [params: $38.$env, $38.$this] [entry=bb0]:
+  fn @Task.arrowSuper [home_object=@25.prototype] [direct_callable] [js_name "arrowSuper"] [js_length 0] [params: $38.$env, $38.$this] [entry=bb0]:
     bb0:
       %0 = load var $38.$this
       %1 = const c413
@@ -1852,7 +1852,7 @@ module {
       %3 = call %2, this=%0
       return %3
 
-  fn @Task.chain [home_object=@25.prototype] [direct_callable] [params: $39.$env, $39.$this] [entry=bb0]:
+  fn @Task.chain [home_object=@25.prototype] [direct_callable] [js_name "chain"] [js_length 0] [params: $39.$env, $39.$this] [entry=bb0]:
     bb0:
       %0 = load var $39.$this
       %1 = const c416
@@ -1860,7 +1860,7 @@ module {
       %3 = call %2, this=%0
       return %3
 
-  fn @Task.recover [home_object=@25.prototype] [direct_callable] [params: $40.$env, $40.$this] [entry=bb0]:
+  fn @Task.recover [home_object=@25.prototype] [direct_callable] [js_name "recover"] [js_length 0] [params: $40.$env, $40.$this] [entry=bb0]:
     bb0:
       %0 = load var $40.$this
       %1 = const c419
@@ -1868,7 +1868,7 @@ module {
       %3 = call %2, this=%0
       return %3
 
-  fn @Task.reject [home_object=@25.prototype] [direct_callable] [params: $41.$env, $41.$this] [entry=bb0]:
+  fn @Task.reject [home_object=@25.prototype] [direct_callable] [js_name "reject"] [js_length 0] [params: $41.$env, $41.$this] [entry=bb0]:
     bb0:
       %0 = load var $41.$this
       %1 = const c422
@@ -1876,7 +1876,7 @@ module {
       %3 = call %2, this=%0
       return %3
 
-  fn @Task.stamp [home_object=@25] [captures: $4.Task] [params: $42.$env, $42.$this, $42.kind] [entry=bb0]:
+  fn @Task.stamp [home_object=@25] [js_name "stamp"] [js_length 1] [captures: $4.Task] [params: $42.$env, $42.$this, $42.kind] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c425
@@ -1887,7 +1887,7 @@ module {
       %6 = call %4, this=%2, args=[%5]
       return %6
 
-  fn @Task.tryCall [home_object=@25] [direct_callable] [params: $43.$env, $43.$this, $43.target] [entry=bb0]:
+  fn @Task.tryCall [home_object=@25] [direct_callable] [js_name "tryCall"] [js_length 1] [params: $43.$env, $43.$this, $43.target] [entry=bb0]:
     bb0:
       jump bb1
     bb1:
@@ -1932,7 +1932,7 @@ module {
       %18 = phi [(bb8, %16), (bb9, %17)]
       return %18
 
-  fn @arrow_36 [captures: $0.outer, $0.Task] [params: $48.$env, $48.$this, $48.value] [entry=bb0]:
+  fn @arrow_36 [js_name ""] [js_length 1] [captures: $0.outer, $0.Task] [params: $48.$env, $48.$this, $48.value] [entry=bb0]:
     bb0:
       %0 = const c452
       %1 = load var $48.value
@@ -1955,7 +1955,7 @@ module {
       %7 = call builtin.exception_value(%5)
       throw %7
 
-  fn @arrow_37 [captures: $0.task] [params: $49.$env, $49.$this, $49.value] [entry=bb0]:
+  fn @arrow_37 [js_name ""] [js_length 1] [captures: $0.task] [params: $49.$env, $49.$this, $49.value] [entry=bb0]:
     bb0:
       %0 = const c460
       %1 = load var $49.value
@@ -1974,7 +1974,7 @@ module {
       %4 = call builtin.exception_value(%2)
       throw %4
 
-  fn @arrow_38 [captures: $0.task] [params: $50.$env, $50.$this, $50.value] [entry=bb0]:
+  fn @arrow_38 [js_name ""] [js_length 1] [captures: $0.task] [params: $50.$env, $50.$this, $50.value] [entry=bb0]:
     bb0:
       %0 = const c466
       %1 = load var $50.value
@@ -2003,7 +2003,7 @@ module {
     bb5:
       return %16
 
-  fn @arrow_39 [captures: $0.task] [params: $51.$env, $51.$this, $51.value] [entry=bb0]:
+  fn @arrow_39 [js_name ""] [js_length 1] [captures: $0.task] [params: $51.$env, $51.$this, $51.value] [entry=bb0]:
     bb0:
       %0 = const c471
       %1 = load var $51.value
@@ -2032,7 +2032,7 @@ module {
     bb5:
       return %16
 
-  fn @arrow_40 [captures: $0.task] [params: $52.$env, $52.$this, $52.value] [entry=bb0]:
+  fn @arrow_40 [js_name ""] [js_length 1] [captures: $0.task] [params: $52.$env, $52.$this, $52.value] [entry=bb0]:
     bb0:
       %0 = const c476
       %1 = load var $52.value
@@ -2061,7 +2061,7 @@ module {
     bb5:
       return %16
 
-  fn @arrow_41 [direct_callable] [params: $54.$env, $54.$this, $54.error] [entry=bb0]:
+  fn @arrow_41 [direct_callable] [js_name ""] [js_length 1] [params: $54.$env, $54.$this, $54.error] [entry=bb0]:
     bb0:
       %0 = const c484
       %1 = load var $54.error
@@ -2076,7 +2076,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @arrow_41 [captures: $0.task] [params: $53.$env, $53.$this, $53.value] [entry=bb0]:
+  fn @arrow_41 [js_name ""] [js_length 1] [captures: $0.task] [params: $53.$env, $53.$this, $53.value] [entry=bb0]:
     bb0:
       %0 = const c481
       %1 = load var $53.value
@@ -2121,7 +2121,7 @@ module {
       %33 = call builtin.exception_value(%20)
       throw %33
 
-  fn @arrow_43 [direct_callable] [params: $55.$env, $55.$this, $55.value] [entry=bb0]:
+  fn @arrow_43 [direct_callable] [js_name ""] [js_length 1] [params: $55.$env, $55.$this, $55.value] [entry=bb0]:
     bb0:
       %0 = const c489
       %1 = load var $55.value

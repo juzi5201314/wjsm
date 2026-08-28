@@ -6,6 +6,9 @@ impl Lowerer {
         class_expr: &swc_ast::ClassExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // NamedEvaluation（ES §8.4.5）：匿名类表达式的构造器 `name` 取绑定名
+        // 提示（变量声明/赋值/属性定义等），无提示为空串；命名类表达式取 ident。
+        let named_eval = self.named_eval_hint.take();
         // 类表达式可选名称（匿名类表达式无名称）
         let class_name = class_expr
             .ident
@@ -15,6 +18,12 @@ impl Lowerer {
         if class_expr.ident.is_none() {
             self.anon_counter += 1;
         }
+        let js_ctor_name = class_expr
+            .ident
+            .as_ref()
+            .map(|id| id.sym.to_string())
+            .or(named_eval)
+            .unwrap_or_default();
 
         // 命名类表达式：仅在类体内绑定名称（块作用域）。
         let class_body_name_scope =
@@ -37,6 +46,7 @@ impl Lowerer {
             &class_expr.class,
             class_expr.span(),
             decorator_name,
+            &js_ctor_name,
             block,
         )?;
 

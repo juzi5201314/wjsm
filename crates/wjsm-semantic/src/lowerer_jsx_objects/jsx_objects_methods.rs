@@ -51,11 +51,26 @@ impl Lowerer {
                         // PropertyDefinitionEvaluation：先求属性键再求属性值；
                         // 计算键抛异常必须传播且不得继续求属性值。
                         let key_dest = self.lower_prop_name_checked(&kv.key, &mut block)?;
+                        // NamedEvaluation：匿名函数定义按属性键命名——静态键
+                        // 走降级期提示，计算键在值求值后运行时设置。
+                        let named_by_key = Self::is_anonymous_fn_definition(&kv.value);
+                        let static_key_name = Self::static_prop_name_text(&kv.key);
+                        if named_by_key && let Some(name) = &static_key_name {
+                            self.named_eval_hint = Some(name.clone());
+                        }
                         let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
                         // 属性值求值抛异常必须传播，
                         // 不得把 TAG_EXCEPTION 存为属性值后继续求值后续属性。
                         if self.expr_exception_fork_allowed() && self.expr_can_throw(&kv.value) {
                             block = self.lower_value_exception_branch(block, val_dest)?;
+                        }
+                        if named_by_key && static_key_name.is_none() {
+                            self.emit_runtime_set_function_name(
+                                block,
+                                val_dest,
+                                key_dest,
+                                AccessorPrefix::None,
+                            );
                         }
                         self.emit_set_prop(block, obj_dest, key_dest, val_dest);
                     }
@@ -94,6 +109,16 @@ impl Lowerer {
                             getter.span,
                         )?;
                         block = continuation;
+                        // getter 的 length 恒为 0（无形参）；name 为 `get x`。
+                        self.set_function_js_metadata(function.function_id, None, 0);
+                        self.apply_method_js_name(
+                            block,
+                            function.function_id,
+                            fn_value,
+                            &getter.key,
+                            key_dest,
+                            AccessorPrefix::Get,
+                        );
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
                         block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
@@ -129,6 +154,20 @@ impl Lowerer {
                             setter.span,
                         )?;
                         block = continuation;
+                        // setter 的 length 按 ExpectedArgumentCount（默认值形参为 0）。
+                        self.set_function_js_metadata(
+                            function.function_id,
+                            None,
+                            Self::expected_argument_count(std::slice::from_ref(&*setter.param)),
+                        );
+                        self.apply_method_js_name(
+                            block,
+                            function.function_id,
+                            fn_value,
+                            &setter.key,
+                            key_dest,
+                            AccessorPrefix::Set,
+                        );
                         let desc = self.build_descriptor("set", fn_value, true, true, block)?;
                         block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
@@ -165,6 +204,19 @@ impl Lowerer {
                             method.function.span,
                         )?;
                         block = continuation;
+                        self.set_function_js_metadata(
+                            function.function_id,
+                            None,
+                            Self::expected_param_count(&method.function.params),
+                        );
+                        self.apply_method_js_name(
+                            block,
+                            function.function_id,
+                            fn_value,
+                            &method.key,
+                            key_dest,
+                            AccessorPrefix::None,
+                        );
                         self.emit_set_prop(block, obj_dest, key_dest, fn_value);
                     }
                     _ => {
@@ -723,6 +775,13 @@ impl Lowerer {
             let swc_ast::Prop::KeyValue(kv) = prop.as_ref() else {
                 unreachable!("collect_sso_object_literal_keys 仅接受 KeyValue");
             };
+            // NamedEvaluation：SSO 路径的键恒为静态字符串键，匿名函数定义
+            // 按键名命名（与通用路径的静态键分支同语义）。
+            if Self::is_anonymous_fn_definition(&kv.value)
+                && let Some(name) = Self::static_prop_name_text(&kv.key)
+            {
+                self.named_eval_hint = Some(name);
+            }
             let val_dest = self.lower_expr_then_continue(&kv.value, &mut block)?;
             // 与通用路径一致：属性值求值抛异常必须传播，
             // 不得把 TAG_EXCEPTION 烘焙进 InitObjectLiteral 的值列表。
@@ -806,21 +865,4 @@ fn static_object_literal_property_key(
         let constant_idx = module.add_constant(Constant::String(key_str));
         Some(value::template_name_ref_key(constant_idx.0))
     }
-}
-
-fn js_number_property_key(value: f64) -> String {
-    if value.is_nan() {
-        return "NaN".into();
-    }
-    if value.is_infinite() {
-        return if value.is_sign_negative() {
-            "-Infinity".into()
-        } else {
-            "Infinity".into()
-        };
-    }
-    if value.fract() == 0.0 && value.abs() < 1e21 {
-        return format!("{}", value as i64);
-    }
-    format!("{value}")
 }

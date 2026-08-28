@@ -22,6 +22,7 @@ impl Lowerer {
             &class_decl.class,
             class_decl.span(),
             Some(&class_name),
+            &class_name,
             outer_block,
         )?;
 

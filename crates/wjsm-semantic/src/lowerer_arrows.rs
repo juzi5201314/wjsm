@@ -7,7 +7,11 @@ impl Lowerer {
         arrow: &swc_ast::ArrowExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // NamedEvaluation 提示入口即取走：箭头函数恒为匿名函数定义，
+        // `name` 取绑定名提示（无则空串），体内嵌套表达式不得再消费。
+        let named_eval = self.named_eval_hint.take();
         if arrow.is_async {
+            self.named_eval_hint = named_eval;
             return self.lower_async_arrow_expr(arrow, block);
         }
         let inherited_home_object = self.lexical_home_object;
@@ -102,6 +106,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        ir_function.set_js_name(named_eval.unwrap_or_default());
+        ir_function.set_js_length(Self::expected_argument_count(&arrow.params));
         if let Some(span) = self.span_to_source_span(arrow.span()) {
             ir_function.set_source_span(span);
         }
@@ -165,6 +171,7 @@ impl Lowerer {
         arrow: &swc_ast::ArrowExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        let named_eval = self.named_eval_hint.take();
         let inherited_home_object = self.lexical_home_object;
         let outer_super_allowed = self.super_allowed;
         let outer_super_call_allowed = self.super_call_allowed;
@@ -842,6 +849,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
         wrapper_ir_function.set_has_eval(has_eval);
+        wrapper_ir_function.set_js_name(named_eval.unwrap_or_default());
+        wrapper_ir_function.set_js_length(Self::expected_argument_count(&arrow.params));
         if let Some(span) = self.span_to_source_span(arrow.span()) {
             wrapper_ir_function.set_source_span(span);
         }

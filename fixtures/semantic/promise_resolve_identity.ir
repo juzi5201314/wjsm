@@ -36,7 +36,7 @@ module {
     c33 = bool(true)
     c34 = bool(false)
 
-  fn @anon_0 [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [js_name ""] [js_length 1] [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
       %0 = load var $1.v
       %1 = call builtin.console.log(%0)
@@ -48,7 +48,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @anon_1 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+  fn @anon_1 [needs_prototype] [direct_callable] [js_name ""] [js_length 1] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = load var $2.v
       %1 = call builtin.console.log(%0)
@@ -60,7 +60,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @anon_2 [needs_prototype] [direct_callable] [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
+  fn @anon_2 [needs_prototype] [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
     bb0:
       %0 = load var $3.e
       %1 = call builtin.console.log(%0)

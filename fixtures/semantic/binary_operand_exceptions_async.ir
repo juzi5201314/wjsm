@@ -294,7 +294,7 @@ module {
     c291 = functionref(@27)
     c292 = bool(true)
 
-  fn @caught [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.label, $1.e] [entry=bb0]:
+  fn @caught [needs_prototype] [direct_callable] [js_length 2] [params: $1.$env, $1.$this, $1.label, $1.e] [entry=bb0]:
     bb0:
       %0 = load var $1.label
       %1 = const c20
@@ -356,7 +356,7 @@ module {
       %29 = call builtin.exception_value(%27)
       throw %29
 
-  fn @throwError [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.message] [entry=bb0]:
+  fn @throwError [needs_prototype] [direct_callable] [js_length 1] [params: $2.$env, $2.$this, $2.message] [entry=bb0]:
     bb0:
       %0 = load var $0.$global
       %1 = const c26
@@ -507,7 +507,7 @@ module {
     bb21:
       unreachable
 
-  fn @gen [needs_prototype] [captures: $0.throwError] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @gen [needs_prototype] [js_name "gen"] [js_length 0] [captures: $0.throwError] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c49
@@ -608,7 +608,7 @@ module {
     bb7:
       unreachable
 
-  fn @asyncAdd [needs_prototype] [captures: $0.throwError] [params: $10.$env, $10.$this] [entry=bb0]:
+  fn @asyncAdd [needs_prototype] [js_name "asyncAdd"] [js_length 0] [captures: $0.throwError] [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c84
@@ -718,7 +718,7 @@ module {
     bb7:
       unreachable
 
-  fn @asyncEq [needs_prototype] [captures: $0.throwError] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @asyncEq [needs_prototype] [js_name "asyncEq"] [js_length 0] [captures: $0.throwError] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c118
@@ -829,7 +829,7 @@ module {
     bb7:
       unreachable
 
-  fn @asyncNeq [needs_prototype] [captures: $0.throwError] [params: $14.$env, $14.$this] [entry=bb0]:
+  fn @asyncNeq [needs_prototype] [js_name "asyncNeq"] [js_length 0] [captures: $0.throwError] [params: $14.$env, $14.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c152
@@ -939,7 +939,7 @@ module {
     bb7:
       unreachable
 
-  fn @asyncSeq [needs_prototype] [captures: $0.throwError] [params: $16.$env, $16.$this] [entry=bb0]:
+  fn @asyncSeq [needs_prototype] [js_name "asyncSeq"] [js_length 0] [captures: $0.throwError] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c186
@@ -1051,7 +1051,7 @@ module {
     bb7:
       unreachable
 
-  fn @asyncLt [needs_prototype] [captures: $0.throwError] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @asyncLt [needs_prototype] [js_name "asyncLt"] [js_length 0] [captures: $0.throwError] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c222
@@ -1097,13 +1097,13 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_14 [direct_callable] [params: $19.$env, $19.$this] [entry=bb0]:
+  fn @arrow_14 [direct_callable] [js_name ""] [js_length 0] [params: $19.$env, $19.$this] [entry=bb0]:
     bb0:
       %0 = const c241
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_15 [captures: $0.caught] [params: $20.$env, $20.$this, $20.e] [entry=bb0]:
+  fn @arrow_15 [js_name ""] [js_length 1] [captures: $0.caught] [params: $20.$env, $20.$this, $20.e] [entry=bb0]:
     bb0:
       %4 = const c245
       %5 = load var $20.e
@@ -1185,7 +1185,7 @@ module {
       store var $1.label, %7
       throw %37
 
-  fn @arrow_16 [captures: $0.asyncEq] [params: $21.$env, $21.$this] [entry=bb0]:
+  fn @arrow_16 [js_name ""] [js_length 0] [captures: $0.asyncEq] [params: $21.$env, $21.$this] [entry=bb0]:
     bb0:
       %0 = const c248
       %1 = load var $env
@@ -1194,13 +1194,13 @@ module {
       %4 = call %3, this=%0
       return %4
 
-  fn @arrow_17 [direct_callable] [params: $22.$env, $22.$this] [entry=bb0]:
+  fn @arrow_17 [direct_callable] [js_name ""] [js_length 0] [params: $22.$env, $22.$this] [entry=bb0]:
     bb0:
       %0 = const c253
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_18 [captures: $0.caught] [params: $23.$env, $23.$this, $23.e] [entry=bb0]:
+  fn @arrow_18 [js_name ""] [js_length 1] [captures: $0.caught] [params: $23.$env, $23.$this, $23.e] [entry=bb0]:
     bb0:
       %4 = const c257
       %5 = load var $23.e
@@ -1282,7 +1282,7 @@ module {
       store var $1.label, %7
       throw %37
 
-  fn @arrow_19 [captures: $0.asyncNeq] [params: $24.$env, $24.$this] [entry=bb0]:
+  fn @arrow_19 [js_name ""] [js_length 0] [captures: $0.asyncNeq] [params: $24.$env, $24.$this] [entry=bb0]:
     bb0:
       %0 = const c259
       %1 = load var $env
@@ -1291,13 +1291,13 @@ module {
       %4 = call %3, this=%0
       return %4
 
-  fn @arrow_20 [direct_callable] [params: $25.$env, $25.$this] [entry=bb0]:
+  fn @arrow_20 [direct_callable] [js_name ""] [js_length 0] [params: $25.$env, $25.$this] [entry=bb0]:
     bb0:
       %0 = const c264
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_21 [captures: $0.caught] [params: $26.$env, $26.$this, $26.e] [entry=bb0]:
+  fn @arrow_21 [js_name ""] [js_length 1] [captures: $0.caught] [params: $26.$env, $26.$this, $26.e] [entry=bb0]:
     bb0:
       %4 = const c268
       %5 = load var $26.e
@@ -1379,7 +1379,7 @@ module {
       store var $1.label, %7
       throw %37
 
-  fn @arrow_22 [captures: $0.asyncSeq] [params: $27.$env, $27.$this] [entry=bb0]:
+  fn @arrow_22 [js_name ""] [js_length 0] [captures: $0.asyncSeq] [params: $27.$env, $27.$this] [entry=bb0]:
     bb0:
       %0 = const c270
       %1 = load var $env
@@ -1388,13 +1388,13 @@ module {
       %4 = call %3, this=%0
       return %4
 
-  fn @arrow_23 [direct_callable] [params: $28.$env, $28.$this] [entry=bb0]:
+  fn @arrow_23 [direct_callable] [js_name ""] [js_length 0] [params: $28.$env, $28.$this] [entry=bb0]:
     bb0:
       %0 = const c275
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_24 [captures: $0.caught] [params: $29.$env, $29.$this, $29.e] [entry=bb0]:
+  fn @arrow_24 [js_name ""] [js_length 1] [captures: $0.caught] [params: $29.$env, $29.$this, $29.e] [entry=bb0]:
     bb0:
       %4 = const c279
       %5 = load var $29.e
@@ -1476,7 +1476,7 @@ module {
       store var $1.label, %7
       throw %37
 
-  fn @arrow_25 [captures: $0.asyncLt] [params: $30.$env, $30.$this] [entry=bb0]:
+  fn @arrow_25 [js_name ""] [js_length 0] [captures: $0.asyncLt] [params: $30.$env, $30.$this] [entry=bb0]:
     bb0:
       %0 = const c281
       %1 = load var $env
@@ -1485,13 +1485,13 @@ module {
       %4 = call %3, this=%0
       return %4
 
-  fn @arrow_26 [direct_callable] [params: $31.$env, $31.$this] [entry=bb0]:
+  fn @arrow_26 [direct_callable] [js_name ""] [js_length 0] [params: $31.$env, $31.$this] [entry=bb0]:
     bb0:
       %0 = const c286
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_27 [captures: $0.caught] [params: $32.$env, $32.$this, $32.e] [entry=bb0]:
+  fn @arrow_27 [js_name ""] [js_length 1] [captures: $0.caught] [params: $32.$env, $32.$this, $32.e] [entry=bb0]:
     bb0:
       %4 = const c290
       %5 = load var $32.e

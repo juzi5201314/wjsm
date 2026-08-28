@@ -47,7 +47,7 @@ module {
     c44 = bool(true)
     c45 = bool(false)
 
-  fn @getValue [needs_prototype] [direct_callable] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @getValue [needs_prototype] [direct_callable] [js_length 0] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = const c21
       return %0

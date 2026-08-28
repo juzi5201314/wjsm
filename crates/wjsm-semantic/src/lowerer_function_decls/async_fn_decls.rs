@@ -645,6 +645,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
         wrapper_ir_function.set_has_eval(has_eval);
+        wrapper_ir_function.set_js_name(&name);
+        wrapper_ir_function.set_js_length(Self::expected_param_count(&fn_decl.function.params));
         if let Some(span) = self.span_to_source_span(fn_decl.span()) {
             wrapper_ir_function.set_source_span(span);
         }

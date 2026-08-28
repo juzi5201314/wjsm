@@ -189,7 +189,7 @@ module {
     c186 = string("value")
     c187 = number(2)
 
-  fn @$0.value [captures: $0.getterValue] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @$0.value [js_name "get value"] [js_length 0] [captures: $0.getterValue] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c22
@@ -201,7 +201,7 @@ module {
       %6 = get_prop %4, %5
       return %6
 
-  fn @$0.value [captures: $0.setterValue] [params: $2.$env, $2.$this, $2.next] [entry=bb0]:
+  fn @$0.value [js_name "set value"] [js_length 1] [captures: $0.setterValue] [params: $2.$env, $2.$this, $2.next] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c39
@@ -220,7 +220,7 @@ module {
       %9 = call builtin.exception_value(%7)
       throw %9
 
-  fn @$0.update [captures: $0.methodValue] [params: $3.$env, $3.$this, $3.next] [entry=bb0]:
+  fn @$0.update [js_name "update"] [js_length 1] [captures: $0.methodValue] [params: $3.$env, $3.$this, $3.next] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c56
@@ -239,7 +239,7 @@ module {
       %9 = call builtin.exception_value(%7)
       throw %9
 
-  fn @$0.update [captures: $0.homeValue] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @$0.update [js_name "update"] [js_length 0] [captures: $0.homeValue] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c68
@@ -264,7 +264,7 @@ module {
       %12 = call builtin.exception_value(%10)
       throw %12
 
-  fn @$0.update [captures: $0.homeValue] [params: $5.$env, $5.$this] [entry=bb0]:
+  fn @$0.update [js_name "update"] [js_length 0] [captures: $0.homeValue] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c77
@@ -304,11 +304,11 @@ module {
       %18 = call builtin.exception_value(%16)
       throw %18
 
-  fn @StaticClosure.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [class_ctor "StaticClosure"] [params: $7.$env, $7.$this] [entry=bb0]:
+  fn @StaticClosure.constructor [home_object=@5.prototype] [needs_prototype] [direct_callable] [class_ctor "StaticClosure"] [js_name "StaticClosure"] [js_length 0] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @StaticClosure.read [home_object=@5] [captures: $0.staticValue] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @StaticClosure.read [home_object=@5] [js_name "read"] [js_length 0] [captures: $0.staticValue] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c97
@@ -342,18 +342,18 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @AccessorClosure.constructor [home_object=@8.prototype] [needs_prototype] [direct_callable] [class_ctor "AccessorClosure"] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @AccessorClosure.constructor [home_object=@8.prototype] [needs_prototype] [direct_callable] [class_ctor "AccessorClosure"] [js_name "AccessorClosure"] [js_length 0] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @AccessorClosure.get_value [home_object=@8.prototype] [captures: $0.accessorValue] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @AccessorClosure.get_value [home_object=@8.prototype] [js_name "get value"] [js_length 0] [captures: $0.accessorValue] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c114
       %2 = get_prop %0, %1
       return %2
 
-  fn @AccessorClosure.set_value [home_object=@8.prototype] [captures: $0.accessorValue] [params: $13.$env, $13.$this, $13.next] [entry=bb0]:
+  fn @AccessorClosure.set_value [home_object=@8.prototype] [js_name "set value"] [js_length 1] [captures: $0.accessorValue] [params: $13.$env, $13.$this, $13.next] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c123
@@ -380,11 +380,11 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @MethodClosure.constructor [home_object=@11.prototype] [needs_prototype] [direct_callable] [class_ctor "MethodClosure"] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @MethodClosure.constructor [home_object=@11.prototype] [needs_prototype] [direct_callable] [class_ctor "MethodClosure"] [js_name "MethodClosure"] [js_length 0] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       return
 
-  fn @MethodClosure.update [home_object=@11.prototype] [captures: $0.instanceMethodValue] [params: $16.$env, $16.$this, $16.next] [entry=bb0]:
+  fn @MethodClosure.update [home_object=@11.prototype] [js_name "update"] [js_length 1] [captures: $0.instanceMethodValue] [params: $16.$env, $16.$this, $16.next] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c143
@@ -411,7 +411,7 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @GeneratorClosure.constructor [home_object=@13.prototype] [needs_prototype] [direct_callable] [class_ctor "GeneratorClosure"] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @GeneratorClosure.constructor [home_object=@13.prototype] [needs_prototype] [direct_callable] [class_ctor "GeneratorClosure"] [js_name "GeneratorClosure"] [js_length 0] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       return
 
@@ -480,7 +480,7 @@ module {
     bb9:
       unreachable
 
-  fn @read [needs_prototype] [captures: $0.generatorValue] [params: $20.$env, $20.$this] [entry=bb0]:
+  fn @read [needs_prototype] [js_name "read"] [js_length 0] [captures: $0.generatorValue] [params: $20.$env, $20.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c170
