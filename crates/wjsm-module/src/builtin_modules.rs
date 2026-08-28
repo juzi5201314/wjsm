@@ -81,6 +81,10 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         source: include_str!("../builtin_js/node_stream.js"),
     },
     BuiltinModule {
+        canonical: "stream/web",
+        source: include_str!("../builtin_js/node_stream_web.js"),
+    },
+    BuiltinModule {
         canonical: "http",
         source: include_str!("../builtin_js/node_http.js"),
     },
@@ -173,7 +177,26 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         canonical: "diagnostics_channel",
         source: include_str!("../builtin_js/node_diagnostics_channel.js"),
     },
+    BuiltinModule {
+        canonical: "module",
+        source: include_str!("../builtin_js/node_module.js"),
+    },
+    BuiltinModule {
+        canonical: "tty",
+        source: include_str!("../builtin_js/node_tty.js"),
+    },
+    BuiltinModule {
+        canonical: "v8",
+        source: include_str!("../builtin_js/node_v8.js"),
+    },
 ];
+
+/// 全部内置模块的 canonical 名（注册表顺序，不带 `node:` 前缀）。
+///
+/// 供宿主向 `node:module` 暴露 `builtinModules` 清单使用。
+pub fn builtin_module_names() -> impl Iterator<Item = &'static str> {
+    BUILTIN_MODULES.iter().map(|module| module.canonical)
+}
 
 pub(crate) fn lookup(specifier: &str) -> BuiltinLookup {
     let canonical = specifier.strip_prefix("node:").unwrap_or(specifier);
@@ -295,6 +318,10 @@ mod tests {
             "console",
             "constants",
             "diagnostics_channel",
+            "stream/web",
+            "module",
+            "tty",
+            "v8",
         ] {
             assert!(
                 seen.insert(virtual_path(canonical)),
@@ -310,6 +337,7 @@ mod tests {
             "assert/strict",
             "util/types",
             "path/posix",
+            "stream/web",
         ] {
             let bare = match lookup(canonical) {
                 BuiltinLookup::Found(module) => module,

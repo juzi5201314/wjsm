@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+true
+function function function
+true true true
+true true false
+cjs-sibling 15
+x/y
+--- stderr ---

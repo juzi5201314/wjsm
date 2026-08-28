@@ -15,6 +15,8 @@ pub(crate) fn extend_gc_roots(streams: &NativeStreamsState, roots: &mut VecDeque
     for handle in streams.objects.keys() {
         roots.push_back(value::encode_object_handle(*handle));
     }
+    // node:stream/web 桥对象由宿主缓存句柄，必须钉扎以防缓存悬空。
+    roots.extend(streams.web_bridge);
 }
 
 /// 把 stream 侧表中的回调、队列 chunk 等 JS 值引用并入 GC 宿主边图。

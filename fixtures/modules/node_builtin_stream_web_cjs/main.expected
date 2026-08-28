@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+true
+function ReadableStream
+function function
+2
+cjs-chunk false
+--- stderr ---

@@ -660,6 +660,28 @@ fn create_import_meta_resolve(
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
+/// node:module 桥：`createRequire` 可调用值（与 CJS 内建 require 同一宿主实现）
+/// 加上来自注册表的 `builtinModules` canonical 名清单。
+pub(crate) fn ensure_node_module_bridge(state: &mut NativeAgentState) -> Option<i64> {
+    if let Some(bridge) = state.node_module_bridge {
+        return Some(bridge);
+    }
+    let create_require = state.native_callable(NativeCallableKind::Builtin(
+        Builtin::CjsCreateRequire,
+        false,
+    ))?;
+    let mut names = Vec::new();
+    for canonical in wjsm_module::builtin_module_names() {
+        names.push(state.intern_text(canonical.to_owned(), value::TAG_STRING)?);
+    }
+    let builtin_modules = state.allocate_array_values(&names).ok()?;
+    let bridge = state.allocate_object(2, false).ok()?;
+    set_named_property(state, bridge, "createRequire", create_require).ok()?;
+    set_named_property(state, bridge, "builtinModules", builtin_modules).ok()?;
+    state.node_module_bridge = Some(bridge);
+    Some(bridge)
+}
+
 fn create_require(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let Some(filename) = args.first().copied() else {
         return fail_dispatch(ctx);
