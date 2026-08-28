@@ -35,7 +35,7 @@ wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 | `async_hooks` | 7 | 含 `AsyncLocalStorage` |
 | `perf_hooks` | 13 | |
 | `string_decoder` | 1 | `StringDecoder`，支持 utf8/utf16le/base64/latin1/hex/ascii 流式解码 |
-| `timers` | 7 | 含 `promises` 属性；见下方命名导入说明 |
+| `timers` | 7 | 含 `promises` 属性 |
 | `timers/promises` | 4 | `setTimeout`/`setImmediate`/`setInterval`/`scheduler` |
 | `punycode` | 6 | RFC 3492 完整实现（Node 中已弃用） |
 | `process` | 21 | 默认导出即全局 `process` |
@@ -47,8 +47,6 @@ wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 | `v8` | 10 | `getHeapStatistics` 数据与 `process.memoryUsage` 同源（真实 GC 计量，未计量维度报 0）；`serialize` 等抛「not implemented」 |
 
 未列出的模块（如 `readline`、`repl`、`dns`、`http2`）没有内置封装，导入 `node:` 前缀形式会报 `Unknown built-in module`。其中 `readline` 属于明确排除：宿主 `process.stdin` 目前只有 `on`/`resume` 空实现，没有真实的按行读取能力，提供 `readline` 封装只能是假实现；待宿主 stdin 具备真实读取能力后再补。`dns`、`http2` 涉及真实网络协议栈，同样不在当前范围。
-
-> 命名导入 `timers` 系函数时请使用别名（如 `import { setTimeout as delay } from 'node:timers/promises'`）：不加别名的 `setTimeout(...)` 裸调用会被解析为全局 timer intrinsic（回调在前的签名），而不是导入的绑定。通过默认导出或解构 `require` 调用（`tp.setTimeout(...)`）不受影响。
 
 > <details><summary>「导出项数量」够用吗？</summary>
 >
