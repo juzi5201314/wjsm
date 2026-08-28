@@ -186,6 +186,58 @@ pub(crate) fn map_setter(
     }
 }
 
+/// 把所有仍在映射中的下标固化成数据属性并丢弃 [[ParameterMap]]。
+///
+/// `Object.freeze` 走的是 SetIntegrityLevel 的
+/// `DefinePropertyOrThrow(O, k, {[[Writable]]: false, [[Configurable]]: false})`，
+/// 对 mapped 下标即 §10.4.4.2 步骤 7.b.ii 的断映射。宿主的 freeze 实现按标志位
+/// 批量收紧，看不到「访问器对其实代表数据属性」这层，所以在收紧前先在这里断开。
+pub(crate) fn unmap_all(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    handle: u32,
+) -> Result<(), i64> {
+    let Some(count) = state
+        .arguments_param_maps
+        .get(&handle)
+        .map(|map| map.keys.len())
+    else {
+        return Ok(());
+    };
+    for index in 0..count {
+        let Ok(index) = u32::try_from(index) else {
+            return Err(fail_dispatch(ctx));
+        };
+        let Some(key) = state.intern_property_string(RuntimeString::from(index.to_string())) else {
+            return Err(fail_dispatch(ctx));
+        };
+        if mapped_index(state, handle, key) != Some(index) {
+            continue;
+        }
+        let value = map_getter(ctx, state, handle, index);
+        if value::is_exception(value) {
+            return Err(value);
+        }
+        let flags = match state.gc.heap().get_property_slot(handle, key) {
+            Ok(Some(property)) => {
+                (property.flags & !(constants::FLAG_IS_ACCESSOR as u32))
+                    | constants::FLAG_WRITABLE as u32
+            }
+            _ => return Err(fail_dispatch(ctx)),
+        };
+        if state
+            .gc
+            .heap()
+            .define_data_property(handle, key, value as u64, flags)
+            .is_err()
+        {
+            return Err(fail_dispatch(ctx));
+        }
+    }
+    state.arguments_param_maps.remove(&handle);
+    Ok(())
+}
+
 /// 下标 `key` 当前是否仍在 [[ParameterMap]] 里。
 ///
 /// 判据就是自有属性本身：只有映射访问器对才算已映射。`delete arguments[i]`、

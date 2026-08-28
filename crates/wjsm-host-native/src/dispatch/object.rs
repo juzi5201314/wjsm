@@ -2268,6 +2268,11 @@ fn seal_or_freeze(
     if value::is_array(object) && seal_or_freeze_array(state, handle, freeze).is_none() {
         return fail_dispatch(ctx);
     }
+    // freeze 把每个数据属性重定义为不可写，对 mapped arguments 下标即断映射；
+    // 下面的按位收紧看不到映射访问器背后的数据属性语义，先行断开。
+    if freeze && let Err(exception) = super::arguments::unmap_all(ctx, state, handle) {
+        return exception;
+    }
     let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
     };
