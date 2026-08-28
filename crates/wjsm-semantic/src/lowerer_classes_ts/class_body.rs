@@ -415,8 +415,12 @@ impl Lowerer {
             },
         );
 
+        let mut block = block;
         if let Some(super_class) = &class.super_class {
-            let super_ctor = self.lower_expr(super_class, block)?;
+            // 超类表达式可能引入控制流（如 eval 模式下共享 env 绑定读取的
+            // 分叉合流）：必须推进到延续块，否则后续指令落回分叉前的块，
+            // 使用合流 phi 值将违反支配关系。
+            let super_ctor = self.lower_expr_then_continue(super_class, &mut block)?;
             let proto_key_dest = self.emit_string_const(block, "prototype");
             let super_proto = self.alloc_value();
             self.current_function.append_instruction(

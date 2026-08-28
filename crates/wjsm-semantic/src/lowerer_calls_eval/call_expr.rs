@@ -1337,12 +1337,16 @@ impl Lowerer {
                 },
             );
 
+            // 写回必须用原样读取：静态标志为已初始化的绑定仍可能动态处于
+            // TDZ（如派生构造器 super() 前的 $this 哨兵），EvalGetBinding 会
+            // 抛 ReferenceError 且异常编码会被直接写入槽位；raw 变体返回
+            // 哨兵，写回哨兵即保持原槽的 TDZ 状态。
             let value = self.alloc_value();
             self.current_function.append_instruction(
                 continue_block,
                 Instruction::CallBuiltin {
                     dest: Some(value),
-                    builtin: Builtin::EvalGetBinding,
+                    builtin: Builtin::EvalGetBindingRaw,
                     args: vec![scope_record, name_val],
                 },
             );

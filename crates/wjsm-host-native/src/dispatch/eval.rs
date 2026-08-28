@@ -19,6 +19,7 @@ pub(super) fn dispatch_eval(
         Builtin::EvalIndirect => eval_indirect(ctx, state, args),
         Builtin::Eval => eval_dynamic(ctx, state, args),
         Builtin::EvalGetBinding => eval_get_binding(ctx, state, args),
+        Builtin::EvalGetBindingRaw => eval_get_binding_raw(ctx, state, args),
         Builtin::EvalSetBinding => eval_set_binding(ctx, state, args),
         Builtin::EvalHasBinding => {
             let [environment, key] = args else {
@@ -100,12 +101,16 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         modules::ScopeBindingRead::Value(result) => return result,
         modules::ScopeBindingRead::Uninitialized => {
             let name = eval_binding_name(state, *key);
-            return javascript_error(
-                ctx,
-                state,
-                "ReferenceError",
-                format!("Cannot access '{name}' before initialization"),
-            );
+            // 派生构造器 this TDZ（`$this` 仅在 super() 前持哨兵）：文案
+            // 对齐 V8 的 super 提示；其余词法绑定用通用 TDZ 文案。
+            let message = if name == "$this" {
+                "Must call super constructor in derived class before accessing 'this' \
+                 or returning from derived constructor"
+                    .to_string()
+            } else {
+                format!("Cannot access '{name}' before initialization")
+            };
+            return javascript_error(ctx, state, "ReferenceError", message);
         }
         modules::ScopeBindingRead::Missing => {}
     }
@@ -122,6 +127,24 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         "ReferenceError",
         format!("{} is not defined", eval_binding_name(state, *key)),
     )
+}
+
+/// eval 站点写回专用的原样读取：绑定仍处 TDZ 时返回未初始化哨兵而非抛
+/// ReferenceError（写回哨兵即保持原槽的 TDZ 状态）。绑定必是站点 seed 过的，
+/// Missing 属协议违例。
+fn eval_get_binding_raw(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [environment, key] = args else {
+        return fail_dispatch(ctx);
+    };
+    match modules::scope_record_get(state, *environment, *key) {
+        modules::ScopeBindingRead::Value(result) => result,
+        modules::ScopeBindingRead::Uninitialized => value::encode_uninitialized(),
+        modules::ScopeBindingRead::Missing => fail_dispatch(ctx),
+    }
 }
 
 fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {

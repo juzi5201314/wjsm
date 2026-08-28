@@ -466,6 +466,7 @@ fn builtin_accepts_exception_arguments(builtin: Builtin) -> bool {
             | Builtin::GetPrototypeFromConstructor
             | Builtin::ArrayPush
             | Builtin::EvalGetBinding
+            | Builtin::EvalGetBindingRaw
             | Builtin::EvalSetBinding
             | Builtin::EvalHasBinding
             | Builtin::EvalSuperBase
@@ -534,7 +535,7 @@ pub(super) fn dispatch_builtin(
             arguments::dispatch_arguments => Builtin::CreateMappedArgumentsObject | Builtin::CreateUnmappedArgumentsObject,
             console::dispatch_console => Builtin::ConsoleLog | Builtin::ConsoleInfo | Builtin::ConsoleDebug | Builtin::ConsoleWarn | Builtin::ConsoleError | Builtin::ConsoleTrace,
             errors::dispatch_error => Builtin::ErrorConstructor | Builtin::EvalErrorConstructor | Builtin::RangeErrorConstructor | Builtin::ReferenceErrorConstructor | Builtin::SyntaxErrorConstructor | Builtin::TypeErrorConstructor | Builtin::URIErrorConstructor,
-            eval::dispatch_eval => Builtin::Eval | Builtin::EvalIndirect | Builtin::EvalGetBinding | Builtin::EvalSetBinding | Builtin::EvalHasBinding | Builtin::EvalSuperBase,
+            eval::dispatch_eval => Builtin::Eval | Builtin::EvalIndirect | Builtin::EvalGetBinding | Builtin::EvalGetBindingRaw | Builtin::EvalSetBinding | Builtin::EvalHasBinding | Builtin::EvalSuperBase,
             iterator::dispatch_iterator => Builtin::IteratorFrom | Builtin::IteratorDone | Builtin::IteratorValue | Builtin::IteratorStepValue | Builtin::IteratorNext | Builtin::IteratorClose,
             node_perf_hooks::dispatch_perf => Builtin::PerformanceNow,
             operator::dispatch_operator => Builtin::AbstractCompare | Builtin::AbstractEq | Builtin::StrictEq | Builtin::TypeOf | Builtin::InstanceOf | Builtin::In | Builtin::Throw | Builtin::ExceptionValue | Builtin::NewTarget | Builtin::Debugger | Builtin::IsCallable | Builtin::IsJsObject | Builtin::GetPrototypeFromConstructor | Builtin::IsString | Builtin::TdzCheck | Builtin::ToPropertyKey | Builtin::ThisTdzCheck | Builtin::SuperCallOnceCheck,

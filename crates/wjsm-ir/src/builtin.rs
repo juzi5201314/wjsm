@@ -540,6 +540,11 @@ pub enum Builtin {
     /// 说明 super() 已成功执行过一次，再次调用抛 ReferenceError；仍为未初始化
     /// 哨兵时原样返回。args: [value(当前 this 绑定)]。
     SuperCallOnceCheck,
+    /// eval 站点写回专用的绑定原样读取：与 `EvalGetBinding` 不同，绑定仍处
+    /// TDZ 时返回未初始化哨兵而非抛 ReferenceError——写回哨兵即保持原槽的
+    /// TDZ 状态（派生构造器 this 等动态 TDZ 绑定在 eval 后可能仍未初始化）。
+    /// dest: i64 — value（含未初始化哨兵）。args: [record, name]。
+    EvalGetBindingRaw,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -575,7 +580,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::SuperCallOnceCheck as u16
+        Self::EvalGetBindingRaw as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1066,6 +1071,7 @@ impl Builtin {
             Self::ToPropertyKey => "to_property_key",
             Self::ThisTdzCheck => "this_tdz_check",
             Self::SuperCallOnceCheck => "super_call_once_check",
+            Self::EvalGetBindingRaw => "eval_get_binding_raw",
         }
     }
 }
