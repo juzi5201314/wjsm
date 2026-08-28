@@ -159,6 +159,8 @@ pub(crate) fn extend_gc_edges(fetch: &NativeFetchState, mut add: impl FnMut(i64,
         if !value::is_undefined(signal.reason) {
             add(signal.object, signal.reason);
         }
+        // abort 监听器回调与 onabort 处理器由 signal 对象持有。
+        super::events::extend_target_edges(&signal.events, signal.object, &mut add);
     }
     for (handle, kind) in &fetch.objects {
         if let FetchObjectKind::AbortController(signal) = kind
@@ -242,14 +244,43 @@ pub(super) fn dispatch_fetch(
     })
 }
 
-/// 无共享 prototype 的接口（AbortSignal）仍经虚拟属性解析实例值；
-/// Headers/Request/Response/AbortController 的成员已全部安装到
-/// 对应 `prototype` 对象，不再走此路径。
-pub(crate) fn property(state: &NativeAgentState, receiver: i64, key: &str) -> Option<i64> {
-    match *state.fetch.objects.get(&value::decode_handle(receiver))? {
-        FetchObjectKind::AbortSignal(handle) => abort::signal_property(state, handle, key),
+/// 按实际 `this` 解析 AbortSignal 品牌（`dispatch::events` 的 EventTarget
+/// 分派与 AbortSignal 访问器共用）。
+pub(super) fn abort_signal_of(state: &NativeAgentState, this_value: i64) -> Option<u32> {
+    match this_object_kind(state, this_value)? {
+        FetchObjectKind::AbortSignal(handle) => Some(handle),
         _ => None,
     }
+}
+
+/// AbortSignal 的监听器登记表（内嵌在 fetch 侧表）。
+pub(super) fn abort_signal_events_mut(
+    state: &mut NativeAgentState,
+    handle: u32,
+) -> Option<&mut super::events::EventTargetData> {
+    state
+        .fetch
+        .abort_signals
+        .get_mut(handle)
+        .map(|signal| &mut signal.events)
+}
+
+/// AbortSignal 的 JS 包装对象。
+pub(super) fn abort_signal_object(state: &NativeAgentState, handle: u32) -> Option<i64> {
+    state
+        .fetch
+        .abort_signals
+        .get(handle)
+        .map(|signal| signal.object)
+}
+
+/// AbortSignal 的 `(aborted, reason)` 快照。
+pub(super) fn abort_signal_flags(state: &NativeAgentState, handle: u32) -> Option<(bool, i64)> {
+    state
+        .fetch
+        .abort_signals
+        .get(handle)
+        .map(|signal| (signal.aborted, signal.reason))
 }
 
 /// 按实际 `this` 解析品牌：非对象或未登记为 fetch 包装对象时返回 None。

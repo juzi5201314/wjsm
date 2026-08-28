@@ -686,6 +686,15 @@ pub enum Builtin {
     /// STATIC_MEMBER 为容器全局名）；[family, wire_id, receiver] 解析
     /// receiver 上的站点属性成员。
     IntrinsicResolve,
+    /// 全局 `EventTarget` 构造器（WHATWG DOM §2.7）：创建空监听器列表的
+    /// 事件目标对象。args: []（实参忽略）。
+    EventTargetConstructor,
+    /// 全局 `AbortSignal` 接口对象（WHATWG DOM §3.2）：不可直接构造，
+    /// [[Construct]] 恒抛 TypeError "Illegal constructor"。
+    AbortSignalConstructor,
+    /// 全局 `Event` 构造器（WHATWG DOM §2.5）：type 必选（ToString），
+    /// options 字典读 bubbles / cancelable / composed。args: [type, options?]。
+    EventConstructor,
     /// throw completion 语义的 IteratorClose（ES §7.4.6 步骤 5）：completion
     /// 为 throw 时原始异常胜出——return 方法查找抛出、非 callable、调用抛出、
     /// 返回非对象全部吞咽，恒返回 completion；宿主内部 invariant 失败仍以
@@ -1252,6 +1261,9 @@ impl Builtin {
             Self::StringRaw => "string.raw",
             Self::IntrinsicPristine => "intrinsic_pristine",
             Self::IntrinsicResolve => "intrinsic_resolve",
+            Self::EventTargetConstructor => "EventTarget",
+            Self::AbortSignalConstructor => "AbortSignal",
+            Self::EventConstructor => "Event",
             Self::IteratorCloseThrowCompletion => "iterator.close_throw",
         }
     }

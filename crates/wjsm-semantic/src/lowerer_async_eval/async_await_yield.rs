@@ -701,6 +701,9 @@ impl Lowerer {
                         | Builtin::RequestConstructor
                         | Builtin::ResponseConstructor
                         | Builtin::AbortControllerConstructor
+                        | Builtin::AbortSignalConstructor
+                        | Builtin::EventTargetConstructor
+                        | Builtin::EventConstructor
                         | Builtin::ReadableStreamConstructor
                         | Builtin::WritableStreamConstructor
                         | Builtin::TransformStreamConstructor
@@ -711,7 +714,9 @@ impl Lowerer {
                 let mut call_block = block;
                 let mut arg_vals =
                     self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
-                if arg_vals.is_empty() {
+                // Event 构造器必须区分 `new Event()`（缺参错误）与
+                // `new Event(undefined)`（type 为 "undefined"），不补位。
+                if arg_vals.is_empty() && builtin != Builtin::EventConstructor {
                     arg_vals.push({
                         let c = self.module.add_constant(Constant::Undefined);
                         let dest = self.alloc_value();

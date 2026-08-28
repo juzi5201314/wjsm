@@ -1654,7 +1654,8 @@ pub(crate) fn lower_function(
             let result = match constant {
                 // 字符串常量 install 期已发布进 vmctx 常量数组：入口两条 load 直读，
                 // 替代旧的 MaterializeString 宿主往返（每次函数调用 ~40ns/常量）。
-                Constant::String(_) => {
+                // Utf16String（含孤立代理项）与 String 共用同一发布表。
+                Constant::String(_) | Constant::Utf16String(_) => {
                     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
                     let base = cx.builder.ins().load(
                         pointer_type,
@@ -1783,7 +1784,10 @@ pub(crate) fn lower_function(
                 let Some(value) = constants.get(constant.0 as usize) else {
                     continue;
                 };
-                if matches!(value, Constant::String(_) | Constant::BigInt(_)) {
+                if matches!(
+                    value,
+                    Constant::String(_) | Constant::Utf16String(_) | Constant::BigInt(_)
+                ) {
                     ids.insert(*constant);
                 }
             }
@@ -3270,7 +3274,7 @@ fn lower_instruction(
                     .builder
                     .ins()
                     .iconst(types::I64, value::encode_f64(f64::from(module.0))),
-                Constant::String(_) | Constant::BigInt(_) => tables
+                Constant::String(_) | Constant::Utf16String(_) | Constant::BigInt(_) => tables
                     .hoisted_constants
                     .get(constant_id)
                     .copied()
@@ -8800,7 +8804,10 @@ fn switch_constant_immediate(constant: &Constant) -> Result<i64> {
         Constant::FunctionRef(_) => bail!("function references are not valid switch keys"),
         Constant::NativeCallableEval => Ok(value::encode_native_callable_idx(0)),
         Constant::ModuleId(module) => Ok(value::encode_f64(f64::from(module.0))),
-        Constant::String(_) | Constant::BigInt(_) | Constant::RegExp { .. } => {
+        Constant::String(_)
+        | Constant::Utf16String(_)
+        | Constant::BigInt(_)
+        | Constant::RegExp { .. } => {
             bail!("materialized constants are not valid switch keys")
         }
         Constant::ArrayTemplate(_) => bail!("array templates are not valid switch keys"),

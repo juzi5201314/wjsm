@@ -356,7 +356,8 @@ fn constant_kind(constant: &Constant) -> Option<PrimitiveKind> {
         Constant::Bool(_) => PrimitiveKind::Bool,
         Constant::Null => PrimitiveKind::Null,
         Constant::Number(_) => PrimitiveKind::Number,
-        Constant::String(_) => PrimitiveKind::String,
+        // 类型分类不取值：Utf16String（含孤立代理项）同样是字符串。
+        Constant::String(_) | Constant::Utf16String(_) => PrimitiveKind::String,
         Constant::Undefined => PrimitiveKind::Undefined,
         Constant::FunctionRef(_)
         | Constant::NativeCallableEval

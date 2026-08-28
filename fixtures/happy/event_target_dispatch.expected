@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+["f:x","f:x"]
+after remove bool: ["f:x"]
+after remove obj: []
+once: 1
+mutation: ["l1"]
+second round: ["l1","l3","l3"]
+sip ret: true ["w1"]
+cancel ret: false true
+handleEvent: ["he:true:h"]
+probe true true true false null 0
+number [object Event]
+during: 2 true true
+after: 0 true null
+--- stderr ---
