@@ -430,7 +430,8 @@ impl Lowerer {
 
         for elem in array_pat.elems.iter() {
             let Some(elem) = elem else {
-                // 空位：消耗一次迭代但不绑定
+                // 空位：消耗一次迭代但不绑定。Elision 的 `? IteratorStep`
+                // （§8.6.2）abrupt 时须传播——next()/done 读取抛出以异常值返回。
                 let hole_val = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
@@ -440,7 +441,7 @@ impl Lowerer {
                         args: vec![iter_handle],
                     },
                 );
-                block = self.resolve_store_block(block);
+                block = self.lower_value_exception_branch(block, hole_val)?;
                 continue;
             };
 
@@ -451,7 +452,9 @@ impl Lowerer {
                 break;
             }
 
-            // 取下一个迭代值（已耗尽则返回 undefined）
+            // 取下一个迭代值（已耗尽则返回 undefined）。IteratorStepValue 的
+            // abrupt completion（next 调用 / done / value 读取抛出）以异常值
+            // 返回，须先于默认值判定与绑定传播（§8.6.2 IteratorBindingInitialization）。
             let elem_val = self.alloc_value();
             self.current_function.append_instruction(
                 block,
@@ -461,6 +464,7 @@ impl Lowerer {
                     args: vec![iter_handle],
                 },
             );
+            block = self.lower_value_exception_branch(block, elem_val)?;
 
             if let swc_ast::Pat::Assign(assign) = elem {
                 // NamedEvaluation：`[f = <匿名函数定义>]` 按目标标识符命名。
@@ -501,7 +505,7 @@ impl Lowerer {
             },
         );
 
-        // 循环收集剩余元素（与 for-of 相同的 header→body→next→header 结构）
+        // 循环收集剩余元素（与 for-of 相同的 header→body→header 结构）
         let header = self.current_function.new_block();
         let loop_body = self.current_function.new_block();
         let exit = self.current_function.new_block();
@@ -509,7 +513,10 @@ impl Lowerer {
         self.current_function
             .set_terminator(block, Terminator::Jump { target: header });
 
-        // header: 检查 done
+        // header: 检查 done。IteratorDone 对自定义迭代器惰性调用 next() 并
+        // 缓存结果，step 错误（next 抛出 / done 读取抛出）以异常值返回；
+        // 不检查会让异常值流入 Not/Branch 而循环永不终止（§8.6.2
+        // BindingRestElement：abrupt 时置 [[Done]] 并向外抛，不做 IteratorClose）。
         let done_val = self.alloc_value();
         self.current_function.append_instruction(
             header,
@@ -519,9 +526,10 @@ impl Lowerer {
                 args: vec![iter_handle],
             },
         );
+        let condition_block = self.lower_value_exception_branch(header, done_val)?;
         let not_done = self.alloc_value();
         self.current_function.append_instruction(
-            header,
+            condition_block,
             Instruction::Unary {
                 dest: not_done,
                 op: UnaryOp::Not,
@@ -529,7 +537,7 @@ impl Lowerer {
             },
         );
         self.current_function.set_terminator(
-            header,
+            condition_block,
             Terminator::Branch {
                 condition: not_done,
                 true_block: loop_body,
@@ -537,41 +545,40 @@ impl Lowerer {
             },
         );
 
-        // body: 取值、push、前进
+        // body: 取值并前进（IteratorStepValue 一步完成，value getter 只求值
+        // 一次）；value 读取抛出同样以异常值返回，须在 push 前分叉传播。
         let elem_val = self.alloc_value();
         self.current_function.append_instruction(
             loop_body,
             Instruction::CallBuiltin {
                 dest: Some(elem_val),
-                builtin: Builtin::IteratorValue,
+                builtin: Builtin::IteratorStepValue,
                 args: vec![iter_handle],
             },
         );
+        let push_block = self.lower_value_exception_branch(loop_body, elem_val)?;
         self.current_function.append_instruction(
-            loop_body,
+            push_block,
             Instruction::CallBuiltin {
                 dest: None,
                 builtin: Builtin::ArrayPush,
                 args: vec![result_arr, elem_val],
             },
         );
-        self.current_function.append_instruction(
-            loop_body,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::IteratorNext,
-                args: vec![iter_handle],
-            },
-        );
         self.current_function
-            .set_terminator(loop_body, Terminator::Jump { target: header });
+            .set_terminator(push_block, Terminator::Jump { target: header });
 
-        // exit: 关闭迭代器
-        let exit = self.emit_single_iterator_close_normal(exit, iter_handle)?;
+        // exit: 不做 IteratorClose——rest 收集只在 done 为 true 时结束，
+        // 规范所有 IteratorClose 调用点都以 [[Done]] 为 false 为前提
+        // （§13.15.5.2 步骤 6），耗尽后再调 return() 属可观察偏离；
+        // 迭代器侧表项由 GC 存活扫描回收。
 
-        let _ = self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
+        // rest 目标可为嵌套解构模式（`[...[x, y]]` / `[...{ length }]`）：
+        // 其绑定初始化产生的后继块必须回传，丢弃会让嵌套绑定代码悬挂在
+        // 不可达分支、后续语句接回旧块（症状伪装成 TDZ / 全 undefined）。
+        let exit = self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
 
-        Ok(exit)
+        Ok(self.resolve_store_block(exit))
     }
 
     /// 默认值检查: `x = default`
