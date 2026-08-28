@@ -833,14 +833,12 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             let old_prototype = header as u32;
             if (epoch.young_marking || epoch.old_marking) && old_prototype != PROTO_NULL_SENTINEL {
                 barrier
-                    .record(BarrierRecord::Satb(value::encode_object_handle(
-                        old_prototype,
-                    )))
+                    .record(BarrierRecord::Satb(encode_proto_slot_value(old_prototype)))
                     .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
             }
             if (epoch.young_marking || epoch.old_marking) && prototype != PROTO_NULL_SENTINEL {
                 barrier
-                    .record(BarrierRecord::Mark(value::encode_object_handle(prototype)))
+                    .record(BarrierRecord::Mark(encode_proto_slot_value(prototype)))
                     .map_err(|_| HeapAccessV2Error::BarrierBufferFull)?;
             }
             if self.handle_generation(handle) == Some(HandleGeneration::Old) {
@@ -2236,11 +2234,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map_err(HeapAccessV2Error::Memory)?;
         let prototype = header as u32;
         if prototype != PROTO_NULL_SENTINEL && prototype != handle {
-            if prototype & 0x8000_0000 != 0 {
-                visitor(value::encode_proxy_handle(prototype & 0x7FFF_FFFF));
-            } else {
-                visitor(value::encode_object_handle(prototype));
-            }
+            visitor(encode_proto_slot_value(prototype));
         }
         // 字符串对象：payload 是原始字节或子引用句柄，不是值槽数组。
         if header_heap_type(header) == u32::from(wjsm_ir::HEAP_TYPE_STRING) {
@@ -2493,9 +2487,9 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<Option<(u32, HeapAccessV2Property)>, HeapAccessV2Error> {
         let mut current = handle;
         loop {
-            // 高位标记的 proxy handle 不能 resolve 为 V2 heap 地址；
-            // 交给上层 host 走 Proxy [[Get]] trap。
-            if current & 0x8000_0000 != 0 {
+            // 高位标记的宿主 exotic 句柄（Proxy / RegExp）不能 resolve 为 V2
+            // heap 地址；交给上层 host 继续（trap / 宿主侧表）。
+            if crate::shape::proto_slot_is_exotic(current) {
                 return Ok(None);
             }
             let object = self.resolve_handle(current)?;
@@ -2514,9 +2508,9 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             if prototype == PROTO_NULL_SENTINEL || prototype == current {
                 return Ok(None);
             }
-            // 下一环是 Proxy：停止并返回 None，由 host 继续 proxy 路径。
-            if prototype & 0x8000_0000 != 0 {
-                return Err(HeapAccessV2Error::ProxyPrototype { handle: prototype });
+            // 下一环是 Proxy / RegExp：以错误逃逸，由 host 解码标记位继续。
+            if crate::shape::proto_slot_is_exotic(prototype) {
+                return Err(HeapAccessV2Error::ExoticPrototype { slot: prototype });
             }
             current = prototype;
         }
@@ -2535,8 +2529,8 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     ) -> Result<Option<(u32, u32, HeapAccessV2Property)>, HeapAccessV2Error> {
         let mut current = handle;
         loop {
-            // 高位标记的 proxy handle 不能 resolve 为 V2 heap 地址。
-            if current & 0x8000_0000 != 0 {
+            // 高位标记的宿主 exotic 句柄不能 resolve 为 V2 heap 地址。
+            if crate::shape::proto_slot_is_exotic(current) {
                 return Ok(None);
             }
             let object = self.resolve_handle(current)?;
@@ -2564,7 +2558,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             if prototype == PROTO_NULL_SENTINEL || prototype == current {
                 return Ok(None);
             }
-            if prototype & 0x8000_0000 != 0 {
+            if crate::shape::proto_slot_is_exotic(prototype) {
                 return Ok(None);
             }
             current = prototype;
@@ -2988,6 +2982,18 @@ fn header_heap_type(header: u64) -> u32 {
     ((header >> (constants::HEAP_OBJECT_TYPE_OFFSET * 8)) & 0xFF) as u32
 }
 
+/// proto 槽 u32 → GC 编码值：标记位还原为对应宿主 tag（Proxy / RegExp），
+/// 其余按普通堆对象句柄编码；调用方须先排除 null 哨兵。
+fn encode_proto_slot_value(prototype: u32) -> i64 {
+    if prototype & crate::shape::PROTO_PROXY_FLAG != 0 {
+        value::encode_proxy_handle(prototype & !crate::shape::PROTO_PROXY_FLAG)
+    } else if prototype & crate::shape::PROTO_REGEXP_FLAG != 0 {
+        value::encode_regexp_handle(prototype & !crate::shape::PROTO_REGEXP_FLAG)
+    } else {
+        value::encode_object_handle(prototype)
+    }
+}
+
 /// 值槽地址：`object + 24 + index * 8`，与数组元素同一套公式。
 pub fn value_slot_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
     object
@@ -3065,9 +3071,10 @@ pub enum HeapAccessV2Error {
         actual: u32,
     },
     RelocationAssist(String),
-    /// 原型链下一环是高位标记的 Proxy handle，需 host 走 trap。
-    ProxyPrototype {
-        handle: u32,
+    /// 原型链下一环是高位标记的宿主 exotic 句柄（Proxy / RegExp），
+    /// 需 host 解码标记位后继续（Proxy 走 trap，RegExp 走宿主侧表）。
+    ExoticPrototype {
+        slot: u32,
     },
     /// 数组对象没有属性槽（offset 8/12 与 length/元素容量别名）；
     /// 命名属性必须经宿主 `ArrayNamedPropsStore` 侧表。
@@ -3180,8 +3187,8 @@ impl fmt::Display for HeapAccessV2Error {
             Self::RelocationAssist(error) => {
                 write!(formatter, "ZGC relocation assist failed: {error}")
             }
-            Self::ProxyPrototype { handle } => {
-                write!(formatter, "proxy prototype handle {handle:#x}")
+            Self::ExoticPrototype { slot } => {
+                write!(formatter, "exotic prototype slot {slot:#x}")
             }
             Self::ArrayPropertySlots { handle } => write!(
                 formatter,

@@ -93,7 +93,11 @@ pub(crate) fn error_constructor(
     let Some(cause_key) = state.intern_text("cause".into(), value::TAG_STRING) else {
         return fail_dispatch(ctx);
     };
-    if has_property(state, options, cause_key) {
+    let has_cause = match has_property(ctx, state, options, cause_key) {
+        Ok(present) => present,
+        Err(exception) => return exception,
+    };
+    if has_cause {
         let cause =
             get_property(ctx, state, options, cause_key).unwrap_or_else(|()| fail_dispatch(ctx));
         if value::is_exception(cause) {

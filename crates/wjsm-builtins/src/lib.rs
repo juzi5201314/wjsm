@@ -25,6 +25,7 @@ pub mod misc;
 pub mod modules;
 pub mod number_format;
 pub mod object_builtins;
+pub mod object_proto;
 pub mod primitive_core;
 pub mod private_fields;
 pub mod promise;

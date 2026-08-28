@@ -190,7 +190,8 @@ fn type_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
         "boolean"
     } else if value::is_string(input) {
         "string"
-    } else if value::is_callable(input) {
+    } else if value::is_callable(input) || state.value_is_callable(input) {
+        // §13.5.3 表 37：实现 [[Call]] 的对象（含 callable Proxy）为 "function"。
         "function"
     } else if value::is_bigint(input) {
         "bigint"
@@ -232,7 +233,10 @@ fn op_in(ctx: &mut NativeVmContext, state: &mut NativeAgentState, object: i64, k
     if value::is_proxy(object) {
         return proxy::has(ctx, state, &[object, key]);
     }
-    value::encode_bool(has_property(state, object, key))
+    match has_property(ctx, state, object, key) {
+        Ok(present) => value::encode_bool(present),
+        Err(exception) => exception,
+    }
 }
 
 /// ES InstanceofOperator：步骤 1 target 非对象抛 TypeError（先于
