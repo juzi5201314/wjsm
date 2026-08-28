@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+findIndex: [null] 0
+findLastIndex: [2,null] 1
+find-inherited: 42 42
+--- stderr ---

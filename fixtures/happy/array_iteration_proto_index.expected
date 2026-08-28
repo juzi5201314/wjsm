@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+map: [14] 1
+map-slow: [14]
+forEach: 0:7,1:2
+filter: [7]
+some: true every: true
+reduce: 9
+reduceRight: 2|7
+getter-map: [20,5]
+proto-delete: 0:1,2:3
+proto-add: 0:0,1:9,2:2
+--- stderr ---

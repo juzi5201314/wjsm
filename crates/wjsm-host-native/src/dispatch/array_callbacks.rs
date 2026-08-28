@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::array_like::{ArrayLikeSource, observable, raw};
+use super::array_like::{ArrayLikeSource, element_get, element_has, element_slots_trusted};
 use super::runtime::{
     allocate_object_or_out_of_memory, fail_dispatch, is_truthy, range_error, render_value,
     to_number, type_error,
@@ -280,18 +280,36 @@ fn iterate(
                     let output =
                         value::decode_handle(result_array.expect("flatMap allocates output"));
                     if value::is_array(callback_result) {
+                        // FlattenIntoArray（§23.1.3.13.1）depth=0 递归层：逐索引
+                        // 先 HasProperty 跳过内层洞（原型链继承索引可观察），
+                        // 存在才 Get 追加。内层数组与 Get 产出的值会途经 GC
+                        // 安全点（原型 getter 分配 / 追加扩容），循环期间锚根；
+                        // 提前 return 的异常路径由收尾 truncate 统一清根。
                         let inner = value::decode_handle(callback_result);
                         let Ok(inner_length) = state.gc.heap().array_length(inner) else {
                             return fail_dispatch(ctx);
                         };
-                        for inner_index in 0..inner_length {
-                            let inner_value = observable(raw(state, inner, inner_index));
-                            if push_element_with_gc_retry(ctx, state, output, inner_value as u64)
-                                .is_err()
-                            {
+                        state.temporary_roots.push(callback_result);
+                        for inner_index in 0..u64::from(inner_length) {
+                            match element_has(ctx, state, callback_result, inner_index) {
+                                Ok(true) => {}
+                                Ok(false) => continue,
+                                Err(exception) => return exception,
+                            }
+                            let inner_value =
+                                match element_get(ctx, state, callback_result, inner_index) {
+                                    Ok(inner_value) => inner_value,
+                                    Err(exception) => return exception,
+                                };
+                            state.temporary_roots.push(inner_value);
+                            let pushed =
+                                push_element_with_gc_retry(ctx, state, output, inner_value as u64);
+                            state.temporary_roots.pop();
+                            if pushed.is_err() {
                                 return fail_dispatch(ctx);
                             }
                         }
+                        state.temporary_roots.pop();
                     } else if push_element_with_gc_retry(ctx, state, output, callback_result as u64)
                         .is_err()
                     {
@@ -487,11 +505,14 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], c
                 .unwrap_or_else(|_| fail_dispatch(ctx));
         }
         match source {
+            // 元素槽可信（非字典 kind）才允许直写写回；比较器可能在排序中
+            // 给数组索引装 accessor（升为字典 kind），此时直写会绕过 setter
+            // 与不可写特性，退回下方规范 Set / DeletePropertyOrThrow 路径。
             ArrayLikeSource::Fast {
                 encoded,
                 handle,
                 length,
-            } => {
+            } if element_slots_trusted(state, handle) => {
                 let present = values.len() as u32;
                 for (index, stored) in values.into_iter().enumerate() {
                     if set_element_with_gc_retry(ctx, state, handle, index as u32, stored as u64)
@@ -515,9 +536,11 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64], c
                 }
                 encoded
             }
-            ArrayLikeSource::Generic { object, length } => {
+            source => {
                 // §23.1.3.30 步骤 7–9：Set 逐键写回，收集数少于 length 的
                 // 尾部索引 DeletePropertyOrThrow。
+                let object = source.receiver();
+                let length = source.length();
                 let present = values.len() as u64;
                 for (index, stored) in values.into_iter().enumerate() {
                     if let Err(exception) = super::array_like::set_index_or_throw(
