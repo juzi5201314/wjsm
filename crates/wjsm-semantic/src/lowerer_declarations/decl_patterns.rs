@@ -37,7 +37,15 @@ impl Lowerer {
                     );
                     rest_val
                 };
-                block = self.lower_destructure_pattern(&rest.arg, rest_val, block, VarKind::Let)?;
+                // rest 形参值是收集数组（永不 nullish），来源上下文惰性；
+                // 其元素位置的嵌套对象模式按数组嵌套处理。
+                block = self.lower_destructure_pattern(
+                    &rest.arg,
+                    rest_val,
+                    block,
+                    VarKind::Let,
+                    &DestructureSource::NestedInArray,
+                )?;
                 block = self.resolve_store_block(block);
                 break;
             }
@@ -77,16 +85,23 @@ impl Lowerer {
                                 name: ir_name.clone(),
                             },
                         );
+                        // 带默认值的形参：V8 把形参初始化脱糖为三元表达式，
+                        // 文案调用点为三连 "(intermediate value)"。
+                        let default_source =
+                            DestructureSource::TopLevel(DestructureCallsite::Text(
+                                "(intermediate value)".repeat(3),
+                            ));
                         block = self.lower_destructure_pattern(
                             &assign.left,
                             loaded,
                             store_block,
                             VarKind::Let,
+                            &default_source,
                         )?;
                     }
                 }
                 _ => {
-                    // 解构参数
+                    // 解构参数：无源码调用点，文案按运行期值渲染。
                     let raw = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
@@ -95,7 +110,13 @@ impl Lowerer {
                             name: ir_name.clone(),
                         },
                     );
-                    block = self.lower_destructure_pattern(pat, raw, block, VarKind::Let)?;
+                    block = self.lower_destructure_pattern(
+                        pat,
+                        raw,
+                        block,
+                        VarKind::Let,
+                        &DestructureSource::TopLevel(DestructureCallsite::RuntimeDefault),
+                    )?;
                 }
             }
             ir_name_idx += 1;
@@ -106,13 +127,16 @@ impl Lowerer {
     }
 
     /// 将解构 pattern 降低为一系列 IR 指令（GetProp/GetElem + StoreVar）。
-    /// 递归处理嵌套的 Array/Object/Assign pattern。
+    /// 递归处理嵌套的 Array/Object/Assign pattern。`source` 为对象模式
+    /// RequireObjectCoercible 检查的值来源上下文（仅对象模式消费；标识符 /
+    /// 数组模式忽略，数组元素的嵌套对象模式统一转为 NestedInArray）。
     pub(crate) fn lower_destructure_pattern(
         &mut self,
         pat: &swc_ast::Pat,
         src_val: ValueId,
         block: BasicBlockId,
         kind: VarKind,
+        source: &DestructureSource,
     ) -> Result<BasicBlockId, LoweringError> {
         match pat {
             swc_ast::Pat::Ident(binding) => {
@@ -161,7 +185,7 @@ impl Lowerer {
                 Ok(store_block)
             }
             swc_ast::Pat::Object(object_pat) => {
-                self.lower_object_destructure(object_pat, src_val, block, kind)
+                self.lower_object_destructure(object_pat, src_val, block, kind, source)
             }
             swc_ast::Pat::Array(array_pat) => {
                 self.lower_array_destructure(array_pat, src_val, block, kind)
@@ -171,7 +195,18 @@ impl Lowerer {
                 self.stage_named_eval_for_binding(&assign_pat.left, &assign_pat.right);
                 let resolved = self.lower_default_value_check(src_val, &assign_pat.right, block)?;
                 let store_block = self.resolve_store_block(block);
-                self.lower_destructure_pattern(&assign_pat.left, resolved, store_block, kind)
+                // 带默认值的子模式：无论默认是否被采用，V8 的文案位置都指向
+                // 默认值表达式（顶层形态，调用点为默认表达式文本）。
+                let default_source = DestructureSource::TopLevel(DestructureCallsite::Text(
+                    render_destructure_callsite(&assign_pat.right),
+                ));
+                self.lower_destructure_pattern(
+                    &assign_pat.left,
+                    resolved,
+                    store_block,
+                    kind,
+                    &default_source,
+                )
             }
             swc_ast::Pat::Rest(_) => Err(self.error(
                 pat.span(),
@@ -275,7 +310,15 @@ impl Lowerer {
         src_val: ValueId,
         mut block: BasicBlockId,
         kind: VarKind,
+        source: &DestructureSource,
     ) -> Result<BasicBlockId, LoweringError> {
+        // RequireObjectCoercible（§13.15.5.2 步骤 1 / §8.6.2 步骤 1）：nullish
+        // 值先于任何键求值 / 属性读取抛 TypeError；文案矩阵见
+        // emit_object_coercible_check。首属性为简单键时由 GetProp 的 ToObject
+        // TypeError 承担（与 V8 消除冗余检查一致）。
+        let (checked_block, child_callsite) =
+            self.emit_object_coercible_check(object_pat, src_val, block, source)?;
+        block = checked_block;
         let mut excluded_keys = Vec::new();
         for prop in &object_pat.props {
             match prop {
@@ -295,7 +338,14 @@ impl Lowerer {
                     );
                     // getter 可能抛出：异常须先于后续绑定/写入传播。
                     block = self.lower_value_exception_branch(block, dest)?;
-                    block = self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
+                    // 属性值位置的嵌套模式：继承顶层调用点，外层键供空/计算
+                    // 键嵌套模式的检查文案使用。
+                    let nested_source = DestructureSource::NestedInObject {
+                        outer_key: decl_coercible::render_prop_name(&kv.key),
+                        callsite: child_callsite.clone(),
+                    };
+                    block =
+                        self.lower_destructure_pattern(&kv.value, dest, block, kind, &nested_source)?;
                 }
                 swc_ast::ObjectPatProp::Assign(assign) => {
                     // { key } 等价于 { key: key }
@@ -360,11 +410,13 @@ impl Lowerer {
                                 self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
                         }
                     } else {
+                        // 标识符目标不消费来源上下文。
                         block = self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),
                             dest,
                             block,
                             kind,
+                            &DestructureSource::NestedInArray,
                         )?;
                     }
                 }
@@ -397,7 +449,15 @@ impl Lowerer {
                             args: vec![src_val, excluded_val],
                         },
                     );
-                    block = self.lower_destructure_pattern(&rest.arg, rest_dest, block, kind)?;
+                    // BindingRestProperty 目标是标识符（赋值型可为成员表达式），
+                    // 不消费来源上下文。
+                    block = self.lower_destructure_pattern(
+                        &rest.arg,
+                        rest_dest,
+                        block,
+                        kind,
+                        &DestructureSource::NestedInArray,
+                    )?;
                 }
             }
             // 确保 block 指向当前可用的基本块（可能已被 lower_default_value_check 等终结）
@@ -487,9 +547,25 @@ impl Lowerer {
                 self.stage_named_eval_for_binding(&assign.left, &assign.right);
                 let resolved = self.lower_default_value_check(elem_val, &assign.right, block)?;
                 block = self.resolve_store_block(block);
-                block = self.lower_destructure_pattern(&assign.left, resolved, block, kind)?;
+                // 带默认值的元素：V8 文案位置指向默认值表达式（顶层形态）。
+                let default_source = DestructureSource::TopLevel(DestructureCallsite::Text(
+                    render_destructure_callsite(&assign.right),
+                ));
+                block = self.lower_destructure_pattern(
+                    &assign.left,
+                    resolved,
+                    block,
+                    kind,
+                    &default_source,
+                )?;
             } else {
-                block = self.lower_destructure_pattern(elem, elem_val, block, kind)?;
+                block = self.lower_destructure_pattern(
+                    elem,
+                    elem_val,
+                    block,
+                    kind,
+                    &DestructureSource::NestedInArray,
+                )?;
             }
             block = self.resolve_store_block(block);
         }
@@ -596,7 +672,14 @@ impl Lowerer {
         // rest 目标可为嵌套解构模式（`[...[x, y]]` / `[...{ length }]`）：
         // 其绑定初始化产生的后继块必须回传，丢弃会让嵌套绑定代码悬挂在
         // 不可达分支、后续语句接回旧块（症状伪装成 TDZ / 全 undefined）。
-        let exit = self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
+        // rest 值是新建数组（永不 nullish），来源上下文惰性。
+        let exit = self.lower_destructure_pattern(
+            rest_pat,
+            result_arr,
+            exit,
+            kind,
+            &DestructureSource::NestedInArray,
+        )?;
 
         Ok(self.resolve_store_block(exit))
     }

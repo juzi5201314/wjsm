@@ -130,9 +130,7 @@ fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
         | Instruction::ExceptionToObject { value, .. } => *value == target,
         Instruction::StringConcatVa { parts, .. }
         | Instruction::CallBuiltin { args: parts, .. } => parts.contains(&target),
-        Instruction::GetProp { object, key, .. }
-        | Instruction::OptionalGetProp { object, key, .. }
-        | Instruction::OptionalGetElem { object, key, .. } => *object == target || *key == target,
+        Instruction::GetProp { object, key, .. } => *object == target || *key == target,
         Instruction::SetProp {
             object, key, value, ..
         }
@@ -158,12 +156,6 @@ fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
             ..
         } => *object == target || *index == target || *value == target,
         Instruction::Call {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | Instruction::OptionalCall {
             callee,
             this_val,
             args,
@@ -210,7 +202,6 @@ fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
 fn instruction_uses_other_than_callee(instruction: &Instruction, target: ValueId) -> bool {
     match instruction {
         Instruction::Call { this_val, args, .. }
-        | Instruction::OptionalCall { this_val, args, .. }
         | Instruction::SuperCall { this_val, args, .. }
         | Instruction::ConstructCall { this_val, args, .. } => {
             *this_val == target || args.contains(&target)

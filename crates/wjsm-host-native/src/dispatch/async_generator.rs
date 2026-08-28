@@ -167,6 +167,12 @@ fn async_iterator_from(
     }
     let async_iterator =
         value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ASYNC_ITERATOR);
+    // GetIterator(obj, async)（§7.4.3）的 GetMethod 对 nullish 做 ToObject：
+    // V8 按普通属性读取渲染（reading 'Symbol(Symbol.asyncIterator)'）。
+    if let Some(exception) = super::runtime::get_on_nullish_base(ctx, state, source, async_iterator)
+    {
+        return exception;
+    }
     let method = match get_property(ctx, state, source, async_iterator) {
         Ok(method) => method,
         Err(()) => return wrap_sync_iterator(ctx, state, source),

@@ -62,125 +62,6 @@ impl Lowerer {
         );
         dest
     }
-    /// 可选调用的短路发射：`callee?.(args)` 的短路点在 ArgumentListEvaluation
-    /// 之前（§13.3.9.1），callee 为 nullish 时直接产出 undefined，实参一律
-    /// 不求值。非 nullish 分支才求值实参：spread 形态经参数数组 + FuncApply，
-    /// 非 spread 形态发 OptionalCall（由 backend 处理非可调用 TypeError）。
-    fn lower_optional_call_short_circuit(
-        &mut self,
-        callee: ValueId,
-        this_val: ValueId,
-        args: &[swc_ast::ExprOrSpread],
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
-        let branch_block = self.resolve_store_block(block);
-        let branch_block = if self.current_function.block(branch_block).is_some_and(|bb| {
-            bb.instructions()
-                .iter()
-                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
-        }) {
-            let next_block = self.current_function.new_block();
-            self.current_function
-                .set_terminator(branch_block, Terminator::Jump { target: next_block });
-            next_block
-        } else {
-            branch_block
-        };
-
-        let is_nullish = self.alloc_value();
-        self.current_function.append_instruction(
-            branch_block,
-            Instruction::Unary {
-                dest: is_nullish,
-                op: UnaryOp::IsNullish,
-                value: callee,
-            },
-        );
-        let nullish_block = self.current_function.new_block();
-        let call_block = self.current_function.new_block();
-        let merge_block = self.current_function.new_block();
-        self.current_function.set_terminator(
-            branch_block,
-            Terminator::Branch {
-                condition: is_nullish,
-                true_block: nullish_block,
-                false_block: call_block,
-            },
-        );
-
-        let undefined = self.alloc_value();
-        let undefined_constant = self.module.add_constant(Constant::Undefined);
-        self.current_function.append_instruction(
-            nullish_block,
-            Instruction::Const {
-                dest: undefined,
-                constant: undefined_constant,
-            },
-        );
-        self.current_function.set_terminator(
-            nullish_block,
-            Terminator::Jump {
-                target: merge_block,
-            },
-        );
-
-        let (called, args_end) = if Self::call_args_have_spread(args) {
-            let (args_array, args_end) = self.lower_call_args_to_array(args, call_block)?;
-            let called = self.alloc_value();
-            self.current_function.append_instruction(
-                args_end,
-                Instruction::CallBuiltin {
-                    dest: Some(called),
-                    builtin: Builtin::FuncApply,
-                    args: vec![callee, this_val, args_array],
-                },
-            );
-            (called, args_end)
-        } else {
-            let mut args_end = call_block;
-            let mut arg_vals = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_vals.push(self.lower_call_operand_then_continue(&arg.expr, &mut args_end)?);
-            }
-            let called = self.alloc_value();
-            self.current_function.append_instruction(
-                args_end,
-                Instruction::OptionalCall {
-                    dest: called,
-                    callee,
-                    this_val,
-                    args: arg_vals,
-                },
-            );
-            (called, args_end)
-        };
-        self.current_function.set_terminator(
-            args_end,
-            Terminator::Jump {
-                target: merge_block,
-            },
-        );
-
-        let result = self.alloc_value();
-        self.current_function.append_instruction(
-            merge_block,
-            Instruction::Phi {
-                dest: result,
-                sources: vec![
-                    PhiSource {
-                        predecessor: nullish_block,
-                        value: undefined,
-                    },
-                    PhiSource {
-                        predecessor: args_end,
-                        value: called,
-                    },
-                ],
-            },
-        );
-        self.expr_merge_block = Some(merge_block);
-        Ok(result)
-    }
     /// 原型方法拦截的公共发射逻辑：把 `obj.method(args...)` 降为
     /// `CallBuiltin(builtin, [this, args...])`，其中 this = obj。
     ///
@@ -204,7 +85,7 @@ impl Lowerer {
         let dest;
         if Self::call_args_have_spread(args) {
             let callee_val =
-                self.lower_member_expr_from_object(member_expr, this_val, &mut call_block, false)?;
+                self.lower_member_expr_from_object(member_expr, this_val, &mut call_block)?;
             let (args_array, end_block) = self.lower_call_args_to_array(args, call_block)?;
             call_block = end_block;
             dest = self.alloc_value();
@@ -723,12 +604,8 @@ impl Lowerer {
                     let mut member_block = block;
                     this_val =
                         self.lower_call_operand_then_continue(&member_expr.obj, &mut member_block)?;
-                    callee_val = self.lower_member_expr_from_object(
-                        member_expr,
-                        this_val,
-                        &mut member_block,
-                        false,
-                    )?;
+                    callee_val =
+                        self.lower_member_expr_from_object(member_expr, this_val, &mut member_block)?;
                     // 方法查找（getter / Proxy get 陷阱）抛出必须先于调用分叉
                     // 传播，哨兵不得作为 callee 流入 Call（否则误报
                     // "... is not a function" 且丢失原始异常）。
@@ -884,135 +761,6 @@ impl Lowerer {
         // `new RegExp(...)` 的异常分叉、三元、await 等）时，Call 已发射在推进后的
         // 延续块上。必须把该块经 expr_merge_block 上报，否则外层语句会在过时的入口块
         // 上继续，覆盖延续块的终结器并使真正的 Call 落入不可达块。
-        if call_block != block {
-            self.expr_merge_block = Some(call_block);
-        }
-        Ok(dest)
-    }
-
-    /// 可选调用 `callee?.(args)`：
-    /// - 静态宿主 API（`console.log` 等）与普通调用一样走 `CallBuiltin`（属性不存在于对象图，
-    ///   只能靠编译期识别；`?.` 在静态已知方法上恒存在，与 V8 优化路径一致）。
-    /// - 其它 callee 发射 `OptionalCall`，由 backend 对 null/undefined 短路。
-    pub(crate) fn lower_optional_call_expr(
-        &mut self,
-        call: &swc_ast::CallExpr,
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
-        if let swc_ast::Callee::Expr(expr) = &call.callee
-            && let swc_ast::Expr::Member(member_expr) = expr.as_ref()
-            && let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
-            && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
-            && let Some(builtin) = builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
-            && !self.global_intrinsic_shadowed(&obj_ident.sym)
-            && self
-                .with_scopes_for_ident(obj_ident.sym.as_ref())
-                .is_empty()
-        {
-            // pristine 时静态方法恒存在，可选链不短路，等于直接 CallBuiltin；
-            // 被改写 / 删除后慢路径按可选调用对 nullish callee 短路。
-            return self.lower_intrinsic_guarded_call(
-                call,
-                block,
-                builtin,
-                IntrinsicCallSite::StaticMember { optional: true },
-            );
-        }
-
-        let callee_val: ValueId;
-        let this_val: ValueId;
-        let callee_block: BasicBlockId;
-
-        // 成员形态的 callee（含 `a?.b()` / `a?.b.c()` 的 OptChain 包装）：
-        // receiver 求值一次并复用为 this（EvaluateCall 的 thisValue 取自
-        // Reference base，`f().m?.()` 不得二次求值）；`?.` 短路点按包装节点的
-        // optional 发 OptionalGetProp，短路产出 undefined 后 OptionalCall 再次
-        // 短路，与规范链式短路一致。
-        let callee_member = match &call.callee {
-            swc_ast::Callee::Expr(expr) => match expr.as_ref() {
-                swc_ast::Expr::Member(member_expr) => Some((member_expr, false)),
-                swc_ast::Expr::OptChain(oc) => match oc.base.as_ref() {
-                    swc_ast::OptChainBase::Member(member_expr) => Some((member_expr, oc.optional)),
-                    swc_ast::OptChainBase::Call(_) => None,
-                },
-                _ => None,
-            },
-            _ => None,
-        };
-
-        match &call.callee {
-            swc_ast::Callee::Expr(expr) => {
-                if let Some((member_expr, member_optional)) = callee_member {
-                    // 方法查找（getter）抛出必须先于调用分叉传播，哨兵不得作为
-                    // callee 流入 OptionalCall。
-                    let mut member_block = block;
-                    this_val =
-                        self.lower_call_operand_then_continue(&member_expr.obj, &mut member_block)?;
-                    callee_val = self.lower_member_expr_from_object(
-                        member_expr,
-                        this_val,
-                        &mut member_block,
-                        member_optional,
-                    )?;
-                    member_block = self.lower_value_exception_branch(member_block, callee_val)?;
-                    callee_block = member_block;
-                } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
-                    && !self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()
-                {
-                    // 裸标识符可选调用穿越 with 作用域：callee/this 动态分派，
-                    // 命中 with 对象时 this 绑定为该对象（§9.1.1.2.10）。
-                    let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
-                    let (callee, this, post) =
-                        self.lower_with_callee_resolution(ident, &crossed, block)?;
-                    callee_val = callee;
-                    this_val = this;
-                    callee_block = post;
-                } else {
-                    this_val = self.alloc_value();
-                    let undef = self.module.add_constant(Constant::Undefined);
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::Const {
-                            dest: this_val,
-                            constant: undef,
-                        },
-                    );
-                    // callee 表达式（`o?.m` 等可选链）抛出必须在调用前分叉传播。
-                    let mut callee_eval_block = block;
-                    callee_val =
-                        self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
-                    callee_block = callee_eval_block;
-                }
-            }
-            other => {
-                let _ = other;
-                return self.lower_call_expr(call, block);
-            }
-        }
-
-        let call_block = self.resolve_store_block(callee_block);
-        if !call.args.is_empty() {
-            // 有实参：短路点必须在 ArgumentListEvaluation 之前（§13.3.9.1），
-            // nullish callee 不得触发实参求值的副作用。
-            return self.lower_optional_call_short_circuit(
-                callee_val,
-                this_val,
-                &call.args,
-                call_block,
-            );
-        }
-
-        // 无实参：不存在实参求值顺序问题，OptionalCall 自身完成 nullish 短路。
-        let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            call_block,
-            Instruction::OptionalCall {
-                dest,
-                callee: callee_val,
-                this_val,
-                args: Vec::new(),
-            },
-        );
         if call_block != block {
             self.expr_merge_block = Some(call_block);
         }

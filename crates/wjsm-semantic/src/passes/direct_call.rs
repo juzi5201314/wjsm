@@ -58,16 +58,7 @@ pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
             value,
             ..
         } => vec![*object, *index, *value],
-        OptionalGetProp { object, key, .. } | OptionalGetElem { object, key, .. } => {
-            vec![*object, *key]
-        }
-        OptionalCall {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | Call {
+        Call {
             callee,
             this_val,
             args,
@@ -175,12 +166,9 @@ pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
         | InitObjectLiteral { dest, .. }
         | GetElem { dest, .. }
         | SetElem { dest, .. }
-        | OptionalGetProp { dest, .. }
-        | OptionalGetElem { dest, .. }
         | ElemShapeGuard { dest, .. }
         | GetElemGuarded { dest, .. }
         | GetPropGuarded { dest, .. }
-        | OptionalCall { dest, .. }
         | GetSuperBase { dest }
         | GetSuperConstructor { dest }
         | NewPromise { dest }

@@ -240,27 +240,6 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             add(index);
             add(value);
         }
-        OptionalGetProp { dest, object, key } => {
-            add(dest);
-            add(object);
-            add(key);
-        }
-        OptionalGetElem { dest, object, key } => {
-            add(dest);
-            add(object);
-            add(key);
-        }
-        OptionalCall {
-            dest,
-            callee,
-            this_val,
-            args,
-        } => {
-            add(dest);
-            add(callee);
-            add(this_val);
-            add_vec(args);
-        }
         ObjectSpread {
             dest,
             object,
@@ -498,27 +477,6 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(object);
             rep(index);
             rep(value);
-        }
-        OptionalGetProp { dest, object, key } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-        }
-        OptionalGetElem { dest, object, key } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-        }
-        OptionalCall {
-            dest,
-            callee,
-            this_val,
-            args,
-        } => {
-            rep(dest);
-            rep(callee);
-            rep(this_val);
-            rep_vec(args);
         }
         ObjectSpread {
             dest,

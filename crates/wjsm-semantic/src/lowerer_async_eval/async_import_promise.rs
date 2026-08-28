@@ -174,7 +174,7 @@ impl Lowerer {
         if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
             let this_val = self.lower_expr_then_continue(member_expr.obj.as_ref(), block)?;
             let callee_val =
-                self.lower_member_expr_from_object(member_expr, this_val, block, false)?;
+                self.lower_member_expr_from_object(member_expr, this_val, block)?;
             return Ok((callee_val, this_val));
         }
         let undef_const = self.module.add_constant(Constant::Undefined);
