@@ -1,0 +1,37 @@
+exit_code: 0
+--- stdout ---
+s1 {"value":11,"done":false}
+s1-inner closed
+s1-outer closed
+s1 finally
+s1 caught: s1 boom
+s2 {"value":1,"done":false}
+s2 inner finally
+s2-loop closed
+s2 caught: s2 boom
+s3-iter closed
+s3 finally
+s3 caught: s3 boom
+s4 {"value":1,"done":false}
+s4 bad return called
+s4 finally
+s4 caught: s4 original
+s5 {"value":1,"done":false}
+s5-iter closed
+s5 finally
+s5 caught: s5 replaced
+s6 inner finally
+s6-iter closed
+s6 caught: s6 boom
+s7-iter closed
+s7 caught: s7 boom
+s7 outer finally
+s8-iter closed
+s8 finally
+s8 caught: s8 boom
+s9 {"value":1,"done":false}
+s9 finally
+s9 {"value":"from-finally","done":false}
+s9-iter closed
+s9 caught: s9 boom
+--- stderr ---
