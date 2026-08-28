@@ -71,6 +71,22 @@ console.log(new (G.bind(null))().hit);
 const BG = G.bind(null);
 console.log(BG().hit);
 
+// spread 形态 SuperCall 是 [[Construct]]（ES §13.3.7.1）：不触发 [[Call]]
+// 门禁，new.target 沿派生构造器传播。
+class SpreadBase {
+  constructor(a, b) {
+    this.total = a + b;
+    this.viaDerived = new.target === SpreadDerived;
+  }
+}
+class SpreadDerived extends SpreadBase {
+  constructor(args) {
+    super(...args);
+  }
+}
+const spread = new SpreadDerived([20, 22]);
+console.log(spread.total, spread.viaDerived, spread instanceof SpreadBase);
+
 // 拒绝路径可重复触发且不破坏后续构造。
 let rejections = 0;
 for (let i = 0; i < 3; i++) {

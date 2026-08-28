@@ -18,5 +18,6 @@ TypeError: Class constructor Inner cannot be invoked without 'new'
 15 x true
 true
 false
+42 true true
 3 19
 --- stderr ---

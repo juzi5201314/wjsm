@@ -65,7 +65,7 @@ pub(super) fn dispatch_function(
                 .invoke_callable(ctx, callee, this_value, arguments)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
-        Builtin::FuncApply | Builtin::SuperApply => {
+        Builtin::FuncApply => {
             let Some(callee) = args.first().copied() else {
                 return Some(fail_dispatch(ctx));
             };
@@ -77,6 +77,29 @@ pub(super) fn dispatch_function(
             };
             state
                 .invoke_callable(ctx, callee, this_value, &arguments)
+                .unwrap_or_else(|| fail_dispatch(ctx))
+        }
+        Builtin::SuperApply => {
+            // spread 形态的 SuperCall（ES §13.3.7.1 步骤 3）：
+            // Construct(func, argList, GetNewTarget())——是 [[Construct]] 而非
+            // [[Call]]，newTarget 沿用当前（派生构造器）activation 的值，与
+            // prepare_super_call 的非 spread 路径一致；否则类构造器基类会被
+            // [[Call]] 门禁误拒，new.target 也会丢失。
+            let Some(callee) = args.first().copied() else {
+                return Some(fail_dispatch(ctx));
+            };
+            let this_value = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            let argument_list = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+            let arguments = match create_list_from_array_like(ctx, state, argument_list) {
+                Ok(arguments) => arguments,
+                Err(exception) => return Some(exception),
+            };
+            let new_target = state
+                .activations
+                .last()
+                .map_or_else(value::encode_undefined, |activation| activation.new_target);
+            state
+                .invoke_constructor(ctx, callee, new_target, this_value, &arguments)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         Builtin::CreateClosure => state
