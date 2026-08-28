@@ -1426,6 +1426,7 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
         Some(crate::NativeCallableKind::Intl(kind)) => super::intl::is_constructor(kind),
         Some(crate::NativeCallableKind::DateMethod(_)) => false,
         Some(crate::NativeCallableKind::FunctionPrototype) => false,
+        Some(crate::NativeCallableKind::SpeciesGetter) => false,
         Some(_) => true,
         None => state
             .callable_function(encoded)
@@ -1435,6 +1436,70 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
 
 pub(super) fn object_handle(encoded: i64) -> Option<u32> {
     (value::is_object(encoded) || value::is_array(encoded)).then(|| value::decode_handle(encoded))
+}
+
+/// IsArray（§7.2.2）：Proxy 沿 [[ProxyTarget]] 链穿透判定；revoked proxy
+/// 返回 None（调用方按规范抛 TypeError）。
+pub(super) fn is_array_value(state: &NativeAgentState, encoded: i64) -> Option<bool> {
+    if value::is_proxy(encoded) {
+        return super::proxy::is_array_target(state, encoded);
+    }
+    Some(value::is_array(encoded))
+}
+
+/// Construct(F, argumentsList, newTarget)（§7.3.15）：Proxy 走 [[Construct]]
+/// trap；其余按 OrdinaryCreateFromConstructor 预建 this（newTarget 的
+/// `prototype` 为对象时作为 [[Prototype]]），构造器返回对象以之为结果，否则
+/// 用预建 this。调用方须先通过 IsConstructor 校验 F 与 newTarget。
+pub(super) fn construct_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    constructor: i64,
+    arguments: &[i64],
+    new_target: i64,
+) -> i64 {
+    if value::is_proxy(constructor) {
+        return super::proxy::construct(ctx, state, constructor, arguments, new_target);
+    }
+    let Ok(this_value) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
+        return fail_dispatch(ctx);
+    };
+    // 预建 this 在 prototype 读取（可再入 getter / Proxy trap）与构造调用
+    // 期间需锚根；构造器实参由调用方保证存活。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(this_value);
+    let res = (|| {
+        let Some(prototype_key) = state.intern_text("prototype".into(), value::TAG_STRING) else {
+            return fail_dispatch(ctx);
+        };
+        let prototype = get_property(ctx, state, new_target, prototype_key)
+            .unwrap_or_else(|()| fail_dispatch(ctx));
+        if value::is_exception(prototype) {
+            return prototype;
+        }
+        if let Some(prototype) = object_handle(prototype)
+            && state
+                .gc
+                .heap()
+                .set_prototype(value::decode_handle(this_value), prototype)
+                .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+        let result = state
+            .invoke_constructor(ctx, constructor, new_target, this_value, arguments)
+            .unwrap_or_else(|| fail_dispatch(ctx));
+        if value::is_exception(result) {
+            return result;
+        }
+        if value::is_js_object(result) {
+            result
+        } else {
+            this_value
+        }
+    })();
+    state.temporary_roots.truncate(initial_temp_roots);
+    res
 }
 
 /// %RegExp.prototype% 访问器族（§22.2.6）的键名：命中返回 brand 检查错误

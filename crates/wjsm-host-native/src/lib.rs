@@ -274,6 +274,8 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::TimerConstructor(true) => Some(("Immediate", 0)),
         NativeCallableKind::TimerConstructor(false) => Some(("Timeout", 0)),
         NativeCallableKind::Gc => Some(("gc", 0)),
+        // @@species 访问器 getter 的规范函数名（§23.1.2.5 步骤说明）。
+        NativeCallableKind::SpeciesGetter => Some(("get [Symbol.species]", 0)),
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
@@ -283,6 +285,22 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::DateMethod(method) => dispatch::date::method_metadata(method),
         _ => None,
     }
+}
+
+/// Array 构造分派的 newTarget 归一：当前激活帧的 new.target 与被调构造器
+/// 相同（普通 `new Array(..)` / 无 new 调用）时归一为 undefined 走缺省原型，
+/// 仅类 extends Array 的 super() 与 Reflect.construct 显式 newTarget 需要
+/// 读取其 `prototype` 覆盖实例原型。
+fn array_construct_new_target(state: &NativeAgentState, callee: i64) -> i64 {
+    state
+        .activations
+        .last()
+        .map(|activation| activation.new_target)
+        .filter(|target| {
+            !value::is_undefined(*target)
+                && value::strip_gc_color(*target) != value::strip_gc_color(callee)
+        })
+        .unwrap_or_else(value::encode_undefined)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -639,6 +657,9 @@ enum NativeCallableKind {
     SetImmediate,
     TimerConstructor(bool),
     Gc,
+    /// 内建构造器的 `get [Symbol.species]` 访问器（§23.1.2.5 等）：返回 this，
+    /// 子类经静态原型链继承后取回子类自身。所有安装点共享同一实例。
+    SpeciesGetter,
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
@@ -2782,6 +2803,8 @@ impl NativeAgentState {
                 .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
             self.install_prototype_constructor(prototype, constructor)
                 .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.install_species_accessor(constructor)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
             self.array_constructor = Some(constructor);
         }
         if self.regexp_prototype.is_none() {
@@ -3077,7 +3100,23 @@ impl NativeAgentState {
         self.array_prototype = Some(prototype);
         self.array_constructor = Some(constructor);
         self.install_prototype_constructor(prototype, constructor)?;
+        self.install_species_accessor(constructor)?;
         Some(constructor)
+    }
+
+    /// 在构造器上安装 @@species 访问器属性（§23.1.2.5 get Array
+    /// [ %Symbol.species% ] 等）：getter 为共享的 SpeciesGetter（返回 this，
+    /// 子类经静态原型链继承取回子类自身），无 setter，
+    /// { enumerable: false, configurable: true }。
+    fn install_species_accessor(&mut self, constructor: i64) -> Option<()> {
+        let getter = self.native_callable(NativeCallableKind::SpeciesGetter)?;
+        let key = PropertyKey::symbol(wjsm_ir::wk_symbol::SPECIES);
+        let constructor = value::strip_gc_color(constructor);
+        self.callable_accessors
+            .insert((constructor, key), (getter, value::encode_undefined()));
+        self.callable_property_flags
+            .insert((constructor, key), FUNCTION_METADATA_FLAGS);
+        Some(())
     }
 
     fn ensure_error_prototype(&mut self, name: &str) -> Option<i64> {
@@ -3448,6 +3487,7 @@ impl NativeAgentState {
             | NativeCallableKind::ProcessNextTick
             | NativeCallableKind::ProcessOn
             | NativeCallableKind::Gc
+            | NativeCallableKind::SpeciesGetter
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
@@ -6082,14 +6122,18 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::Intl(callable) => {
             dispatch::intl::call(ctx, state, callable, this_value, &arguments)
         }
-        NativeCallableKind::ArrayConstructor => dispatch::construct_array(ctx, state, &arguments),
+        NativeCallableKind::ArrayConstructor => {
+            let new_target = array_construct_new_target(state, callee);
+            dispatch::construct_array(ctx, state, &arguments, new_target)
+        }
         NativeCallableKind::ObjectConstructor => dispatch::construct_object(ctx, state, &arguments),
         NativeCallableKind::RealmArrayConstructor(context) => {
+            let new_target = array_construct_new_target(state, callee);
             let previous = state.array_prototype;
             if let Some(prototype) = dispatch::node_vm::array_prototype_for_handle(state, context) {
                 state.array_prototype = Some(prototype);
             }
-            let result = dispatch::construct_array(ctx, state, &arguments);
+            let result = dispatch::construct_array(ctx, state, &arguments, new_target);
             state.array_prototype = previous;
             result
         }
@@ -6322,6 +6366,8 @@ unsafe extern "C" fn native_callable_call(
             result.unwrap_or_else(value::encode_undefined)
         }
         NativeCallableKind::FunctionPrototype => value::encode_undefined(),
+        // `get [Symbol.species]` 恒返回 this（§23.1.2.5）。
+        NativeCallableKind::SpeciesGetter => this_value,
         NativeCallableKind::TimerConstructor(_) => this_value,
         NativeCallableKind::SetImmediate => {
             let Some(callback) = arguments
