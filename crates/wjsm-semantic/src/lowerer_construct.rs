@@ -296,7 +296,8 @@ impl Lowerer {
             let binding = CapturedBinding::lexical_this();
             self.record_capture(binding.clone());
             let start_env = self.load_env_object(block);
-            let (owner_block, owner_env) = self.resolve_env_binding_owner(block, start_env, &binding);
+            let (owner_block, owner_env) =
+                self.resolve_env_binding_owner(block, start_env, &binding);
             let key_val = self.append_env_key_const(owner_block, &binding);
             self.emit_set_prop(owner_block, owner_env, key_val, value);
             return owner_block;

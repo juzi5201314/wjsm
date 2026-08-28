@@ -1070,6 +1070,8 @@ struct NativeAgentState {
     array_property_order: HashMap<u32, Vec<PropertyKey>>,
     array_accessors: HashMap<(u32, PropertyKey), (i64, i64, u32)>,
     array_property_flags: HashMap<(u32, PropertyKey), u32>,
+    /// length 自有属性已 writable=false 的数组（Object.freeze 设置）。
+    array_fixed_length: HashSet<u32>,
     closures: Vec<Option<NativeClosure>>,
     closure_free: Vec<u32>,
     bound_functions: Vec<Option<NativeBoundFunction>>,
@@ -1092,6 +1094,8 @@ struct NativeAgentState {
     callable_accessors: HashMap<(i64, PropertyKey), (i64, i64)>,
     callable_property_flags: HashMap<(i64, PropertyKey), u32>,
     non_extensible_objects: HashSet<u32>,
+    /// 已 preventExtensions/seal/freeze 的 callable（编码值，去色规范形）。
+    non_extensible_callables: HashSet<i64>,
     environment: HashMap<String, String>,
     working_directory: PathBuf,
     process_arguments: Vec<String>,
@@ -1266,6 +1270,7 @@ impl NativeAgentState {
             iterator_next: HashMap::new(),
             array_properties: HashMap::new(),
             array_property_order: HashMap::new(),
+            array_fixed_length: HashSet::new(),
             closures: Vec::new(),
             closure_free: Vec::new(),
             bound_functions: Vec::new(),
@@ -1285,6 +1290,7 @@ impl NativeAgentState {
             boxed_primitives: HashMap::new(),
             error_prototypes: HashMap::new(),
             non_extensible_objects: HashSet::new(),
+            non_extensible_callables: HashSet::new(),
             next_ticks: VecDeque::new(),
             immediates: VecDeque::new(),
             timers: BinaryHeap::new(),
@@ -1525,6 +1531,7 @@ impl NativeAgentState {
         self.latin1_char_strings.fill(value::encode_undefined());
         self.array_accessors.clear();
         self.array_property_flags.clear();
+        self.array_fixed_length.clear();
         self.activations.clear();
         self.pending_stack_trace = None;
         self.closures.clear();
@@ -1567,6 +1574,7 @@ impl NativeAgentState {
         self.boxed_primitives.clear();
         self.error_prototypes.clear();
         self.non_extensible_objects.clear();
+        self.non_extensible_callables.clear();
         self.node_worker_threads.reset_agent();
         self.node_child_process.reset_agent();
         // test262_agent 由 configure_test262_agent 注入，reset_execution 不清除，
@@ -5081,6 +5089,7 @@ impl NativeAgentState {
             .retain(|(handle, _), _| is_live(handle));
         self.array_property_flags
             .retain(|(handle, _), _| is_live(handle));
+        self.array_fixed_length.retain(is_live);
         self.scope_records.retain(|handle, _| is_live(handle));
         self.async_from_sync_iterators
             .retain(|handle, _| is_live(handle));

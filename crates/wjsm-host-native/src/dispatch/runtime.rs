@@ -875,15 +875,7 @@ fn set_property_completion(
         return super::proxy::set(ctx, state, object, key, stored, object);
     }
     if value::is_array(object) && state.text_matches(key, "length") {
-        let Some(length) = array_length(state, stored) else {
-            return Err(range_error(ctx, state, "Invalid array length"));
-        };
-        return state
-            .gc
-            .heap()
-            .set_array_length(value::decode_handle(object), length)
-            .map(|()| property_write::SetCompletion::Written)
-            .map_err(|_| fail_dispatch(ctx));
+        return set_array_length_completion(ctx, state, object, stored);
     }
     if value::is_regexp(object) && state.text_matches(key, "lastIndex") {
         let result = super::regexp::set_last_index(ctx, state, &[object, stored]);
@@ -949,15 +941,7 @@ fn set_element_completion(
         }
     }
     if value::is_array(object) && state.text_matches(index, "length") {
-        let Some(length) = array_length(state, stored) else {
-            return Err(range_error(ctx, state, "Invalid array length"));
-        };
-        return state
-            .gc
-            .heap()
-            .set_array_length(value::decode_handle(object), length)
-            .map(|()| SetCompletion::Written)
-            .map_err(|_| fail_dispatch(ctx));
+        return set_array_length_completion(ctx, state, object, stored);
     }
     if value::is_array(object)
         && let Some(index) = array_index(state, index)
@@ -981,14 +965,16 @@ fn set_element_completion(
                 }
                 return Ok(SetCompletion::Written);
             }
+            // flags 条目独立于覆盖层取值存在（seal/freeze 只迁移特性，
+            // 元素值仍以元素存储为准），可写性检查先于取值条目。
+            if state
+                .array_property_flags
+                .get(&(handle, key))
+                .is_some_and(|flags| flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0)
+            {
+                return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
+            }
             if state.array_properties.contains_key(&(handle, key)) {
-                if state
-                    .array_property_flags
-                    .get(&(handle, key))
-                    .is_some_and(|flags| flags & wjsm_ir::constants::FLAG_WRITABLE as u32 == 0)
-                {
-                    return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
-                }
                 state.array_properties.insert((handle, key), stored);
                 // 覆盖层写入成功后同步在范围内的元素存储，保持 render /
                 // 迭代等直读元素的路径与 [[Get]] 一致。
@@ -1005,6 +991,23 @@ fn set_element_completion(
                     );
                 }
                 return Ok(SetCompletion::Written);
+            }
+        }
+        // OrdinarySet 步骤 2–3：元素不存在（越界或 hole）且数组不可扩展时
+        // 拒绝创建；已有元素的更新不受 [[PreventExtensions]] 影响。
+        if state.non_extensible_objects.contains(&handle) {
+            let length = state
+                .gc
+                .heap()
+                .array_length(handle)
+                .map_err(|_| fail_dispatch(ctx))?;
+            let exists = index < length
+                && matches!(
+                    state.gc.heap().get_element(handle, index),
+                    Ok(Some(element)) if !value::is_array_hole(element as i64)
+                );
+            if !exists {
+                return Ok(SetCompletion::Failed(SetFailure::NotExtensible));
             }
         }
         return state
@@ -1046,6 +1049,95 @@ fn set_element_completion(
         stored,
         object,
     )
+}
+
+/// 数组 length 赋值的 [[Set]]（OrdinarySet → ArraySetLength）：
+/// 不可写 length 先于取值比较拒绝（写相同值也失败，与 V8 一致）；收缩遇
+/// 不可配置元素时按 ArraySetLength 步骤 19 停在最高被阻塞下标 + 1 并报告
+/// 失败（strict 抛 "Cannot delete property"）。收缩同步清除被删下标的字典
+/// 覆盖层条目，保持覆盖层与元素存储一致。
+pub(super) fn set_array_length_completion(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    array: i64,
+    stored: i64,
+) -> property_write::SetResult {
+    use property_write::{SetCompletion, SetFailure};
+    let Some(new_length) = array_length(state, stored) else {
+        return Err(range_error(ctx, state, "Invalid array length"));
+    };
+    let handle = value::decode_handle(array);
+    if state.array_fixed_length.contains(&handle) {
+        return Ok(SetCompletion::Failed(SetFailure::ReadOnly));
+    }
+    let mut final_length = new_length;
+    let mut blocked = None;
+    let shrinking = state
+        .gc
+        .heap()
+        .array_length(handle)
+        .is_ok_and(|old_length| new_length < old_length);
+    if shrinking
+        && state.gc.heap().array_kind(handle).ok()
+            == Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+    {
+        if let Some(index) = highest_non_configurable_element(state, handle, new_length) {
+            final_length = index + 1;
+            blocked = Some(SetFailure::NonDeletableElement(index));
+        }
+        remove_overlay_elements_from(state, handle, final_length);
+    }
+    state
+        .gc
+        .heap()
+        .set_array_length(handle, final_length)
+        .map_err(|_| fail_dispatch(ctx))?;
+    match blocked {
+        Some(failure) => Ok(SetCompletion::Failed(failure)),
+        None => Ok(SetCompletion::Written),
+    }
+}
+
+/// 字典覆盖层中下标 ≥ `from` 且不可配置的最大元素下标（数据或访问器条目）。
+fn highest_non_configurable_element(
+    state: &NativeAgentState,
+    handle: u32,
+    from: u32,
+) -> Option<u32> {
+    let configurable = constants::FLAG_CONFIGURABLE as u32;
+    let data = state
+        .array_property_flags
+        .iter()
+        .filter(|((owner, _), flags)| *owner == handle && *flags & configurable == 0)
+        .filter_map(|((_, key), _)| array_index(state, encoded_property_key(*key)));
+    let accessors = state
+        .array_accessors
+        .iter()
+        .filter(|((owner, _), (_, _, flags))| *owner == handle && *flags & configurable == 0)
+        .filter_map(|((_, key), _)| array_index(state, encoded_property_key(*key)));
+    data.chain(accessors).filter(|index| *index >= from).max()
+}
+
+/// 移除字典覆盖层中下标 ≥ `from` 的全部元素条目（值 / 特性 / 访问器 /
+/// 枚举顺序），配合 length 收缩防止覆盖层残留已删除下标的旧值。
+fn remove_overlay_elements_from(state: &mut NativeAgentState, handle: u32, from: u32) {
+    let removed: Vec<PropertyKey> = state
+        .array_property_flags
+        .keys()
+        .chain(state.array_properties.keys())
+        .chain(state.array_accessors.keys())
+        .filter(|(owner, _)| *owner == handle)
+        .map(|(_, key)| *key)
+        .filter(|key| {
+            array_index(state, encoded_property_key(*key)).is_some_and(|index| index >= from)
+        })
+        .collect();
+    for key in removed {
+        state.array_properties.remove(&(handle, key));
+        state.array_property_flags.remove(&(handle, key));
+        state.array_accessors.remove(&(handle, key));
+        state.forget_array_property(handle, key);
+    }
 }
 
 /// 值是否为 ECMAScript 基元（含 null / undefined）。
@@ -1923,6 +2015,11 @@ fn assign_to_callable_receiver(
     {
         return SetCompletion::Failed(SetFailure::ReadOnly);
     }
+    if !state.callable_properties.contains_key(&(receiver, key))
+        && state.non_extensible_callables.contains(&receiver)
+    {
+        return SetCompletion::Failed(SetFailure::NotExtensible);
+    }
     state.callable_properties.insert((receiver, key), stored);
     state
         .callable_property_flags
@@ -1959,6 +2056,28 @@ pub(super) fn delete_property(
         }
         let handle = value::decode_handle(object);
         if let Some(index) = array_index(state, encoded_key) {
+            // 字典数组的下标条目携带特性：不可配置（seal/freeze 或
+            // defineProperty 设置）按 [[Delete]] 拒绝，删除成功则同步清除
+            // 覆盖层条目，防止残留旧值。
+            if state.gc.heap().array_kind(handle).ok() == Some(constants::ARRAY_KIND_DICTIONARY) {
+                let element_key =
+                    property_key(state, value::encode_f64(f64::from(index))).ok_or(())?;
+                if state
+                    .array_property_flags
+                    .get(&(handle, element_key))
+                    .is_some_and(|flags| flags & configurable == 0)
+                    || state
+                        .array_accessors
+                        .get(&(handle, element_key))
+                        .is_some_and(|(_, _, flags)| flags & configurable == 0)
+                {
+                    return Ok(false);
+                }
+                state.array_properties.remove(&(handle, element_key));
+                state.array_property_flags.remove(&(handle, element_key));
+                state.array_accessors.remove(&(handle, element_key));
+                state.forget_array_property(handle, element_key);
+            }
             let length = state.gc.heap().array_length(handle).map_err(|_| ())?;
             if index < length {
                 state
@@ -2807,7 +2926,7 @@ pub(super) fn array_index(state: &NativeAgentState, encoded: i64) -> Option<u32>
     (index != u32::MAX).then_some(index)
 }
 
-fn array_length(state: &NativeAgentState, encoded: i64) -> Option<u32> {
+pub(super) fn array_length(state: &NativeAgentState, encoded: i64) -> Option<u32> {
     let number = to_number(state, encoded)?;
     (number.is_finite() && number >= 0.0 && number.fract() == 0.0 && number <= u32::MAX as f64)
         .then_some(number as u32)

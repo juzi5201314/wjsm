@@ -6,6 +6,7 @@ use super::array_callbacks::{push_element_with_gc_retry, set_element_with_gc_ret
 use super::runtime::{
     allocate_object_or_out_of_memory, array_index, fail_dispatch, get_property, has_property,
     is_truthy, iterator_done, iterator_value, strict_equal, to_number, to_string_coerced,
+    type_error,
 };
 use crate::NativeAgentState;
 
@@ -364,6 +365,25 @@ fn array_push(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
     let Some(handle) = handle(args) else {
         return fail_dispatch(ctx);
     };
+    // Array.prototype.push 以 throw=true 执行 Set（步骤 4.b / 5）：不可扩展
+    // 数组追加新下标、冻结 length 的更新均直接抛 TypeError（sloppy 亦然）。
+    if args.len() > 1 && state.non_extensible_objects.contains(&handle) {
+        let Ok(length) = state.gc.heap().array_length(handle) else {
+            return fail_dispatch(ctx);
+        };
+        return type_error(
+            ctx,
+            state,
+            &format!("Cannot add property {length}, object is not extensible"),
+        );
+    }
+    if state.array_fixed_length.contains(&handle) {
+        return type_error(
+            ctx,
+            state,
+            "Cannot assign to read only property 'length' of object '[object Array]'",
+        );
+    }
     let initial_temp_roots = state.temporary_roots.len();
     state.temporary_roots.extend(args.iter().copied());
 

@@ -79,6 +79,7 @@ impl Lowerer {
             |ident| ident.sym.to_string(),
         );
         self.push_function_context(&name, BasicBlockId(0));
+        self.apply_function_strictness(fn_expr.function.body.as_ref());
 
         // 声明 $env（闭包环境对象）
         let env_scope_id = self
@@ -270,6 +271,7 @@ impl Lowerer {
         let async_name = format!("{name}$async");
 
         self.push_function_context(&async_name, BasicBlockId(0));
+        self.apply_function_strictness(fn_expr.function.body.as_ref());
         self.is_async_fn = true;
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
@@ -658,7 +660,9 @@ impl Lowerer {
         self.pop_function_context();
 
         self.push_function_context(name, BasicBlockId(0));
-        // wrapper 即方法本体：形参默认值等 wrapper 侧代码里的 super 同样合法。
+        // wrapper 即方法本体：形参默认值等 wrapper 侧代码与 body 同严格性，
+        // super 同样合法。
+        self.apply_function_strictness(fn_expr.function.body.as_ref());
         self.apply_method_super_binding(method_super);
 
         let wrapper_env_scope_id = self

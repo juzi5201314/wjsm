@@ -1087,8 +1087,14 @@ pub(crate) fn get_own_property_descriptor(
             let Ok(length) = state.gc.heap().array_length(handle) else {
                 return fail_dispatch(ctx);
             };
+            // Object.freeze 后 length writable=false（configurable 恒 false）。
+            let flags = if state.array_fixed_length.contains(&handle) {
+                0
+            } else {
+                WRITABLE
+            };
             Some(wjsm_gc::HeapAccessV2Property {
-                flags: WRITABLE,
+                flags,
                 value: value::encode_f64(f64::from(length)) as u64,
                 getter: value::encode_undefined() as u64,
                 setter: value::encode_undefined() as u64,
@@ -1116,8 +1122,14 @@ pub(crate) fn get_own_property_descriptor(
         } else if let Some(index) = super::runtime::array_index(state, encoded_key) {
             match state.gc.heap().get_element(handle, index) {
                 Ok(Some(element)) if !value::is_array_hole(element as i64) => {
+                    // seal/freeze 只迁移特性入覆盖层，元素值仍在元素存储；
+                    // 特性以覆盖层条目为准，无条目为缺省可写可配置。
                     Some(wjsm_gc::HeapAccessV2Property {
-                        flags: WRITABLE | ENUMERABLE | CONFIGURABLE,
+                        flags: state
+                            .array_property_flags
+                            .get(&(handle, key))
+                            .copied()
+                            .unwrap_or(WRITABLE | ENUMERABLE | CONFIGURABLE),
                         value: element,
                         getter: value::encode_undefined() as u64,
                         setter: value::encode_undefined() as u64,
@@ -1592,138 +1604,363 @@ pub(crate) fn define_property(
     let Some(key) = property_key(state, encoded_key) else {
         return fail_dispatch(ctx);
     };
-    let configurable = descriptor_field(state, descriptor, "configurable")
-        .is_some_and(|value| super::runtime::is_truthy(state, value));
-    let enumerable = descriptor_field(state, descriptor, "enumerable")
-        .is_some_and(|value| super::runtime::is_truthy(state, value));
-    let writable = descriptor_field(state, descriptor, "writable")
-        .is_some_and(|value| super::runtime::is_truthy(state, value));
-    let flags = (u32::from(configurable) * CONFIGURABLE)
-        | (u32::from(enumerable) * ENUMERABLE)
-        | (u32::from(writable) * WRITABLE);
-    let getter = descriptor_field(state, descriptor, "get");
-    let setter = descriptor_field(state, descriptor, "set");
-    if getter.is_some_and(|getter| !value::is_undefined(getter) && !value::is_callable(getter)) {
-        return type_error(ctx, state, "property getter must be callable");
-    }
-    if setter.is_some_and(|setter| !value::is_undefined(setter) && !value::is_callable(setter)) {
-        return type_error(ctx, state, "property setter must be callable");
-    }
-
     if value::is_callable(*object) {
-        let callable = value::strip_gc_color(*object);
-        if getter.is_some() || setter.is_some() {
-            let existing = state.callable_accessors.remove(&(callable, key));
-            let old_property = state.callable_properties.remove(&(callable, key));
-            let next_getter = getter
-                .or_else(|| existing.map(|(getter, _)| getter))
-                .unwrap_or_else(value::encode_undefined);
-            let next_setter = setter
-                .or_else(|| existing.map(|(_, setter)| setter))
-                .unwrap_or_else(value::encode_undefined);
-            state
-                .callable_accessors
-                .insert((callable, key), (next_getter, next_setter));
-            state.gc.record_host_write(callable, old_property, None);
-            if let Some((old_getter, old_setter)) = existing {
-                state
-                    .gc
-                    .record_host_write(callable, Some(old_getter), Some(next_getter));
-                state
-                    .gc
-                    .record_host_write(callable, Some(old_setter), Some(next_setter));
-            } else {
-                state
-                    .gc
-                    .record_host_write(callable, None, Some(next_getter));
-                state
-                    .gc
-                    .record_host_write(callable, None, Some(next_setter));
-            }
-        } else if let Some(stored) = descriptor_field(state, descriptor, "value") {
-            let existing = state.callable_accessors.remove(&(callable, key));
-            let old_property = state.callable_properties.insert((callable, key), stored);
-            if let Some((old_getter, old_setter)) = existing {
-                state
-                    .gc
-                    .record_host_write(callable, Some(old_getter), Some(stored));
-                state
-                    .gc
-                    .record_host_write(callable, Some(old_setter), Some(stored));
-            }
-            state
-                .gc
-                .record_host_write(callable, old_property, Some(stored));
-        }
-        state.callable_property_flags.insert((callable, key), flags);
-        return callable;
+        return define_callable_property(ctx, state, *object, key, descriptor);
     }
     let Some(handle) = object_handle(*object) else {
         return fail_dispatch(ctx);
     };
-    let data_value =
-        descriptor_field(state, descriptor, "value").unwrap_or_else(value::encode_undefined);
     if value::is_array(*object) {
-        if super::runtime::array_index(state, encoded_key).is_some()
-            && state
-                .gc
-                .heap()
-                .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
-                .is_err()
-        {
-            return fail_dispatch(ctx);
-        }
-        state.note_array_property(handle, key);
-        if getter.is_some() || setter.is_some() {
-            let existing = state.array_accessors.get(&(handle, key)).copied();
-            state.array_properties.remove(&(handle, key));
-            state.array_property_flags.remove(&(handle, key));
-            state.array_accessors.insert(
-                (handle, key),
-                (
-                    getter
-                        .or_else(|| existing.map(|(getter, _, _)| getter))
-                        .unwrap_or_else(value::encode_undefined),
-                    setter
-                        .or_else(|| existing.map(|(_, setter, _)| setter))
-                        .unwrap_or_else(value::encode_undefined),
-                    flags,
-                ),
-            );
-        } else if descriptor_field(state, descriptor, "value").is_some() {
-            state.array_accessors.remove(&(handle, key));
-            state.array_properties.insert((handle, key), data_value);
-            state.array_property_flags.insert((handle, key), flags);
-        } else if let Some(accessor) = state.array_accessors.get_mut(&(handle, key)) {
-            // 纯特性变更的访问器属性：保留 get/set，仅更新 flags。
-            accessor.2 = flags;
-        } else {
-            // 无 value/get/set 的纯特性变更：把现值（覆盖层 / 在范围元素 /
-            // undefined）迁入字典覆盖层，使 writable=false 等特性对 [[Set]]
-            // 与后续 defineProperty 可见。
-            let current = state
-                .array_properties
-                .get(&(handle, key))
-                .copied()
-                .or_else(|| {
-                    super::runtime::array_index(state, encoded_key).and_then(|index| {
-                        state
-                            .gc
-                            .heap()
-                            .get_element(handle, index)
-                            .ok()
-                            .flatten()
-                            .map(|element| i64::from_ne_bytes(element.to_ne_bytes()))
-                            .filter(|element| !value::is_array_hole(*element))
-                    })
-                })
-                .unwrap_or_else(value::encode_undefined);
-            state.array_properties.insert((handle, key), current);
-            state.array_property_flags.insert((handle, key), flags);
-        }
-        return *object;
+        return define_array_property(ctx, state, *object, handle, key, encoded_key, descriptor);
     }
     define_ordinary_property(ctx, state, *object, handle, key, descriptor)
+}
+
+/// callable 的 [[DefineOwnProperty]]：惰性自有属性先物化参与校验；属性缺失
+/// 且不可扩展拒绝；不可配置属性按 ValidateAndApplyPropertyDescriptor 拒绝
+/// 不兼容重定义；缺省特性继承既有条目（新属性缺省 false）。
+fn define_callable_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: PropertyKey,
+    descriptor_handle: u32,
+) -> i64 {
+    let callable = value::strip_gc_color(object);
+    let descriptor = match read_descriptor(ctx, state, descriptor_handle) {
+        Ok(descriptor) => descriptor,
+        Err(exception) => return exception,
+    };
+    let _ = state.callable_property(callable, key);
+    let current_accessor = state.callable_accessors.get(&(callable, key)).copied();
+    let current_value = state.callable_properties.get(&(callable, key)).copied();
+    let current_flags = state
+        .callable_property_flags
+        .get(&(callable, key))
+        .copied()
+        .unwrap_or(crate::ASSIGNED_PROPERTY_FLAGS);
+    let exists = current_accessor.is_some() || current_value.is_some();
+    if !exists {
+        if state.non_extensible_callables.contains(&callable) {
+            return type_error(
+                ctx,
+                state,
+                "Cannot define property on a non-extensible object",
+            );
+        }
+    } else {
+        let current = PropertyDescriptor {
+            configurable: Some(current_flags & CONFIGURABLE != 0),
+            enumerable: Some(current_flags & ENUMERABLE != 0),
+            writable: current_accessor
+                .is_none()
+                .then_some(current_flags & WRITABLE != 0),
+            value: current_value,
+            getter: current_accessor.map(|(getter, _)| getter),
+            setter: current_accessor.map(|(_, setter)| setter),
+        };
+        if !descriptor_is_compatible(state, descriptor, current) {
+            return incompatible_descriptor(ctx, state);
+        }
+    }
+    apply_callable_descriptor(state, callable, key, descriptor, exists);
+    object
+}
+
+/// define_callable_property 的应用阶段：种类切换清零特性，同类更新继承
+/// 既有特性；数据/访问器载荷写入侧表并触发 GC 写屏障。
+fn apply_callable_descriptor(
+    state: &mut NativeAgentState,
+    callable: i64,
+    key: PropertyKey,
+    descriptor: PropertyDescriptor,
+    exists: bool,
+) {
+    let current_accessor = state.callable_accessors.get(&(callable, key)).copied();
+    let current_value = state.callable_properties.get(&(callable, key)).copied();
+    let current_is_accessor = current_accessor.is_some();
+    let use_accessor = if descriptor.is_accessor() {
+        true
+    } else if descriptor.is_data() {
+        false
+    } else {
+        current_is_accessor
+    };
+    let switching_kind = exists && use_accessor != current_is_accessor;
+    let mut flags = if !exists || switching_kind {
+        0
+    } else {
+        state
+            .callable_property_flags
+            .get(&(callable, key))
+            .copied()
+            .unwrap_or(crate::ASSIGNED_PROPERTY_FLAGS)
+    };
+    set_flag(&mut flags, CONFIGURABLE, descriptor.configurable);
+    set_flag(&mut flags, ENUMERABLE, descriptor.enumerable);
+    if use_accessor {
+        let carried = current_accessor.filter(|_| !switching_kind);
+        let next_getter = descriptor
+            .getter
+            .or(carried.map(|(getter, _)| getter))
+            .unwrap_or_else(value::encode_undefined);
+        let next_setter = descriptor
+            .setter
+            .or(carried.map(|(_, setter)| setter))
+            .unwrap_or_else(value::encode_undefined);
+        let old_property = state.callable_properties.remove(&(callable, key));
+        state
+            .callable_accessors
+            .insert((callable, key), (next_getter, next_setter));
+        state.gc.record_host_write(callable, old_property, None);
+        let (old_getter, old_setter) = match current_accessor {
+            Some((old_getter, old_setter)) => (Some(old_getter), Some(old_setter)),
+            None => (None, None),
+        };
+        state
+            .gc
+            .record_host_write(callable, old_getter, Some(next_getter));
+        state
+            .gc
+            .record_host_write(callable, old_setter, Some(next_setter));
+        state
+            .callable_property_flags
+            .insert((callable, key), flags & !WRITABLE);
+    } else {
+        set_flag(&mut flags, WRITABLE, descriptor.writable);
+        let stored = descriptor
+            .value
+            .or(if switching_kind { None } else { current_value })
+            .unwrap_or_else(value::encode_undefined);
+        let existing = state.callable_accessors.remove(&(callable, key));
+        let old_property = state.callable_properties.insert((callable, key), stored);
+        if let Some((old_getter, old_setter)) = existing {
+            state
+                .gc
+                .record_host_write(callable, Some(old_getter), Some(stored));
+            state
+                .gc
+                .record_host_write(callable, Some(old_setter), Some(stored));
+        }
+        state
+            .gc
+            .record_host_write(callable, old_property, Some(stored));
+        state.callable_property_flags.insert((callable, key), flags);
+    }
+}
+
+/// 数组的 [[DefineOwnProperty]]：读取现有条目（覆盖层数据 / 访问器 / 在范围
+/// 元素，元素缺省可写可枚举可配置）作为 ValidateAndApplyPropertyDescriptor
+/// 的 current，缺省特性继承 current（新属性缺省 false），不可配置属性按规范
+/// 拒绝不兼容重定义；`length` 走 ArraySetLength 特化路径。
+fn define_array_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    handle: u32,
+    key: PropertyKey,
+    encoded_key: i64,
+    descriptor_handle: u32,
+) -> i64 {
+    let descriptor = match read_descriptor(ctx, state, descriptor_handle) {
+        Ok(descriptor) => descriptor,
+        Err(exception) => return exception,
+    };
+    if state.text_matches(encoded_key, "length") {
+        return define_array_length(ctx, state, object, handle, descriptor);
+    }
+    let index = super::runtime::array_index(state, encoded_key);
+    let current_accessor = state.array_accessors.get(&(handle, key)).copied();
+    let element_value = index.and_then(|index| {
+        state
+            .gc
+            .heap()
+            .get_element(handle, index)
+            .ok()
+            .flatten()
+            .map(|element| i64::from_ne_bytes(element.to_ne_bytes()))
+            .filter(|element| !value::is_array_hole(*element))
+    });
+    let current_value = state
+        .array_properties
+        .get(&(handle, key))
+        .copied()
+        .or(element_value);
+    // (flags, 是否访问器)：flags 条目可独立于取值存在（seal/freeze 仅迁移
+    // 特性），无任何条目的在范围元素取缺省特性。
+    let current = if let Some((_, _, flags)) = current_accessor {
+        Some((flags, true))
+    } else if let Some(flags) = state.array_property_flags.get(&(handle, key)).copied() {
+        Some((flags, false))
+    } else if current_value.is_some() {
+        Some((crate::ASSIGNED_PROPERTY_FLAGS, false))
+    } else {
+        None
+    };
+    if current.is_none() && state.non_extensible_objects.contains(&handle) {
+        return super::runtime::type_error(
+            ctx,
+            state,
+            "Cannot define property on a non-extensible object",
+        );
+    }
+    if let Some((current_flags, current_is_accessor)) = current
+        && current_flags & CONFIGURABLE == 0
+    {
+        if descriptor.configurable == Some(true)
+            || descriptor
+                .enumerable
+                .is_some_and(|enumerable| enumerable != (current_flags & ENUMERABLE != 0))
+            || descriptor.is_accessor() != current_is_accessor
+                && (descriptor.is_accessor() || descriptor.is_data())
+        {
+            return incompatible_descriptor(ctx, state);
+        }
+        if !current_is_accessor
+            && current_flags & WRITABLE == 0
+            && (descriptor.writable == Some(true)
+                || descriptor.value.is_some_and(|stored| {
+                    !same_value(
+                        state,
+                        stored,
+                        current_value.unwrap_or_else(value::encode_undefined),
+                    )
+                }))
+        {
+            return incompatible_descriptor(ctx, state);
+        }
+        if current_is_accessor
+            && let Some((getter, setter, _)) = current_accessor
+            && (descriptor
+                .getter
+                .is_some_and(|next| !same_value(state, next, getter))
+                || descriptor
+                    .setter
+                    .is_some_and(|next| !same_value(state, next, setter)))
+        {
+            return incompatible_descriptor(ctx, state);
+        }
+    }
+    if index.is_some()
+        && state
+            .gc
+            .heap()
+            .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+            .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    let current_is_accessor = current.is_some_and(|(_, accessor)| accessor);
+    let use_accessor = if descriptor.is_accessor() {
+        true
+    } else if descriptor.is_data() {
+        false
+    } else {
+        current_is_accessor
+    };
+    let switching_kind = current.is_some() && use_accessor != current_is_accessor;
+    let mut flags = if switching_kind {
+        0
+    } else {
+        current.map_or(0, |(flags, _)| flags)
+    };
+    set_flag(&mut flags, CONFIGURABLE, descriptor.configurable);
+    set_flag(&mut flags, ENUMERABLE, descriptor.enumerable);
+    state.note_array_property(handle, key);
+    if use_accessor {
+        let existing = (!switching_kind)
+            .then_some(current_accessor)
+            .flatten()
+            .map(|(getter, setter, _)| (getter, setter));
+        state.array_properties.remove(&(handle, key));
+        state.array_property_flags.remove(&(handle, key));
+        state.array_accessors.insert(
+            (handle, key),
+            (
+                descriptor
+                    .getter
+                    .or_else(|| existing.map(|(getter, _)| getter))
+                    .unwrap_or_else(value::encode_undefined),
+                descriptor
+                    .setter
+                    .or_else(|| existing.map(|(_, setter)| setter))
+                    .unwrap_or_else(value::encode_undefined),
+                flags,
+            ),
+        );
+        return object;
+    }
+    set_flag(&mut flags, WRITABLE, descriptor.writable);
+    let stored = descriptor
+        .value
+        .or(if switching_kind { None } else { current_value })
+        .unwrap_or_else(value::encode_undefined);
+    state.array_accessors.remove(&(handle, key));
+    state.array_properties.insert((handle, key), stored);
+    state.array_property_flags.insert((handle, key), flags);
+    // 在范围下标同步元素存储，保持 render / 迭代等直读路径与 [[Get]] 一致。
+    if let Some(index) = index
+        && state
+            .gc
+            .heap()
+            .array_length(handle)
+            .is_ok_and(|length| index < length)
+    {
+        let _ =
+            state
+                .gc
+                .heap()
+                .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()));
+    }
+    object
+}
+
+/// 数组 `length` 的 [[DefineOwnProperty]]（ArraySetLength）：length 恒不可
+/// 配置不可枚举；writable false→true 与 configurable/enumerable 提升、访问器
+/// 化一律拒绝；带 value 时按收缩语义执行（不可配置元素阻塞收缩同样拒绝），
+/// 但对不可写 length 的 SameValue 重定义为无操作成功（区别于 [[Set]]）；
+/// writable:false 记录 length 冻结标记。
+fn define_array_length(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    handle: u32,
+    descriptor: PropertyDescriptor,
+) -> i64 {
+    if descriptor.is_accessor()
+        || descriptor.configurable == Some(true)
+        || descriptor.enumerable == Some(true)
+        || (descriptor.writable == Some(true) && state.array_fixed_length.contains(&handle))
+    {
+        return incompatible_descriptor(ctx, state);
+    }
+    if let Some(stored) = descriptor.value {
+        let Some(requested) = super::runtime::array_length(state, stored) else {
+            return super::runtime::range_error(ctx, state, "Invalid array length");
+        };
+        if state.array_fixed_length.contains(&handle) {
+            let Ok(current) = state.gc.heap().array_length(handle) else {
+                return fail_dispatch(ctx);
+            };
+            if requested != current {
+                return incompatible_descriptor(ctx, state);
+            }
+        } else {
+            let completion =
+                super::runtime::set_array_length_completion(ctx, state, object, stored);
+            match completion {
+                Err(exception) => return exception,
+                Ok(completion) if !completion.succeeded() => {
+                    return incompatible_descriptor(ctx, state);
+                }
+                Ok(_) => {}
+            }
+        }
+    }
+    if descriptor.writable == Some(false) {
+        state.array_fixed_length.insert(handle);
+    }
+    object
 }
 
 fn get_own_property_descriptors(
@@ -1797,9 +2034,30 @@ fn prevent_extensions(
             )
         };
     }
+    if integrity_primitive(object) {
+        // Object.preventExtensions 步骤 1：非对象参数原样返回。
+        return object;
+    }
+    if value::is_callable(object) {
+        state
+            .non_extensible_callables
+            .insert(value::strip_gc_color(object));
+        return object;
+    }
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
+    // 数组必须升为字典种类：编译产物的 packed 元素写入 / push 快路径不检查
+    // 宿主侧不可扩展表，字典种类使其退回宿主分派执行扩展性检查。
+    if value::is_array(object)
+        && state
+            .gc
+            .heap()
+            .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+            .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
     state.non_extensible_objects.insert(handle);
     object
 }
@@ -1812,12 +2070,29 @@ fn is_extensible(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
         return super::proxy::is_extensible(ctx, state, object);
     }
     if value::is_callable(object) {
-        return value::encode_bool(true);
+        return value::encode_bool(
+            !state
+                .non_extensible_callables
+                .contains(&value::strip_gc_color(object)),
+        );
+    }
+    if integrity_primitive(object) {
+        // Object.isExtensible 步骤 1：非对象参数恒为 false。
+        return value::encode_bool(false);
     }
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
     value::encode_bool(!state.non_extensible_objects.contains(&handle))
+}
+
+/// 完整性操作（freeze/seal/preventExtensions 及其谓词）对非对象参数的
+/// 短路判定：基元（含 null/undefined）按 ES2015+ 语义原样处理，不进堆路径。
+fn integrity_primitive(object: i64) -> bool {
+    !value::is_object(object)
+        && !value::is_array(object)
+        && !value::is_callable(object)
+        && !value::is_proxy(object)
 }
 
 fn seal_or_freeze(
@@ -1829,9 +2104,22 @@ fn seal_or_freeze(
     let Some(object) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
+    if integrity_primitive(object) {
+        // SetIntegrityLevel 入口（Object.freeze/seal 步骤 1）：非对象原样返回。
+        return object;
+    }
+    if value::is_callable(object) {
+        return match seal_or_freeze_callable(state, object, freeze) {
+            Some(()) => object,
+            None => fail_dispatch(ctx),
+        };
+    }
     let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
+    if value::is_array(object) && seal_or_freeze_array(state, handle, freeze).is_none() {
+        return fail_dispatch(ctx);
+    }
     let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
     };
@@ -1850,17 +2138,166 @@ fn seal_or_freeze(
     object
 }
 
+/// SetIntegrityLevel 的数组部分：升为字典种类后为每个非 hole 元素建立
+/// 覆盖层“特性”条目（值仍由元素存储持有，避免枚举与读取路径出现双份），
+/// 再统一收紧全部既有覆盖层条目（下标与命名，数据与访问器）；freeze 追加
+/// length 不可写标记。
+fn seal_or_freeze_array(state: &mut NativeAgentState, handle: u32, freeze: bool) -> Option<()> {
+    state
+        .gc
+        .heap()
+        .raise_array_kind(handle, wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+        .ok()?;
+    let length = state.gc.heap().array_length(handle).ok()?;
+    for index in 0..length {
+        let element = match state.gc.heap().get_element(handle, index) {
+            Ok(Some(element)) => element as i64,
+            // 超出已分配容量的隐式 hole 与显式 hole 均非自有属性。
+            Ok(None) => continue,
+            Err(_) => return None,
+        };
+        if value::is_array_hole(element) {
+            continue;
+        }
+        let key = property_key(state, value::encode_f64(f64::from(index)))?;
+        if state.array_accessors.contains_key(&(handle, key))
+            || state.array_property_flags.contains_key(&(handle, key))
+        {
+            continue;
+        }
+        state
+            .array_property_flags
+            .insert((handle, key), crate::ASSIGNED_PROPERTY_FLAGS);
+    }
+    let strip = CONFIGURABLE | if freeze { WRITABLE } else { 0 };
+    let data_keys: Vec<PropertyKey> = state
+        .array_property_flags
+        .keys()
+        .filter(|(owner, _)| *owner == handle)
+        .map(|(_, key)| *key)
+        .collect();
+    for key in data_keys {
+        if let Some(flags) = state.array_property_flags.get_mut(&(handle, key)) {
+            *flags &= !strip;
+        }
+    }
+    let accessor_keys: Vec<PropertyKey> = state
+        .array_accessors
+        .keys()
+        .filter(|(owner, _)| *owner == handle)
+        .map(|(_, key)| *key)
+        .collect();
+    for key in accessor_keys {
+        if let Some((_, _, flags)) = state.array_accessors.get_mut(&(handle, key)) {
+            // 访问器属性无 writable 概念，freeze 同样只收紧 configurable。
+            *flags &= !CONFIGURABLE;
+        }
+    }
+    if freeze {
+        state.array_fixed_length.insert(handle);
+    }
+    Some(())
+}
+
+/// SetIntegrityLevel 的 callable 部分：先物化 name / length / prototype 惰性
+/// 自有属性使其特性条目参与收紧；无 flags 条目的自有属性先补缺省特性，再
+/// 统一剥除 configurable（freeze 追加剥除 writable），最后标记不可扩展。
+fn seal_or_freeze_callable(state: &mut NativeAgentState, object: i64, freeze: bool) -> Option<()> {
+    let callable = value::strip_gc_color(object);
+    materialize_callable_lazy_properties(state, callable)?;
+    let own_keys: Vec<PropertyKey> = state
+        .callable_properties
+        .keys()
+        .chain(state.callable_accessors.keys())
+        .filter(|(owner, _)| *owner == callable)
+        .map(|(_, key)| *key)
+        .collect();
+    let strip = CONFIGURABLE | if freeze { WRITABLE } else { 0 };
+    for key in own_keys {
+        let flags = state
+            .callable_property_flags
+            .entry((callable, key))
+            .or_insert(crate::ASSIGNED_PROPERTY_FLAGS);
+        *flags &= !strip;
+    }
+    state.non_extensible_callables.insert(callable);
+    Some(())
+}
+
+/// TestIntegrityLevel 的 callable 部分（不可扩展性由调用方先验）：物化惰性
+/// 自有属性后检查全部自有条目均不可配置，frozen 下数据条目还须不可写
+/// （访问器无 writable 概念）。无 flags 条目视为缺省可写可配置。
+fn callable_integrity_level(
+    state: &mut NativeAgentState,
+    callable: i64,
+    frozen: bool,
+) -> Option<bool> {
+    materialize_callable_lazy_properties(state, callable)?;
+    let tightened = |state: &NativeAgentState, key: PropertyKey, data: bool| {
+        state
+            .callable_property_flags
+            .get(&(callable, key))
+            .is_some_and(|flags| {
+                flags & CONFIGURABLE == 0 && (!frozen || !data || flags & WRITABLE == 0)
+            })
+    };
+    let data_ok = state
+        .callable_properties
+        .keys()
+        .filter(|(owner, _)| *owner == callable)
+        .all(|(_, key)| tightened(state, *key, true));
+    let accessor_ok = state
+        .callable_accessors
+        .keys()
+        .filter(|(owner, _)| *owner == callable)
+        .all(|(_, key)| tightened(state, *key, false));
+    Some(data_ok && accessor_ok)
+}
+
+/// 触发 callable 的 name / length / prototype 惰性自有属性物化（不适用的
+/// 键各自缺席，如箭头函数无 prototype），使完整性操作可见其特性条目。
+fn materialize_callable_lazy_properties(state: &mut NativeAgentState, callable: i64) -> Option<()> {
+    for name in ["name", "length", "prototype"] {
+        let key = state.intern_property_string(name.into())?;
+        let _ = state.callable_property(callable, key);
+    }
+    Some(())
+}
+
 fn is_sealed_or_frozen(
     ctx: &mut NativeVmContext,
-    state: &NativeAgentState,
+    state: &mut NativeAgentState,
     args: &[i64],
     frozen: bool,
 ) -> i64 {
-    let Some(handle) = args.first().copied().and_then(object_handle) else {
+    let Some(object) = args.first().copied() else {
+        return fail_dispatch(ctx);
+    };
+    if integrity_primitive(object) {
+        // TestIntegrityLevel 入口（Object.isFrozen/isSealed 步骤 1）：非对象恒 true。
+        return value::encode_bool(true);
+    }
+    if value::is_callable(object) {
+        let callable = value::strip_gc_color(object);
+        if !state.non_extensible_callables.contains(&callable) {
+            return value::encode_bool(false);
+        }
+        return match callable_integrity_level(state, callable, frozen) {
+            Some(result) => value::encode_bool(result),
+            None => fail_dispatch(ctx),
+        };
+    }
+    let Some(handle) = object_handle(object) else {
         return fail_dispatch(ctx);
     };
     if !state.non_extensible_objects.contains(&handle) {
         return value::encode_bool(false);
+    }
+    if value::is_array(object) {
+        return match array_integrity_level(state, handle, frozen) {
+            Some(result) => value::encode_bool(result),
+            None => fail_dispatch(ctx),
+        };
     }
     let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);
@@ -1868,4 +2305,54 @@ fn is_sealed_or_frozen(
     value::encode_bool(properties.into_iter().all(|(_, flags)| {
         flags & CONFIGURABLE == 0 && (!frozen || flags & ACCESSOR != 0 || flags & WRITABLE == 0)
     }))
+}
+
+/// TestIntegrityLevel 的数组部分（不可扩展性由调用方先验）：frozen 要求
+/// length 不可写；全部覆盖层条目（下标与命名）须不可配置、数据条目在
+/// frozen 下还须不可写；元素存储中每个非 hole 元素必须有覆盖层特性条目
+/// （无条目即缺省可写可配置）。
+fn array_integrity_level(state: &NativeAgentState, handle: u32, frozen: bool) -> Option<bool> {
+    if frozen && !state.array_fixed_length.contains(&handle) {
+        return Some(false);
+    }
+    let mut overlaid = std::collections::HashSet::new();
+    for ((owner, key), flags) in &state.array_property_flags {
+        if *owner != handle {
+            continue;
+        }
+        if *flags & CONFIGURABLE != 0 || (frozen && *flags & WRITABLE != 0) {
+            return Some(false);
+        }
+        if let Some(index) = overlay_element_index(state, *key) {
+            overlaid.insert(index);
+        }
+    }
+    for ((owner, key), (_, _, flags)) in &state.array_accessors {
+        if *owner != handle {
+            continue;
+        }
+        if *flags & CONFIGURABLE != 0 {
+            return Some(false);
+        }
+        if let Some(index) = overlay_element_index(state, *key) {
+            overlaid.insert(index);
+        }
+    }
+    let length = state.gc.heap().array_length(handle).ok()?;
+    for index in 0..length {
+        let element = match state.gc.heap().get_element(handle, index) {
+            Ok(Some(element)) => element as i64,
+            Ok(None) => continue,
+            Err(_) => return None,
+        };
+        if !value::is_array_hole(element) && !overlaid.contains(&index) {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+/// 覆盖层键还原为数组下标（非下标命名键返回 None）。
+fn overlay_element_index(state: &NativeAgentState, key: PropertyKey) -> Option<u32> {
+    super::runtime::array_index(state, super::runtime::encoded_property_key(key))
 }

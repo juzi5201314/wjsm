@@ -44,6 +44,8 @@ impl Lowerer {
                 .map_err(|msg| self.error(class_span, msg))?;
         }
         self.push_function_context(&ctor_name, BasicBlockId(0));
+        // 类体代码恒为严格模式（ClassDefinitionEvaluation）。
+        self.strict_mode = true;
         self.is_method = true;
         self.super_allowed = true;
         self.set_lexical_home_object_for_enclosing_method(Self::PENDING_CTOR_FUNCTION_ID, false);
@@ -731,6 +733,8 @@ impl Lowerer {
                 .map_err(|msg| self.error(method_span, msg))?;
         }
         self.push_function_context(fn_name, BasicBlockId(0));
+        // 类体代码恒为严格模式（ClassDefinitionEvaluation）。
+        self.strict_mode = true;
         self.is_method = true;
         self.super_allowed = true;
         self.set_lexical_home_object_for_enclosing_method(ctor_function_id, is_static);
@@ -809,6 +813,8 @@ impl Lowerer {
         ctor_function_id: FunctionId,
     ) -> Result<LoweredClassFunction, LoweringError> {
         self.push_function_context(fn_name, BasicBlockId(0));
+        // 类体代码恒为严格模式（ClassDefinitionEvaluation）。
+        self.strict_mode = true;
         self.is_method = true;
         self.super_allowed = true;
         self.set_lexical_home_object_for_enclosing_method(ctor_function_id, true);

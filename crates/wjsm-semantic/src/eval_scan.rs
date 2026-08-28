@@ -112,6 +112,24 @@ pub(crate) fn module_has_use_strict_directive(module: &swc_ast::Module) -> bool 
     found
 }
 
+/// 函数体语句列表的 directive prologue 是否含 `"use strict"`（前导字符串
+/// 字面量语句序列，遇非字符串语句停止扫描）。
+pub(crate) fn stmts_have_use_strict_directive(stmts: &[swc_ast::Stmt]) -> bool {
+    let mut found = false;
+    for stmt in stmts {
+        let swc_ast::Stmt::Expr(expr_stmt) = stmt else {
+            break;
+        };
+        let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr_stmt.expr.as_ref() else {
+            break;
+        };
+        if string.value.as_str() == Some("use strict") {
+            found = true;
+        }
+    }
+    found
+}
+
 pub fn eval_literal_binding_names(code: &str) -> Vec<String> {
     let Ok(module) = wjsm_parser::parse_script_as_module(code) else {
         return Vec::new();

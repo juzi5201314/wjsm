@@ -39,6 +39,8 @@ pub(super) enum SetFailure {
     /// receiver 无法承载数据属性（OrdinarySetWithOwnDescriptor 步骤
     /// 3.d.iv：Receiver 为基元等非对象值）。
     Receiver,
+    /// ArraySetLength 收缩被不可配置元素阻塞（携带首个拒绝删除的下标）。
+    NonDeletableElement(u32),
 }
 
 impl SetCompletion {
@@ -94,6 +96,10 @@ pub(super) fn strict_set_failure_error(
         }
         SetFailure::Receiver => format!(
             "Cannot create property '{key_text}' on {}",
+            render_receiver_brief(state, receiver)
+        ),
+        SetFailure::NonDeletableElement(index) => format!(
+            "Cannot delete property '{index}' of {}",
             render_receiver_brief(state, receiver)
         ),
     };

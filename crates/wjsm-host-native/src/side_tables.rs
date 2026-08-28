@@ -40,6 +40,7 @@ impl NativeAgentState {
             .retain(|(candidate, _), _| *candidate != owner);
         self.callable_prototypes
             .retain(|candidate, _| *candidate != owner);
+        self.non_extensible_callables.remove(&owner);
     }
 
     fn sweep_closures(&mut self, live: &HostLiveSet) {

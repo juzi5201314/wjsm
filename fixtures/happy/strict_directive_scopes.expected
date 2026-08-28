@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+fn-decl TypeError
+fn-expr TypeError
+arrow TypeError
+nested TypeError
+static-block TypeError
+static-field TypeError
+ctor TypeError
+method TypeError
+obj-method TypeError
+obj-sloppy silent 1
+obj-getter TypeError
+top-level silent 1
+--- stderr ---

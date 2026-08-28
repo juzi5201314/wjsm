@@ -29,6 +29,7 @@ impl Lowerer {
         let async_gen_name = format!("{name}$asyncgen");
 
         self.push_function_context(&async_gen_name, BasicBlockId(0));
+        self.apply_function_strictness(fn_decl.function.body.as_ref());
         self.is_async_fn = true;
         self.is_async_generator_fn = true;
         self.async_state_counter = 1;
@@ -362,7 +363,9 @@ impl Lowerer {
 
         // ── 构建 wrapper 函数 ──
         self.push_function_context(&name, BasicBlockId(0));
-        // wrapper 即方法本体：形参默认值等 wrapper 侧代码里的 super 同样合法。
+        // wrapper 即方法本体：形参默认值等 wrapper 侧代码与 body 同严格性，
+        // super 同样合法。
+        self.apply_function_strictness(fn_decl.function.body.as_ref());
         self.apply_method_super_binding(method_super);
 
         let wrapper_env_scope_id = self

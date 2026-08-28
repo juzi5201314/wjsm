@@ -15,6 +15,9 @@ impl Lowerer {
         let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
+        if let swc_ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_ref() {
+            self.apply_function_strictness(Some(body));
+        }
         // 标记当前为箭头函数；箭头函数继承外层 super 绑定。
         self.is_arrow = true;
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
@@ -163,6 +166,9 @@ impl Lowerer {
         let async_name = format!("{name}$async");
 
         self.push_function_context(&async_name, BasicBlockId(0));
+        if let swc_ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_ref() {
+            self.apply_function_strictness(Some(body));
+        }
         self.is_async_fn = true;
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
@@ -541,6 +547,10 @@ impl Lowerer {
         self.pop_function_context();
 
         self.push_function_context(&name, BasicBlockId(0));
+        // wrapper 侧的形参默认值等用户代码与 body 同严格性。
+        if let swc_ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_ref() {
+            self.apply_function_strictness(Some(body));
+        }
 
         let wrapper_env_scope_id = self
             .scopes

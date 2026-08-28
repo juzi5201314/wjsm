@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+elem TypeError
+push TypeError
+length TypeError
+frozen state 3 1 3
+frozen flags true true false
+seal write 10
+seal add TypeError
+seal delete false 10
+seal flags true false false
+pe write 5
+pe add TypeError
+pe shrink 0
+pe flags false true false
+define nw TypeError
+define shrink TypeError
+define state 2 false 2
+--- stderr ---

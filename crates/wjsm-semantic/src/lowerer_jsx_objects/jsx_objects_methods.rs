@@ -347,6 +347,7 @@ impl Lowerer {
 
         // 推入新的函数上下文（使用 push_function_context 管理作用域栈）
         self.push_function_context(&fn_name, BasicBlockId(0));
+        self.apply_function_strictness(Some(body));
         self.super_allowed = home_object.is_some();
 
         // 声明 $env 和 $this
@@ -494,6 +495,7 @@ impl Lowerer {
         let fn_name = format!("$0.{method_name}");
 
         self.push_function_context(&fn_name, BasicBlockId(0));
+        self.apply_function_strictness(function.body.as_ref());
         self.super_allowed = home_object.is_some();
 
         let env_scope_id = self
