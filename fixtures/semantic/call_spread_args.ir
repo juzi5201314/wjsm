@@ -483,7 +483,7 @@ module {
       %12 = const c132
       %13 = set_prop %9, %12, %11
       %14 = call builtin.create_closure(%7, %9)
-      %15 = set_prop %5, %6, %14
+      %15 = create_data_property %5, %6, %14
       return %5
 
   fn @$__wjsm_gen_expr_8$gen [params: $10.$env, $10.$this] [entry=bb0]:
@@ -783,10 +783,10 @@ module {
       %54 = new_object(capacity=4)
       %55 = const c36
       %56 = const c37
-      %57 = set_prop %54, %55, %56
+      %57 = create_data_property %54, %55, %56
       %58 = const c38
       %59 = const c44
-      %60 = set_prop %54, %58, %59
+      %60 = create_data_property %54, %58, %59
       store var $0.receiver, %54
       %61 = const c45
       %62 = load var $0.receiver
@@ -1122,7 +1122,7 @@ module {
       %235 = const c133
       %236 = const c134
       call builtin.function.set_name(%235, %232, %236)
-      %237 = set_prop %227, %232, %235
+      %237 = create_data_property %227, %232, %235
       store var $0.iterable, %227
       %238 = const c135
       %239 = const c136

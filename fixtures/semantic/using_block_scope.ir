@@ -53,7 +53,7 @@ module {
       %0 = new_object(capacity=4)
       %1 = const c20
       %2 = load var $1.name
-      %3 = set_prop %0, %1, %2
+      %3 = create_data_property %0, %1, %2
       %4 = const c21
       %5 = call builtin.symbol.well_known(%4)
       %6 = is_exception %5
@@ -71,7 +71,7 @@ module {
       %13 = call builtin.create_closure(%11, %12)
       %14 = const c25
       call builtin.function.set_name(%13, %8, %14)
-      %15 = set_prop %0, %8, %13
+      %15 = create_data_property %0, %8, %13
       return %0
     bb4:
       %10 = call builtin.exception_value(%8)
@@ -161,7 +161,7 @@ module {
     bb9:
       %41 = new_object(capacity=4)
       %42 = const c20
-      %44 = set_prop %41, %42, %24
+      %44 = create_data_property %41, %42, %24
       %45 = const c21
       %46 = call builtin.symbol.well_known(%45)
       %47 = is_exception %46
@@ -180,7 +180,7 @@ module {
       %54 = call builtin.create_closure(%52, %53)
       %55 = const c25
       call builtin.function.set_name(%54, %49, %55)
-      %56 = set_prop %41, %49, %54
+      %56 = create_data_property %41, %49, %54
       store var $1.name, %40
       jump bb8
     bb13:
