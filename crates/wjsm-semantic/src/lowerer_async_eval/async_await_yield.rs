@@ -7,7 +7,10 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut block = block;
-        let value = self.lower_expr_then_continue(&await_expr.arg, &mut block)?;
+        // AwaitExpression 的 `? GetValue(exprRef)`：操作数求值抛出必须先于
+        // Await 传播（进入本地 try/catch 或 reject 返回的 promise），异常
+        // 哨兵不得作为普通值流入 PromiseResolveStatic。
+        let value = self.lower_call_operand_then_continue(&await_expr.arg, &mut block)?;
 
         let promised = self.alloc_value();
         {
@@ -126,8 +129,10 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut block = block;
+        // YieldExpression 的 `? GetValue(exprRef)`：操作数求值抛出必须先于
+        // yield 挂起传播（本地 try/catch 或 GeneratorThrow / AsyncGeneratorThrow）。
         let value = if let Some(arg) = &yield_expr.arg {
-            self.lower_expr_then_continue(arg, &mut block)?
+            self.lower_call_operand_then_continue(arg, &mut block)?
         } else {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();

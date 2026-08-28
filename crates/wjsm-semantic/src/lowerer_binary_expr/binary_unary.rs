@@ -75,15 +75,14 @@ impl Lowerer {
         }
     }
 
-    /// 表达式位置的异常检查分叉在 async / async-generator 函数体内会破坏其状态机的
-    /// 基本块枚举与续延结构，故此类分叉仅在普通（非状态机）函数体及顶层代码中插入。
-    /// async 函数体内的同步抛出沿用原有 promise rejection 路径（不在此处理）。
+    /// 表达式位置的异常检查分叉默认在所有函数体（含 async / async-generator
+    /// 状态机体）内插入：同步抛出经 `emit_throw_value` 路由到最近的本地
+    /// try/catch，未捕获时按函数类别落到 promise rejection / GeneratorThrow /
+    /// AsyncGeneratorThrow / Throw 终结器。
     /// 动态 import(expr) 等规范拥有者会临时压制此分叉，让 TAG_EXCEPTION 作为表达式值
     /// 流向 owning host builtin，由它创建 Promise rejection。
     pub(crate) fn expr_exception_fork_allowed(&self) -> bool {
         self.exception_fork_suppression_depth == 0
-            && !self.is_async_fn
-            && !self.is_async_generator_fn
     }
 
     pub(crate) fn exception_fork_suppressed(&self) -> bool {

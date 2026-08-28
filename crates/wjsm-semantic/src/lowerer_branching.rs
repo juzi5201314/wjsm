@@ -505,11 +505,14 @@ impl Lowerer {
         return_stmt: &swc_ast::ReturnStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
 
         if self.is_async_fn {
+            // ReturnStatement 的 `? GetValue(exprRef)`：操作数抛出先于 return
+            // 完成传播（本地 try/catch 或 promise rejection），哨兵不得作为
+            // 返回值流入 PromiseResolve / AsyncGeneratorReturn。
             let value = if let Some(arg) = &return_stmt.arg {
-                self.lower_expr(arg, block)?
+                self.lower_call_operand_then_continue(arg, &mut block)?
             } else {
                 self.alloc_undefined_value(block)
             };
@@ -569,7 +572,7 @@ impl Lowerer {
 
         if self.is_generator_fn {
             let value = if let Some(arg) = &return_stmt.arg {
-                self.lower_expr(arg, block)?
+                self.lower_call_operand_then_continue(arg, &mut block)?
             } else {
                 self.alloc_undefined_value(block)
             };
@@ -614,7 +617,20 @@ impl Lowerer {
             return Ok(StmtFlow::Terminated);
         }
         let value = if let Some(arg) = &return_stmt.arg {
-            Some(self.lower_expr(arg, block)?)
+            // 普通函数 return 操作数的 `? GetValue`：仅当操作数抛出与「哨兵作为
+            // 返回值向上传播」观察上有差异时才分叉——存在本地 catch（应就地捕获）、
+            // finally / 迭代器清理（throw 与 return 完成的 IteratorClose 错误
+            // 吞咽语义不同）、派生构造器返回协议（哨兵不得流入对象/基元裁决）。
+            // 裸尾位置不分叉，保持 `return f(x)` 的尾调用形态（tail_self_loop），
+            // 哨兵返回值即异常传播机制本身。
+            let needs_fork = self.expr_exception_fork_allowed()
+                && self.expr_can_throw(arg)
+                && self.return_operand_throw_observable();
+            let value = self.lower_expr_then_continue(arg, &mut block)?;
+            if needs_fork {
+                block = self.lower_value_exception_branch(block, value)?;
+            }
+            Some(value)
         } else {
             None
         };
@@ -823,6 +839,16 @@ impl Lowerer {
             .set_terminator(block, Terminator::Return { value: None });
     }
 
+    /// 普通函数 return 操作数抛出时，与「哨兵作为返回值传播给调用方再抛」相比
+    /// 是否存在可观察差异：本地 catch 须就地捕获；finally / 迭代器清理对 throw
+    /// 与 return 完成的处理不同；派生构造器返回协议会误判哨兵。
+    pub(crate) fn return_operand_throw_observable(&self) -> bool {
+        self.nearest_catch_context().is_some()
+            || !self.active_finalizers.is_empty()
+            || !self.active_iterator_cleanups().is_empty()
+            || (self.super_call_allowed && !self.is_arrow)
+    }
+
     fn nearest_catch_context(&self) -> Option<(usize, BasicBlockId, String, usize)> {
         self.try_contexts
             .iter()
@@ -970,8 +996,10 @@ impl Lowerer {
         throw_stmt: &swc_ast::ThrowStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
-        let value = self.lower_expr(&throw_stmt.arg, block)?;
+        let mut block = self.ensure_open(flow)?;
+        // ThrowStatement 的 `? GetValue(exprRef)`：操作数自身抛出（getter /
+        // 被调函数）时传播该内层异常，哨兵不得被当作 throw 的值再包一层。
+        let value = self.lower_call_operand_then_continue(&throw_stmt.arg, &mut block)?;
         self.emit_throw_value(block, value)
     }
 
