@@ -526,7 +526,7 @@ pub(super) fn dispatch_builtin(
             node_perf_hooks::dispatch_perf => Builtin::PerformanceNow,
             operator::dispatch_operator => Builtin::AbstractCompare | Builtin::AbstractEq | Builtin::StrictEq | Builtin::TypeOf | Builtin::InstanceOf | Builtin::In | Builtin::Throw | Builtin::ExceptionValue | Builtin::NewTarget | Builtin::Debugger | Builtin::IsCallable | Builtin::IsJsObject | Builtin::GetPrototypeFromConstructor | Builtin::IsString | Builtin::TdzCheck | Builtin::ToPropertyKey | Builtin::ThisTdzCheck | Builtin::SuperCallOnceCheck,
             structured_clone::dispatch_structured_clone => Builtin::StructuredClone,
-            intrinsics::dispatch_intrinsics => Builtin::IntrinsicPristine,
+            intrinsics::dispatch_intrinsics => Builtin::IntrinsicPristine | Builtin::IntrinsicResolve,
             timer::dispatch_timer => Builtin::SetTimeout | Builtin::SetInterval | Builtin::ClearTimeout | Builtin::ClearInterval,
             jsx::dispatch_jsx => Builtin::JsxCreateElement,
         }

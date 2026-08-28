@@ -62,7 +62,11 @@ impl Lowerer {
         );
         dest
     }
-    fn lower_optional_spread_call(
+    /// 可选调用的短路发射：`callee?.(args)` 的短路点在 ArgumentListEvaluation
+    /// 之前（§13.3.9.1），callee 为 nullish 时直接产出 undefined，实参一律
+    /// 不求值。非 nullish 分支才求值实参：spread 形态经参数数组 + FuncApply，
+    /// 非 spread 形态发 OptionalCall（由 backend 处理非可调用 TypeError）。
+    fn lower_optional_call_short_circuit(
         &mut self,
         callee: ValueId,
         this_val: ValueId,
@@ -120,16 +124,36 @@ impl Lowerer {
             },
         );
 
-        let (args_array, args_end) = self.lower_call_args_to_array(args, call_block)?;
-        let called = self.alloc_value();
-        self.current_function.append_instruction(
-            args_end,
-            Instruction::CallBuiltin {
-                dest: Some(called),
-                builtin: Builtin::FuncApply,
-                args: vec![callee, this_val, args_array],
-            },
-        );
+        let (called, args_end) = if Self::call_args_have_spread(args) {
+            let (args_array, args_end) = self.lower_call_args_to_array(args, call_block)?;
+            let called = self.alloc_value();
+            self.current_function.append_instruction(
+                args_end,
+                Instruction::CallBuiltin {
+                    dest: Some(called),
+                    builtin: Builtin::FuncApply,
+                    args: vec![callee, this_val, args_array],
+                },
+            );
+            (called, args_end)
+        } else {
+            let mut args_end = call_block;
+            let mut arg_vals = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_vals.push(self.lower_call_operand_then_continue(&arg.expr, &mut args_end)?);
+            }
+            let called = self.alloc_value();
+            self.current_function.append_instruction(
+                args_end,
+                Instruction::OptionalCall {
+                    dest: called,
+                    callee,
+                    this_val,
+                    args: arg_vals,
+                },
+            );
+            (called, args_end)
+        };
         self.current_function.set_terminator(
             args_end,
             Terminator::Jump {
@@ -336,9 +360,7 @@ impl Lowerer {
                             call,
                             block,
                             builtin,
-                            IntrinsicCallSite::GlobalIdent {
-                                name: ident.sym.as_ref(),
-                            },
+                            IntrinsicCallSite::GlobalIdent,
                         );
                     }
                 }
@@ -379,11 +401,7 @@ impl Lowerer {
                             call,
                             block,
                             builtin,
-                            IntrinsicCallSite::StaticMember {
-                                object: obj_ident.sym.as_ref(),
-                                prop: prop_ident.sym.as_ref(),
-                                optional: false,
-                            },
+                            IntrinsicCallSite::StaticMember { optional: false },
                         );
                     }
 
@@ -475,7 +493,6 @@ impl Lowerer {
                             wjsm_ir::constants::INTRINSIC_FAMILY_ARRAY_PROTO,
                             array_builtin,
                             member_expr,
-                            prop_ident.sym.as_ref(),
                             &call.args,
                             block,
                         );
@@ -501,7 +518,6 @@ impl Lowerer {
                             wjsm_ir::constants::INTRINSIC_FAMILY_STRING_PROTO,
                             string_builtin,
                             member_expr,
-                            prop_ident.sym.as_ref(),
                             &call.args,
                             block,
                         );
@@ -899,11 +915,7 @@ impl Lowerer {
                 call,
                 block,
                 builtin,
-                IntrinsicCallSite::StaticMember {
-                    object: obj_ident.sym.as_ref(),
-                    prop: prop_ident.sym.as_ref(),
-                    optional: true,
-                },
+                IntrinsicCallSite::StaticMember { optional: true },
             );
         }
 
@@ -978,15 +990,19 @@ impl Lowerer {
             }
         }
 
-        let mut call_block = self.resolve_store_block(callee_block);
-        if Self::call_args_have_spread(&call.args) {
-            return self.lower_optional_spread_call(callee_val, this_val, &call.args, call_block);
-        }
-        let mut args = Vec::with_capacity(call.args.len());
-        for arg in &call.args {
-            args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
+        let call_block = self.resolve_store_block(callee_block);
+        if !call.args.is_empty() {
+            // 有实参：短路点必须在 ArgumentListEvaluation 之前（§13.3.9.1），
+            // nullish callee 不得触发实参求值的副作用。
+            return self.lower_optional_call_short_circuit(
+                callee_val,
+                this_val,
+                &call.args,
+                call_block,
+            );
         }
 
+        // 无实参：不存在实参求值顺序问题，OptionalCall 自身完成 nullish 短路。
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             call_block,
@@ -994,7 +1010,7 @@ impl Lowerer {
                 dest,
                 callee: callee_val,
                 this_val,
-                args,
+                args: Vec::new(),
             },
         );
         if call_block != block {

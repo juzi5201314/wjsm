@@ -5182,6 +5182,13 @@ impl NativeAgentState {
             names.extend(record.lexical.keys().filter_map(|key| key.name_id()));
             names.extend(record.var_names.iter().filter_map(|key| key.name_id()));
         }
+        // intrinsic 删除墓碑的键名必须常驻：键字符串一旦被 GC 剪出驻留表，
+        // 同名的后续驻留会得到新句柄，墓碑失配将令被删除的 intrinsic 复活。
+        names.extend(
+            self.intrinsic_tombstones
+                .iter()
+                .filter_map(|(_, key)| key.name_id()),
+        );
         self.string_ids
             .values()
             .copied()
@@ -5237,7 +5244,7 @@ impl NativeAgentState {
 
     /// 去重命中时复用既有句柄；键为（内容哈希, UTF-16 长度），同一内容无论
     /// Latin-1 还是 UTF-16 载荷都得到同一键，表示选择不影响句柄唯一性。
-    fn dedup_string_handle(&self, key: &(u32, u32)) -> Option<i64> {
+    pub(crate) fn dedup_string_handle(&self, key: &(u32, u32)) -> Option<i64> {
         self.string_ids
             .get(key)
             .copied()

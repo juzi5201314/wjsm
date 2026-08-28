@@ -1,6 +1,7 @@
 pub mod builtin;
 pub mod cfg;
 pub mod constants;
+pub mod intrinsic_sites;
 pub mod string_hash;
 pub mod typed_cfg;
 pub mod types;
