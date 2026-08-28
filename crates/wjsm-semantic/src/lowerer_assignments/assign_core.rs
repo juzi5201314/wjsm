@@ -472,6 +472,13 @@ impl Lowerer {
             return self.lower_assign_script_global(assign, block, &name);
         }
 
+        // 具名函数表达式自身名字绑定（CreateImmutableBinding(name, false)）：
+        // 写入按运行时语义分流——非严格静默忽略、严格 TypeError，
+        // 先于 lookup_for_assign 的 const 编译期拒绝。
+        if let Some(binding) = self.fn_expr_name_binding(&name) {
+            return self.lower_assign_fn_expr_name(assign, block, &binding);
+        }
+
         // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
         // 避免独立的 const 检查与 lookup 各自遍历 scope chain 的冗余。
         let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
@@ -709,6 +716,15 @@ impl Lowerer {
         span: Span,
         _sync_existing_env: bool,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 具名函数表达式自身名字绑定（解构目标 / for-in/of 头等收口写入）：
+        // 不可变，非严格静默忽略，严格在写点抛运行时 TypeError。
+        if binding
+            .scope_id
+            .is_some_and(|scope_id| self.scopes.is_fn_expr_name(scope_id, &binding.name))
+        {
+            let store_block = self.resolve_store_block(block);
+            return self.emit_fn_expr_name_write(store_block);
+        }
         // 脚本全局绑定没有 `$0.*` 槽：一切写入按 SetMutableBinding 路由到
         // 宿主全局环境记录（声明初始化已由调用方经 GlobalEnvInitLex 分流）。
         if binding.scope_id == Some(0) && self.script_global_names.contains_key(&binding.name) {

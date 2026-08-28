@@ -36,6 +36,10 @@ pub(crate) struct VarInfo {
     /// `true` only for the implicit `arguments` binding created by emit_arguments_init.
     /// Used to distinguish implicit `arguments` from explicit `var`/`let`/`const arguments`.
     pub(crate) implicit_arguments: bool,
+    /// `true` 仅用于具名函数表达式自身名字绑定（§15.2.5 步骤 4
+    /// CreateImmutableBinding(name, false)）：写入按运行时语义分流——
+    /// 非严格代码静默忽略、严格代码 TypeError，而非 const 的编译期拒绝。
+    pub(crate) fn_expr_name: bool,
 }
 
 pub(crate) struct Scope {
@@ -169,6 +173,7 @@ impl ScopeTree {
                 kind,
                 initialised,
                 implicit_arguments: false,
+                fn_expr_name: false,
             },
         );
         Ok(scope.id)
@@ -366,6 +371,25 @@ impl ScopeTree {
             return false;
         };
         self.arenas[scope_id].variables.contains_key("arguments")
+    }
+
+    /// 将 `(scope_id, name)` 处的绑定标记为具名函数表达式自身名字绑定。
+    pub(crate) fn set_fn_expr_name(&mut self, scope_id: usize, name: &str) -> Result<(), String> {
+        let info = self
+            .arenas
+            .get_mut(scope_id)
+            .and_then(|scope| scope.variables.get_mut(name))
+            .ok_or_else(|| format!("undeclared identifier `{name}`"))?;
+        info.fn_expr_name = true;
+        Ok(())
+    }
+
+    /// `(scope_id, name)` 处的绑定是否为具名函数表达式自身名字绑定。
+    pub(crate) fn is_fn_expr_name(&self, scope_id: usize, name: &str) -> bool {
+        self.arenas
+            .get(scope_id)
+            .and_then(|scope| scope.variables.get(name))
+            .is_some_and(|info| info.fn_expr_name)
     }
 
     /// Mark an existing variable as implicit `arguments`.

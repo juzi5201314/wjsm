@@ -899,6 +899,11 @@ fn async_method_super_fixture_matches_ir_snapshot() {
     assert_snapshot("async_method_super");
 }
 
+#[test]
+fn fn_expr_name_binding_fixture_matches_ir_snapshot() {
+    assert_snapshot("fn_expr_name_binding");
+}
+
 // ── with 语句 ───────────────────────────────────────────────────────────
 
 #[test]

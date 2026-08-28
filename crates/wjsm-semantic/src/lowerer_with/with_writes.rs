@@ -17,6 +17,9 @@ pub(crate) enum WithWriteFallback {
     ImplicitGlobal,
     /// const 重赋值：命中 with 对象时合法，未命中运行时 TypeError（§13.15.2）。
     ConstViolation,
+    /// 具名函数表达式自身名字绑定：不可变；with 仅存在于非严格代码，
+    /// 未命中时写入静默忽略（CreateImmutableBinding(name, false)）。
+    FnExprName,
     /// 同函数直线 TDZ 写入：未命中运行时 ReferenceError。
     Tdz,
 }
@@ -24,6 +27,9 @@ pub(crate) enum WithWriteFallback {
 impl Lowerer {
     /// 判定 with 写未命中回退的处理类别。
     pub(crate) fn with_write_fallback_kind(&self, name: &str) -> WithWriteFallback {
+        if self.fn_expr_name_binding(name).is_some() {
+            return WithWriteFallback::FnExprName;
+        }
         match self.lookup_binding_for_assign(name) {
             Ok((scope_id, kind)) => WithWriteFallback::Binding {
                 scope_id,
@@ -138,6 +144,8 @@ impl Lowerer {
                 )?;
                 Ok((block, false))
             }
+            // with 体恒为非严格代码：对自身名字的写入静默忽略。
+            WithWriteFallback::FnExprName => Ok((block, true)),
             WithWriteFallback::Tdz => {
                 let _ = self.emit_runtime_error_throw(
                     block,

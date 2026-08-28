@@ -602,7 +602,17 @@ impl Lowerer {
         let owner_env_scope = self.nearest_function_module_scope(parent_scope);
         // binding 的 owner env 属于：binding_scope 的最近 Function/Module 祖先。
         let binding_env_scope = self.nearest_function_module_scope(binding_scope);
-        binding_env_scope == owner_env_scope
+        if binding_env_scope != owner_env_scope {
+            return false;
+        }
+        // 父函数在闭包创建点存在活动的按迭代 env 帧（循环体按迭代绑定 /
+        // 具名函数表达式 funcEnv）时，本闭包的 `$env` 可能是插在稳定共享
+        // env 之前的迭代 env：直接写 `$env` 会在其上创建遮蔽自有属性，
+        // 内层读到新值而外层仍读稳定 env 旧值。此时回退动态链查找定位 owner。
+        !self
+            .iteration_env_stack
+            .iter()
+            .any(|frame| frame.function_scope_id == owner_env_scope)
     }
 
     /// 沿作用域树向上找最近的 Function/Module 作用域（env 的持有者）。
