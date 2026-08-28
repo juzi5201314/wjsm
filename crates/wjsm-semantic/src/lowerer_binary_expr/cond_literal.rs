@@ -11,15 +11,9 @@ impl Lowerer {
         // mode, collect abrupt completions before the conditional result feeds an
         // enclosing operator such as `+`.
         let collect_exception_forks = self.exception_fork_suppressed();
-        let mut test_block = block;
-        let test = if collect_exception_forks {
-            self.lower_expr_then_continue(cond.test.as_ref(), &mut test_block)?
-        } else {
-            let value = self.lower_expr(cond.test.as_ref(), test_block)?;
-            test_block = self.resolve_store_block(test_block);
-            value
-        };
-        let branch_block = test_block;
+        // test 操作数的 `? GetValue`：getter/调用抛出必须在 ToBoolean 分支前
+        // 分叉传播，哨兵不得被 Branch 当真值消费（lower_branch_condition 统一处理）。
+        let (test, branch_block) = self.lower_branch_condition(cond.test.as_ref(), block)?;
         // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
         // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch，违反 CFG codegen 契约。
         let branch_block = if self.current_function.block(branch_block).is_some_and(|b| {

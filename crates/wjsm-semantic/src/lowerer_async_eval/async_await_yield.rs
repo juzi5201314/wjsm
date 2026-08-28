@@ -851,7 +851,9 @@ impl Lowerer {
         }
 
         let mut call_block = block;
-        let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
+        // 构造器求值（`new o.C()` 的 getter 等）抛出必须先于 Construct 分叉
+        // 传播，哨兵不得作为 callee 流入（否则误报 "... is not a constructor"）。
+        let callee_val = self.lower_call_operand_then_continue(&new_expr.callee, &mut call_block)?;
         if let Some(args) = new_expr.args.as_deref()
             && Self::call_args_have_spread(args)
         {
