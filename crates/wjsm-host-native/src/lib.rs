@@ -269,10 +269,8 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::ArrayIterator(NativeIteratorKind::Keys) => Some(("keys", 0)),
         NativeCallableKind::ArrayIterator(NativeIteratorKind::Values) => Some(("values", 0)),
         NativeCallableKind::ArrayIterator(NativeIteratorKind::Entries) => Some(("entries", 0)),
-        // 迭代器对象的 next 方法（%ArrayIteratorPrototype%.next 等，§27.5.1）。
-        NativeCallableKind::CollectionNext(_)
-        | NativeCallableKind::IteratorNext(_)
-        | NativeCallableKind::RegExpIteratorNext(_) => Some(("next", 0)),
+        // 内建迭代器家族原型的共享 next（%ArrayIteratorPrototype%.next 等）。
+        NativeCallableKind::IteratorFamilyNext(_) => Some(("next", 0)),
         // Promise executor 的 resolve/reject 函数（§27.2.1.3）：匿名、length 1。
         NativeCallableKind::PromiseResolve(_) | NativeCallableKind::PromiseReject(_) => {
             Some(("", 1))
@@ -662,8 +660,6 @@ enum NativeCallableKind {
     Test262Agent(dispatch::agent::Test262Method),
     CjsResolvePaths(u32),
     ImportMetaResolve(u32),
-    CollectionNext(u32),
-    IteratorNext(u32),
     PromiseResolve(u32),
     PromiseReject(u32),
     ProxyRevoke(u32),
@@ -682,7 +678,6 @@ enum NativeCallableKind {
     FunctionPrototype,
     ProxyConstruct(u32),
     RegExpToString,
-    RegExpIteratorNext(u32),
     ProcessCwd,
     ProcessOn,
     SetImmediate,
@@ -728,6 +723,9 @@ enum NativeCallableKind {
     IteratorWrapNext,
     /// %WrapForValidIteratorPrototype%.return（§27.1.3.2.2.2）。
     IteratorWrapReturn,
+    /// 内建迭代器家族原型的共享 `next`（%ArrayIteratorPrototype%.next 等，
+    /// §23.1.5.2.1 / §22.1.5.1.1 / §24.1.5.2.1 / §24.2.5.2.1 / §22.2.9.2.1）。
+    IteratorFamilyNext(dispatch::iterator_prototypes::NativeIteratorFamily),
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
@@ -792,7 +790,6 @@ pub(crate) fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Bui
             "splice" => Builtin::ArraySpliceVa,
             "some" => Builtin::ArraySome,
             "sort" => Builtin::ArraySort,
-            "values" => Builtin::IteratorFrom,
             "toReversed" => Builtin::ArrayToReversed,
             "toSpliced" => Builtin::ArrayToSplicedVa,
             "toSorted" => Builtin::ArrayToSorted,
@@ -1138,9 +1135,10 @@ struct NativeAgentState {
     maps: HashMap<u32, Vec<(i64, i64)>>,
     sets: HashMap<u32, Vec<i64>>,
     weak: dispatch::weak::NativeWeakState,
-    collection_iterators: Vec<dispatch::collections::CollectionIterator>,
     array_iterators: HashMap<u32, NativeArrayIterator>,
     iterator_helpers: dispatch::iterator_helpers::IteratorHelpersState,
+    /// 内建迭代器家族原型对象（%ArrayIteratorPrototype% 等）的登记表。
+    iterator_prototypes: dispatch::iterator_prototypes::IteratorPrototypesState,
     enumerators: HashMap<u32, dispatch::enumerator::NativeEnumerator>,
     regexp_iterators: Vec<dispatch::regexp::RegExpIterator>,
     array_buffers: HashMap<u32, dispatch::buffers::NativeArrayBuffer>,
@@ -1175,7 +1173,9 @@ struct NativeAgentState {
     /// GC 可能回收 promise 对象，故 reason 在 settle 时即格式化为文本留存。
     pending_unhandled_rejections: Vec<(u32, String)>,
     microtasks: VecDeque<dispatch::promise::NativeScheduledMicrotask>,
-    iterator_next: HashMap<u32, u32>,
+    /// RegExp String Iterator 实例句柄 → `regexp_iterators` 下标：
+    /// %RegExpStringIteratorPrototype%.next 按 receiver 找实例状态。
+    regexp_iterator_ids: HashMap<u32, u32>,
     array_properties: HashMap<(u32, PropertyKey), i64>,
     array_property_order: HashMap<u32, Vec<PropertyKey>>,
     array_accessors: HashMap<(u32, PropertyKey), (i64, i64, u32)>,
@@ -1390,9 +1390,9 @@ impl NativeAgentState {
             weak: dispatch::weak::NativeWeakState::default(),
             array_accessors: HashMap::new(),
             array_property_flags: HashMap::new(),
-            collection_iterators: Vec::new(),
             array_iterators: HashMap::new(),
             iterator_helpers: dispatch::iterator_helpers::IteratorHelpersState::default(),
+            iterator_prototypes: dispatch::iterator_prototypes::IteratorPrototypesState::default(),
             enumerators: HashMap::new(),
             buffers: HashMap::new(),
             text_decoders: HashMap::new(),
@@ -1419,7 +1419,7 @@ impl NativeAgentState {
             pending_unhandled_rejections: Vec::new(),
             promise_combinators: Vec::new(),
             microtasks: VecDeque::new(),
-            iterator_next: HashMap::new(),
+            regexp_iterator_ids: HashMap::new(),
             array_properties: HashMap::new(),
             array_property_order: HashMap::new(),
             array_fixed_length: HashSet::new(),
@@ -1755,10 +1755,10 @@ impl NativeAgentState {
         self.maps.clear();
         self.sets.clear();
         self.weak.clear();
-        self.collection_iterators.clear();
         self.promise_combinators.clear();
         self.array_iterators.clear();
         self.iterator_helpers.clear();
+        self.iterator_prototypes.clear();
         self.regexp_iterators.clear();
         self.array_buffers.clear();
         self.shared_array_buffers.clear();
@@ -1813,7 +1813,7 @@ impl NativeAgentState {
         self.promise_reactions.clear();
         self.pending_unhandled_rejections.clear();
         self.microtasks.clear();
-        self.iterator_next.clear();
+        self.regexp_iterator_ids.clear();
         self.node_vm = dispatch::node_vm::NodeVmState::default();
         self.regexps.clear();
         self.regexp_free.clear();
@@ -2488,11 +2488,9 @@ impl NativeAgentState {
         }
         if value::is_symbol(key) && value::decode_handle(key) == wjsm_ir::wk_symbol::ITERATOR {
             let handle = value::decode_handle(receiver);
-            let builtin = if dispatch::generator::is_generator(self, receiver)
-                || value::is_js_object(receiver)
-                    && (self.array_iterators.contains_key(&handle)
-                        || self.iterator_next.contains_key(&handle))
-            {
+            // 内建迭代器实例（数组/字符串/集合/RegExp 家族）不再旁挂合成：
+            // @@iterator 沿真实原型链继承 %Iterator.prototype%[@@iterator]。
+            let builtin = if dispatch::generator::is_generator(self, receiver) {
                 wjsm_ir::Builtin::ObjectProtoValueOf
             } else if value::is_js_object(receiver) && self.maps.contains_key(&handle) {
                 wjsm_ir::Builtin::MapSetEntries
@@ -2513,7 +2511,13 @@ impl NativeAgentState {
                         .object_type(handle)
                         .is_ok_and(|kind| kind == u32::from(wjsm_ir::HEAP_TYPE_ARGUMENTS))
             {
-                wjsm_ir::Builtin::IteratorFrom
+                // %Array.prototype%[@@iterator] 与 values 为同一函数
+                // （§23.1.3.40），arguments 对象的 @@iterator 初值亦为
+                // %Array.prototype.values%（§10.4.4.6）：CreateArrayIterator
+                // 对 ToObject(this) 通用，不回落 GetIterator 协议。
+                return self.native_callable(NativeCallableKind::ArrayIterator(
+                    NativeIteratorKind::Values,
+                ));
             } else {
                 return None;
             };
@@ -2575,8 +2579,12 @@ impl NativeAgentState {
             };
         }
         if value::is_array(receiver) {
+            // values / keys / entries 与 @@iterator 同为 CreateArrayIterator
+            // 入口（§23.1.3.5 / §23.1.3.19 / §23.1.3.35），对 ToObject(this)
+            // 通用，不走 GetIterator 协议。
             let kind = match key.as_str() {
                 "keys" => Some(NativeIteratorKind::Keys),
+                "values" => Some(NativeIteratorKind::Values),
                 "entries" => Some(NativeIteratorKind::Entries),
                 _ => None,
             };
@@ -2590,26 +2598,10 @@ impl NativeAgentState {
         if let Some(builtin) = dispatch::generator::method(self, receiver, &key) {
             return self.native_callable(NativeCallableKind::Builtin(builtin, true));
         }
-        if key == "next"
-            && let Some(next) = self
-                .iterator_next
-                .get(&value::decode_handle(receiver))
-                .copied()
-        {
-            return Some(value::encode_native_callable_idx(next));
-        }
-        if key == "next"
-            && !self
-                .iterator_next
-                .contains_key(&value::decode_handle(receiver))
-            && let Some(iterator) = self
-                .array_iterators
-                .get(&value::decode_handle(receiver))
-                .map(|_| value::decode_handle(receiver))
-        {
-            return self.native_callable(NativeCallableKind::IteratorNext(iterator));
-        }
-        // 内部迭代器实例的 Iterator Helper 方法（§27.1.4）：语义原型链穿过
+        // 内建迭代器实例（数组/字符串/集合/RegExp 家族）的 `next` 不再旁挂
+        // 合成：实例创建即接线家族原型（%ArrayIteratorPrototype% 等），
+        // `next` 沿真实原型链解析为共享函数。
+        // 生成器实例的 Iterator Helper 方法（§27.1.4）：语义原型链穿过
         // %Iterator.prototype%，读取原型对象当前同名自有属性。
         if let Some(method) = dispatch::iterator_helpers::instance_method(self, receiver, &key) {
             return Some(method);
@@ -2647,9 +2639,6 @@ impl NativeAgentState {
         }
         if let Some(builtin) = dispatch::promise::promise_builtin(self, receiver, &key) {
             return self.native_callable(NativeCallableKind::Builtin(builtin, true));
-        }
-        if let Some(next) = dispatch::collections::iterator_property(self, receiver, &key) {
-            return Some(next);
         }
         if value::is_native_callable(receiver)
             && let Some(property) = dispatch::modules::callable_property(self, receiver, &key)
@@ -3665,8 +3654,6 @@ impl NativeAgentState {
             | NativeCallableKind::CjsResolve(_)
             | NativeCallableKind::CjsResolvePaths(_)
             | NativeCallableKind::ImportMetaResolve(_)
-            | NativeCallableKind::CollectionNext(_)
-            | NativeCallableKind::IteratorNext(_)
             | NativeCallableKind::FunctionConstructor
             | NativeCallableKind::FunctionPrototype
             | NativeCallableKind::NodeNet(_)
@@ -3702,7 +3689,6 @@ impl NativeAgentState {
             | NativeCallableKind::ProcessCpuUsage
             | NativeCallableKind::StringConstructor
             | NativeCallableKind::RegExpToString
-            | NativeCallableKind::RegExpIteratorNext(_)
             | NativeCallableKind::ProcessCwd
             | NativeCallableKind::Stream(_)
             | NativeCallableKind::WebEncoding(_)
@@ -3727,6 +3713,7 @@ impl NativeAgentState {
             | NativeCallableKind::IteratorHelperReturn
             | NativeCallableKind::IteratorWrapNext
             | NativeCallableKind::IteratorWrapReturn
+            | NativeCallableKind::IteratorFamilyNext(_)
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
@@ -6316,7 +6303,7 @@ impl NativeAgentState {
             .wraps
             .retain(|handle, _| is_live(handle));
         self.enumerators.retain(|handle, _| is_live(handle));
-        self.iterator_next.retain(|handle, _| is_live(handle));
+        self.regexp_iterator_ids.retain(|handle, _| is_live(handle));
         self.array_property_order
             .retain(|handle, _| is_live(handle));
         self.error_objects.retain(is_live);
@@ -6694,11 +6681,8 @@ unsafe extern "C" fn native_callable_call(
             proxy.revoked = true;
             value::encode_undefined()
         }
-        NativeCallableKind::CollectionNext(iterator_id) => {
-            dispatch::collections::next(ctx, state, iterator_id)
-        }
-        NativeCallableKind::IteratorNext(iterator) => {
-            dispatch::iterator_next_result(ctx, state, iterator)
+        NativeCallableKind::IteratorFamilyNext(family) => {
+            dispatch::iterator_prototypes::family_next(ctx, state, family, this_value)
         }
         NativeCallableKind::ArgumentsStrictCallee => {
             dispatch::arguments::strict_callee_error(ctx, state)
@@ -6711,9 +6695,6 @@ unsafe extern "C" fn native_callable_call(
             state
                 .intern_text(format!("/{source}/{flags}"), value::TAG_STRING)
                 .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
-        }
-        NativeCallableKind::RegExpIteratorNext(iterator_id) => {
-            dispatch::regexp::next_match_all(ctx, state, iterator_id)
         }
         NativeCallableKind::PromiseResolve(promise) => dispatch::promise::settle_resolver(
             ctx,

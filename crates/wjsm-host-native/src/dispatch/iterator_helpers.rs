@@ -1,8 +1,9 @@
 //! Iterator Helpers（ES2025 §27.1）：%Iterator% 抽象构造器、%Iterator.prototype%、
 //! %IteratorHelperPrototype% 与 %WrapForValidIteratorPrototype% 的物化与分派。
 //!
-//! 原型方法安装为堆原型对象的真实自有属性；内部迭代器实例（数组/字符串/集合
-//! 迭代器与生成器）经 `instance_method` 惰性合成读取同一批方法值，保证
+//! 原型方法安装为堆原型对象的真实自有属性；内建迭代器家族实例（数组/字符串/
+//! 集合/RegExp，见 `iterator_prototypes`）经真实原型链继承，生成器实例经
+//! `instance_method` 惰性合成读取同一批方法值，保证
 //! `[].values().map === Iterator.prototype.map` 的函数身份一致。
 
 mod eager;
@@ -326,10 +327,10 @@ pub(crate) fn ensure_wrap_prototype(state: &mut NativeAgentState) -> Option<i64>
     Some(prototype)
 }
 
-/// 内部迭代器实例（数组/字符串/参数对象/集合迭代器、生成器、helper 与
-/// wrapper）对 helper 方法名的惰性合成：语义上这些实例的原型链穿过
+/// 生成器实例对 helper 方法名的惰性合成：语义上生成器的原型链穿过
 /// %Iterator.prototype%（§27.1.2），返回原型对象当前的同名自有属性值，
 /// 用户对 `Iterator.prototype.map` 的覆盖 / 删除对实例读取立即可见。
+/// 内建迭代器家族实例有真实原型链，读取先于合成在链上命中，不再走此处。
 pub(crate) fn instance_method(
     state: &mut NativeAgentState,
     receiver: i64,
@@ -356,21 +357,19 @@ pub(crate) fn instance_method(
 }
 
 /// 宿主侧「原型链穿过 %Iterator.prototype%」的家族判定（OrdinaryHasInstance
-/// 对 %Iterator% 的实例语义，§27.1.3.1 Iterator.from 步骤 2）。
+/// 对 %Iterator% 的实例语义，§27.1.3.1 Iterator.from 步骤 2）。内建迭代器
+/// 家族（数组/字符串/集合/RegExp）、helper 与 wrapper 实例都有真实堆原型链，
+/// 由下方链行走覆盖；生成器实例的原型仍是旁挂合成，保留侧表判定。
 pub(crate) fn is_iterator_instance(state: &NativeAgentState, encoded: i64) -> bool {
     if !is_object_value(encoded) {
         return false;
     }
-    if value::is_js_object(encoded) {
-        let handle = value::decode_handle(encoded);
-        if state.array_iterators.contains_key(&handle)
-            || state.iterator_next.contains_key(&handle)
-            || state.generators.contains_key(&handle)
-            || state.iterator_helpers.helpers.contains_key(&handle)
-            || state.iterator_helpers.wraps.contains_key(&handle)
-        {
-            return true;
-        }
+    if value::is_js_object(encoded)
+        && state
+            .generators
+            .contains_key(&value::decode_handle(encoded))
+    {
+        return true;
     }
     let Some(prototype) = state.iterator_helpers.prototype else {
         return false;
