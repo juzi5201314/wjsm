@@ -3,6 +3,6 @@ exit_code: 0
 main-start
 main-end
 before-throw
-Uncaught exception: Error: timer-callback-error
 after-error-timer
 --- stderr ---
+Uncaught exception: Error: timer-callback-error
