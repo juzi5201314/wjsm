@@ -442,12 +442,9 @@ fn iterate(
                             value::encode_undefined(),
                         )
                     }
-                    SpeciesDecision::Default => allocate_object_or_out_of_memory(
-                        ctx,
-                        state,
-                        source.allocation_hint(),
-                        true,
-                    ),
+                    SpeciesDecision::Default => {
+                        allocate_object_or_out_of_memory(ctx, state, source.allocation_hint(), true)
+                    }
                 };
                 if value::is_exception(array) {
                     return array;

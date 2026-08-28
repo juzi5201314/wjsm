@@ -39,7 +39,10 @@ pub(super) fn dispatch_array(
         Builtin::ArrayCopyWithin => array_copy_within(ctx, state, args),
         Builtin::ArrayIsArray => {
             // IsArray（§7.2.2）：Proxy 穿透到 target 判定，revoked 抛 TypeError。
-            let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let receiver = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             match super::runtime::is_array_value(state, receiver) {
                 Some(is_array) => value::encode_bool(is_array),
                 None => type_error(
@@ -52,13 +55,19 @@ pub(super) fn dispatch_array(
         Builtin::ArrayIsPlain => {
             // array_inline 守卫：裸真数组判定（不穿透 Proxy——trap 语义须走
             // 慢路径 builtin 的完整协议）。
-            let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let receiver = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             value::encode_bool(value::is_array(receiver))
         }
         Builtin::ArraySpeciesDefault => {
             // array_inline map/filter 守卫：ArraySpeciesCreate 可静态归约为
             // 缺省 ArrayCreate 时才允许内联快路径。
-            let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let receiver = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             value::encode_bool(super::array_callbacks::species_is_default(state, receiver))
         }
         Builtin::ArrayAllocate => array_allocate(ctx, state, args),

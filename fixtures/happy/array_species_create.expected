@@ -1,0 +1,30 @@
+exit_code: 0
+--- stdout ---
+desc function undefined false true
+getter "get [Symbol.species]" 0
+identity true
+sub map true
+sub filter true
+sub flatMap true
+sub species true
+two-level true true
+custom map true
+custom filter true
+custom flatMap true
+null species true
+undef species true
+species=Array true
+non-ctor TypeError object.constructor[Symbol.species] is not a constructor
+num-ctor TypeError object.constructor[Symbol.species] is not a constructor
+species-getter RangeError boom-species
+ctor-getter Error boom-ctor
+bad-sub SyntaxError bad-species
+order ["ctor:3","cb:1","cb:2","cb:3","ctor:0","ctor:0"]
+filter grow true 2 1 3
+flatMap grow true 4 [1,-1,3,-3]
+redefined true
+deleted undefined true
+proto-swap true undefined 5 6
+restored true
+array-like true a! b! false
+--- stderr ---

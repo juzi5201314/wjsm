@@ -799,7 +799,8 @@ impl Lowerer {
                         // 显式 var/形参名 arguments 同为不可删除的声明式绑定。
                         // 具名函数表达式自身名字按 CreateImmutableBinding 创建，
                         // 同样不可删除（§9.1.1.1.8 步骤 3）。
-                        let deletable = !((name == "arguments" && self.scopes.lookup(&name).is_ok())
+                        let deletable = !((name == "arguments"
+                            && self.scopes.lookup(&name).is_ok())
                             || self.fn_expr_name_binding(&name).is_some());
                         let bool_const = self.module.add_constant(Constant::Bool(deletable));
                         let dest = self.alloc_value();

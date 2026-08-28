@@ -521,7 +521,14 @@ pub(crate) fn define_property(
 ) -> i64 {
     match try_define_property(ctx, state, proxy, key, descriptor) {
         Ok(true) => proxy,
-        Ok(false) => proxy_invariant_error(ctx, state, "Proxy defineProperty trap returned false"),
+        Ok(false) => {
+            // V8 falsish 文案（与 set / deleteProperty trap 同款式）。
+            let key_text = super::runtime::render_value(state, key);
+            let message = format!(
+                "'defineProperty' on proxy: trap returned falsish for property '{key_text}'"
+            );
+            proxy_invariant_error(ctx, state, &message)
+        }
         Err(exception) => exception,
     }
 }

@@ -103,7 +103,7 @@ module {
       %31 = call builtin.exception_value(%29)
       throw %31
     bb3:
-      %34 = call builtin.array.is_array(%25)
+      %34 = call builtin.array.species_default(%25)
       branch %34, bb5, bb4
     bb4:
       %32 = call builtin.array.map(%25, %28)

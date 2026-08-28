@@ -114,7 +114,7 @@ module {
       %32 = call builtin.exception_value(%30)
       throw %32
     bb3:
-      %35 = call builtin.array.is_array(%26)
+      %35 = call builtin.array.species_default(%26)
       branch %35, bb5, bb4
     bb4:
       %33 = call builtin.array.filter(%26, %29)
