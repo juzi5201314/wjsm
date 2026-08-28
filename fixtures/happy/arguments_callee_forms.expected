@@ -1,0 +1,18 @@
+exit_code: 0
+--- stdout ---
+decl: function true
+named expr: function true
+anon expr: function true
+gen decl: function true
+gen expr: true
+recursion: 120
+recursion w/ capture: 9
+method: true
+bind: true
+call: true apply: true
+new: true
+shape: true false true function
+keys: 0,1
+async decl: true
+async gen decl: true
+--- stderr ---

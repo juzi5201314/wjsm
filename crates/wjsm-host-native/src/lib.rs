@@ -880,6 +880,12 @@ struct NativeActivation {
     environment: i64,
     caller_image_id: u64,
     new_target: i64,
+    /// 本次调用的被调值（prepare_call 收到的 callee 原样记录，入口帧为
+    /// undefined）。mapped arguments 的 callee 数据属性按 §10.2.11 步骤 22
+    /// 取当前帧的该值——与 new_target 同机制：物化 arguments 的函数含
+    /// CollectRestArgs，direct_call 直调优化已排除它们，因此其每次进入都
+    /// 经 prepare_call 压 activation，栈顶恒为当前帧。
+    callee: i64,
     home_object: Option<wjsm_ir::HomeObject>,
     function: Option<NativeFunctionRef>,
     /// PrepareCall 选择特化 overlay 时 pin 住其 image，直到 FinishCall 弹出
@@ -3925,6 +3931,7 @@ impl NativeAgentState {
             } else {
                 value::encode_undefined()
             },
+            callee,
             home_object: function.and_then(|function| function.home_object),
             function,
             specialized_image: None,
@@ -3971,6 +3978,7 @@ impl NativeAgentState {
             environment: value::encode_undefined(),
             caller_image_id,
             new_target: value::encode_undefined(),
+            callee: value::encode_undefined(),
             home_object: None,
             function: None,
             specialized_image: None,

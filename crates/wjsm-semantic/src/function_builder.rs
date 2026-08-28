@@ -46,10 +46,6 @@ impl FunctionBuilder {
         std::mem::take(&mut self.known_callee_vars)
     }
 
-    pub(crate) fn name(&self) -> &str {
-        &self._name
-    }
-
     pub(crate) fn new_block(&mut self) -> BasicBlockId {
         let id = BasicBlockId(self.blocks.len() as u32);
         self.blocks.push(BasicBlock::new(id));

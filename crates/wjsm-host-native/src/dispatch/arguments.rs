@@ -120,8 +120,16 @@ pub(super) fn create(
     if mapped {
         // §10.2.1.1 步骤 8：callee 恒为自有数据属性
         // `{[[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true}`。
-        // 语义层解析不出闭包值时值为 undefined，但属性本身仍须存在。
-        let callee = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+        // 取值即 §10.2.11 步骤 22 传给 CreateMappedArgumentsObject 的 func——
+        // 本次调用的函数对象。物化 arguments 的函数含 CollectRestArgs，
+        // direct_call 直调优化已排除它们，每次进入都经 prepare_call 压
+        // activation，因此栈顶 activation 记录的被调值恒为当前帧的用户可见
+        // 函数（具名声明/表达式/generator 与 async wrapper 一致；bound/
+        // proxy 转发在内层 prepare_call 已解包为真实目标）。
+        let callee = state
+            .activations
+            .last()
+            .map_or_else(value::encode_undefined, |activation| activation.callee);
         if !define_named(state, handle, "callee", callee, HIDDEN_DATA_FLAGS) {
             return fail_dispatch(ctx);
         }
