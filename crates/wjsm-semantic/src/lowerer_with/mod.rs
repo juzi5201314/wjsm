@@ -18,7 +18,7 @@
 
 use super::*;
 
-mod strict_check;
+pub(crate) mod strict_check;
 mod with_calls;
 mod with_reads;
 mod with_writes;
@@ -138,8 +138,7 @@ impl Lowerer {
         scope_id: usize,
     ) -> Result<ValueId, LoweringError> {
         let binding = CapturedBinding::new(WITH_OBJECT_BINDING, scope_id);
-        if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding)
-        {
+        if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
             let value = self.load_captured_binding(*block, &binding)?;
             self.resolve_expr_continuations(block);
             return Ok(value);
@@ -218,8 +217,13 @@ impl Lowerer {
         });
 
         let base = self.alloc_value();
-        self.current_function
-            .append_instruction(merge, Instruction::Phi { dest: base, sources });
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: base,
+                sources,
+            },
+        );
         // Phi 所在块不得再挂 Branch 终结器（CFG codegen 契约），插入续接块。
         let post = self.current_function.new_block();
         self.current_function

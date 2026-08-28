@@ -166,6 +166,36 @@ impl Lowerer {
             params.iter().map(|p| &p.pat).collect::<Vec<_>>().as_slice(),
             env_scope_id,
             this_scope_id,
+            false,
+        )
+    }
+
+    /// 普通（非 async / 非 generator）函数的参数构建：sloppy 简单参数列表
+    /// 允许重复形参名（§15.2.1 早错误仅约束严格代码与非简单列表）。
+    pub(crate) fn build_plain_function_param_ir_names(
+        &mut self,
+        function: &swc_ast::Function,
+        env_scope_id: usize,
+        this_scope_id: usize,
+    ) -> Result<Vec<String>, LoweringError> {
+        let allow_duplicates = !self.strict_mode
+            && !function.body.as_ref().is_some_and(|body| {
+                crate::lowerer_with::strict_check::stmts_have_use_strict(&body.stmts)
+            })
+            && function
+                .params
+                .iter()
+                .all(|param| matches!(param.pat, swc_ast::Pat::Ident(_)));
+        self.build_param_ir_names_impl(
+            function
+                .params
+                .iter()
+                .map(|p| &p.pat)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            env_scope_id,
+            this_scope_id,
+            allow_duplicates,
         )
     }
 
@@ -180,6 +210,7 @@ impl Lowerer {
             params.iter().collect::<Vec<_>>().as_slice(),
             env_scope_id,
             this_scope_id,
+            false,
         )
     }
 
@@ -188,16 +219,33 @@ impl Lowerer {
         pats: &[&swc_ast::Pat],
         env_scope_id: usize,
         this_scope_id: usize,
+        allow_duplicates: bool,
     ) -> Result<Vec<String>, LoweringError> {
         let mut ir_names: Vec<String> = vec![
             format!("${env_scope_id}.$env"),
             format!("${this_scope_id}.$this"),
         ];
 
-        for pat in pats {
+        for (index, pat) in pats.iter().enumerate() {
             match pat {
                 swc_ast::Pat::Ident(binding) => {
                     let name = binding.id.sym.to_string();
+                    // sloppy 简单参数列表的重复形参（后者胜）：除最后一次出现
+                    // 外重命名为临时槽——实参仍按位置写入各自槽位，函数体内的
+                    // 名字解析到最后一次绑定，与规范"绑定被同名后参覆盖"一致。
+                    let duplicated_later = allow_duplicates
+                        && pats[index + 1..].iter().any(|later| {
+                            matches!(later, swc_ast::Pat::Ident(other) if other.id.sym == binding.id.sym)
+                        });
+                    if duplicated_later {
+                        let temp = self.alloc_temp_name();
+                        let scope_id = self
+                            .scopes
+                            .declare(&temp, VarKind::Let, true)
+                            .map_err(|msg| self.error(binding.span(), msg))?;
+                        ir_names.push(format!("${scope_id}.{temp}"));
+                        continue;
+                    }
                     let scope_id = self
                         .scopes
                         .declare(&name, VarKind::Let, true)

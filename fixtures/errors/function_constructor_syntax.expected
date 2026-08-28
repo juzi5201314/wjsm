@@ -1,0 +1,4 @@
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: SyntaxError: invalid function body for Function constructor: source text is not a single function

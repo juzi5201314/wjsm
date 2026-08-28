@@ -1,0 +1,16 @@
+exit_code: 0
+--- stdout ---
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+SyntaxError
+TypeError
+RangeError
+--- stderr ---

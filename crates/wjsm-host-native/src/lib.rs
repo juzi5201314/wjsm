@@ -259,6 +259,7 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::AggregateErrorConstructor => Some(("AggregateError", 2)),
         NativeCallableKind::ObjectConstructor => Some(("Object", 1)),
         NativeCallableKind::RealmArrayConstructor(_) => Some(("Array", 1)),
+        NativeCallableKind::FunctionConstructor => Some(("Function", 1)),
         NativeCallableKind::FunctionPrototype => Some(("", 0)),
         NativeCallableKind::TimerConstructor(true) => Some(("Immediate", 0)),
         NativeCallableKind::TimerConstructor(false) => Some(("Timeout", 0)),
@@ -2182,11 +2183,25 @@ impl NativeAgentState {
                 return true;
             }
             if value::is_callable(current) {
-                let Some(parent) = self
+                let explicit = self
                     .callable_prototypes
                     .get(&value::strip_gc_color(current))
-                    .copied()
-                else {
+                    .copied();
+                // 无显式原型的普通可调用值：[[Prototype]] 默认为
+                // %Function.prototype%（§10.2.3 OrdinaryFunctionCreate），
+                // 使 `f instanceof Function` 成立；%Function.prototype%
+                // 自身的父原型是 %Object.prototype%（§20.2.3）。
+                let Some(parent) = explicit.or_else(|| {
+                    if self.native_callable_kind(current)
+                        == Some(NativeCallableKind::FunctionPrototype)
+                    {
+                        self.object_prototype
+                    } else {
+                        self.native_callable_ids
+                            .get(&NativeCallableKind::FunctionPrototype)
+                            .map(|index| value::encode_native_callable_idx(*index))
+                    }
+                }) else {
                     return false;
                 };
                 current = parent;
@@ -5611,33 +5626,7 @@ unsafe extern "C" fn native_callable_call(
             dispatch::node_perf_hooks::call(ctx, state, callable, &arguments)
         }
         NativeCallableKind::FunctionConstructor => {
-            let global = dispatch::node_vm::current_context(state);
-            if !dispatch::node_vm::strings_enabled(state, global) {
-                return dispatch::modules::named_error_object(
-                    state,
-                    "EvalError",
-                    "Code generation from strings disallowed for this context".into(),
-                )
-                .and_then(|error| state.create_exception(error))
-                .unwrap_or_else(|| dispatch::fail_dispatch(ctx));
-            }
-            let Some((body, parameters)) = arguments.split_last() else {
-                return dispatch::node_vm::compile_dynamic_function(ctx, state, "", &[], global);
-            };
-            let Some(body) = state.string_owned(*body).and_then(|text| text.to_utf8()) else {
-                return dispatch::fail_dispatch(ctx);
-            };
-            let mut parameter_names = Vec::with_capacity(parameters.len());
-            for parameter in parameters {
-                let Some(parameter) = state
-                    .string_owned(*parameter)
-                    .and_then(|text| text.to_utf8())
-                else {
-                    return dispatch::fail_dispatch(ctx);
-                };
-                parameter_names.push(parameter);
-            }
-            dispatch::node_vm::compile_dynamic_function(ctx, state, &body, &parameter_names, global)
+            dispatch::function_constructor::construct(ctx, state, &arguments)
         }
         NativeCallableKind::StringConstructor => {
             let Some(argument) = arguments.first().copied() else {

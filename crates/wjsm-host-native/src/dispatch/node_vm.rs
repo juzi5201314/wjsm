@@ -346,20 +346,6 @@ fn compile_function(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         Err(error) => vm_error(ctx, state, error),
     }
 }
-pub(crate) fn compile_dynamic_function(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    body: &str,
-    params: &[String],
-    global: i64,
-) -> i64 {
-    let logical_url = next_url(state, "function-constructor");
-    match modules::compile_vm_function(ctx, state, body, params, global, &logical_url) {
-        Ok(function) => function,
-        Err(error) => vm_error(ctx, state, error),
-    }
-}
-
 fn contains_string_codegen(source: &str) -> bool {
     source.contains("eval(") || source.contains("Function(")
 }
@@ -472,7 +458,7 @@ fn copy_extensions(state: &mut NativeAgentState, target: i64, extensions: i64) -
     true
 }
 
-fn next_url(state: &mut NativeAgentState, kind: &str) -> String {
+pub(crate) fn next_url(state: &mut NativeAgentState, kind: &str) -> String {
     let id = state.node_vm.next_script_id;
     state.node_vm.next_script_id = id.saturating_add(1);
     format!("vm:{kind}:{id}")

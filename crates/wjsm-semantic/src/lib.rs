@@ -195,10 +195,12 @@ impl std::fmt::Display for Diagnostic {
 
 mod ast_kinds;
 mod builtins;
+mod dynamic_function;
 mod eval_scan;
 
 use ast_kinds::*;
 use builtins::*;
+pub use dynamic_function::{DynamicFunctionSource, prepare_dynamic_function};
 pub use eval_scan::eval_literal_binding_names;
 use eval_scan::*;
 /// 判断表达式是否为 Array 构造结果（数组字面量或 `new Array(...)`）。

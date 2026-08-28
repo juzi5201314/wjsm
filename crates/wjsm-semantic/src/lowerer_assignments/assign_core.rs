@@ -8,10 +8,34 @@ impl Lowerer {
         value: ValueId,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        if self.eval_var_writes_to_scope && matches!(kind, VarKind::Var) {
+        // 只有声明于 eval 顶层变量环境的 var 绑定才写回调用方作用域记录
+        // （§19.2.1.3 EvalDeclarationInstantiation 的 varEnv 是 eval 的变量
+        // 环境）。eval 代码内定义的函数（含箭头、类静态块）自带
+        // VariableEnvironment，其内部声明的 var 是函数局部绑定，绝不能外泄；
+        // 而嵌套函数对 eval 顶层 var 的闭包赋值仍须回写，保持记录与静态
+        // 绑定同步。
+        if self.eval_var_writes_to_scope
+            && matches!(kind, VarKind::Var)
+            && self.eval_binding_is_top_level(name)
+        {
             return self.append_eval_env_write(name, value, block);
         }
         Ok(block)
+    }
+
+    /// 绑定是否声明于 eval 顶层（不在任何嵌套函数上下文内）。
+    fn eval_binding_is_top_level(&self, name: &str) -> bool {
+        let Some(outer_fn_scope) = self.function_scope_id_stack.first().copied() else {
+            // 尚未进入任何嵌套函数：声明/写点即 eval 顶层。
+            return true;
+        };
+        match self.scopes.resolve_scope_id(name) {
+            Ok(scope_id) => {
+                scope_id != outer_fn_scope
+                    && !self.scopes.is_strict_ancestor(outer_fn_scope, scope_id)
+            }
+            Err(_) => false,
+        }
     }
 
     /// 标识符读取入口：解析穿越 with 作用域时先走对象环境记录动态分派
