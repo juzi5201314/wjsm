@@ -589,40 +589,51 @@ impl Lowerer {
                 // 钉死后续语句入口，避免 new 的 continue 块与 Jump 把 store 落到死块。
                 self.expr_merge_block = Some(after_write_block);
                 // 更新 Array 绑定跟踪：arr = [...] / new Array(...) / Array.from/of -> 标记；
-                // arr = 其他 -> 取消标记。
-                if is_array_constructor_expr(assign.right.as_ref())
+                // arr = 其他 -> 取消标记。构造器名被词法/模块绑定遮蔽时形状证明不成立。
+                if (is_array_constructor_expr(assign.right.as_ref())
+                    && !self.ctor_shape_shadowed(assign.right.as_ref()))
                     || (is_array_from_of_call(assign.right.as_ref())
-                        && self.scopes.lookup("Array").is_err())
+                        && !self.global_intrinsic_shadowed("Array"))
                 {
                     self.array_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.array_bindings.remove(&(scope_id, name.clone()));
                 }
                 // 更新 TypedArray 绑定跟踪：arr = new Int32Array -> 标记；arr = 其他 -> 取消标记
-                if is_typedarray_constructor_expr(assign.right.as_ref()) {
+                if is_typedarray_constructor_expr(assign.right.as_ref())
+                    && !self.ctor_shape_shadowed(assign.right.as_ref())
+                {
                     self.typedarray_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.typedarray_bindings.remove(&(scope_id, name.clone()));
                 }
                 // 更新 SharedArrayBuffer 绑定跟踪（与 TypedArray 平行）
-                if is_sharedarraybuffer_constructor_expr(assign.right.as_ref()) {
+                if is_sharedarraybuffer_constructor_expr(assign.right.as_ref())
+                    && !self.ctor_shape_shadowed(assign.right.as_ref())
+                {
                     self.sab_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.sab_bindings.remove(&(scope_id, name.clone()));
                 }
                 // 更新 DataView 绑定跟踪（专用宿主导入调用约定）。
-                if is_dataview_constructor_expr(assign.right.as_ref()) {
+                if is_dataview_constructor_expr(assign.right.as_ref())
+                    && !self.ctor_shape_shadowed(assign.right.as_ref())
+                {
                     self.dataview_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.dataview_bindings.remove(&(scope_id, name.clone()));
                 }
                 // 更新 Map/Set 绑定跟踪（原型方法直连优化）。
-                if is_map_constructor_expr(assign.right.as_ref()) {
+                if is_map_constructor_expr(assign.right.as_ref())
+                    && !self.ctor_shape_shadowed(assign.right.as_ref())
+                {
                     self.map_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.map_bindings.remove(&(scope_id, name.clone()));
                 }
-                if is_set_constructor_expr(assign.right.as_ref()) {
+                if is_set_constructor_expr(assign.right.as_ref())
+                    && !self.ctor_shape_shadowed(assign.right.as_ref())
+                {
                     self.set_bindings.insert((scope_id, name.clone()));
                 } else {
                     self.set_bindings.remove(&(scope_id, name.clone()));

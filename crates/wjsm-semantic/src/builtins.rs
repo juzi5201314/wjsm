@@ -92,6 +92,43 @@ pub(crate) fn is_builtin_global(name: &str) -> bool {
     BUILTIN_GLOBALS.contains(&name)
 }
 
+impl Lowerer {
+    /// 全局 intrinsic 名在当前解析点是否被静态绑定遮蔽（ResolveBinding 先于全局解析，
+    /// §9.4.2）。任一命中都必须禁用 CallBuiltin 等编译期 intrinsic 快路径，改走通用
+    /// 标识符解析（含模块导入 live binding 与 TDZ 诊断）。
+    ///
+    /// 遮蔽来源覆盖三类：
+    /// - 作用域树中的声明（含 TDZ 中的 let/const/class——遮蔽取决于声明存在与否，
+    ///   TDZ 报错由通用路径负责，不得回退为 intrinsic 劫持）；
+    /// - 模块命名/默认导入别名（`import { setTimeout } from 'node:timers/promises'`
+    ///   只登记 import_aliases，不进作用域树）；
+    /// - `import * as ns` 命名空间局部（按导入方模块隔离）。
+    pub(crate) fn global_intrinsic_shadowed(&self, name: &str) -> bool {
+        if self.scopes.resolve_scope_id(name).is_ok() {
+            return true;
+        }
+        self.current_module_id.is_some_and(|module_id| {
+            self.import_aliases
+                .contains_key(&(module_id, name.to_string()))
+                || self
+                    .static_namespace_import_objects
+                    .contains_key(&(module_id, name.to_string()))
+        })
+    }
+
+    /// `new C(...)` 形状证明（receiver 类型推断）里的构造器名被静态绑定遮蔽时，
+    /// 证明不成立：构造结果是用户构造器的实例，不得按内建 receiver 直连原型方法。
+    /// 非 `new <ident>` 形状（数组字面量等）恒不被遮蔽。
+    pub(crate) fn ctor_shape_shadowed(&self, expr: &swc_ast::Expr) -> bool {
+        if let swc_ast::Expr::New(new_expr) = expr
+            && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+        {
+            return self.global_intrinsic_shadowed(&ident.sym);
+        }
+        false
+    }
+}
+
 pub(crate) fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
     match name {
         "setTimeout" => Some(Builtin::SetTimeout),

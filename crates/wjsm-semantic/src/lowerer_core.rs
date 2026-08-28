@@ -1377,13 +1377,13 @@ impl Lowerer {
     /// 原型方法」链（如 `arr.map(f).filter(g)` 的中间结果）。用于数组原型方法
     /// 调用的 `CallBuiltin` 直连判定，使链式高阶函数逐链节内建化。
     pub(crate) fn is_array_producing_expr(&self, expr: &swc_ast::Expr) -> bool {
-        if is_array_constructor_expr(expr) {
+        if is_array_constructor_expr(expr) && !self.ctor_shape_shadowed(expr) {
             return true;
         }
         match expr {
             swc_ast::Expr::Ident(ident) => self.is_array_binding(ident),
             swc_ast::Expr::Call(call) => {
-                if is_array_from_of_call(expr) && self.scopes.lookup("Array").is_err() {
+                if is_array_from_of_call(expr) && !self.global_intrinsic_shadowed("Array") {
                     return true;
                 }
                 let swc_ast::Callee::Expr(callee) = &call.callee else {
@@ -1442,7 +1442,7 @@ impl Lowerer {
                 match callee.as_ref() {
                     // 未被遮蔽的全局 `String(x)` 恒返回字符串。
                     swc_ast::Expr::Ident(ident) => {
-                        ident.sym.as_ref() == "String" && self.scopes.lookup("String").is_err()
+                        ident.sym.as_ref() == "String" && !self.global_intrinsic_shadowed("String")
                     }
                     swc_ast::Expr::Member(member) => {
                         let swc_ast::MemberProp::Ident(prop) = &member.prop else {

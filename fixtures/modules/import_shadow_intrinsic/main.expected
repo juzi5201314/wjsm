@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+function
+waited
+shim-fetch:/x
+shim-headers
+shim-clone:v
+tick 1
+tick 2
+--- stderr ---

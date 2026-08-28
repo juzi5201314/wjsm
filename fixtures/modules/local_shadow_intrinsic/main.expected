@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+local-timer:5
+local-fetch:/y
+local-headers
+a=1
+local-symbol
+local-pi local-max
+local-epsilon
+local-stringify
+local-promise
+t
+abc
+4 number [1]
+--- stderr ---
