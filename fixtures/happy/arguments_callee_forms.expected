@@ -1,3 +1,5 @@
+exit_code: 0
+--- stdout ---
 decl: function true
 named expr: function true
 anon expr: function true
@@ -13,3 +15,4 @@ shape: true false true function
 keys: 0,1
 async decl: true
 async gen decl: true
+--- stderr ---
