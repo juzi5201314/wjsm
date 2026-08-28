@@ -118,12 +118,11 @@ pub(super) fn create(
         return fail_dispatch(ctx);
     }
     if mapped {
-        if let Some(callee) = args
-            .get(2)
-            .copied()
-            .filter(|callee| !value::is_undefined(*callee))
-            && !define_named(state, handle, "callee", callee, HIDDEN_DATA_FLAGS)
-        {
+        // §10.2.1.1 步骤 8：callee 恒为自有数据属性
+        // `{[[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true}`。
+        // 语义层解析不出闭包值时值为 undefined，但属性本身仍须存在。
+        let callee = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+        if !define_named(state, handle, "callee", callee, HIDDEN_DATA_FLAGS) {
             return fail_dispatch(ctx);
         }
         // [[ParameterMap]] 侧表：语义层仅在形参别名重定向生效（简单参数列表、
