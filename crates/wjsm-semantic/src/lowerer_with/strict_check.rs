@@ -108,7 +108,10 @@ impl StrictCodeValidator {
 impl Visit for StrictCodeValidator {
     fn visit_with_stmt(&mut self, stmt: &swc_ast::WithStmt) {
         if self.strict {
-            self.record(stmt.span, "Strict mode code may not include a with statement");
+            self.record(
+                stmt.span,
+                "Strict mode code may not include a with statement",
+            );
         }
         stmt.visit_children_with(self);
     }
