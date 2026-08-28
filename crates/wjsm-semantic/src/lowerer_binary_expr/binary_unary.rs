@@ -820,6 +820,8 @@ impl Lowerer {
                     // 成员访问发 DeleteProp，调用环求值后恒 true。
                     swc_ast::Expr::OptChain(oc) => self.lower_optchain_delete(oc, block),
                     // delete x：绑定不可删除时返回 false，其余沿用既有恒 true。
+                    // 严格代码中 delete 标识符是 early error（§13.5.1.1），
+                    // 已在降级前由 strict_check 拒绝，此处只剩 sloppy 路径。
                     swc_ast::Expr::Ident(ident) => {
                         // §13.5.1.1 早期错误：严格模式下 delete 无限定标识符。
                         if self.strict_mode {

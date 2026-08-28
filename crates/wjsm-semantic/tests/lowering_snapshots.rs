@@ -948,6 +948,53 @@ fn with_in_strict_code_reports_diagnostic() {
 }
 
 #[test]
+fn delete_identifier_in_strict_code_reports_diagnostic() {
+    // §13.5.1.1 early error：strict 代码中 delete 的派生操作数为
+    // IdentifierReference 即 SyntaxError；括号包裹递归适用，绑定名
+    // （含 arguments、未声明名）不影响判定。
+    let rejected = [
+        "\"use strict\"; var x = 1; delete x;",
+        "\"use strict\"; delete undeclared;",
+        "\"use strict\"; delete (((x)));",
+        "function f() { \"use strict\"; delete x; }",
+        "function f() { \"use strict\"; delete arguments; }",
+        "class C { m() { let y; delete y; } }",
+        "class C { static { delete z; } }",
+        "const g = () => { \"use strict\"; delete x; };",
+    ];
+    for source in rejected {
+        let error = lower_module(parse_module(source).expect("parse should succeed"), false)
+            .expect_err("strict delete of an identifier should be rejected");
+        match error {
+            LoweringError::Diagnostic(diagnostic) => {
+                assert!(
+                    diagnostic
+                        .message
+                        .contains("Delete of an unqualified identifier in strict mode."),
+                    "source {source:?} produced unexpected diagnostic: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn delete_non_identifier_in_strict_code_lowers() {
+    // 非 IdentifierReference 操作数（成员表达式）不触发 §13.5.1.1；
+    // sloppy 代码中 delete 标识符也照常降级。
+    let accepted = [
+        "\"use strict\"; var o = { p: 1 }; console.log(delete o.p);",
+        "var x = 1; console.log(delete x);",
+        "function f() { var y; return delete y; } f();",
+    ];
+    for source in accepted {
+        lower_module(parse_module(source).expect("parse should succeed"), false)
+            .unwrap_or_else(|error| panic!("source {source:?} should lower: {error:?}"));
+    }
+}
+
+#[test]
 fn with_in_sloppy_function_inside_strict_free_module_lowers() {
     // 非严格代码中的 with 正常降级为对象环境记录分派。
     let text = dump("const o = { x: 1 }; with (o) { console.log(x); }\n");

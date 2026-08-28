@@ -989,7 +989,8 @@ impl Lowerer {
         // 与模块自身指令做并集，而非覆盖。
         self.strict_mode = self.strict_mode || module_has_use_strict_directive(module);
         // 早错误：严格模式代码（含函数级指令与类体）不得包含 with 语句
-        // （§14.11.1），也不得以 eval/arguments 为赋值目标（§13.1.3）。
+        // （§14.11.1），不得以 eval/arguments 为赋值目标（§13.1.3），
+        // 也不得对 IdentifierReference 使用 delete（§13.5.1.1）。
         if let Some((span, message)) =
             crate::lowerer_with::find_strict_code_early_error(module, self.strict_mode)
         {

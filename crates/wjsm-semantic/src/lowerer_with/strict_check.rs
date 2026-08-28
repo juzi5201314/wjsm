@@ -1,9 +1,11 @@
 //! 严格模式代码的语法级 early error 校验。
 //!
-//! 覆盖两类规则：WithStatement（§14.11.1）与 eval/arguments 作为赋值目标
+//! 覆盖三类规则：WithStatement（§14.11.1）、eval/arguments 作为赋值目标
 //! （§13.1.3 AssignmentTargetType：strict 代码中 IdentifierReference 为
 //! "eval" 或 "arguments" 时 AssignmentTargetType 非 simple，赋值 /
-//! update / 解构 / for-in/of 头均为 SyntaxError）。
+//! update / 解构 / for-in/of 头均为 SyntaxError），以及 delete 作用于
+//! IdentifierReference（§13.5.1.1：strict 代码中 `delete x` 为 SyntaxError，
+//! 括号包裹递归适用，`delete (((x)))` 同样违例）。
 //!
 //! 严格模式是语法上下文属性：模块/eval 级指令、函数体 `"use strict"` 指令
 //! 序言、类体（含构造器 / 方法 / 静态块 / 字段初始化器）内的代码都属于
@@ -16,6 +18,9 @@ use super::*;
 
 /// V8 同口径的 eval/arguments 赋值目标错误消息。
 const RESTRICTED_TARGET_MESSAGE: &str = "Unexpected eval or arguments in strict mode";
+
+/// V8 同口径的严格模式 delete 标识符错误消息（§13.5.1.1）。
+const STRICT_DELETE_MESSAGE: &str = "Delete of an unqualified identifier in strict mode.";
 
 struct StrictCodeValidator {
     strict: bool,
@@ -41,6 +46,22 @@ pub(crate) fn stmts_have_use_strict(stmts: &[swc_ast::Stmt]) -> bool {
 /// 标识符是否为严格模式禁止的赋值目标名（§13.1.3）。
 fn is_restricted_target_name(name: &str) -> bool {
     name == "eval" || name == "arguments"
+}
+
+/// delete 操作数剥掉括号与 TS 类型包装后是否为 IdentifierReference，
+/// 命中返回标识符区间（§13.5.1.1：CoverParenthesizedExpression 规则递归
+/// 适用；TS 的 as/!/satisfies 等仅类型层包装，擦除后即括号内标识符）。
+fn delete_target_identifier_span(expr: &swc_ast::Expr) -> Option<Span> {
+    match expr {
+        swc_ast::Expr::Ident(ident) => Some(ident.span),
+        swc_ast::Expr::Paren(paren) => delete_target_identifier_span(&paren.expr),
+        swc_ast::Expr::TsAs(e) => delete_target_identifier_span(&e.expr),
+        swc_ast::Expr::TsNonNull(e) => delete_target_identifier_span(&e.expr),
+        swc_ast::Expr::TsConstAssertion(e) => delete_target_identifier_span(&e.expr),
+        swc_ast::Expr::TsTypeAssertion(e) => delete_target_identifier_span(&e.expr),
+        swc_ast::Expr::TsSatisfies(e) => delete_target_identifier_span(&e.expr),
+        _ => None,
+    }
 }
 
 /// 解构赋值 Pattern 中承接赋值的标识符叶子是否命中 eval/arguments。
@@ -121,6 +142,18 @@ impl Visit for StrictCodeValidator {
         assign.visit_children_with(self);
     }
 
+    fn visit_unary_expr(&mut self, unary: &swc_ast::UnaryExpr) {
+        // §13.5.1.1：strict 代码中 delete 的派生操作数为 IdentifierReference
+        // 即 SyntaxError（对所有绑定统一成立，不看绑定是否存在或可删）。
+        if self.strict
+            && unary.op == swc_ast::UnaryOp::Delete
+            && let Some(span) = delete_target_identifier_span(&unary.arg)
+        {
+            self.record(span, STRICT_DELETE_MESSAGE);
+        }
+        unary.visit_children_with(self);
+    }
+
     fn visit_update_expr(&mut self, update: &swc_ast::UpdateExpr) {
         if self.strict
             && let swc_ast::Expr::Ident(ident) = update.arg.as_ref()
@@ -181,8 +214,8 @@ impl Visit for StrictCodeValidator {
 }
 
 /// 对整棵模块 AST 校验严格模式代码的语法级 early error（with 语句、
-/// eval/arguments 赋值目标），返回首个违例的源区间与消息（调用方经
-/// `Lowerer::error` 生成携带源码上下文的诊断）。
+/// eval/arguments 赋值目标、delete 标识符），返回首个违例的源区间与消息
+/// （调用方经 `Lowerer::error` 生成携带源码上下文的诊断）。
 /// `base_strict` 为模块/eval 级严格性（含 direct eval 继承的调用方严格位）。
 pub(crate) fn find_strict_code_early_error(
     module: &swc_ast::Module,

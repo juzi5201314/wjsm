@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+true SyntaxError
+true
+true SyntaxError
+true SyntaxError
+true SyntaxError
+true false
+true
+--- stderr ---

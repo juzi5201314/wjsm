@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: Delete of an unqualified identifier in strict mode.
+ --> errors/strict_delete_identifier_paren.js:6:13
+6 |   delete (((x)));
+  |             ^
+
