@@ -5132,10 +5132,9 @@ impl NativeAgentState {
     /// 避免下一轮 intern 立即触发再散列；峰值后的多余容量随之归还，
     /// 长跑进程的 RSS 不会停留在历史峰值。
     pub(crate) fn finish_string_table_sweep(&mut self) {
-        self.string_table_sweep_watermark = STRING_TABLE_SWEEP_BASE_LEN
-            .max(self.string_ids.len().saturating_mul(2));
-        self.string_ids
-            .shrink_to(self.string_table_sweep_watermark);
+        self.string_table_sweep_watermark =
+            STRING_TABLE_SWEEP_BASE_LEN.max(self.string_ids.len().saturating_mul(2));
+        self.string_ids.shrink_to(self.string_table_sweep_watermark);
     }
 
     fn encode_inline_ascii_units(units: &[u16]) -> Option<i64> {

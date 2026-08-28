@@ -145,10 +145,7 @@ pub(crate) fn extend_gc_edges(fetch: &NativeFetchState, mut add: impl FnMut(i64,
 /// 提取为独立值的 fetch 方法（如 `headers.append`）以槽位下标编码；只要
 /// 方法值存活，就必须钉住对应包装对象，否则槽位被清扫复用后旧方法会
 /// 操作新 owner。返回该可调用值应指向的包装对象。
-pub(crate) fn callable_gc_target(
-    fetch: &NativeFetchState,
-    callable: FetchCallable,
-) -> Option<i64> {
+pub(crate) fn callable_gc_target(fetch: &NativeFetchState, callable: FetchCallable) -> Option<i64> {
     match callable {
         FetchCallable::AbortControllerAbort(handle) => {
             fetch.abort_signals.get(handle).map(|signal| signal.object)

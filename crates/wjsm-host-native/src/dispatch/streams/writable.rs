@@ -466,11 +466,8 @@ pub(super) fn run_write(
         return super::super::fail_dispatch(ctx);
     };
     let result = if let Some(transform) = transform {
-        let Some((callback, this_value, readable_controller)) = state
-            .streams
-            .transforms
-            .get(transform)
-            .map(|transform| {
+        let Some((callback, this_value, readable_controller)) =
+            state.streams.transforms.get(transform).map(|transform| {
                 (
                     transform.transform,
                     transform.transformer,

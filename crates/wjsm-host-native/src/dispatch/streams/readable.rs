@@ -361,15 +361,13 @@ fn get_reader(
             .and_then(|text| text.to_utf8())
             .is_some_and(|mode| mode == "byob")
     });
-    let Some((locked, byte_stream, status)) =
-        state.streams.readables.get(stream).map(|entry| {
-            (
-                entry.locked,
-                state.streams.controllers[entry.controller].byte_stream,
-                entry.status,
-            )
-        })
-    else {
+    let Some((locked, byte_stream, status)) = state.streams.readables.get(stream).map(|entry| {
+        (
+            entry.locked,
+            state.streams.controllers[entry.controller].byte_stream,
+            entry.status,
+        )
+    }) else {
         return super::super::fail_dispatch(ctx);
     };
     if locked {
@@ -480,10 +478,12 @@ fn read(
             }
         }
         ReadableStatus::Readable => {
-            state.streams.readers[reader].pending.push_back(PendingRead {
-                promise: promise_handle,
-                view,
-            });
+            state.streams.readers[reader]
+                .pending
+                .push_back(PendingRead {
+                    promise: promise_handle,
+                    view,
+                });
             if let Some(view) = view {
                 create_byob_request(ctx, state, controller, reader, view, promise_handle);
             }
@@ -541,11 +541,8 @@ fn respond(
             "BYOB respond count must be a non-negative integer",
         );
     };
-    let Some((controller, reader, view, promise, responded)) = state
-        .streams
-        .byob_requests
-        .get(request)
-        .map(|entry| {
+    let Some((controller, reader, view, promise, responded)) =
+        state.streams.byob_requests.get(request).map(|entry| {
             (
                 entry.controller,
                 entry.reader,
@@ -900,12 +897,7 @@ fn pipe_to_object(
     else {
         return None;
     };
-    if state
-        .streams
-        .readables
-        .get(readable)?
-        .pipe
-        .is_some()
+    if state.streams.readables.get(readable)?.pipe.is_some()
         || state.streams.readables[readable].locked
     {
         return None;
@@ -923,11 +915,8 @@ fn pipe_to_object(
 }
 
 pub(super) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState, readable: u32) -> i64 {
-    let Some((controller, destination, writing, closing, pipe_promise)) = state
-        .streams
-        .readables
-        .get(readable)
-        .and_then(|stream| {
+    let Some((controller, destination, writing, closing, pipe_promise)) =
+        state.streams.readables.get(readable).and_then(|stream| {
             stream.pipe.as_ref().map(|pipe| {
                 (
                     stream.controller,
@@ -944,10 +933,7 @@ pub(super) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState, read
     if writing {
         return value::encode_undefined();
     }
-    if let Some(chunk) = state.streams.controllers[controller]
-        .queue
-        .pop_front()
-    {
+    if let Some(chunk) = state.streams.controllers[controller].queue.pop_front() {
         state.streams.readables[readable]
             .pipe
             .as_mut()
@@ -1070,9 +1056,7 @@ fn copy_chunk_to_view(
             rest.push(value::decode_f64(stored) as u8);
         }
         let rest = super::super::typedarray::create_uint8_array(state, &rest)?;
-        state.streams.controllers[controller]
-            .queue
-            .push_front(rest);
+        state.streams.controllers[controller].queue.push_front(rest);
     }
     super::super::typedarray::prefix_view(state, view, written)
 }

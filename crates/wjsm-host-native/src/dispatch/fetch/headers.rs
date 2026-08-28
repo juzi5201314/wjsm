@@ -62,7 +62,10 @@ fn create(state: &mut NativeAgentState, entries: Vec<(String, Vec<String>)>) -> 
     state
         .set_web_instance_prototype(object, wjsm_ir::Builtin::HeadersConstructor)
         .ok()?;
-    let handle = state.fetch.headers.insert(HeadersState { object, entries })?;
+    let handle = state
+        .fetch
+        .headers
+        .insert(HeadersState { object, entries })?;
     super::register_object(state, object, FetchObjectKind::Headers(handle));
     Some(object)
 }
@@ -238,13 +241,13 @@ pub(super) fn call(
             };
             stored
         }
-        HeadersMethod::Has => value::encode_bool(
-            state
-                .fetch
-                .headers
-                .get(handle)
-                .is_some_and(|headers| headers.entries.iter().any(|(stored, _)| stored == &name)),
-        ),
+        HeadersMethod::Has => {
+            value::encode_bool(
+                state.fetch.headers.get(handle).is_some_and(|headers| {
+                    headers.entries.iter().any(|(stored, _)| stored == &name)
+                }),
+            )
+        }
         HeadersMethod::Append | HeadersMethod::Set => {
             let raw = args
                 .get(1)

@@ -91,7 +91,10 @@ fn string_table_watermark_bounds_interned_strings_without_explicit_gc() {
          for(let i=0;i<60000;i++){ const s='xx'+i+'yy'; n+=s.length; } \
          console.log(n, keep.join('|'));",
     );
-    assert_eq!(execution.stdout, b"528890 alive_123456789|bravo_987654321\n");
+    assert_eq!(
+        execution.stdout,
+        b"528890 alive_123456789|bravo_987654321\n"
+    );
     let stats = runtime.host_side_table_stats();
     assert!(
         stats.string_ids < 16384,
@@ -301,7 +304,10 @@ fn dead_stream_wrappers_are_swept_and_reused_handles_lose_the_brand() {
     assert_eq!(execution.stdout, b"polluted 0\n");
     runtime.collect_garbage_now().expect("GC should run");
     let stats = runtime.host_side_table_stats();
-    assert_eq!(stats.stream_objects, 0, "死 stream 登记项应被清扫：{stats:?}");
+    assert_eq!(
+        stats.stream_objects, 0,
+        "死 stream 登记项应被清扫：{stats:?}"
+    );
     assert_eq!(stats.stream_slots, 0, "死 stream 槽位应被释放：{stats:?}");
 }
 
