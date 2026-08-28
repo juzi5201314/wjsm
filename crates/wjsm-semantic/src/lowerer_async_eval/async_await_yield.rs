@@ -638,10 +638,12 @@ impl Lowerer {
         if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
             && self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()
         {
-            if ident.sym == "Promise" && self.scopes.lookup(&ident.sym).is_err() {
+            // 词法/模块绑定（含导入别名与 TDZ 声明）遮蔽全局构造器名：
+            // 被遮蔽时禁用全部编译期内建构造器快路径，走通用 ConstructCall。
+            if ident.sym == "Promise" && !self.global_intrinsic_shadowed(&ident.sym) {
                 return self.lower_new_promise(new_expr, block);
             }
-            if ident.sym == "Proxy" && self.scopes.lookup(&ident.sym).is_err() {
+            if ident.sym == "Proxy" && !self.global_intrinsic_shadowed(&ident.sym) {
                 // new Proxy(target, handler) → CallBuiltin(ProxyCreate, [target, handler])
                 let mut call_block = block;
                 let arg_vals =
@@ -657,7 +659,7 @@ impl Lowerer {
                 );
                 return Ok((dest, call_block));
             }
-            if ident.sym == "RegExp" && self.scopes.lookup(&ident.sym).is_err() {
+            if ident.sym == "RegExp" && !self.global_intrinsic_shadowed(&ident.sym) {
                 let mut call_block = block;
                 let callee_val =
                     self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
@@ -689,7 +691,7 @@ impl Lowerer {
                 return Ok((dest, continue_block));
             }
             // WeakRef / FinalizationRegistry constructors (can throw — need exception checking)
-            if self.scopes.lookup(&ident.sym).is_err()
+            if !self.global_intrinsic_shadowed(&ident.sym)
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)
                 && matches!(
                     builtin,
@@ -763,7 +765,7 @@ impl Lowerer {
             }
             // 这些宿主构造器当前直接返回宿主对象；Error 构造器不能走这里，
             // 它们需要通用 ConstructCall 传入 new.target 并把已分配 receiver 初始化为错误对象。
-            if self.scopes.lookup(&ident.sym).is_err()
+            if !self.global_intrinsic_shadowed(&ident.sym)
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)
                 && matches!(
                     builtin,
@@ -844,7 +846,7 @@ impl Lowerer {
 
         // Create new object. Error 构造器需要更大容量以容纳 name/message/__error_brand__/cause/stack。
         let new_obj_capacity = match new_expr.callee.as_ref() {
-            swc_ast::Expr::Ident(ident) if self.scopes.lookup(&ident.sym).is_err() => {
+            swc_ast::Expr::Ident(ident) if !self.global_intrinsic_shadowed(&ident.sym) => {
                 match builtin_from_global_ident(&ident.sym) {
                     Some(
                         Builtin::ErrorConstructor
