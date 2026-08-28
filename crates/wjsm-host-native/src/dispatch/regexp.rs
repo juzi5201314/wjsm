@@ -97,9 +97,11 @@ fn compile_regexp(
 }
 
 fn subject(state: &NativeAgentState, encoded: i64) -> String {
-    if value::is_string(encoded) {
+    if let Some(primitive) = super::runtime::primitive_string(state, encoded) {
+        // boxed String 包装对象与原语同路：ToString(this) 经 ToPrimitive
+        // 归约为 [[StringData]]（§7.1.17）。
         state
-            .string_owned(encoded)
+            .string_owned(primitive)
             .map(|text| text.to_utf8_lossy())
             .unwrap_or_default()
     } else {
@@ -108,8 +110,8 @@ fn subject(state: &NativeAgentState, encoded: i64) -> String {
 }
 
 fn subject_runtime_string(state: &NativeAgentState, encoded: i64) -> wjsm_host::RuntimeString {
-    if value::is_string(encoded) {
-        state.string_owned(encoded).unwrap_or_default()
+    if let Some(primitive) = super::runtime::primitive_string(state, encoded) {
+        state.string_owned(primitive).unwrap_or_default()
     } else if value::is_symbol(encoded) {
         wjsm_host::RuntimeString::empty()
     } else {

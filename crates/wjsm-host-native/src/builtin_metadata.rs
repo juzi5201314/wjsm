@@ -191,6 +191,7 @@ fn string_metadata(builtin: Builtin) -> Option<(&'static str, u32)> {
     Some(match builtin {
         Builtin::StringFromCharCode => ("fromCharCode", 1),
         Builtin::StringFromCodePoint => ("fromCodePoint", 1),
+        Builtin::StringRaw => ("raw", 1),
         Builtin::StringAt => ("at", 1),
         Builtin::StringCharAt => ("charAt", 1),
         Builtin::StringCharCodeAt => ("charCodeAt", 1),

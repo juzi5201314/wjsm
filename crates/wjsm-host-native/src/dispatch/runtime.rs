@@ -2030,6 +2030,19 @@ pub(super) fn get_property_with_receiver(
         };
     }
     let handle = object_handle(object).ok_or(())?;
+    // String exotic 包装对象的自有 "length" 与在界索引（§10.4.3）先于原型
+    // 链解析：%String.prototype% 的自有 "length"（+0）不得遮蔽实例值。
+    if let Some(primitive) = boxed_primitive_value(state, object)
+        && value::is_string(primitive)
+        && (state.text_matches(encoded_key, "length")
+            || array_index(state, encoded_key).is_some_and(|index| {
+                state
+                    .string_len(primitive)
+                    .is_some_and(|length| (index as usize) < length)
+            }))
+    {
+        return get_property_with_receiver(ctx, state, primitive, encoded_key, receiver);
+    }
     let lookup = state
         .gc
         .heap()
@@ -2061,8 +2074,12 @@ pub(super) fn get_property_with_receiver(
                 return Ok(property);
             }
             // 包装对象（boxed primitive）：普通对象链未命中后回退到原语本身
-            // （字符串 length/索引等 exotic own 属性与原语方法）。
-            if let Some(primitive) = boxed_primitive_value(state, object) {
+            // （字符串 length/索引等 exotic own 属性与原语方法）。固有原型
+            // 自身携带 [[StringData]]（%String.prototype%，§22.1.3）时不
+            // 回退：原语的包装原型即本对象，递归不会带来新的属性来源。
+            if let Some(primitive) = boxed_primitive_value(state, object)
+                && state.primitive_wrapper_prototype(primitive) != Some(object)
+            {
                 return get_property_with_receiver(ctx, state, primitive, encoded_key, receiver);
             }
             Ok(value::encode_undefined())
@@ -2414,7 +2431,11 @@ fn boxed_primitive_has(state: &mut NativeAgentState, primitive: i64, encoded_key
     state.primitive_property(primitive, encoded_key).is_some()
 }
 
-fn primitive_string(state: &NativeAgentState, source: i64) -> Option<i64> {
+/// 字符串原语或 boxed String 包装对象的 [[StringData]]；其余为 None。
+/// 字符串方法对 this 做 ToString 前先经此解箱（ToPrimitive 对包装对象
+/// 命中原语，§7.1.17），使 `String.prototype.slice.call(new String(...))`
+/// 与 Node 对齐。
+pub(super) fn primitive_string(state: &NativeAgentState, source: i64) -> Option<i64> {
     if value::is_string(source) {
         return Some(source);
     }

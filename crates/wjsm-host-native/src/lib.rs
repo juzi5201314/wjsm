@@ -639,6 +639,9 @@ enum NativeCallableKind {
     Intl(dispatch::intl::IntlCallable),
 }
 
+/// 按 receiver 家族惰性合成内建方法值。字符串方法不在此合成：它们是
+/// %String.prototype%（`ensure_string_prototype`）上的真实自有属性，基元
+/// 读取未命中后沿包装原型链命中。
 fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
     use wjsm_ir::Builtin;
 
@@ -661,35 +664,6 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
         match key {
             "toString" => Builtin::BigIntProtoToString,
             "valueOf" => Builtin::BigIntProtoValueOf,
-            _ => return None,
-        }
-    } else if value::is_string(receiver) {
-        match key {
-            "at" => Builtin::StringAt,
-            "charAt" => Builtin::StringCharAt,
-            "charCodeAt" => Builtin::StringCharCodeAt,
-            "codePointAt" => Builtin::StringCodePointAt,
-            "concat" => Builtin::StringConcatVa,
-            "endsWith" => Builtin::StringEndsWith,
-            "includes" => Builtin::StringIncludes,
-            "indexOf" => Builtin::StringIndexOf,
-            "lastIndexOf" => Builtin::StringLastIndexOf,
-            "matchAll" => Builtin::StringMatchAll,
-            "padEnd" => Builtin::StringPadEnd,
-            "padStart" => Builtin::StringPadStart,
-            "repeat" => Builtin::StringRepeat,
-            "replace" => Builtin::StringReplace,
-            "replaceAll" => Builtin::StringReplaceAll,
-            "search" => Builtin::StringSearch,
-            "slice" => Builtin::StringSlice,
-            "split" => Builtin::StringSplit,
-            "startsWith" => Builtin::StringStartsWith,
-            "substring" => Builtin::StringSubstring,
-            "toString" => Builtin::StringToString,
-            "trim" => Builtin::StringTrim,
-            "trimEnd" => Builtin::StringTrimEnd,
-            "trimStart" => Builtin::StringTrimStart,
-            "valueOf" => Builtin::StringValueOf,
             _ => return None,
         }
     } else if value::is_array(receiver) {
@@ -819,6 +793,7 @@ fn static_builtin(owner: wjsm_ir::Builtin, key: &str) -> Option<wjsm_ir::Builtin
         (Builtin::ArrayIsArray, "of") => Builtin::ArrayOf,
         (Builtin::StringFromCharCode, "fromCharCode") => Builtin::StringFromCharCode,
         (Builtin::StringFromCharCode, "fromCodePoint") => Builtin::StringFromCodePoint,
+        (Builtin::StringFromCharCode, "raw") => Builtin::StringRaw,
         (Builtin::NumberConstructor, "isNaN") => Builtin::NumberIsNaN,
         (Builtin::NumberConstructor, "isFinite") => Builtin::NumberIsFinite,
         (Builtin::NumberConstructor, "isInteger") => Builtin::NumberIsInteger,
@@ -2333,10 +2308,6 @@ impl NativeAgentState {
                 // %TypedArray%.prototype[@@iterator] 与 values 为同一函数
                 // （ES §23.2.3.38），原型对象与实例走同一 builtin。
                 wjsm_ir::Builtin::TypedArrayProtoValues
-            } else if value::is_string(receiver) {
-                // 字符串迭代器与 IteratorFrom 行为一致，但 JS 可见 name 为
-                // "[Symbol.iterator]"（§22.1.3.36），与数组的 "values" 区分。
-                wjsm_ir::Builtin::StringIterator
             } else if value::is_array(receiver)
                 || value::is_js_object(receiver)
                     && self
@@ -2539,6 +2510,7 @@ impl NativeAgentState {
             let builtin = match key.as_str() {
                 "fromCharCode" => wjsm_ir::Builtin::StringFromCharCode,
                 "fromCodePoint" => wjsm_ir::Builtin::StringFromCodePoint,
+                "raw" => wjsm_ir::Builtin::StringRaw,
                 _ => return None,
             };
             return self.native_callable(NativeCallableKind::Builtin(builtin, false));
@@ -2890,7 +2862,7 @@ impl NativeAgentState {
         if value::is_f64(primitive) {
             dispatch::intl::ensure_number_prototype(self)
         } else if value::is_string(primitive) {
-            dispatch::intl::ensure_string_prototype(self)
+            dispatch::string_proto::ensure_string_prototype(self)
         } else if value::is_bigint(primitive) {
             dispatch::intl::ensure_bigint_prototype(self)
         } else if value::is_bool(primitive) {
@@ -4526,7 +4498,7 @@ impl NativeAgentState {
         if self.native_callable_kind(callable) == Some(NativeCallableKind::StringConstructor)
             && self.text_matches(key.to_value(), "prototype")
         {
-            return dispatch::intl::ensure_string_prototype(self);
+            return dispatch::string_proto::ensure_string_prototype(self);
         }
         if self
             .native_callable_builtin(callable)

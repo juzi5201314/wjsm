@@ -4,8 +4,8 @@ use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
-    PrimitiveHint, fail_dispatch, range_error, render_value, to_number, to_primitive,
-    to_string_coerced, to_uint32, type_error,
+    PrimitiveHint, fail_dispatch, range_error, render_value, to_number, to_number_coerced,
+    to_primitive, to_string_coerced, to_uint32, type_error,
 };
 use crate::NativeAgentState;
 
@@ -48,8 +48,85 @@ pub(super) fn dispatch_string(
         Builtin::StringToString | Builtin::StringValueOf => this_string_value(ctx, state, args),
         Builtin::StringFromCharCode => string_from_char_code(ctx, state, args),
         Builtin::StringFromCodePoint => string_from_code_point(ctx, state, args),
+        Builtin::StringRaw => string_raw(ctx, state, args),
         _ => return None,
     })
+}
+
+/// `String.raw`（ES §22.1.2.4）步骤 2/3 的 ToObject 边界：undefined/null
+/// 不可对象化，抛与 Node 一致的 TypeError；其余值原样返回（[[Get]] 对
+/// 基元经包装原型链解析，无需真实装箱）。
+fn raw_to_object_coercible(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    encoded: i64,
+) -> Result<i64, i64> {
+    if value::is_undefined(encoded) || value::is_null(encoded) {
+        return Err(type_error(
+            ctx,
+            state,
+            "Cannot convert undefined or null to object",
+        ));
+    }
+    Ok(encoded)
+}
+
+/// `String.raw` 的 [[Get]]：key 先经字符串驻留，异常值原样上抛。
+fn raw_get(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    name: &str,
+) -> Result<i64, i64> {
+    let key = intern(ctx, state, RuntimeString::from(name.to_owned()));
+    if value::is_exception(key) {
+        return Err(key);
+    }
+    match super::runtime::get_property(ctx, state, object, key) {
+        Ok(result) if value::is_exception(result) => Err(result),
+        Ok(result) => Ok(result),
+        Err(()) => Err(fail_dispatch(ctx)),
+    }
+}
+
+/// `String.raw`（ES §22.1.2.4）：按 literals（template.raw）的
+/// LengthOfArrayLike 交替拼接原始文本段与替换值。
+/// args: [template, ...substitutions]。
+fn string_raw(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let template = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    let substitutions = args.get(1..).unwrap_or(&[]);
+    let result = (|| -> Result<String, i64> {
+        let cooked = raw_to_object_coercible(ctx, state, template)?;
+        let literals = raw_get(ctx, state, cooked, "raw")?;
+        let literals = raw_to_object_coercible(ctx, state, literals)?;
+        let length = raw_get(ctx, state, literals, "length")?;
+        // LengthOfArrayLike（§7.3.19）：ToLength 截断到 [0, 2^53-1]。
+        let literal_count = match to_number_coerced(ctx, state, length)? {
+            number if number.is_nan() => 0,
+            number => number.clamp(0.0, 9_007_199_254_740_991.0).trunc() as u64,
+        };
+        let mut rendered = String::new();
+        for next_index in 0..literal_count {
+            let segment = raw_get(ctx, state, literals, &next_index.to_string())?;
+            rendered.push_str(&to_string_coerced(ctx, state, segment)?);
+            if next_index + 1 == literal_count {
+                break;
+            }
+            if let Ok(position) = usize::try_from(next_index)
+                && let Some(substitution) = substitutions.get(position).copied()
+            {
+                rendered.push_str(&to_string_coerced(ctx, state, substitution)?);
+            }
+        }
+        Ok(rendered)
+    })();
+    match result {
+        Ok(rendered) => intern(ctx, state, RuntimeString::from(rendered)),
+        Err(exception) => exception,
+    }
 }
 
 fn this_string_value(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
@@ -119,6 +196,10 @@ fn runtime_string(state: &NativeAgentState, value: i64) -> Option<RuntimeString>
         state.string_owned(value)
     } else if value::is_symbol(value) {
         None
+    } else if let Some(primitive) = super::runtime::primitive_string(state, value) {
+        // boxed String 包装对象：ToString(this) 经 ToPrimitive 归约为
+        // [[StringData]] 原语（§7.1.17）。
+        state.string_owned(primitive)
     } else {
         Some(RuntimeString::from(render_value(state, value)))
     }

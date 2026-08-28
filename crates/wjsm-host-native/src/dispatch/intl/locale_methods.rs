@@ -1,7 +1,7 @@
 //! ECMA-262 locale 敏感方法，委托 Phase 2 的 Intl owner。
 
 use wjsm_intl_data::{NormalizationForm, case_map, locale_case_map, normalize};
-use wjsm_ir::{Builtin, value};
+use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
 use super::common::intern;
@@ -400,18 +400,7 @@ pub(crate) fn primitive_locale_property(
     receiver: i64,
     key: &str,
 ) -> Option<i64> {
-    let prototype = if value::is_string(receiver)
-        && matches!(
-            key,
-            "normalize"
-                | "toLowerCase"
-                | "toUpperCase"
-                | "toLocaleLowerCase"
-                | "toLocaleUpperCase"
-                | "localeCompare"
-        ) {
-        ensure_string_prototype(state)?
-    } else if value::is_f64(receiver) && key == "toLocaleString" {
+    let prototype = if value::is_f64(receiver) && key == "toLocaleString" {
         ensure_number_prototype(state)?
     } else if value::is_bigint(receiver) && key == "toLocaleString" {
         ensure_bigint_prototype(state)?
@@ -441,40 +430,6 @@ pub(crate) fn primitive_locale_property(
         .ok()
         .flatten()
         .map(|stored| stored as i64)
-}
-
-pub(crate) fn ensure_string_prototype(state: &mut NativeAgentState) -> Option<i64> {
-    if let Some(prototype) = state.intl.string_prototype {
-        return Some(prototype);
-    }
-    let constructor = state.native_callable(crate::NativeCallableKind::StringConstructor)?;
-    let prototype = allocate_proto(state, constructor)?;
-    for (name, kind) in [
-        ("normalize", IntlCallable::StringNormalize),
-        ("toLowerCase", IntlCallable::StringToLowerCase),
-        ("toUpperCase", IntlCallable::StringToUpperCase),
-        ("toLocaleLowerCase", IntlCallable::StringToLocaleLowerCase),
-        ("toLocaleUpperCase", IntlCallable::StringToLocaleUpperCase),
-        ("localeCompare", IntlCallable::StringLocaleCompare),
-    ] {
-        super::install::install_method(state, prototype, name, kind).ok()?;
-    }
-    for (name, builtin) in [
-        ("toString", Builtin::StringToString),
-        ("valueOf", Builtin::StringValueOf),
-    ] {
-        let callable = state.native_callable(crate::NativeCallableKind::Builtin(builtin, true))?;
-        super::install::install_data_property(
-            state,
-            prototype,
-            name,
-            callable,
-            crate::BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
-        )
-        .ok()?;
-    }
-    state.intl.string_prototype = Some(prototype);
-    Some(prototype)
 }
 
 pub(crate) fn ensure_number_prototype(state: &mut NativeAgentState) -> Option<i64> {
