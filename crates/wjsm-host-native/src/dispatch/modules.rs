@@ -258,7 +258,10 @@ pub(crate) fn scope_record_with_layers_for(
 }
 
 /// 平面读取 ScopeRecord 自有绑定（不经 with 层与 outer 对象）：eval 结束后的
-/// 回写用它取回静态绑定终值。缺失或 TDZ 时返回 undefined。
+/// 回写用它取回静态绑定终值。TDZ 时返回未初始化哨兵——回写哨兵即保持原槽
+/// 的 TDZ 状态（派生构造器 super() 前的 $this 等动态 TDZ 绑定在 eval 后可能
+/// 仍未初始化，返回 undefined 会抹掉哨兵、瓦解 TDZ 与二次 super() 检测）。
+/// 缺失时返回 undefined。
 pub(crate) fn scope_record_get_binding_flat(
     state: &mut NativeAgentState,
     record: i64,
@@ -266,7 +269,8 @@ pub(crate) fn scope_record_get_binding_flat(
 ) -> i64 {
     match scope_record_get(state, record, key) {
         ScopeBindingRead::Value(stored) => stored,
-        ScopeBindingRead::Missing | ScopeBindingRead::Uninitialized => value::encode_undefined(),
+        ScopeBindingRead::Uninitialized => value::encode_uninitialized(),
+        ScopeBindingRead::Missing => value::encode_undefined(),
     }
 }
 

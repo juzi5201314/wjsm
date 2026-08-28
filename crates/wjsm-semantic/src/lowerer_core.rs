@@ -95,6 +95,8 @@ impl Lowerer {
             function_derived_ctor_init_ctx_stack: Vec::new(),
             ctor_this_via_env: false,
             function_ctor_this_via_env_stack: Vec::new(),
+            ctor_super_proto: None,
+            function_ctor_super_proto_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             iteration_env_stack: Vec::new(),
             current_module_id: None,
@@ -389,6 +391,8 @@ impl Lowerer {
         self.function_ctor_this_via_env_stack
             .push(self.ctor_this_via_env);
         self.ctor_this_via_env = false;
+        self.function_ctor_super_proto_stack
+            .push(self.ctor_super_proto.take());
         self.function_is_arrow_stack.push(self.is_arrow);
         self.function_is_method_stack.push(self.is_method);
         self.is_arrow = false;
@@ -457,6 +461,10 @@ impl Lowerer {
             .function_ctor_this_via_env_stack
             .pop()
             .expect("ctor this via env stack underflow");
+        self.ctor_super_proto = self
+            .function_ctor_super_proto_stack
+            .pop()
+            .expect("ctor super proto stack underflow");
         self.lexical_home_object = self
             .function_lexical_home_object_stack
             .pop()

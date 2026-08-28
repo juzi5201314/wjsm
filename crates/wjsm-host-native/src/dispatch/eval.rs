@@ -159,12 +159,16 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         modules::ScopeBindingRead::Value(result) => return result,
         modules::ScopeBindingRead::Uninitialized => {
             let name = eval_binding_name(state, *key);
-            return javascript_error(
-                ctx,
-                state,
-                "ReferenceError",
-                format!("Cannot access '{name}' before initialization"),
-            );
+            // 派生构造器 this TDZ（`$this` 仅在 super() 前持哨兵）：文案
+            // 对齐 V8 的 super 提示；其余词法绑定用通用 TDZ 文案。
+            let message = if name == "$this" {
+                "Must call super constructor in derived class before accessing 'this' \
+                 or returning from derived constructor"
+                    .to_string()
+            } else {
+                format!("Cannot access '{name}' before initialization")
+            };
+            return javascript_error(ctx, state, "ReferenceError", message);
         }
         modules::ScopeBindingRead::Missing => {}
     }

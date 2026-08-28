@@ -3,52 +3,6 @@ use super::*;
 use swc_core::common::Span;
 use swc_core::ecma::visit::{Visit, VisitWith};
 
-#[derive(Default)]
-struct DerivedCtorPreSuperUse {
-    seen_super_call: bool,
-    invalid_span: Option<Span>,
-}
-
-impl Visit for DerivedCtorPreSuperUse {
-    fn visit_call_expr(&mut self, call: &swc_ast::CallExpr) {
-        if self.invalid_span.is_some() {
-            return;
-        }
-        if matches!(call.callee, swc_ast::Callee::Super(_)) {
-            for arg in &call.args {
-                arg.visit_with(self);
-            }
-            self.seen_super_call = true;
-            return;
-        }
-        call.visit_children_with(self);
-    }
-
-    fn visit_this_expr(&mut self, this_expr: &swc_ast::ThisExpr) {
-        if !self.seen_super_call && self.invalid_span.is_none() {
-            self.invalid_span = Some(this_expr.span);
-        }
-    }
-
-    fn visit_super_prop_expr(&mut self, super_prop: &swc_ast::SuperPropExpr) {
-        if !self.seen_super_call && self.invalid_span.is_none() {
-            self.invalid_span = Some(super_prop.span);
-        }
-    }
-
-    fn visit_function(&mut self, _: &swc_ast::Function) {}
-
-    fn visit_arrow_expr(&mut self, arrow: &swc_ast::ArrowExpr) {
-        if self.invalid_span.is_some() {
-            return;
-        }
-        // 箭头函数词法捕获外层 this；派生构造器 super() 前禁止访问该 this。
-        arrow.visit_children_with(self);
-    }
-
-    fn visit_class(&mut self, _: &swc_ast::Class) {}
-}
-
 struct ValueDecoratorContext<'a> {
     decorators: &'a [swc_ast::Decorator],
     kind: &'a str,
@@ -57,23 +11,19 @@ struct ValueDecoratorContext<'a> {
     is_private: bool,
 }
 
-pub(super) fn first_pre_super_this_or_super_span(body: &swc_ast::BlockStmt) -> Option<Span> {
-    let mut visitor = DerivedCtorPreSuperUse::default();
-    body.visit_with(&mut visitor);
-    visitor.invalid_span
-}
-
-/// 扫描派生构造器（形参默认值 + 函数体）内是否存在**箭头函数中的**
-/// super() 调用。命中时构造器 this 的规范存储改为共享 env（见
-/// `ctor_this_via_env`），使箭头帧的 BindThisValue 重绑对构造器帧可见。
-/// 普通函数与嵌套类是 super 语境边界，不参与扫描。
+/// 扫描派生构造器（形参默认值 + 函数体）内是否存在**观察 this 绑定的箭头
+/// 函数**（体内出现 this / super 属性 / super() 之一）。命中时构造器 this
+/// 的规范存储改为共享 env（见 `ctor_this_via_env`）：super() 前的 TDZ 哨兵、
+/// BindThisValue 重绑（无论发生在构造器帧还是箭头帧）对全部帧经同一 env
+/// 保持可见——本地槽快照无法覆盖「super() 前创建、之后调用」的箭头。
+/// 普通函数与嵌套类是词法 this 边界，不参与扫描。
 #[derive(Default)]
-struct ArrowSuperCallScan {
+struct ArrowThisObservationScan {
     arrow_depth: u32,
     found: bool,
 }
 
-impl Visit for ArrowSuperCallScan {
+impl Visit for ArrowThisObservationScan {
     fn visit_call_expr(&mut self, call: &swc_ast::CallExpr) {
         if self.found {
             return;
@@ -83,6 +33,23 @@ impl Visit for ArrowSuperCallScan {
             return;
         }
         call.visit_children_with(self);
+    }
+
+    fn visit_this_expr(&mut self, _: &swc_ast::ThisExpr) {
+        if self.arrow_depth > 0 {
+            self.found = true;
+        }
+    }
+
+    fn visit_super_prop_expr(&mut self, super_prop: &swc_ast::SuperPropExpr) {
+        if self.found {
+            return;
+        }
+        if self.arrow_depth > 0 {
+            self.found = true;
+            return;
+        }
+        super_prop.visit_children_with(self);
     }
 
     fn visit_arrow_expr(&mut self, arrow: &swc_ast::ArrowExpr) {
@@ -99,8 +66,8 @@ impl Visit for ArrowSuperCallScan {
     fn visit_class(&mut self, _: &swc_ast::Class) {}
 }
 
-fn ctor_has_arrow_super(ctor: &swc_ast::Constructor) -> bool {
-    let mut scan = ArrowSuperCallScan::default();
+pub(super) fn ctor_arrow_observes_this(ctor: &swc_ast::Constructor) -> bool {
+    let mut scan = ArrowThisObservationScan::default();
     for param in &ctor.params {
         param.visit_with(&mut scan);
     }
