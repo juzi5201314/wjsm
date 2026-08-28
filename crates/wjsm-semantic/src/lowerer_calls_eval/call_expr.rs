@@ -415,7 +415,7 @@ impl Lowerer {
 
         let callee_val: ValueId;
         let this_val: ValueId;
-        let mut callee_block = block;
+        let callee_block: BasicBlockId;
 
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
@@ -433,8 +433,13 @@ impl Lowerer {
                 }
 
                 if let swc_ast::Expr::SuperProp(super_prop) = expr.as_ref() {
-                    this_val = self.lower_this(block)?;
-                    callee_val = self.lower_super_prop(super_prop, block)?;
+                    // super.m(...)：receiver 是 GetThisBinding 结果（派生构造器
+                    // this TDZ 检查可能分叉，块就地推进），方法查找复用同一值。
+                    let mut super_block = block;
+                    this_val = self.lower_this_checked(&mut super_block)?;
+                    callee_val =
+                        self.lower_super_prop_with_this(super_prop, this_val, &mut super_block)?;
+                    callee_block = super_block;
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 } else if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
                     if Self::is_import_meta_resolve_member(member_expr) {
@@ -904,16 +909,26 @@ impl Lowerer {
                         "super() is only valid inside derived constructors",
                     ));
                 }
+                // super() 只在显式派生构造器（含其内层箭头）持有实例原型
+                // 绑定；字段初始化器等其余位置按早错误拒绝（对齐 V8 文案）。
+                let Some(proto_binding) = self.ctor_super_proto.clone() else {
+                    return Err(self.error(super_token.span, "'super' keyword unexpected here"));
+                };
                 let callee = self.alloc_value();
                 self.current_function
                     .append_instruction(block, Instruction::GetSuperConstructor { dest: callee });
-                let this_val = self.lower_this(block)?;
+                // 原型读取可能经捕获链引入控制流（箭头帧），先解析到延续块；
+                // thisArgument 本身须在实参求值之后新建（规范 [[Construct]]
+                // 顺序），故此处只读原型值。
+                let proto_val = self.emit_read_ctor_super_proto(block, &proto_binding)?;
                 let mut call_block = self.resolve_store_block(block);
                 let ctor_result = self.alloc_value();
+                let this_val;
                 if Self::call_args_have_spread(&call.args) {
                     let (args_array, end_block) =
                         self.lower_call_args_to_array(&call.args, call_block)?;
                     call_block = end_block;
+                    this_val = self.emit_super_this_argument(call_block, proto_val);
                     self.current_function.append_instruction(
                         call_block,
                         Instruction::CallBuiltin {
@@ -929,6 +944,7 @@ impl Lowerer {
                             self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?,
                         );
                     }
+                    this_val = self.emit_super_this_argument(call_block, proto_val);
                     self.current_function.append_instruction(
                         call_block,
                         Instruction::SuperCall {
@@ -940,12 +956,12 @@ impl Lowerer {
                         },
                     );
                 }
-                // 实参异常分叉与 select_super_call_result 都会引入控制流并终结
-                // 入口块；必须把 merge 块经 expr_merge_block 上报，否则外层
-                // （语句级异常检查、后续表达式）的启发式解析穿不过分叉链，
+                // 实参异常分叉与 emit_super_call_result_bind 都会引入控制流并
+                // 终结入口块；必须把 merge 块经 expr_merge_block 上报，否则
+                // 外层（语句级异常检查、后续表达式）的启发式解析穿不过分叉链，
                 // 会误写已终结块并覆盖其终结器。
                 let (result, merge_block) =
-                    self.select_super_call_result(call_block, ctor_result, this_val);
+                    self.emit_super_call_result_bind(call_block, ctor_result, this_val)?;
                 // InitializeInstanceElements（ES SuperCall 步骤 11）：字段
                 // 初始化属于 super() 求值本身——BindThisValue 之后、表达式
                 // 返回之前发射，任何位置（语句、赋值右值、if 分支、箭头体内）
@@ -1406,8 +1422,12 @@ impl Lowerer {
                 },
             );
 
-            // 回写必须平面读取自有绑定：经 EvalGetBinding 会被 with 层拦截，
-            // 把 with 对象属性错误回写进调用方静态绑定。
+            // 回写必须平面读取自有绑定：经 EvalGetBinding 一则会被 with 层
+            // 拦截、把 with 对象属性错误回写进调用方静态绑定；二则静态标志
+            // 为已初始化的绑定仍可能动态处于 TDZ（如派生构造器 super() 前的
+            // $this 哨兵），EvalGetBinding 会抛 ReferenceError 且异常编码会
+            // 被直接写入槽位——平面读取对 TDZ 返回哨兵，回写哨兵即保持原槽
+            // 的 TDZ 状态。
             let value = self.alloc_value();
             self.current_function.append_instruction(
                 continue_block,
