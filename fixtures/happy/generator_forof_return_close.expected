@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+{"value":1,"done":false}
+iter closed, arg=undefined
+fn finally
+{"value":99,"done":true}
+{"done":true}
+--- stderr ---
