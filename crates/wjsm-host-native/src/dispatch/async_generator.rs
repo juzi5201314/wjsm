@@ -85,7 +85,16 @@ pub(super) fn is_managed_async_iterator(state: &NativeAgentState, args: &[i64]) 
 /// GetIterator(source, async) 的 sync 回退（§7.4.3 步骤 1.b）：GetMethod(source,
 /// @@iterator) 后经 CreateAsyncFromSyncIterator 语义包裹。nullish 基座已由
 /// `async_iterator_from` 按 @@asyncIterator 键先行抛出，不会到达这里。
-fn wrap_sync_iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, source: i64) -> i64 {
+/// V8 desugar（BuildGetIterator kAsync）直调 @@iterator 属性值而不做 GetMethod
+/// 归约，方法缺失或非可调用统一 kCalledNonCallable；仅 for-await 语法位置
+/// （`for_await_hint`）经 CallPrinter hint 在方法缺失时把模板改写成
+/// kNotAsyncIterable。
+fn wrap_sync_iterator(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    source: i64,
+    for_await_hint: bool,
+) -> i64 {
     let symbol = value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ITERATOR);
     let method = match get_property(ctx, state, source, symbol) {
         Ok(method) => method,
@@ -94,12 +103,15 @@ fn wrap_sync_iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, s
     if value::is_exception(method) {
         return method;
     }
-    // 两个迭代器方法皆缺（步骤 1.b.ii）：V8 kNotAsyncIterable 回退形态。
-    if value::is_undefined(method) || value::is_null(method) {
+    // for-await 两个迭代器方法皆缺（步骤 1.b.ii）：V8 CallPrinter 按 for-of
+    // subject 位置把 kCalledNonCallable 改写为 kNotAsyncIterable（callsite 为
+    // 源码重打印，这里以值渲染近似）。
+    if for_await_hint && (value::is_undefined(method) || value::is_null(method)) {
         let callsite = default_call_site(state, source);
         return type_error(ctx, state, &format!("{callsite} is not async iterable"));
     }
-    // GetMethod（§7.3.10）非可调用：V8 按候选方法值渲染 kCalledNonCallable。
+    // 其余位置（async yield*）与非可调用值：直调即 kCalledNonCallable，按被调
+    // 方法值渲染——undefined 缺失得「undefined is not a function」，与 Node 一致。
     if !value::is_callable(method) {
         let callsite = default_call_site(state, method);
         return type_error(ctx, state, &format!("{callsite} is not a function"));
@@ -183,6 +195,12 @@ fn async_iterator_from(
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
+    // 第二实参标记 for-await 语法位置（lowering 侧仅 for-await 臂传 true），
+    // 决定 sync 回退在方法缺失时的错误模板形态。
+    let for_await_hint = args
+        .get(1)
+        .copied()
+        .is_some_and(|flag| value::is_bool(flag) && value::decode_bool(flag));
     if is_async_generator(state, source) {
         return source;
     }
@@ -196,13 +214,13 @@ fn async_iterator_from(
     }
     let method = match get_property(ctx, state, source, async_iterator) {
         Ok(method) => method,
-        Err(()) => return wrap_sync_iterator(ctx, state, source),
+        Err(()) => return wrap_sync_iterator(ctx, state, source, for_await_hint),
     };
     if value::is_exception(method) {
         return method;
     }
     if value::is_undefined(method) || value::is_null(method) {
-        return wrap_sync_iterator(ctx, state, source);
+        return wrap_sync_iterator(ctx, state, source, for_await_hint);
     }
     // GetMethod（§7.3.10）非可调用：V8 按候选方法值渲染 kCalledNonCallable。
     if !value::is_callable(method) {
