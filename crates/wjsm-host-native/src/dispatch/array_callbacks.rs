@@ -193,21 +193,13 @@ fn iterate(
         let result_array = match kind {
             IterationKind::Map => {
                 // ArraySpeciesCreate(O, len)（步骤 4）：非数组接收者退化为
-                // ArrayCreate(len)，len 超过 2^32 − 1 抛 RangeError。
-                let Ok(map_length) = u32::try_from(length) else {
-                    return range_error(ctx, state, "Invalid array length");
-                };
-                let array = allocate_object_or_out_of_memory(ctx, state, map_length, true);
+                // ArrayCreate(len)。复用 Array(n) 构造以获得洞哨兵填充与
+                // HOLEY kind（未回填的跳过索引必须读出洞，而非未初始化槽），
+                // len 超过 2^32 − 1 由其抛 RangeError。
+                let array =
+                    super::array::construct(ctx, state, &[value::encode_f64(length as f64)]);
                 if value::is_exception(array) {
                     return array;
-                }
-                if state
-                    .gc
-                    .heap()
-                    .set_array_length(value::decode_handle(array), map_length)
-                    .is_err()
-                {
-                    return fail_dispatch(ctx);
                 }
                 Some(array)
             }
