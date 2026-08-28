@@ -24,7 +24,7 @@ impl Lowerer {
     }
 
     /// 绑定是否声明于 eval 顶层（不在任何嵌套函数上下文内）。
-    fn eval_binding_is_top_level(&self, name: &str) -> bool {
+    pub(crate) fn eval_binding_is_top_level(&self, name: &str) -> bool {
         let Some(outer_fn_scope) = self.function_scope_id_stack.first().copied() else {
             // 尚未进入任何嵌套函数：声明/写点即 eval 顶层。
             return true;

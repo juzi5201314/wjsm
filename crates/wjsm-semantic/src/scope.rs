@@ -314,6 +314,20 @@ impl ScopeTree {
         }
     }
 
+    /// 解析绑定但不施加 TDZ 初始化检查：DeleteBinding（§9.1.1.1.8）只关心
+    /// 绑定是否存在及其类别，与初始化状态无关（TDZ 中的 let/const 同样
+    /// 解析为声明式绑定，delete 返回 false 而非抛 ReferenceError）。
+    pub(crate) fn resolve_binding_any(&self, name: &str) -> Option<(usize, VarKind)> {
+        let mut cursor = self.current;
+        loop {
+            let scope = &self.arenas[cursor];
+            if let Some(info) = scope.variables.get(name) {
+                return Some((scope.id, info.kind));
+            }
+            cursor = scope.parent?;
+        }
+    }
+
     /// 赋值时查找变量：组合 const 检查与作用域解析，
     /// 一次 scope chain 遍历完成 const 检查 + TDZ 检查。
     ///

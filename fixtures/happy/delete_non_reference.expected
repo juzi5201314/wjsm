@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+true true true true true
+true true true
+f evaluated
+true
+true true true true
+true true true true
+true true
+true 7
+caught: operand boom
+true false
+await: true
+--- stderr ---

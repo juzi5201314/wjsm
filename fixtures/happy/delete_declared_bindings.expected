@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+var: false 1
+let: false 2
+const: false 3
+funcdecl: false function
+classdecl: false function
+param: false 0
+locals: false false false false false
+catch-param: false 1
+arguments: false 2
+fn-expr-name: false function
+captured: false 1
+tdz: false
+restricted: false false false
+paren: false 1
+undeclared: true
+block-fn: false function
+--- stderr ---

@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+method: ReferenceError Unsupported reference to 'super'
+key evaluated
+computed: ReferenceError Unsupported reference to 'super'
+key-throw: Error key boom
+object-method: ReferenceError Unsupported reference to 'super'
+derived-ctor: ReferenceError Unsupported reference to 'super'
+static: ReferenceError Unsupported reference to 'super'
+--- stderr ---

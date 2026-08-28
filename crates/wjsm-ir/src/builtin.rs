@@ -481,6 +481,9 @@ pub enum Builtin {
     EvalSetBinding,
     /// dest: i64 — bool (0 or 1)
     EvalHasBinding,
+    /// dest: i64 — bool | TAG_EXCEPTION（DeleteBinding §9.1.1.1.8：调用方声明式
+    /// 绑定 false；with 层 / 全局对象属性按 [[Delete]]；不可解析名 true）
+    EvalDeleteBinding,
     /// dest: i64 — prototype | undefined | TAG_EXCEPTION
     EvalSuperBase,
     /// args[0]: record, args[1]: key (i64 integer tag), args[2]: value (i64)
@@ -1204,6 +1207,7 @@ impl Builtin {
             Self::EvalGetBinding => "eval_get_binding",
             Self::EvalSetBinding => "eval_set_binding",
             Self::EvalHasBinding => "eval_has_binding",
+            Self::EvalDeleteBinding => "eval_delete_binding",
             Self::EvalSuperBase => "eval_super_base",
             Self::ScopeRecordSetMeta => "scope_record_set_meta",
             Self::ScopeRecordDestroy => "scope_record_destroy",

@@ -323,8 +323,9 @@ impl Lowerer {
         let hit_end = self.fork_with_dispatch_exception(hit, deleted)?;
 
         // 未命中：未声明名对隐式全局属性执行 [[Delete]]（缺失属性也返回 true），
-        // 静态绑定沿用引擎既有裸标识符 delete 语义（恒 true）。
-        let miss_val = if matches!(
+        // 静态绑定/脚本全局/eval 桥按裸标识符 DeleteBinding 语义回退
+        // （声明式绑定返回 false，§9.1.1.1.8；TDZ 不影响可删性裁决）。
+        let (miss_val, miss_end) = if matches!(
             self.with_read_fallback_kind(&name),
             WithFallback::Undeclared
         ) {
@@ -347,22 +348,13 @@ impl Lowerer {
                     strict: false,
                 },
             );
-            deleted_global
+            (deleted_global, miss)
         } else {
-            let true_const = self.module.add_constant(Constant::Bool(true));
-            let miss_val = self.alloc_value();
-            self.current_function.append_instruction(
-                miss,
-                Instruction::Const {
-                    dest: miss_val,
-                    constant: true_const,
-                },
-            );
-            miss_val
+            self.lower_delete_ident_fallback(miss, &name)?
         };
 
-        let (result, out) =
-            self.merge_with_dispatch_results(&[(hit_end, deleted, true), (miss, miss_val, true)]);
+        let (result, out) = self
+            .merge_with_dispatch_results(&[(hit_end, deleted, true), (miss_end, miss_val, true)]);
         self.expr_merge_block = Some(out);
         Ok(result)
     }
