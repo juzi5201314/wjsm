@@ -470,6 +470,10 @@ pub enum Builtin {
     // ── Arguments Exotic Object ──
     CreateUnmappedArgumentsObject,
     CreateMappedArgumentsObject,
+    /// args[0]: mapped arguments 对象；args[1]: 形参所在的共享 env 对象；
+    /// args[2..]: 按形参次序排列的 env 属性键。为落在实参个数内的下标装上
+    /// 指向 env 绑定的 [[ParameterMap]] 访问器（ES §10.4.4）。
+    BindArgumentsParamMap,
     // ── ScopeRecord eval bridge ───────────────────────────────────────
     /// dest: i64 — scope record handle
     ScopeRecordCreate,
@@ -1097,6 +1101,7 @@ impl Builtin {
             Self::NewTarget => "new.target",
             Self::CreateUnmappedArgumentsObject => "create_unmapped_arguments_object",
             Self::CreateMappedArgumentsObject => "create_mapped_arguments_object",
+            Self::BindArgumentsParamMap => "bind_arguments_param_map",
             Self::ScopeRecordCreate => "scope_record_create",
             Self::ScopeRecordAddBinding => "scope_record_add_binding",
             Self::EvalGetBinding => "eval_get_binding",

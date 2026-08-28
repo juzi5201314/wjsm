@@ -1210,7 +1210,38 @@ pub(crate) fn get_own_property_descriptor(
     let Ok(Some(property)) = state.gc.heap().get_property_slot(handle, key) else {
         return value::encode_undefined();
     };
+    // ES §10.4.4.1：mapped 下标对外始终是数据属性，[[Value]] 取自形参绑定的当前值；
+    // 内部的映射访问器对不得泄漏给用户。
+    let property = match arguments_mapped_descriptor(ctx, state, *object, handle, key, property) {
+        Ok(property) => property,
+        Err(exception) => return exception,
+    };
     descriptor_object(ctx, state, property)
+}
+
+/// 把 mapped 下标的映射访问器还原成规范可见的数据属性描述符。
+fn arguments_mapped_descriptor(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    handle: u32,
+    key: PropertyKey,
+    property: wjsm_gc::HeapAccessV2Property,
+) -> Result<wjsm_gc::HeapAccessV2Property, i64> {
+    let Some(index) = super::arguments::mapped_index(state, handle, key) else {
+        return Ok(property);
+    };
+    let _ = object;
+    let value = super::arguments::map_getter(ctx, state, handle, index);
+    if value::is_exception(value) {
+        return Err(value);
+    }
+    Ok(wjsm_gc::HeapAccessV2Property {
+        flags: (property.flags & !ACCESSOR) | WRITABLE,
+        value: value as u64,
+        getter: value::encode_undefined() as u64,
+        setter: value::encode_undefined() as u64,
+    })
 }
 
 fn descriptor_object(
@@ -1628,7 +1659,109 @@ pub(crate) fn define_property(
     if value::is_array(*object) {
         return define_array_property(ctx, state, *object, handle, key, encoded_key, descriptor);
     }
+    if let Some(index) = super::arguments::mapped_index(state, handle, key) {
+        return define_mapped_arguments_property(ctx, state, handle, key, index, descriptor);
+    }
     define_ordinary_property(ctx, state, *object, handle, key, descriptor)
+}
+
+/// ES §10.4.4.2 ArgumentsExoticObject.[[DefineOwnProperty]]。
+///
+/// 规范里 mapped 下标的自有属性是「数据属性 + 独立 parameter map」；本实现把两者
+/// 合成一个映射访问器对，所以这里按规范可见的那份数据属性
+/// `{[[Value]]: Get(map, P), [[Writable]]: true, [[Enumerable]]: E, [[Configurable]]: C}`
+/// 做 ValidateAndApplyPropertyDescriptor，再按步骤 7 决定映射存续。
+fn define_mapped_arguments_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    handle: u32,
+    key: PropertyKey,
+    index: u32,
+    descriptor_handle: u32,
+) -> i64 {
+    let descriptor = match read_descriptor(ctx, state, descriptor_handle) {
+        Ok(descriptor) => descriptor,
+        Err(exception) => return exception,
+    };
+    let Ok(Some(current)) = state.gc.heap().get_property_slot(handle, key) else {
+        return fail_dispatch(ctx);
+    };
+    let configurable = current.flags & CONFIGURABLE != 0;
+    let enumerable = current.flags & ENUMERABLE != 0;
+    // ValidateAndApplyPropertyDescriptor 步骤 4：不可配置属性只允许「同特性重定义」。
+    // 可见形态恒为 writable 数据属性，故只有 configurable/enumerable/种类切换会被拒。
+    if !configurable
+        && (descriptor.configurable == Some(true)
+            || descriptor
+                .enumerable
+                .is_some_and(|requested| requested != enumerable)
+            || descriptor.is_accessor())
+    {
+        return incompatible_descriptor(ctx, state);
+    }
+    let mapped_value = super::arguments::map_getter(ctx, state, handle, index);
+    if value::is_exception(mapped_value) {
+        return mapped_value;
+    }
+    let mut flags = 0;
+    set_flag(&mut flags, CONFIGURABLE, Some(configurable));
+    set_flag(&mut flags, ENUMERABLE, Some(enumerable));
+    set_flag(&mut flags, CONFIGURABLE, descriptor.configurable);
+    set_flag(&mut flags, ENUMERABLE, descriptor.enumerable);
+
+    // 步骤 7.a：改成访问器属性 ⇒ 断映射，形参绑定保留最后的值。
+    if descriptor.is_accessor() {
+        let getter = descriptor.getter.unwrap_or_else(value::encode_undefined);
+        let setter = descriptor.setter.unwrap_or_else(value::encode_undefined);
+        if state
+            .gc
+            .heap()
+            .define_accessor_property_with_flags(handle, key, getter as u64, setter as u64, flags)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+        return value::encode_bool(true);
+    }
+
+    // 步骤 7.b.i：带 [[Value]] 就先写回形参绑定。
+    let new_value = descriptor.value.unwrap_or(mapped_value);
+    if let Some(stored) = descriptor.value {
+        let result = super::arguments::map_setter(ctx, state, handle, index, stored);
+        if value::is_exception(result) {
+            return result;
+        }
+    }
+
+    // 步骤 7.b.ii：显式 `writable: false` ⇒ 断映射，落成不可写数据属性。
+    if descriptor.writable == Some(false) {
+        if state
+            .gc
+            .heap()
+            .define_data_property(handle, key, new_value as u64, flags)
+            .is_err()
+        {
+            return fail_dispatch(ctx);
+        }
+        return value::encode_bool(true);
+    }
+
+    // 其余情况映射存续：只更新 enumerable/configurable，访问器对原样保留。
+    if state
+        .gc
+        .heap()
+        .define_accessor_property_with_flags(
+            handle,
+            key,
+            current.getter,
+            current.setter,
+            flags | ACCESSOR,
+        )
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    value::encode_bool(true)
 }
 
 /// callable 的 [[DefineOwnProperty]]：惰性自有属性先物化参与校验；属性缺失

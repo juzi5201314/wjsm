@@ -656,6 +656,11 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
             }
         }
     }
+    // mapped arguments 的 [[ParameterMap]] 只由 arguments 对象持有：形参所在的共享
+    // env 若没有别的闭包引用，这条边就是它唯一的存活理由。
+    for (handle, map) in &state.arguments_param_maps {
+        add(owner(*handle), map.env);
+    }
     for (handle, view) in &state.data_views {
         add(owner(*handle), value::encode_object_handle(view.buffer));
     }

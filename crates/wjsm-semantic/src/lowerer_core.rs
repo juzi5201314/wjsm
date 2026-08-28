@@ -137,6 +137,7 @@ impl Lowerer {
             is_arrow: false,
             is_method: false,
             arguments_param_count: 0,
+            arguments_simple_params: Some(Vec::new()),
             arguments_source_override: None,
             rest_args_source_override: None,
             script_mode: false,
@@ -963,6 +964,52 @@ impl Lowerer {
             n += 1;
         }
         n
+    }
+
+    /// simple parameter list（ES §15.1.3）的形参标识符序列；含默认值、rest 或
+    /// 解构形参时返回 `None`。TypeScript 的可选形参（`a?`）带 optional 标记，
+    /// 语义上等价于默认值 undefined，同样不算 simple。
+    pub(crate) fn simple_param_names(params: &[swc_ast::Param]) -> Option<Vec<String>> {
+        params
+            .iter()
+            .map(|param| match &param.pat {
+                swc_ast::Pat::Ident(ident) if !ident.optional => Some(ident.id.sym.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 记录当前函数供 `emit_arguments_init` 使用的形参信息。
+    pub(crate) fn set_arguments_params(&mut self, params: &[swc_ast::Param]) {
+        self.arguments_param_count = Self::count_regular_params(params);
+        self.arguments_simple_params = Self::simple_param_names(params);
+    }
+
+    /// 记录「无形参」：静态块、类字段初始化器等没有形参列表的降级入口。
+    pub(crate) fn clear_arguments_params(&mut self) {
+        self.arguments_param_count = 0;
+        self.arguments_simple_params = Some(Vec::new());
+    }
+
+    /// 只拿得到 `Pat` 序列的降级入口（类构造器、对象访问器）的同名记录。
+    pub(crate) fn set_arguments_params_from_pats(
+        &mut self,
+        pats: &[swc_ast::Pat],
+    ) -> Result<(), LoweringError> {
+        self.arguments_param_count = u32::try_from(
+            pats.iter()
+                .take_while(|pat| !matches!(pat, swc_ast::Pat::Rest(_)))
+                .count(),
+        )
+        .map_err(|_| self.error(DUMMY_SP, "too many parameters"))?;
+        self.arguments_simple_params = pats
+            .iter()
+            .map(|pat| match pat {
+                swc_ast::Pat::Ident(ident) if !ident.optional => Some(ident.id.sym.to_string()),
+                _ => None,
+            })
+            .collect();
+        Ok(())
     }
 
     pub(crate) fn lower_module(

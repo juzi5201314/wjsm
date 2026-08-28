@@ -429,6 +429,7 @@ impl Lowerer {
 
         let m_entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(m_entry);
+        self.set_arguments_params_from_pats(accessor_params.unwrap_or(&[]))?;
 
         // 对象字面量方法/访问器始终物化 arguments（不参与惰性消除）。
         // 原因：此路径（lower_method_to_fn / lower_method_prop_to_fn）在降级方法体时会

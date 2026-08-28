@@ -633,6 +633,10 @@ impl Lowerer {
         // generator/async 函数 body：wrapper 已在真实调用帧物化 arguments 对象并经
         // 续体槽位传入，这里直接绑定同一对象——每次调用恰好一个 arguments、
         // 携带真实实参，且 callee 指向用户可见的 wrapper 函数。
+        //
+        // [[ParameterMap]] 必须在 body 里重建：wrapper 的形参存储随 wrapper 帧退出即
+        // 失效，body 每次 resume 从续体槽位恢复自己的形参副本，映射只有锚在 body 的
+        // 共享 env 上才是活的。
         if let Some(source) = args_override {
             let store_block = self.resolve_store_block(block);
             self.current_function.append_instruction(
@@ -645,7 +649,9 @@ impl Lowerer {
             if self.scopes.mark_initialised("arguments").is_err() {
                 // 已初始化过，无需处理
             }
-            return Ok(self.resolve_store_block(block));
+            let store_block = self.resolve_store_block(block);
+            let after_map = self.emit_arguments_param_map(store_block, source)?;
+            return Ok(self.resolve_store_block(after_map));
         }
 
         // 1) Collect all arguments into an array
@@ -669,7 +675,12 @@ impl Lowerer {
         );
 
         let arguments_obj = self.alloc_value();
-        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
+        // ES §10.2.11 步骤 22：严格模式或非 simple parameter list 一律建 unmapped
+        // arguments 对象（callee 为抛错访问器，且没有 [[ParameterMap]]）。
+        let needs_mapped = !self.strict_mode
+            && !self.is_arrow
+            && !self.is_method
+            && self.arguments_simple_params.is_some();
 
         let fn_name = self.current_function.name().to_string();
         let mapped_self_binding = if needs_mapped {
@@ -681,10 +692,24 @@ impl Lowerer {
             None
         };
 
-        // D5: 精确发 Const — mapped && 无 binding → FunctionRef；mapped && 有 binding → undefined；unmapped → 不发
+        // D5: 精确发 Const — mapped && 无 binding → FunctionRef；mapped && 有 binding →
+        // 从 env 读出闭包值。两种形态都作为 args[2] 传给 builtin，由 builtin 按
+        // §10.2.1.1 的 `{[[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true}`
+        // 定义 callee；早先的「先建对象再 SetProp 回填」会把 callee 建成可枚举属性。
         let func_ref_val = if needs_mapped {
             let val = self.alloc_value();
-            if mapped_self_binding.is_none() {
+            if let Some(binding) = mapped_self_binding.as_ref() {
+                let env_val = self.load_env_object(block);
+                let env_key_val = self.append_env_key_const(block, binding);
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: val,
+                        object: env_val,
+                        key: env_key_val,
+                    },
+                );
+            } else {
                 let function_id = wjsm_ir::FunctionId(self.module.functions().len() as u32);
                 let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
                 self.current_function.append_instruction(
@@ -692,15 +717,6 @@ impl Lowerer {
                     Instruction::Const {
                         dest: val,
                         constant: func_ref_const,
-                    },
-                );
-            } else {
-                let undef_const = self.module.add_constant(Constant::Undefined);
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: val,
-                        constant: undef_const,
                     },
                 );
             }
@@ -747,36 +763,65 @@ impl Lowerer {
             },
         );
 
-        if let Some(binding) = mapped_self_binding {
-            let patch_block = self.resolve_store_block(store_block);
-            let env_val = self.load_env_object(patch_block);
-            let env_key_val = self.append_env_key_const(patch_block, &binding);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                patch_block,
-                Instruction::GetProp {
-                    dest: closure_val,
-                    object: env_val,
-                    key: env_key_val,
-                },
-            );
-            let callee_key = self.alloc_value();
-            self.current_function.append_instruction(
-                patch_block,
-                Instruction::Const {
-                    dest: callee_key,
-                    constant: self
-                        .module
-                        .add_constant(Constant::String("callee".to_string())),
-                },
-            );
-            let result = self.emit_set_prop(patch_block, arguments_obj, callee_key, closure_val);
-            return self.lower_value_exception_branch(patch_block, result);
-        }
-
         if self.scopes.mark_initialised("arguments").is_err() {
             // Already initialised, that's fine
         }
+        if needs_mapped {
+            let after_map = self.emit_arguments_param_map(store_block, arguments_obj)?;
+            return Ok(self.resolve_store_block(after_map));
+        }
         Ok(self.resolve_store_block(block))
+    }
+
+    /// 为 mapped arguments 对象装上 [[ParameterMap]]（ES §10.4.4）。
+    ///
+    /// 形参与 `arguments[i]` 的双向 live binding 需要一个「调用帧内稳定、宿主可寻址」
+    /// 的形参存储：这里把 simple parameter list 的形参一次性搬进本函数的共享 env
+    /// 对象，此后函数体对形参的读写都走 env 的 GetProp/SetProp，宿主再把
+    /// `arguments[i]` 建成指向同一 (env, key) 的访问器对。generator/async body 同样
+    /// 命中此路径——它们的共享 env 跨 suspend 存活，映射因此在 resume 之间保持有效。
+    fn emit_arguments_param_map(
+        &mut self,
+        block: BasicBlockId,
+        arguments_obj: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        if self.strict_mode || self.is_arrow || self.is_method {
+            return Ok(block);
+        }
+        let Some(names) = self.arguments_simple_params.clone() else {
+            return Ok(block);
+        };
+        if names.is_empty() {
+            return Ok(block);
+        }
+        // 形参绑定必须都解析得到，否则映射会指向错误的槽位——宁可不建映射。
+        let mut bindings = Vec::with_capacity(names.len());
+        for name in &names {
+            let Ok((scope_id, _)) = self.scopes.lookup(name) else {
+                return Ok(block);
+            };
+            bindings.push(CapturedBinding::new(name, scope_id));
+        }
+        // 同名形参（`function f(a, a)`）只有最后一个绑定有效，映射会把两个下标
+        // 指到同一 binding，与规范的 §10.2.11 步骤 22 处理一致。
+        let span = swc_core::common::DUMMY_SP;
+        let env_val = self.ensure_shared_env(block, &bindings, span)?;
+        let mut block = self.resolve_store_block(block);
+        let mut args = Vec::with_capacity(bindings.len() + 2);
+        args.push(arguments_obj);
+        args.push(env_val);
+        for binding in &bindings {
+            args.push(self.append_env_key_const(block, binding));
+        }
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::BindArgumentsParamMap,
+                args,
+            },
+        );
+        block = self.resolve_store_block(block);
+        Ok(block)
     }
 }

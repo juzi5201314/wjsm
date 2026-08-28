@@ -211,6 +211,10 @@ pub(crate) struct Lowerer {
     pub(crate) is_method: bool,
     /// 当前函数形参个数，供 emit_arguments_init 使用。
     pub(crate) arguments_param_count: u32,
+    /// 当前函数在 simple parameter list（ES §15.1.3）下的形参标识符序列；
+    /// 含默认值/rest/解构形参时为 `None`。`None` 表示按 §10.2.11 步骤 22
+    /// 只能建 unmapped arguments 对象，也就没有 [[ParameterMap]]。
+    pub(crate) arguments_simple_params: Option<Vec<String>>,
     /// `arguments` 对象的预物化来源：generator/async 函数 body 从续体槽位加载 wrapper
     /// 侧物化好的 arguments 对象时设置；`emit_arguments_init` 在入口 take 消费，
     /// 命中时直接绑定该对象而不再发射 `CollectRestArgs`（body 的原生调用帧没有用户实参）。

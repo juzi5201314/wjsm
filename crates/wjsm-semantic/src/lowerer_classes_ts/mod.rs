@@ -810,7 +810,7 @@ impl Lowerer {
             }
             let m_entry = BasicBlockId(0);
             self.emit_hoisted_var_initializers(m_entry);
-            self.arguments_param_count = Self::count_regular_params(&pm.function.params);
+            self.set_arguments_params(&pm.function.params);
             let m_entry = self.emit_arguments_init(
                 m_entry,
                 Self::function_needs_arguments_object(&pm.function),

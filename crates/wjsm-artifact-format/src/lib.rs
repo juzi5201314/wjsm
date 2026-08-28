@@ -19,7 +19,9 @@ const MAGIC: &[u8; 8] = b"WJSMART\0";
 //      FunctionSetName builtin，旧artifact必须重新构建。
 // v12：Function 新增 [[SourceText]]（source_text），并新增 FunctionToString
 //      builtin，旧artifact必须重新构建。
-const FORMAT_VERSION: u16 = 12;
+// v13：新增 BindArgumentsParamMap builtin（mapped arguments 的 [[ParameterMap]]），
+//      Builtin 判别式整体后移，旧artifact必须重新构建。
+const FORMAT_VERSION: u16 = 13;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

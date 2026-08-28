@@ -583,6 +583,11 @@ enum NativeCallableKind {
     ArrayToString,
     ArrayIterator(NativeIteratorKind),
     ArgumentsStrictCallee,
+    /// mapped arguments 的 [[ParameterMap]] 访问器（ES §10.4.4.7 MakeArgGetter /
+    /// §10.4.4.8 MakeArgSetter）：`.0` 是 arguments 对象句柄，`.1` 是形参下标。
+    /// 真正的 (env, key) 在 `arguments_param_maps` 里，随 arguments 对象一起回收。
+    ArgumentsMapGetter(u32, u32),
+    ArgumentsMapSetter(u32, u32),
     BufferConstructor,
     ErrorToString,
     AggregateErrorConstructor,
@@ -1075,6 +1080,9 @@ struct NativeAgentState {
     shared_array_buffers: HashMap<u32, dispatch::sab::NativeSharedArrayBuffer>,
     data_views: HashMap<u32, dispatch::buffers::NativeDataView>,
     typed_arrays: HashMap<u32, dispatch::typedarray::NativeTypedArray>,
+    /// mapped arguments 对象句柄 → [[ParameterMap]] 的锚点（共享 env 对象与按
+    /// 形参次序排列的 env 属性键）。见 `dispatch::arguments`。
+    arguments_param_maps: HashMap<u32, dispatch::arguments::ArgumentsParamMap>,
     buffers: HashMap<u32, dispatch::node_buffer::NativeBuffer>,
     text_decoders: HashMap<u32, dispatch::web_encoding::TextDecoderSlot>,
     text_decoder_prototype: Option<i64>,
@@ -1293,6 +1301,7 @@ impl NativeAgentState {
             shared_array_buffers: HashMap::new(),
             data_views: HashMap::new(),
             typed_arrays: HashMap::new(),
+            arguments_param_maps: HashMap::new(),
             promises: HashMap::new(),
             continuations: HashMap::new(),
             generators: HashMap::new(),
@@ -1635,6 +1644,7 @@ impl NativeAgentState {
         self.shared_array_buffers.clear();
         self.data_views.clear();
         self.typed_arrays.clear();
+        self.arguments_param_maps.clear();
         self.node_fs_bridge = None;
         self.callable_properties.clear();
         self.callable_accessors.clear();
@@ -3195,6 +3205,8 @@ impl NativeAgentState {
             | NativeCallableKind::RealmArrayConstructor(_)
             | NativeCallableKind::ArrayIterator(_)
             | NativeCallableKind::ArgumentsStrictCallee
+            | NativeCallableKind::ArgumentsMapGetter(_, _)
+            | NativeCallableKind::ArgumentsMapSetter(_, _)
             | NativeCallableKind::BufferConstructor
             | NativeCallableKind::BufferMethod(_)
             | NativeCallableKind::BufferStatic(_)
@@ -5365,6 +5377,7 @@ impl NativeAgentState {
             .retain(|handle, _| is_live(handle));
         self.data_views.retain(|handle, _| is_live(handle));
         self.typed_arrays.retain(|handle, _| is_live(handle));
+        self.arguments_param_maps.retain(|handle, _| is_live(handle));
         self.buffers.retain(|handle, _| is_live(handle));
         self.text_decoders.retain(|handle, _| is_live(handle));
         self.promises.retain(|handle, _| is_live(handle));
@@ -5745,6 +5758,16 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::ArgumentsStrictCallee => {
             dispatch::arguments::strict_callee_error(ctx, state)
         }
+        NativeCallableKind::ArgumentsMapGetter(handle, index) => {
+            dispatch::arguments::map_getter(ctx, state, handle, index)
+        }
+        NativeCallableKind::ArgumentsMapSetter(handle, index) => dispatch::arguments::map_setter(
+            ctx,
+            state,
+            handle,
+            index,
+            arguments.first().copied().unwrap_or(value::encode_undefined()),
+        ),
         NativeCallableKind::RegExpToString => {
             let Some((pattern, flags)) = dispatch::regexp::clone_parts(state, this_value) else {
                 return dispatch::fail_dispatch(ctx);

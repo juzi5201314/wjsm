@@ -180,7 +180,7 @@ impl Lowerer {
             format!("${this_scope_id}.$this"),
         ];
 
-        self.arguments_param_count = 0;
+        self.clear_arguments_params();
         self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
         let mut block = BasicBlockId(0);

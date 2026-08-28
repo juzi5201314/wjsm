@@ -279,13 +279,7 @@ impl Lowerer {
             StmtFlow::Open(field_block)
         };
         if constructor.is_some() {
-            self.arguments_param_count = u32::try_from(
-                ctor_param_pats
-                    .iter()
-                    .take_while(|pat| !matches!(pat, swc_ast::Pat::Rest(_)))
-                    .count(),
-            )
-            .map_err(|_| self.error(class_span, "too many constructor parameters"))?;
+            self.set_arguments_params_from_pats(&ctor_param_pats_owned)?;
             let ctor_refs_args = constructor.is_some_and(Self::ctor_references_arguments);
             let args_block = self.emit_arguments_init(
                 match inner_flow {
@@ -919,7 +913,7 @@ impl Lowerer {
 
         let m_entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(m_entry);
-        self.arguments_param_count = Self::count_regular_params(&function.params);
+        self.set_arguments_params(&function.params);
         let m_entry =
             self.emit_arguments_init(m_entry, Self::function_needs_arguments_object(function))?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&function.params)
@@ -986,7 +980,7 @@ impl Lowerer {
 
         let m_entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(m_entry);
-        self.arguments_param_count = 0;
+        self.clear_arguments_params();
         let m_entry = self.emit_arguments_init(m_entry, Self::body_references_arguments(body))?;
         self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
