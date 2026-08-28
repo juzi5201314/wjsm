@@ -1,0 +1,25 @@
+exit_code: 0
+--- stdout ---
+frozen-write TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen x: 1
+bare-frozen rejected TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+getter-only-write TypeError | Cannot set property x of #<Object> which has only a getter
+non-extensible-write TypeError | Cannot add property y, object is not extensible
+throwing-setter Error | setter boom 7
+bare-setter rejected Error | setter bare 8
+throwing-getter Error | getter boom
+bare-getter rejected Error | getter bare
+frozen-elem-write TypeError | Cannot assign to read only property '1' of object '[object Array]'
+frozen arr[1]: 2
+compound-getter Error | compound getter
+await-operand-getter Error | await operand getter
+post-await-write(after) TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+agen first: 1 false
+agen-frozen rejected TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+agen done: undefined true
+agen catch: caught TypeError
+agen continue: next
+agen-yield-operand rejected Error | yield operand
+plain ok: 2 3
+main done
+--- stderr ---
