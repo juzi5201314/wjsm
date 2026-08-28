@@ -222,6 +222,7 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
         "String" => match property {
             "fromCharCode" => Some(Builtin::StringFromCharCode),
             "fromCodePoint" => Some(Builtin::StringFromCodePoint),
+            "raw" => Some(Builtin::StringRaw),
             _ => None,
         },
         "Proxy" => match property {

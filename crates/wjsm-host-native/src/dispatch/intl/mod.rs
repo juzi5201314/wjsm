@@ -29,7 +29,7 @@ use crate::NativeAgentState;
 pub(crate) use install::{ensure_constructor_prototype, ensure_intl_object};
 pub(crate) use locale_methods::{
     DateLocaleKind, date_to_locale, ensure_bigint_prototype, ensure_number_prototype,
-    ensure_string_prototype, install_array_to_locale_string, primitive_locale_property,
+    install_array_to_locale_string, primitive_locale_property,
 };
 pub(crate) use slots::IntlSlot;
 

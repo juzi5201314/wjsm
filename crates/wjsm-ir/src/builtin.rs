@@ -656,6 +656,10 @@ pub enum Builtin {
     /// `Object.prototype.__lookupSetter__`（ES §B.2.2.5）：沿原型链查首个自有
     /// 属性，访问器返回其 [[Set]]，数据属性返回 undefined。args: [this, key]。
     ObjectProtoLookupSetter,
+    /// `String.raw`（ES §22.1.2.4）：按 template.raw 的 length 交替拼接原始
+    /// 文本段与替换值；template 或其 raw 属性为 undefined/null 时抛
+    /// TypeError（ToObject 失败）。args: [template, ...substitutions]。
+    StringRaw,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -691,7 +695,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::ObjectProtoLookupSetter as u16
+        Self::StringRaw as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1211,6 +1215,7 @@ impl Builtin {
             Self::ObjectProtoDefineSetter => "Object.prototype.__defineSetter__",
             Self::ObjectProtoLookupGetter => "Object.prototype.__lookupGetter__",
             Self::ObjectProtoLookupSetter => "Object.prototype.__lookupSetter__",
+            Self::StringRaw => "string.raw",
         }
     }
 }
