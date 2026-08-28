@@ -1153,6 +1153,9 @@ struct NativeAgentState {
     set_prototype: Option<i64>,
     weak_map_prototype: Option<i64>,
     weak_set_prototype: Option<i64>,
+    /// TypedArray 各构造器与 DataView 的 `prototype` 对象，按构造器 builtin
+    /// 懒创建缓存；方法以数据属性安装（`Uint8Array.prototype.slice` 可取值）。
+    view_prototypes: HashMap<wjsm_ir::Builtin, i64>,
     console_object: Option<i64>,
     intl: dispatch::intl::IntlState,
     native_callables: Vec<NativeCallableKind>,
@@ -1348,6 +1351,7 @@ impl NativeAgentState {
             set_prototype: None,
             weak_map_prototype: None,
             weak_set_prototype: None,
+            view_prototypes: HashMap::new(),
             console_object: None,
             intl: dispatch::intl::IntlState::default(),
             array_constructor: None,
@@ -1620,6 +1624,7 @@ impl NativeAgentState {
         self.set_prototype = None;
         self.weak_map_prototype = None;
         self.weak_set_prototype = None;
+        self.view_prototypes.clear();
         self.array_constructor = None;
         self.global_object = None;
         self.console_object = None;
@@ -2346,7 +2351,12 @@ impl NativeAgentState {
                 wjsm_ir::Builtin::MapSetEntries
             } else if value::is_js_object(receiver) && self.sets.contains_key(&handle) {
                 wjsm_ir::Builtin::MapSetValues
-            } else if value::is_js_object(receiver) && self.typed_arrays.contains_key(&handle) {
+            } else if value::is_js_object(receiver)
+                && (self.typed_arrays.contains_key(&handle)
+                    || self.is_typed_array_prototype(handle))
+            {
+                // %TypedArray%.prototype[@@iterator] 与 values 为同一函数
+                // （ES §23.2.3.38），原型对象与实例走同一 builtin。
                 wjsm_ir::Builtin::TypedArrayProtoValues
             } else if value::is_string(receiver) {
                 // 字符串迭代器与 IteratorFrom 行为一致，但 JS 可见 name 为
@@ -4300,6 +4310,17 @@ impl NativeAgentState {
                 .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
             return Some(prototype);
         }
+        if let Some((builtin, false)) = self.native_callable_builtin(callable)
+            && (dispatch::typedarray::is_typed_array_constructor(builtin)
+                || builtin == wjsm_ir::Builtin::DataViewConstructor)
+            && self.text_matches(key.to_value(), "prototype")
+        {
+            let prototype = self.ensure_view_prototype(callable, builtin)?;
+            self.callable_properties.insert((callable, key), prototype);
+            self.callable_property_flags
+                .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
+            return Some(prototype);
+        }
 
         if self
             .native_callable_builtin(callable)
@@ -4480,6 +4501,54 @@ impl NativeAgentState {
             _ => return None,
         }
         Some(prototype)
+    }
+
+    /// TypedArray 构造器 / DataView 的 `prototype` 对象：懒创建并缓存，安装
+    /// `constructor` 与全部原型方法（数据属性），使 `Uint8Array.prototype.slice`
+    /// / `DataView.prototype.getUint8` 可取值并经 `call` / `apply` 复用。
+    fn ensure_view_prototype(
+        &mut self,
+        constructor: i64,
+        builtin: wjsm_ir::Builtin,
+    ) -> Option<i64> {
+        if let Some(prototype) = self.view_prototypes.get(&builtin).copied() {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let prototype = self.allocate_object(26, false).ok()?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
+        self.gc
+            .heap()
+            .set_property(
+                value::decode_handle(prototype),
+                constructor_key,
+                constructor as u64,
+            )
+            .ok()?;
+        self.gc
+            .heap()
+            .update_property_flags(
+                value::decode_handle(prototype),
+                constructor_key,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        if builtin == wjsm_ir::Builtin::DataViewConstructor {
+            dispatch::buffers::install_data_view_prototype_methods(self, prototype).ok()?;
+        } else {
+            dispatch::typedarray::install_typed_array_prototype_methods(self, prototype).ok()?;
+        }
+        self.view_prototypes.insert(builtin, prototype);
+        Some(prototype)
+    }
+
+    /// 判定 handle 是否为某个 TypedArray 构造器的 `prototype` 对象
+    /// （@@iterator 合成需要，DataView 除外）。
+    fn is_typed_array_prototype(&self, handle: u32) -> bool {
+        self.view_prototypes.iter().any(|(builtin, prototype)| {
+            *builtin != wjsm_ir::Builtin::DataViewConstructor
+                && value::decode_handle(*prototype) == handle
+        })
     }
 
     fn set_collection_prototype(
