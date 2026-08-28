@@ -1,0 +1,29 @@
+exit_code: 0
+--- stdout ---
+function decl(a, b = 1, ...rest) { return a; }
+function named(x) { return x; }
+(a, b) => a + b
+async function af(x) { return x; }
+function* gf(y) { yield y; }
+async function* agf(z) { yield z; }
+class C {
+  constructor(a) { this.a = a; }
+  m(x) { return x; }
+  static s() {}
+  get g() { return 1; }
+  set g(v) {}
+}
+m(x) { return x; }
+s() {}
+get g() { return 1; }
+set g(v) {}
+m(x) { return x; }
+get p() { return 1; }
+set p(v) {}
+function max() { [native code] }
+function map() { [native code] }
+function () { [native code] }
+function () { [native code] }
+true
+true
+--- stderr ---

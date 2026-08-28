@@ -1,0 +1,43 @@
+exit_code: 0
+--- stdout ---
+max 2
+random 0
+atan2 2
+map 1
+splice 2
+values 0
+split 2
+replace 2
+[Symbol.iterator] 0
+defineProperty 3
+getOwnPropertyDescriptor 2
+hasOwnProperty 1
+set 3
+apply 3
+parse 2
+stringify 3
+resolve 1 withResolvers
+now 0 UTC 7
+Number 1 Boolean Symbol BigInt
+Error 1 TypeError 1
+Map 0 Set WeakMap WeakRef 1
+Proxy 2
+parseInt 2 parseFloat 1
+isNaN 1 isFinite 1
+isInteger 2 for
+call 1
+apply 2
+bind 1
+toString 0
+log 0
+set 2 get keys 1
+add values values entries
+set 2 has
+map 2 1 Int8Array 3
+getInt32 1 setFloat64 2
+slice 2 ArrayBuffer DataView
+[Symbol.match] 2
+toFixed 1 toString
+toString valueOf
+next 1 return throw
+--- stderr ---
