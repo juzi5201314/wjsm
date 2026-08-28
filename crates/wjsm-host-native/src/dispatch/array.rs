@@ -317,22 +317,28 @@ fn array_allocate(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     array
 }
 
-/// `array.has_element(array, index)`：数组索引处存在非 hole 元素 → bool。
-fn array_has_element(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+/// `array.has_element(array, index)`：数组索引的 HasProperty（§7.3.11）。
+/// 自有非洞元素直判存在；洞、越界与字典 kind 经完整属性协议观察侧表
+/// accessor 与原型链继承索引（array_inline 展开循环的跳洞检查与 §23.1.3
+/// 各方法的 HasProperty 步骤对齐），Proxy 原型 trap 异常按编码值返回，
+/// 由展开循环的 IsException 分流传播。
+fn array_has_element(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
     let [array, index] = args else {
         return fail_dispatch(ctx);
     };
     if !value::is_array(*array) {
         return fail_dispatch(ctx);
     }
-    let handle = value::decode_handle(*array);
     let Some(index) = array_index(state, *index) else {
         return value::encode_bool(false);
     };
-    match state.gc.heap().get_element(handle, index) {
-        Ok(Some(stored)) => value::encode_bool(!value::is_array_hole(stored as i64)),
-        Ok(None) => value::encode_bool(false),
-        Err(_) => fail_dispatch(ctx),
+    match super::array_like::element_has(ctx, state, *array, u64::from(index)) {
+        Ok(has) => value::encode_bool(has),
+        Err(exception) => exception,
     }
 }
 
