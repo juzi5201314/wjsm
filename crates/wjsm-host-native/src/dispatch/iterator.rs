@@ -29,7 +29,10 @@ pub(super) fn dispatch_iterator(
         Builtin::IteratorDone => iterator_done(ctx, state, args),
         Builtin::IteratorValue => iterator_value(ctx, state, args, false),
         Builtin::IteratorStepValue => iterator_value(ctx, state, args, true),
-        Builtin::IteratorClose => iterator_close(ctx, state, args),
+        Builtin::IteratorClose => iterator_close(ctx, state, args, false),
+        // throw completion 的 IteratorClose（§7.4.6 步骤 5）：close 过程中的
+        // JS 层错误全部吞咽，原始异常（completion）由语义层继续传播。
+        Builtin::IteratorCloseThrowCompletion => iterator_close(ctx, state, args, true),
         _ => return None,
     })
 }
