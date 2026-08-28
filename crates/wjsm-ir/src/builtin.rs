@@ -532,6 +532,14 @@ pub enum Builtin {
     /// 用户 `toString` / `valueOf` / `Symbol.toPrimitive`，转换抛出的异常原样传播；
     /// 非对象输入原样返回。args: [key]。
     ToPropertyKey,
+    /// 派生构造器 this 的 GetThisBinding 检查（ES §9.1.1.3.4）：this 绑定
+    /// 仍为未初始化哨兵（super() 尚未执行）时抛 ReferenceError，否则原样
+    /// 返回。args: [value(当前 this 绑定)]。
+    ThisTdzCheck,
+    /// SuperCall 的 BindThisValue 步骤 2（ES §9.1.1.3.1）：this 绑定已初始化
+    /// 说明 super() 已成功执行过一次，再次调用抛 ReferenceError；仍为未初始化
+    /// 哨兵时原样返回。args: [value(当前 this 绑定)]。
+    SuperCallOnceCheck,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -567,7 +575,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::ToPropertyKey as u16
+        Self::SuperCallOnceCheck as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1056,6 +1064,8 @@ impl Builtin {
             Self::IsString => "is_string",
             Self::TdzCheck => "tdz_check",
             Self::ToPropertyKey => "to_property_key",
+            Self::ThisTdzCheck => "this_tdz_check",
+            Self::SuperCallOnceCheck => "super_call_once_check",
         }
     }
 }

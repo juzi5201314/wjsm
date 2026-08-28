@@ -404,7 +404,7 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let callee_val: ValueId;
         let this_val: ValueId;
-        let mut callee_block = block;
+        let callee_block: BasicBlockId;
 
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
@@ -422,8 +422,13 @@ impl Lowerer {
                 }
 
                 if let swc_ast::Expr::SuperProp(super_prop) = expr.as_ref() {
-                    this_val = self.lower_this(block)?;
-                    callee_val = self.lower_super_prop(super_prop, block)?;
+                    // super.m(...)：receiver 是 GetThisBinding 结果（派生构造器
+                    // this TDZ 检查可能分叉，块就地推进），方法查找复用同一值。
+                    let mut super_block = block;
+                    this_val = self.lower_this_checked(&mut super_block)?;
+                    callee_val =
+                        self.lower_super_prop_with_this(super_prop, this_val, &mut super_block)?;
+                    callee_block = super_block;
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 } else if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
                     if Self::is_import_meta_resolve_member(member_expr) {
@@ -867,10 +872,18 @@ impl Lowerer {
                         "super() is only valid inside derived constructors",
                     ));
                 }
+                // super() 只在显式派生构造器（含其内层箭头）持有预创建实例
+                // 绑定；字段初始化器等其余位置按早错误拒绝（对齐 V8 文案）。
+                let Some(pending_binding) = self.ctor_pending_this.clone() else {
+                    return Err(self.error(super_token.span, "'super' keyword unexpected here"));
+                };
                 let callee = self.alloc_value();
                 self.current_function
                     .append_instruction(block, Instruction::GetSuperConstructor { dest: callee });
-                let this_val = self.lower_this(block)?;
+                // 父构造器的 this 实参是预创建实例（[[Construct]] 的
+                // thisArgument），不读当前 this 绑定——它在 super() 前是
+                // TDZ 哨兵，本就不可读。
+                let this_val = self.emit_read_pending_ctor_this(block, &pending_binding)?;
                 let mut call_block = self.resolve_store_block(block);
                 let ctor_result = self.alloc_value();
                 if Self::call_args_have_spread(&call.args) {
@@ -903,12 +916,12 @@ impl Lowerer {
                         },
                     );
                 }
-                // 实参异常分叉与 select_super_call_result 都会引入控制流并终结
-                // 入口块；必须把 merge 块经 expr_merge_block 上报，否则外层
-                // （语句级异常检查、后续表达式）的启发式解析穿不过分叉链，
+                // 实参异常分叉与 emit_super_call_result_bind 都会引入控制流并
+                // 终结入口块；必须把 merge 块经 expr_merge_block 上报，否则
+                // 外层（语句级异常检查、后续表达式）的启发式解析穿不过分叉链，
                 // 会误写已终结块并覆盖其终结器。
                 let (result, merge_block) =
-                    self.select_super_call_result(call_block, ctor_result, this_val);
+                    self.emit_super_call_result_bind(call_block, ctor_result, this_val)?;
                 // InitializeInstanceElements（ES SuperCall 步骤 11）：字段
                 // 初始化属于 super() 求值本身——BindThisValue 之后、表达式
                 // 返回之前发射，任何位置（语句、赋值右值、if 分支、箭头体内）
