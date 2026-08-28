@@ -6,11 +6,11 @@
 
 | 变量 | 用途 | 默认值 |
 | --- | --- | --- |
-| `WJSM_CACHE_DIR` | native image 与 builtin IR 段缓存目录 | 未设置（磁盘缓存关闭） |
+| `WJSM_CACHE_DIR` | 磁盘缓存目录（native image、builtin IR 段、artifact 缓存） | 未设置（回落 XDG/HOME） |
 | `WJSM_CACHE_MAX_BYTES` | 自动 LRU 上限（字节）；`0` 关闭自动淘汰 | `268435456` |
-| `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段缓存 | 未设置 |
+| `WJSM_NO_BUILTIN_CACHE` | 非空时禁用 builtin IR 段与 artifact 缓存 | 未设置 |
 
-未设置或空的 `WJSM_CACHE_DIR` 都关闭磁盘缓存，不会回落到 `$HOME/.cache/wjsm`。cache 是可重建的派生数据，损坏或 stale 的条目会被 invalidated 而非执行。
+`WJSM_CACHE_DIR` 未设置时回落 `${XDG_CACHE_HOME}/wjsm`，再回落 `${HOME}/.cache/wjsm`；设为空串则显式禁用磁盘缓存。cache 是可重建的派生数据，损坏或 stale 的条目会被 invalidated 而非执行。
 
 ## 编译器
 

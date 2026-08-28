@@ -22,7 +22,7 @@ wjsm validate /tmp/app.wjsm
 wjsm run /tmp/app.wjsm
 ```
 
-设置了 `WJSM_CACHE_DIR` 时，`run` 才按 artifact digest、native ABI hash、codegen hash、target、Cranelift 版本和 settings 查找或写入 `.wnat`。
+磁盘缓存可用时（默认回落 XDG/HOME，`WJSM_CACHE_DIR` 可覆盖），`run` 按 artifact digest、native ABI hash、codegen hash、target、Cranelift 版本和 settings 查找或写入 `.wnat`。
 
 ## 同宿主 `native-executable`
 

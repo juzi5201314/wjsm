@@ -4,7 +4,7 @@
 
 ## 构建期生成
 
-开发构建当前不生成嵌入工件。native cache 只在设置了 `WJSM_CACHE_DIR` 时按需落盘。
+开发构建当前不生成嵌入工件。native cache 在磁盘缓存目录可解析时按需落盘（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。
 
 `build.rs` 生成的测试函数写入 `$OUT_DIR`，不提交到仓库。`include!` 宏在编译期把生成文件包含进测试模块。
 
@@ -12,8 +12,9 @@
 
 | 工件 | 位置 | 键 | 生命周期 |
 | --- | --- | --- | --- |
-| Native image cache | `$WJSM_CACHE_DIR/*.wnat`（未设置则关闭） | artifact digest + native ABI + codegen source hash + target + Cranelift + settings | 进程间持久 |
-| Builtin IR 段缓存 | `$WJSM_CACHE_DIR/builtin_ir/`（未设置则不落盘） | sha256(version ‖ debug ‖ builtin source hashes) | 进程间持久 |
+| Native image cache | `${cache_dir}/*.wnat` | artifact digest + native ABI + codegen source hash + target + Cranelift + settings | 进程间持久 |
+| Builtin IR 段缓存 | `${cache_dir}/builtin_ir/` | sha256(ABI hash ‖ debug ‖ builtin canonical 名) | 进程间持久 |
+| 输入寻址 artifact 缓存 | `${cache_dir}/artifact/` | sha256(源码闭包读集 ‖ 选项 ‖ 语义 ABI) | 进程间持久 |
 | Portable `.wjsm` | 用户指定路径 | — | 用户管理 |
 
 ## 缓存可重建性

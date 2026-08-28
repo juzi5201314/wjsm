@@ -5,7 +5,11 @@ use anyhow::{Context, Result, ensure};
 use proptest::prelude::*;
 use proptest::test_runner::TestCaseError;
 
+#[path = "support/test_env.rs"]
+mod test_env;
+
 fn run_native(source: &str) -> Result<String> {
+    test_env::ensure_test_cache_dir();
     let (exit_code, stdout, stderr) = wjsm_cli::run_source_in_process(source);
     ensure!(
         exit_code == 0,

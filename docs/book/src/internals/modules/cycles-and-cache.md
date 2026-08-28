@@ -29,7 +29,7 @@
 - 模块 id 缓存：同一 canonical 路径只解析一次，重复 import 复用同一 `ModuleId`。
 - `package_cache`：按 canonical 包目录缓存 `PackageInfo`，避免重复读 `package.json`。
 
-这两个缓存的生命周期是单次 bundle。编译产物级缓存是另一回事：native image 落在 `${WJSM_CACHE_DIR}/*.wnat`，builtin IR 段落在 `${WJSM_CACHE_DIR}/builtin_ir/*.bin`。未设置 `WJSM_CACHE_DIR` 时两者都不落盘。
+这两个缓存的生命周期是单次 bundle。编译产物级缓存是另一回事：native image 落在 `${cache_dir}/*.wnat`，builtin IR 段落在 `${cache_dir}/builtin_ir/*.bin`，输入寻址 artifact 缓存落在 `${cache_dir}/artifact/`。缓存目录由 `resolve_cache_dir()` 解析（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。
 
 > <details><summary>为什么「循环依赖」不报错？</summary>
 >

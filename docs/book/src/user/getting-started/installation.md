@@ -46,7 +46,7 @@ cargo build --release
 
 重新构建后用 `cp` 覆盖 `PATH` 中的旧二进制即可。`target/release/wjsm` 总是最新的，不需要额外清理。
 
-若曾设置 `WJSM_CACHE_DIR`，native cache 的 key 含 Cranelift 版本和 native ABI；升级后旧条目会自动 miss，不需要手动清理。未设置该变量时本来就没有磁盘缓存。
+磁盘缓存（默认在 `~/.cache/wjsm`，`WJSM_CACHE_DIR` 可覆盖）的 key 含 Cranelift 版本、native ABI 与语义 ABI 指纹；升级后旧条目会自动 miss，不需要手动清理。
 
 ## 深入了解
 

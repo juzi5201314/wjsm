@@ -59,11 +59,11 @@ enum CompilePlan {
 
 ## Native 编译入口
 
-CLI 不再按 `Target::Wasm` / `Target::Jit` 分发。pipeline 产出 `PortableArtifact` 后，执行路径把 artifact 交给 `NativeImageRepository::prepare`：未设置 `WJSM_CACHE_DIR` 时直接 `NativeCompiler::compile`，设置后才读写 `.wnat`。
+CLI 不再按 `Target::Wasm` / `Target::Jit` 分发。pipeline 产出 `PortableArtifact` 后，执行路径把 artifact 交给 `NativeImageRepository::prepare`：磁盘缓存可用时读写 `.wnat`，被禁用时直接 `NativeCompiler::compile`。文件入口在 pipeline 之前还有一层输入寻址 artifact 缓存，命中时 parse/lower 跳过。
 
 ## 执行入口
 
-`run_compile_then_execute` 取出 `PipelineResult.artifact`，经 `create_native_runtime` 构造 `NativeRuntime`，再调用 `NativeRuntime::execute`。`cache_dir` 只来自 `WJSM_CACHE_DIR`；未设置时每次从 IR 编译，没有 pipeline WASM 落盘，也没有 fork AOT handoff。
+`run_compile_then_execute` 取出 `PipelineResult.artifact`，经 `create_native_runtime` 构造 `NativeRuntime`，再调用 `NativeRuntime::execute`。`cache_dir` 由 `resolve_cache_dir()` 解析（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）；禁用时每次从 IR 编译，没有 pipeline WASM 落盘，也没有 fork AOT handoff。
 
 执行错误里 `FatalJavaScript` 记为退出码 1；其余运行时错误打印 `Runtime error:` 并返回 2；`process.exit(n)` 的退出码由 `NativeExecution.exit_code` 透传。
 

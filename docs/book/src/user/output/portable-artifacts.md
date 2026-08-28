@@ -22,7 +22,7 @@ wjsm run /tmp/app.wjsm
 - native cache key/path；
 - startup snapshot 私有地址。
 
-因此同一 `.wjsm` 可以在支持平台间携带。运行时验证 artifact 后，由当前宿主把 IR 编译为 native image。设置了 `WJSM_CACHE_DIR` 时才会按 digest、native ABI、codegen hash、target、Cranelift 版本和 settings 查找或写入磁盘缓存。
+因此同一 `.wjsm` 可以在支持平台间携带。运行时验证 artifact 后，由当前宿主把 IR 编译为 native image。磁盘缓存可用时按 digest、native ABI、codegen hash、target、Cranelift 版本和 settings 查找或写入磁盘缓存。
 
 `--format native-executable` 产出同宿主 ELF/PE（stub + overlay + 源码快照），不能跨平台携带。runtime 私有 native image 本身仍不是 executable。详见[制品与宿主要求](wasm-artifacts.md)。
 

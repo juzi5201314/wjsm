@@ -13,7 +13,7 @@
 
 ## 核心原则
 
-**单一 owner。** 每个事实只有一个权威定义点。GC 算法解析在 `NativeRuntimeConfig::from_environment`，root 帧布局在 `wjsm-native-abi::NativeRootFrame`，缓存目录由调用方传入的 `cache_dir` / `WJSM_CACHE_DIR` 决定（默认关闭）。其他位置引用，不复制。
+**单一 owner。** 每个事实只有一个权威定义点。GC 算法解析在 `NativeRuntimeConfig::from_environment`，root 帧布局在 `wjsm-native-abi::NativeRootFrame`，缓存目录解析在 `wjsm-module` 的 `resolve_cache_dir()`（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。其他位置引用，不复制。
 
 **后端边界不可越。** Cranelift 依赖只允许出现在 `wjsm-backend-native` 和 `wjsm-host-native`。`wjsm-builtins`、`wjsm-host`、`wjsm-gc`、`wjsm-module` 保持后端无关（ADR 0014）。
 

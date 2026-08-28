@@ -62,7 +62,7 @@ Timing: parse=285µs, lower=326µs, compile=1844µs, execute=16680µs
 
 ## 统计与 IR 自检
 
-`--stats` 打印 IR 规模：常量数、函数数、基本块数、指令数。对已经编码的 portable artifact，还会额外打印 artifact 字节数。设置了 `WJSM_CACHE_DIR` 时，执行后还会打印 native cache 的 entries / bytes / hits / misses / invalidated。未打开磁盘缓存时 cache 计数为 0。
+`--stats` 打印 IR 规模：常量数、函数数、基本块数、指令数。对已经编码的 portable artifact，还会额外打印 artifact 字节数。磁盘缓存可用时，执行后还会打印 native cache 的 entries / bytes / hits / misses / invalidated。磁盘缓存被禁用时 cache 计数为 0。
 
 `--verify-ir` 在 lowering 之后校验 IR 不变量，通过时无额外输出，失败时报错并终止。两者都可与任意子命令组合。
 

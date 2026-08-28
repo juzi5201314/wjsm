@@ -4540,6 +4540,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "swc_core",
  "tar",
  "toml",

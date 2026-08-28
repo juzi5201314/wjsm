@@ -25,7 +25,7 @@ NativeRuntime::execute(artifact, options)
 
 ## Image 加载
 
-`NativeImageRepository` 是 image 与磁盘 cache 的唯一 owner。磁盘路径来自 `NativeRuntimeConfig.cache_dir`；CLI / in-process 入口只在 `WJSM_CACHE_DIR` 有值时传入，默认 `None`。`NativeCacheKey` 绑定：
+`NativeImageRepository` 是 image 与磁盘 cache 的唯一 owner。磁盘路径来自 `NativeRuntimeConfig.cache_dir`；CLI / in-process 入口经 `resolve_cache_dir()` 传入（`WJSM_CACHE_DIR` > XDG/HOME 回落，空串禁用）。`NativeCacheKey` 绑定：
 
 - portable artifact digest；
 - native ABI hash；

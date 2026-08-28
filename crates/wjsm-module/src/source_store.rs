@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use url::Url;
 
 use crate::bundler::{logical_url_from_path, logical_url_path};
+use crate::source_trace::SourceReadTrace;
 
 /// packed exe 的虚拟根与 `file://` 前缀。
 pub const SNAPSHOT_VIRTUAL_ROOT: &str = "/wjsm-exec";
@@ -27,6 +28,8 @@ pub enum ModuleSourceStore {
 #[derive(Clone, Debug)]
 pub struct DiskSourceStore {
     root: PathBuf,
+    /// 输入寻址 artifact 缓存的读集追踪（issue #376）；`None` 时零开销。
+    trace: Option<Arc<SourceReadTrace>>,
 }
 
 #[derive(Debug)]
@@ -44,6 +47,38 @@ impl DiskSourceStore {
     pub fn new(root: &Path) -> Self {
         Self {
             root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            trace: None,
+        }
+    }
+
+    fn with_trace(root: &Path, trace: Arc<SourceReadTrace>) -> Self {
+        Self {
+            root: root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            trace: Some(trace),
+        }
+    }
+
+    fn record_is_file(&self, path: &Path, value: bool) {
+        if let Some(trace) = &self.trace {
+            trace.record_is_file(path, value);
+        }
+    }
+
+    fn record_is_dir(&self, path: &Path, value: bool) {
+        if let Some(trace) = &self.trace {
+            trace.record_is_dir(path, value);
+        }
+    }
+
+    fn record_canonical(&self, path: &Path, target: &Path) {
+        if let Some(trace) = &self.trace {
+            trace.record_canonical(path, target);
+        }
+    }
+
+    fn record_content(&self, path: &Path, bytes: &[u8]) {
+        if let Some(trace) = &self.trace {
+            trace.record_content(path, bytes);
         }
     }
 }
@@ -89,6 +124,12 @@ impl SnapshotSourceStore {
 impl ModuleSourceStore {
     pub fn disk(root: &Path) -> Self {
         Self::Disk(Arc::new(DiskSourceStore::new(root)))
+    }
+
+    /// 带读集追踪的磁盘 store：所有读取/探测/canonicalize 结果记入 `trace`，
+    /// 供输入寻址 artifact 缓存做命中校验（issue #376）。
+    pub fn disk_traced(root: &Path, trace: Arc<SourceReadTrace>) -> Self {
+        Self::Disk(Arc::new(DiskSourceStore::with_trace(root, trace)))
     }
 
     pub fn recording(root: &Path) -> Self {
@@ -185,7 +226,12 @@ impl ModuleSourceStore {
 
     pub fn is_file(&self, path: &Path) -> bool {
         match self {
-            Self::Disk(_) | Self::Recording(_) => path.is_file(),
+            Self::Disk(store) => {
+                let value = path.is_file();
+                store.record_is_file(path, value);
+                value
+            }
+            Self::Recording(_) => path.is_file(),
             Self::Snapshot(store) => snapshot_logical(path)
                 .ok()
                 .is_some_and(|logical| store.files.contains_key(&logical)),
@@ -194,14 +240,26 @@ impl ModuleSourceStore {
 
     pub fn is_dir(&self, path: &Path) -> bool {
         match self {
-            Self::Disk(_) | Self::Recording(_) => path.is_dir(),
+            Self::Disk(store) => {
+                let value = path.is_dir();
+                store.record_is_dir(path, value);
+                value
+            }
+            Self::Recording(_) => path.is_dir(),
             Self::Snapshot(store) => snapshot_is_dir(store, path),
         }
     }
 
     pub fn canonicalize(&self, path: &Path) -> Result<PathBuf> {
         match self {
-            Self::Disk(_) | Self::Recording(_) => path
+            Self::Disk(store) => {
+                let canonical = path
+                    .canonicalize()
+                    .with_context(|| format!("canonicalize {}", path.display()))?;
+                store.record_canonical(path, &canonical);
+                Ok(canonical)
+            }
+            Self::Recording(_) => path
                 .canonicalize()
                 .with_context(|| format!("canonicalize {}", path.display())),
             Self::Snapshot(store) => snapshot_canonicalize(store, path),
@@ -210,8 +268,11 @@ impl ModuleSourceStore {
 
     pub fn read_to_string(&self, path: &Path) -> Result<String> {
         match self {
-            Self::Disk(_) => {
-                std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+            Self::Disk(store) => {
+                let text = std::fs::read_to_string(path)
+                    .with_context(|| format!("read {}", path.display()))?;
+                store.record_content(path, text.as_bytes());
+                Ok(text)
             }
             Self::Recording(store) => {
                 let text = std::fs::read_to_string(path)
@@ -233,8 +294,11 @@ impl ModuleSourceStore {
 
     pub fn read_bytes(&self, path: &Path) -> Result<Vec<u8>> {
         match self {
-            Self::Disk(_) => {
-                std::fs::read(path).with_context(|| format!("read {}", path.display()))
+            Self::Disk(store) => {
+                let bytes =
+                    std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+                store.record_content(path, &bytes);
+                Ok(bytes)
             }
             Self::Recording(store) => {
                 let bytes =
