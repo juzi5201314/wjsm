@@ -690,14 +690,15 @@ impl Lowerer {
                 let continue_block = self.lower_value_exception_branch(call_block, dest)?;
                 return Ok((dest, continue_block));
             }
-            // WeakRef / FinalizationRegistry constructors (can throw — need exception checking)
+            // Web 平台全局构造器是全局对象上可配置的真实自有属性：`new`
+            // 快路径挂 GLOBAL_IDENT pristine 守卫，被赋值 / delete /
+            // defineProperty 改写后回退通用 Construct（spread 形状本就走
+            // 通用路径的 ReflectConstruct，callee 经属性语义解析，无需守卫）。
             if !self.global_intrinsic_shadowed(&ident.sym)
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)
                 && matches!(
                     builtin,
-                    Builtin::WeakRefConstructor
-                        | Builtin::FinalizationRegistryConstructor
-                        | Builtin::HeadersConstructor
+                    Builtin::HeadersConstructor
                         | Builtin::RequestConstructor
                         | Builtin::ResponseConstructor
                         | Builtin::AbortControllerConstructor
@@ -707,6 +708,21 @@ impl Lowerer {
                         | Builtin::ReadableStreamConstructor
                         | Builtin::WritableStreamConstructor
                         | Builtin::TransformStreamConstructor
+                )
+                && !new_expr
+                    .args
+                    .as_deref()
+                    .is_some_and(Self::call_args_have_spread)
+            {
+                return self.lower_intrinsic_guarded_construct(new_expr, block, builtin);
+            }
+            // WeakRef / FinalizationRegistry constructors (can throw — need exception checking)
+            if !self.global_intrinsic_shadowed(&ident.sym)
+                && let Some(builtin) = builtin_from_global_ident(&ident.sym)
+                && matches!(
+                    builtin,
+                    Builtin::WeakRefConstructor
+                        | Builtin::FinalizationRegistryConstructor
                         | Builtin::CountQueuingStrategyConstructor
                         | Builtin::ByteLengthQueuingStrategyConstructor
                 )
@@ -714,9 +730,7 @@ impl Lowerer {
                 let mut call_block = block;
                 let mut arg_vals =
                     self.lower_construct_args(new_expr.args.as_deref(), &mut call_block)?;
-                // Event 构造器必须区分 `new Event()`（缺参错误）与
-                // `new Event(undefined)`（type 为 "undefined"），不补位。
-                if arg_vals.is_empty() && builtin != Builtin::EventConstructor {
+                if arg_vals.is_empty() {
                     arg_vals.push({
                         let c = self.module.add_constant(Constant::Undefined);
                         let dest = self.alloc_value();

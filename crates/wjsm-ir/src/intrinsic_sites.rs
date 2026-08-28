@@ -72,6 +72,43 @@ pub const GLOBAL_IDENT_SITES: &[(&str, Builtin)] = &[
     ("BigUint64Array", Builtin::BigUint64ArrayConstructor),
 ];
 
+/// Web 平台全局（fetch / Fetch 类 / Streams / Abort / Events）在 Node 与
+/// 浏览器中都是全局对象上真实的自有数据属性（WebIDL 接口对象为
+/// {writable, enumerable: false, configurable}，`fetch` 方法额外
+/// enumerable）。宿主在 CreateGlobalObject 时按本表急切物化自有槽；
+/// 语义层据此把裸标识符读取路由到全局环境记录语义（删除后
+/// ReferenceError），并给 `new` 快路径挂 GLOBAL_IDENT 家族守卫。
+/// 元组含义：(全局名, 规范值 builtin, enumerable)。
+pub const WEB_GLOBAL_PROPERTIES: &[(&str, Builtin, bool)] = &[
+    ("fetch", Builtin::Fetch, true),
+    ("Headers", Builtin::HeadersConstructor, false),
+    ("Request", Builtin::RequestConstructor, false),
+    ("Response", Builtin::ResponseConstructor, false),
+    ("ReadableStream", Builtin::ReadableStreamConstructor, false),
+    ("WritableStream", Builtin::WritableStreamConstructor, false),
+    (
+        "TransformStream",
+        Builtin::TransformStreamConstructor,
+        false,
+    ),
+    (
+        "AbortController",
+        Builtin::AbortControllerConstructor,
+        false,
+    ),
+    ("AbortSignal", Builtin::AbortSignalConstructor, false),
+    ("EventTarget", Builtin::EventTargetConstructor, false),
+    ("Event", Builtin::EventConstructor, false),
+];
+
+/// Web 平台全局名 → (规范值 builtin, enumerable)。
+pub fn web_global_property(name: &str) -> Option<(Builtin, bool)> {
+    WEB_GLOBAL_PROPERTIES
+        .iter()
+        .find(|(entry, _, _)| *entry == name)
+        .map(|(_, builtin, enumerable)| (*builtin, *enumerable))
+}
+
 /// 内建容器静态成员调用（`String.raw(...)`）的站点表：
 /// (容器全局名, 属性名) → 快路径 builtin。
 pub const STATIC_MEMBER_SITES: &[(&str, &str, Builtin)] = &[
@@ -429,6 +466,18 @@ mod tests {
         for (name, builtin) in ARRAY_PROTO_SITES {
             assert_eq!(array_proto_builtin(name), Some(*builtin));
             assert_eq!(array_proto_name(*builtin), Some(*name));
+        }
+    }
+
+    /// Web 全局真实属性名单必须与 GLOBAL_IDENT 站点表一一对应：`new` 守卫
+    /// 与慢路径解析按 (GLOBAL_IDENT, wire_id) 反查名字，两表不一致会让守卫
+    /// 判定与实际物化的属性错位。
+    #[test]
+    fn web_global_properties_align_with_global_ident_sites() {
+        for (name, builtin, enumerable) in WEB_GLOBAL_PROPERTIES {
+            assert_eq!(web_global_property(name), Some((*builtin, *enumerable)));
+            assert_eq!(global_ident_builtin(name), Some(*builtin));
+            assert_eq!(global_ident_name(*builtin), Some(*name));
         }
     }
 
