@@ -1,0 +1,54 @@
+exit_code: 0
+--- stdout ---
+pair: true true true
+ctor chain: false true true
+proto chain: true false true
+shape: TypedArray 0 function TypedArray() { [native code] }
+own: from,length,name,of,prototype
+prototype desc: true false false false
+from desc: true false true from 1 function from() { [native code] }
+of desc: true false true of 0
+species desc: get [Symbol.species] false true undefined
+species get: true true
+constructor desc: true true false true
+tag desc: get [Symbol.toStringTag] 0 false true undefined function get [Symbol.toStringTag]() { [native code] }
+tag get: Uint16Array undefined undefined undefined undefined
+tags: [object Int8Array],[object Uint8Array],[object Uint8ClampedArray],[object Int16Array],[object Uint16Array],[object Int32Array],[object Uint32Array],[object Float32Array],[object Float64Array],[object BigInt64Array],[object BigUint64Array]
+proto tags: [object Object] [object Object]
+instance tag: Uint8Array undefined
+call: TypeError Abstract class TypedArray not directly constructable
+new: true Abstract class TypedArray not directly constructable
+reflect: Abstract class TypedArray not directly constructable
+extends: Abstract class TypedArray not directly constructable
+inherit: true
+own statics: false false 0
+sub statics: true true true
+from array: 1,2,3 1,2,3 1,2
+from arraylike: 7,8,0 1,2 0
+from map: 10,21,32 5,5
+from convert: 44,255,0 -56 1,2,3
+empty: 0 0
+bigint: 1,2 true
+iter observed: ["get-iter"]
+cross: true 5,6
+bound: true 9
+sub create: true 1,2 true 9
+ctor args: ["ctor:2","ctor:2"]
+this undefined: TypeError undefined is not a constructor
+this object: #<Object> is not a constructor
+this number: 5 is not a constructor
+map number: number 5 is not a function
+map string: string "x" is not a function
+map null: object null is not a function
+map object: object is not a function
+from null: object null is not iterable (cannot read property Symbol(Symbol.iterator))
+from undefined: undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+bad iterator: %TypedArray%.from requires that the property of the first argument, items[Symbol.iterator], when exists, be a function
+non-ta result: Method %TypedArray%.of called on incompatible receiver #<Object>
+short result: Derived TypedArray constructor created an array which was too small
+short sub: Derived TypedArray constructor created an array which was too small
+iter throw: RangeError boom-iter
+len throw: SyntaxError boom-len
+from construct: TypeError
+method proto: true true
+--- stderr ---
