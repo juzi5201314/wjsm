@@ -1,3 +1,4 @@
+import typesObject from 'node:util/types';
 
 function callFunction(fn, receiver, args) {
   if (args.length === 0) return fn.call(receiver);
@@ -175,14 +176,7 @@ export function isDeepStrictEqual(a, b) {
   return eq(a, b);
 }
 
-export const types = {
-  isDate: value => value instanceof Date,
-  isRegExp: value => value instanceof RegExp,
-  isMap: value => value instanceof Map,
-  isSet: value => value instanceof Set,
-  isPromise: value => !!value && typeof value.then === 'function',
-  isProxy: () => false
-};
+export const types = typesObject;
 
 export const TextEncoder = globalThis.TextEncoder;
 export const TextDecoder = globalThis.TextDecoder;
