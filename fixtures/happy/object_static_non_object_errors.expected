@@ -1,0 +1,59 @@
+exit_code: 0
+--- stdout ---
+=== ToObject nullish TypeError ===
+keys(undefined) !! TypeError: Cannot convert undefined or null to object
+keys(null) !! TypeError: Cannot convert undefined or null to object
+values(null) !! TypeError: Cannot convert undefined or null to object
+entries(undefined) !! TypeError: Cannot convert undefined or null to object
+getOwnPropertyNames(null) !! TypeError: Cannot convert undefined or null to object
+getOwnPropertySymbols(undefined) !! TypeError: Cannot convert undefined or null to object
+assign(null, {}) !! TypeError: Cannot convert undefined or null to object
+getPrototypeOf(undefined) !! TypeError: Cannot convert undefined or null to object
+getOwnPropertyDescriptor(null) !! TypeError: Cannot convert undefined or null to object
+getOwnPropertyDescriptors(undefined) !! TypeError: Cannot convert undefined or null to object
+defineProperties({}, null) !! TypeError: Cannot convert undefined or null to object
+create(null, null) !! TypeError: Cannot convert undefined or null to object
+=== setPrototypeOf ===
+setPrototypeOf(undefined, null) !! TypeError: Object.setPrototypeOf called on null or undefined
+setPrototypeOf(null, 5) !! TypeError: Object.setPrototypeOf called on null or undefined
+setPrototypeOf({}, 5) !! TypeError: Object prototype may only be an Object or null: 5
+setPrototypeOf(1, 5) !! TypeError: Object prototype may only be an Object or null: 5
+=== defineProperty / defineProperties ===
+defineProperty(1) !! TypeError: Object.defineProperty called on non-object
+defineProperty(null) !! TypeError: Object.defineProperty called on non-object
+defineProperty({}, 'x', 1) !! TypeError: Property description must be an object: 1
+defineProperty({}, 'x', null) !! TypeError: Property description must be an object: null
+defineProperties(true, {}) !! TypeError: Object.defineProperties called on non-object
+defineProperties({}, {x: 's'}) !! TypeError: Property description must be an object: s
+defineProperties({}, 1) => {}
+=== create ===
+create(undefined) !! TypeError: Object prototype may only be an Object or null: undefined
+create(1) !! TypeError: Object prototype may only be an Object or null: 1
+create(true) !! TypeError: Object prototype may only be an Object or null: true
+create(Symbol(s)) !! TypeError: Object prototype may only be an Object or null: Symbol(s)
+create('ab') !! TypeError: Object prototype may only be an Object or null: ab
+=== fromEntries ===
+fromEntries(undefined) !! TypeError: undefined is not iterable
+fromEntries(null) !! TypeError: undefined is not iterable
+fromEntries(1) !! TypeError: number 1 is not iterable (cannot read property Symbol(Symbol.iterator))
+fromEntries(true) !! TypeError: boolean true is not iterable (cannot read property Symbol(Symbol.iterator))
+fromEntries({}) !! TypeError: object is not iterable (cannot read property Symbol(Symbol.iterator))
+fromEntries([1]) !! TypeError: Iterator value 1 is not an entry object
+fromEntries('ab') !! TypeError: Iterator value a is not an entry object
+iterator closed
+fromEntries(generator) !! TypeError: Iterator value 1 is not an entry object
+=== Reflect called on non-object ===
+Reflect.ownKeys(undefined) !! TypeError: Reflect.ownKeys called on non-object
+Reflect.ownKeys(1) !! TypeError: Reflect.ownKeys called on non-object
+Reflect.getPrototypeOf(1) !! TypeError: Reflect.getPrototypeOf called on non-object
+Reflect.setPrototypeOf(1, null) !! TypeError: Reflect.setPrototypeOf called on non-object
+Reflect.setPrototypeOf({}, 1) !! TypeError: Object prototype may only be an Object or null: 1
+Reflect.getOwnPropertyDescriptor(1) !! TypeError: Reflect.getOwnPropertyDescriptor called on non-object
+Reflect.defineProperty(1) !! TypeError: Reflect.defineProperty called on non-object
+Reflect.isExtensible(1) !! TypeError: Reflect.isExtensible called on non-object
+Reflect.preventExtensions(1) !! TypeError: Reflect.preventExtensions called on non-object
+=== Reflect.setPrototypeOf false vs throw ===
+frozen target => false
+cyclic proto => false
+still alive
+--- stderr ---
