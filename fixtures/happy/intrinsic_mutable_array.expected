@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+IS:object
+IS:string
+true false
+true undefined
+undefined false
+MAP:3:20
+1,3,5
+true true
+16|25
+--- stderr ---

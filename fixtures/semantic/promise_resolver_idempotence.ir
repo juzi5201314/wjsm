@@ -32,18 +32,40 @@ module {
     c29 = string("$0.calls")
     c30 = string("$0.calls")
     c31 = number(1)
-    c32 = functionref(@1)
-    c33 = undefined
-    c34 = string("$0.calls")
-    c35 = undefined
-    c36 = undefined
-    c37 = string("$0.calls")
-    c38 = functionref(@2)
-    c39 = undefined
-    c40 = string("$0.calls")
-    c41 = undefined
-    c42 = bool(true)
-    c43 = bool(false)
+    c32 = number(1)
+    c33 = number(0)
+    c34 = number(1)
+    c35 = number(0)
+    c36 = number(1)
+    c37 = number(0)
+    c38 = undefined
+    c39 = functionref(@1)
+    c40 = undefined
+    c41 = string("$0.calls")
+    c42 = undefined
+    c43 = number(1)
+    c44 = number(157)
+    c45 = number(1)
+    c46 = number(157)
+    c47 = number(1)
+    c48 = number(157)
+    c49 = undefined
+    c50 = undefined
+    c51 = undefined
+    c52 = number(1)
+    c53 = number(0)
+    c54 = number(1)
+    c55 = number(0)
+    c56 = number(1)
+    c57 = number(0)
+    c58 = undefined
+    c59 = string("$0.calls")
+    c60 = functionref(@2)
+    c61 = undefined
+    c62 = string("$0.calls")
+    c63 = undefined
+    c64 = bool(true)
+    c65 = bool(false)
 
   fn @arrow_0 [direct_callable] [js_name ""] [js_length 2] [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
     bb0:
@@ -92,26 +114,102 @@ module {
       %8 = is_exception %7
       branch %8, bb2, bb1
     bb1:
-      %10 = load var $2.v
-      %11 = call builtin.console.log(%10)
-      %12 = is_exception %11
-      branch %12, bb4, bb3
+      %10 = const c32
+      %11 = const c33
+      %12 = call builtin.intrinsic_pristine(%10, %11)
+      branch %12, bb3, bb4
     bb2:
       %9 = call builtin.exception_value(%7)
       throw %9
     bb3:
-      return
+      %23 = const c38
+      jump bb10
     bb4:
-      %13 = call builtin.exception_value(%11)
-      throw %13
+      %13 = const c34
+      %14 = const c35
+      %15 = call builtin.intrinsic_resolve(%13, %14)
+      %16 = is_exception %15
+      branch %16, bb6, bb5
+    bb5:
+      %18 = const c36
+      %19 = const c37
+      %20 = call builtin.intrinsic_resolve(%18, %19, %15)
+      %21 = is_exception %20
+      branch %21, bb8, bb7
+    bb6:
+      %17 = call builtin.exception_value(%15)
+      throw %17
+    bb7:
+      jump bb10
+    bb8:
+      %22 = call builtin.exception_value(%20)
+      throw %22
+    bb9:
+      %29 = phi [(bb11, %27), (bb12, %28)]
+      %30 = is_exception %29
+      branch %30, bb14, bb13
+    bb10:
+      %24 = phi [(bb3, %23), (bb7, %20)]
+      %25 = phi [(bb3, %23), (bb7, %15)]
+      %26 = load var $2.v
+      branch %12, bb11, bb12
+    bb11:
+      %27 = call builtin.console.log(%26)
+      jump bb9
+    bb12:
+      %28 = call %24, this=%25, args=[%26]
+      jump bb9
+    bb13:
+      return
+    bb14:
+      %31 = call builtin.exception_value(%29)
+      throw %31
 
   fn @arrow_2 [js_name ""] [js_length 0] [captures: $0.calls] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
-      %0 = load var $env
-      %1 = const c37
-      %2 = get_prop %0, %1
-      %3 = call builtin.console.log(%2)
-      return %3
+      %0 = const c52
+      %1 = const c53
+      %2 = call builtin.intrinsic_pristine(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %13 = const c58
+      jump bb8
+    bb2:
+      %3 = const c54
+      %4 = const c55
+      %5 = call builtin.intrinsic_resolve(%3, %4)
+      %6 = is_exception %5
+      branch %6, bb4, bb3
+    bb3:
+      %8 = const c56
+      %9 = const c57
+      %10 = call builtin.intrinsic_resolve(%8, %9, %5)
+      %11 = is_exception %10
+      branch %11, bb6, bb5
+    bb4:
+      %7 = call builtin.exception_value(%5)
+      throw %7
+    bb5:
+      jump bb8
+    bb6:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb7:
+      %21 = phi [(bb9, %19), (bb10, %20)]
+      return %21
+    bb8:
+      %14 = phi [(bb1, %13), (bb5, %10)]
+      %15 = phi [(bb1, %13), (bb5, %5)]
+      %16 = load var $env
+      %17 = const c59
+      %18 = get_prop %16, %17
+      branch %2, bb9, bb10
+    bb9:
+      %19 = call builtin.console.log(%18)
+      jump bb7
+    bb10:
+      %20 = call %14, this=%15, args=[%18]
+      jump bb7
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -162,19 +260,19 @@ module {
       %22 = new_promise
       %24 = call builtin.promise.create_resolve_function(%22)
       %25 = call builtin.promise.create_reject_function(%22)
-      %61 = const c0
-      jump bb13
+      %79 = const c0
+      jump bb23
     bb1:
-      %29 = const c32
+      %29 = const c39
       %31 = new_object(capacity=1)
       %32 = load var $env
       set_proto %31, %32
       store var $0.$shared_env, %31
       %33 = load var $0.calls
-      %34 = const c34
+      %34 = const c41
       %35 = set_prop %31, %34, %33
       %36 = call builtin.create_closure(%29, %31)
-      %37 = const c35
+      %37 = const c42
       %38 = call builtin.promise.then(%22, %36, %37)
       %39 = is_exception %38
       branch %39, bb4, bb3
@@ -182,87 +280,125 @@ module {
       %28 = call builtin.exception_value(%22)
       throw %28
     bb3:
-      %41 = const c36
-      %42 = const c36
-      %43 = call builtin.promise.resolve_static(%41, %42)
-      %44 = is_exception %43
-      branch %44, bb6, bb5
+      %41 = const c43
+      %42 = const c44
+      %43 = call builtin.intrinsic_pristine(%41, %42)
+      branch %43, bb5, bb6
     bb4:
       %40 = call builtin.exception_value(%38)
       throw %40
     bb5:
-      %46 = const c38
-      %47 = load var $0.$shared_env
-      %48 = const c39
-      %49 = stricteq %47, %48
-      branch %49, bb7, bb8
+      %54 = const c49
+      jump bb12
     bb6:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %44 = const c45
+      %45 = const c46
+      %46 = call builtin.intrinsic_resolve(%44, %45)
+      %47 = is_exception %46
+      branch %47, bb8, bb7
     bb7:
-      %50 = new_object(capacity=1)
-      %51 = load var $env
-      set_proto %50, %51
-      store var $0.$shared_env, %50
-      %52 = load var $0.calls
-      %53 = const c40
-      %54 = set_prop %50, %53, %52
-      jump bb9
+      %49 = const c47
+      %50 = const c48
+      %51 = call builtin.intrinsic_resolve(%49, %50, %46)
+      %52 = is_exception %51
+      branch %52, bb10, bb9
     bb8:
-      jump bb9
+      %48 = call builtin.exception_value(%46)
+      throw %48
     bb9:
-      %55 = phi [(bb7, %50), (bb8, %47)]
-      store var $0.$shared_env, %55
-      %56 = call builtin.create_closure(%46, %55)
-      %57 = const c41
-      %58 = call builtin.promise.then(%43, %56, %57)
-      %59 = is_exception %58
-      branch %59, bb11, bb10
+      jump bb12
     bb10:
-      return
+      %53 = call builtin.exception_value(%51)
+      throw %53
     bb11:
-      %60 = call builtin.exception_value(%58)
-      throw %60
+      %61 = phi [(bb13, %59), (bb14, %60)]
+      %62 = is_exception %61
+      branch %62, bb16, bb15
     bb12:
+      %55 = phi [(bb5, %54), (bb9, %51)]
+      %56 = phi [(bb5, %54), (bb9, %46)]
+      branch %43, bb13, bb14
+    bb13:
+      %57 = const c50
+      %58 = const c51
+      %59 = call builtin.promise.resolve_static(%57, %58)
+      jump bb11
+    bb14:
+      %60 = call %55, this=%56
+      jump bb11
+    bb15:
+      %64 = const c60
+      %65 = load var $0.$shared_env
+      %66 = const c61
+      %67 = stricteq %65, %66
+      branch %67, bb17, bb18
+    bb16:
+      %63 = call builtin.exception_value(%61)
+      throw %63
+    bb17:
+      %68 = new_object(capacity=1)
+      %69 = load var $env
+      set_proto %68, %69
+      store var $0.$shared_env, %68
+      %70 = load var $0.calls
+      %71 = const c62
+      %72 = set_prop %68, %71, %70
+      jump bb19
+    bb18:
+      jump bb19
+    bb19:
+      %73 = phi [(bb17, %68), (bb18, %65)]
+      store var $0.$shared_env, %73
+      %74 = call builtin.create_closure(%64, %73)
+      %75 = const c63
+      %76 = call builtin.promise.then(%61, %74, %75)
+      %77 = is_exception %76
+      branch %77, bb21, bb20
+    bb20:
+      return
+    bb21:
+      %78 = call builtin.exception_value(%76)
+      throw %78
+    bb22:
       %27 = is_exception %22
-      %30 = const c33
+      %30 = const c40
       store var $0.$shared_env, %30
       branch %27, bb2, bb1
-    bb13:
-      %62 = const c21
-      %64 = const c22
-      %65 = call %24, this=%62, args=[%64]
-      %66 = is_exception %65
-      branch %66, bb15, bb14
-    bb14:
-      %68 = const c23
-      %70 = const c24
-      %71 = call %25, this=%68, args=[%70]
-      %72 = is_exception %71
-      branch %72, bb17, bb16
-    bb15:
-      %67 = call builtin.exception_value(%65)
-      store var $1.reject, %61
-      store var $1.resolve, %61
-      throw %67
-    bb16:
-      %74 = const c25
-      %76 = const c26
-      %77 = call %24, this=%74, args=[%76]
-      %78 = is_exception %77
-      branch %78, bb19, bb18
-    bb17:
-      %73 = call builtin.exception_value(%71)
-      store var $1.reject, %61
-      store var $1.resolve, %61
-      throw %73
-    bb18:
-      store var $1.reject, %61
-      store var $1.resolve, %61
-      jump bb12
-    bb19:
-      %79 = call builtin.exception_value(%77)
-      store var $1.reject, %61
-      store var $1.resolve, %61
-      throw %79
+    bb23:
+      %80 = const c21
+      %82 = const c22
+      %83 = call %24, this=%80, args=[%82]
+      %84 = is_exception %83
+      branch %84, bb25, bb24
+    bb24:
+      %86 = const c23
+      %88 = const c24
+      %89 = call %25, this=%86, args=[%88]
+      %90 = is_exception %89
+      branch %90, bb27, bb26
+    bb25:
+      %85 = call builtin.exception_value(%83)
+      store var $1.reject, %79
+      store var $1.resolve, %79
+      throw %85
+    bb26:
+      %92 = const c25
+      %94 = const c26
+      %95 = call %24, this=%92, args=[%94]
+      %96 = is_exception %95
+      branch %96, bb29, bb28
+    bb27:
+      %91 = call builtin.exception_value(%89)
+      store var $1.reject, %79
+      store var $1.resolve, %79
+      throw %91
+    bb28:
+      store var $1.reject, %79
+      store var $1.resolve, %79
+      jump bb22
+    bb29:
+      %97 = call builtin.exception_value(%95)
+      store var $1.reject, %79
+      store var $1.resolve, %79
+      throw %97
 }

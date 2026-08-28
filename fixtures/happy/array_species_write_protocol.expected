@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+frozen TypeError Cannot define property 0, object is not extensible
+writes ["0=11:truetruetrue","1=21:truetruetrue","0=20:truetruetrue","0=10:truetruetrue","1=10:truetruetrue","2=20:truetruetrue","3=20:truetruetrue"]
+obj-result 99 2 4
+obj-flat 99 1 10 2 20
+holes 3 true false true true
+refuse TypeError 'defineProperty' on proxy: trap returned falsish for property '0'
+prefilled [5,10,9,9] 4
+--- stderr ---

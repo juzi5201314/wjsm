@@ -24,6 +24,7 @@ pub(crate) mod generator;
 pub(crate) mod global_env;
 pub(crate) mod idna;
 pub(crate) mod intl;
+mod intrinsics;
 mod iterator;
 mod json;
 mod jsx;
@@ -364,7 +365,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
     result
 }
 
-fn rejected_call_error(
+pub(crate) fn rejected_call_error(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     callee: i64,
@@ -500,7 +501,7 @@ pub(super) fn dispatch_builtin(
             atomics::dispatch_atomics => Builtin::AtomicsAdd | Builtin::AtomicsAnd | Builtin::AtomicsCompareExchange | Builtin::AtomicsExchange | Builtin::AtomicsIsLockFree | Builtin::AtomicsLoad | Builtin::AtomicsNotify | Builtin::AtomicsOr | Builtin::AtomicsPause | Builtin::AtomicsStore | Builtin::AtomicsSub | Builtin::AtomicsWait | Builtin::AtomicsWaitAsync | Builtin::AtomicsXor,
             enumerator::dispatch_enumerator => Builtin::EnumeratorDone | Builtin::EnumeratorFrom | Builtin::EnumeratorKey | Builtin::EnumeratorNext,
             collections::dispatch_collection => Builtin::MapConstructor | Builtin::MapGroupBy | Builtin::MapProtoGet | Builtin::MapProtoSet | Builtin::MapSetClear | Builtin::MapSetDelete | Builtin::MapSetEntries | Builtin::MapSetFirstKey | Builtin::MapSetForEach | Builtin::MapSetGetSize | Builtin::MapSetHas | Builtin::MapSetKeys | Builtin::MapSetValues | Builtin::SetConstructor | Builtin::SetProtoAdd | Builtin::SetProtoDelete | Builtin::SetProtoHas,
-            array::dispatch_array => Builtin::ArrayAllocate | Builtin::ArrayAt | Builtin::ArrayConcat | Builtin::ArrayConcatVa | Builtin::ArrayCopyWithin | Builtin::ArrayFill | Builtin::ArrayFlat | Builtin::ArrayFrom | Builtin::ArrayGetLength | Builtin::ArrayHasElement | Builtin::ArrayIncludes | Builtin::ArrayIndexOf | Builtin::ArrayInitLength | Builtin::ArrayIsArray | Builtin::ArrayJoin | Builtin::ArrayLastIndexOf | Builtin::ArrayOf | Builtin::ArrayPop | Builtin::ArrayPush | Builtin::ArrayPushHole | Builtin::ArrayPushSpread | Builtin::ArrayReverse | Builtin::ArrayShift | Builtin::ArraySlice | Builtin::ArraySpliceVa | Builtin::ArrayToReversed | Builtin::ArrayToSplicedVa | Builtin::ArrayUnshiftVa | Builtin::ArrayWith,
+            array::dispatch_array => Builtin::ArrayAllocate | Builtin::ArrayAt | Builtin::ArrayConcat | Builtin::ArrayConcatVa | Builtin::ArrayCopyWithin | Builtin::ArrayFill | Builtin::ArrayFlat | Builtin::ArrayFrom | Builtin::ArrayGetLength | Builtin::ArrayHasElement | Builtin::ArrayIncludes | Builtin::ArrayIndexOf | Builtin::ArrayInitLength | Builtin::ArrayIsArray | Builtin::ArrayIsPlain | Builtin::ArraySpeciesDefault | Builtin::ArrayJoin | Builtin::ArrayLastIndexOf | Builtin::ArrayOf | Builtin::ArrayPop | Builtin::ArrayPush | Builtin::ArrayPushHole | Builtin::ArrayPushSpread | Builtin::ArrayReverse | Builtin::ArrayShift | Builtin::ArraySlice | Builtin::ArraySpliceVa | Builtin::ArrayToReversed | Builtin::ArrayToSplicedVa | Builtin::ArrayUnshiftVa | Builtin::ArrayWith,
             function::dispatch_function => Builtin::FuncApply | Builtin::FuncBind | Builtin::FuncCall | Builtin::SuperApply | Builtin::CreateClosure | Builtin::FunctionSetName | Builtin::FunctionToString,
             array_callbacks::dispatch_array_callback => Builtin::ArrayEvery | Builtin::ArrayFilter | Builtin::ArrayFind | Builtin::ArrayFindIndex | Builtin::ArrayFindLast | Builtin::ArrayFindLastIndex | Builtin::ArrayFlatMap | Builtin::ArrayForEach | Builtin::ArrayMap | Builtin::ArrayReduce | Builtin::ArrayReduceRight | Builtin::ArraySome | Builtin::ArraySort | Builtin::ArrayToSorted,
             json::dispatch_json => Builtin::JsonParse | Builtin::JsonStringify,
@@ -527,6 +528,7 @@ pub(super) fn dispatch_builtin(
             node_perf_hooks::dispatch_perf => Builtin::PerformanceNow,
             operator::dispatch_operator => Builtin::AbstractCompare | Builtin::AbstractEq | Builtin::StrictEq | Builtin::TypeOf | Builtin::InstanceOf | Builtin::In | Builtin::Throw | Builtin::ExceptionValue | Builtin::NewTarget | Builtin::Debugger | Builtin::IsCallable | Builtin::IsJsObject | Builtin::GetPrototypeFromConstructor | Builtin::IsString | Builtin::TdzCheck | Builtin::ToPropertyKey | Builtin::ThisTdzCheck | Builtin::SuperCallOnceCheck,
             structured_clone::dispatch_structured_clone => Builtin::StructuredClone,
+            intrinsics::dispatch_intrinsics => Builtin::IntrinsicPristine | Builtin::IntrinsicResolve,
             timer::dispatch_timer => Builtin::SetTimeout | Builtin::SetInterval | Builtin::ClearTimeout | Builtin::ClearInterval,
             jsx::dispatch_jsx => Builtin::JsxCreateElement,
         }

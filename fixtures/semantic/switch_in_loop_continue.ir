@@ -28,6 +28,13 @@ module {
     c25 = number(1)
     c26 = number(2)
     c27 = number(4)
+    c28 = number(1)
+    c29 = number(0)
+    c30 = number(1)
+    c31 = number(0)
+    c32 = number(1)
+    c33 = number(0)
+    c34 = undefined
 
   fn @$module_main [direct_callable] [entry=bb0]:
     bb0:
@@ -103,10 +110,10 @@ module {
     bb9:
       unreachable
     bb10:
-      %42 = load var $0.i
-      %43 = call builtin.console.log(%42)
-      %44 = is_exception %43
-      branch %44, bb16, bb15
+      %42 = const c28
+      %43 = const c29
+      %44 = call builtin.intrinsic_pristine(%42, %43)
+      branch %44, bb15, bb16
     bb11:
       jump bb1
     bb12:
@@ -120,8 +127,46 @@ module {
       %41 = stricteq %37, %40
       branch %41, bb12, bb10
     bb15:
-      jump bb1
+      %55 = const c34
+      jump bb22
     bb16:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %45 = const c30
+      %46 = const c31
+      %47 = call builtin.intrinsic_resolve(%45, %46)
+      %48 = is_exception %47
+      branch %48, bb18, bb17
+    bb17:
+      %50 = const c32
+      %51 = const c33
+      %52 = call builtin.intrinsic_resolve(%50, %51, %47)
+      %53 = is_exception %52
+      branch %53, bb20, bb19
+    bb18:
+      %49 = call builtin.exception_value(%47)
+      throw %49
+    bb19:
+      jump bb22
+    bb20:
+      %54 = call builtin.exception_value(%52)
+      throw %54
+    bb21:
+      %61 = phi [(bb23, %59), (bb24, %60)]
+      %62 = is_exception %61
+      branch %62, bb26, bb25
+    bb22:
+      %56 = phi [(bb15, %55), (bb19, %52)]
+      %57 = phi [(bb15, %55), (bb19, %47)]
+      %58 = load var $0.i
+      branch %44, bb23, bb24
+    bb23:
+      %59 = call builtin.console.log(%58)
+      jump bb21
+    bb24:
+      %60 = call %56, this=%57, args=[%58]
+      jump bb21
+    bb25:
+      jump bb1
+    bb26:
+      %63 = call builtin.exception_value(%61)
+      throw %63
 }

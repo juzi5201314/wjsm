@@ -3,7 +3,8 @@
 //! 背景：`arr.map(cb)` 在 lowering 时降为单条 `CallBuiltin(ArrayMap, arr, cb, thisArg)`，
 //! 运行时 `dispatch_array_callback` 逐元素经 `invoke_callable → prepare_call →
 //! call_indirect → finish_call` 全套动态调用。本 pass 在 `direct_call` 之后、
-//! `inline_for_ea` 之前运行：把这类调用展开为带 `ArrayIsArray` 守卫的显式循环 +
+//! `inline_for_ea` 之前运行：把这类调用展开为带守卫（`ArrayIsPlain`；map/filter
+//! 为 `ArraySpeciesDefault`，见各自文档）的显式循环 +
 //! 普通 `Call` 指令；展开后回调是 `Const(FunctionRef)` 时被 `inline_for_ea` 阶段 A
 //! 真正内联进循环（无捕获回调 → 每元素零调用成本），有捕获回调则省掉 host builtin
 //! dispatch 层。
@@ -328,13 +329,21 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
 
     let mut blocks: Vec<BasicBlock> = Vec::new();
 
-    // ── guard：is_array 运行时守卫 ──
+    // ── guard：快路径运行时守卫 ──
+    // 裸真数组判定（ArrayIsPlain，不穿透 Proxy——trap 语义须走慢路径完整
+    // 协议）；map/filter 额外要求 ArraySpeciesCreate（§23.1.3.2）可静态归约
+    // 为缺省 ArrayCreate（ArraySpeciesDefault，自定义 constructor/@@species
+    // 退慢路径执行完整 species 协议）。
     {
         let mut b = BasicBlock::new(guard);
         let is_arr = vg.fresh();
+        let guard_builtin = match cand.kind {
+            Kind::Map | Kind::Filter => Builtin::ArraySpeciesDefault,
+            _ => Builtin::ArrayIsPlain,
+        };
         b.push_instruction(Instruction::CallBuiltin {
             dest: Some(is_arr),
-            builtin: Builtin::ArrayIsArray,
+            builtin: guard_builtin,
             args: vec![cand.arr],
         });
         b.set_terminator(Terminator::Branch {
@@ -850,6 +859,22 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
         b.set_terminator(Terminator::Jump { target: guard });
         for block in blocks {
             caller.push_block(block);
+        }
+        // 原终止器已迁入 b_post：后继块中以原块为前驱的 phi source 必须改指
+        // b_post，否则 phi 清洗会把这条边当死边剔除，塌缩出支配性破坏。
+        let orig_block = BasicBlockId(cand.block_idx);
+        for succ in super::cfg_fold::terminator_successors(
+            caller.blocks()[b_post.0 as usize].terminator(),
+        ) {
+            for instr in caller.blocks_mut()[succ.0 as usize].instructions_mut() {
+                if let Instruction::Phi { sources, .. } = instr {
+                    for source in sources {
+                        if source.predecessor == orig_block {
+                            source.predecessor = b_post;
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -283,6 +283,8 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::TimerConstructor(true) => Some(("Immediate", 0)),
         NativeCallableKind::TimerConstructor(false) => Some(("Timeout", 0)),
         NativeCallableKind::Gc => Some(("gc", 0)),
+        // @@species 访问器 getter 的规范函数名（§23.1.2.5 步骤说明）。
+        NativeCallableKind::SpeciesGetter => Some(("get [Symbol.species]", 0)),
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
@@ -295,6 +297,22 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::Events(callable) => dispatch::events::metadata(callable),
         _ => None,
     }
+}
+
+/// Array 构造分派的 newTarget 归一：当前激活帧的 new.target 与被调构造器
+/// 相同（普通 `new Array(..)` / 无 new 调用）时归一为 undefined 走缺省原型，
+/// 仅类 extends Array 的 super() 与 Reflect.construct 显式 newTarget 需要
+/// 读取其 `prototype` 覆盖实例原型。
+fn array_construct_new_target(state: &NativeAgentState, callee: i64) -> i64 {
+    state
+        .activations
+        .last()
+        .map(|activation| activation.new_target)
+        .filter(|target| {
+            !value::is_undefined(*target)
+                && value::strip_gc_color(*target) != value::strip_gc_color(callee)
+        })
+        .unwrap_or_else(value::encode_undefined)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -651,6 +669,9 @@ enum NativeCallableKind {
     SetImmediate,
     TimerConstructor(bool),
     Gc,
+    /// 内建构造器的 `get [Symbol.species]` 访问器（§23.1.2.5 等）：返回 this，
+    /// 子类经静态原型链继承后取回子类自身。所有安装点共享同一实例。
+    SpeciesGetter,
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
@@ -661,7 +682,7 @@ enum NativeCallableKind {
 /// 按 receiver 家族惰性合成内建方法值。字符串方法不在此合成：它们是
 /// %String.prototype%（`ensure_string_prototype`）上的真实自有属性，基元
 /// 读取未命中后沿包装原型链命中。
-fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
+pub(crate) fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
     use wjsm_ir::Builtin;
 
     let builtin = if value::is_bool(receiver) {
@@ -1125,6 +1146,11 @@ struct NativeAgentState {
     callable_properties: HashMap<(i64, PropertyKey), i64>,
     callable_accessors: HashMap<(i64, PropertyKey), (i64, i64)>,
     callable_property_flags: HashMap<(i64, PropertyKey), u32>,
+    /// 惰性合成 intrinsic 属性的删除墓碑：`(owner 编码值去色, key)`。
+    /// owner 为 native callable、realm 全局对象或 %Array.prototype% 等
+    /// 永活规范值；命中即禁止 `primitive_property` / `global_property`
+    /// 再度合成，使 `delete String.raw` 后读取与 Node 一致地缺失。
+    intrinsic_tombstones: HashSet<(i64, PropertyKey)>,
     non_extensible_objects: HashSet<u32>,
     /// 已 preventExtensions/seal/freeze 的 callable（编码值，去色规范形）。
     non_extensible_callables: HashSet<i64>,
@@ -1346,6 +1372,7 @@ impl NativeAgentState {
             private_brands: HashMap::new(),
             callable_accessors: HashMap::new(),
             callable_property_flags: HashMap::new(),
+            intrinsic_tombstones: HashSet::new(),
             error_objects: HashSet::new(),
             boxed_primitives: HashMap::new(),
             error_prototypes: HashMap::new(),
@@ -1674,6 +1701,7 @@ impl NativeAgentState {
         self.callable_properties.clear();
         self.callable_accessors.clear();
         self.callable_property_flags.clear();
+        self.intrinsic_tombstones.clear();
         self.error_objects.clear();
         self.boxed_primitives.clear();
         self.error_prototypes.clear();
@@ -2323,6 +2351,37 @@ impl NativeAgentState {
         false
     }
     fn primitive_property(&mut self, receiver: i64, key: i64) -> Option<i64> {
+        // 删除墓碑先于任何惰性合成：`delete String.raw` /
+        // `delete Array.prototype.map` 后禁止复活，读取与 Node 一致地缺失。
+        if !self.intrinsic_tombstones.is_empty()
+            && let Some(tombstone_key) = dispatch::runtime::property_key(self, key)
+            && self
+                .intrinsic_tombstones
+                .contains(&(value::strip_gc_color(receiver), tombstone_key))
+        {
+            return None;
+        }
+        // 数组方法在语义上继承自 %Array.prototype%：原型层的覆盖、访问器与
+        // 删除墓碑对所有数组 receiver 的惰性合成可见（堆原型链缺失的兜底
+        // 合成路径同样必须遵守），返回 None 让通用链行走解析真实属性。
+        if value::is_array(receiver)
+            && let Some(prototype) = self.array_prototype
+            && let Some(property_key) = dispatch::runtime::property_key(self, key)
+        {
+            let proto_handle = value::decode_handle(prototype);
+            if self
+                .array_accessors
+                .contains_key(&(proto_handle, property_key))
+                || self
+                    .array_properties
+                    .contains_key(&(proto_handle, property_key))
+                || self
+                    .intrinsic_tombstones
+                    .contains(&(value::strip_gc_color(prototype), property_key))
+            {
+                return None;
+            }
+        }
         if value::is_regexp(receiver)
             && let Some(builtin) = dispatch::regexp::symbol_builtin(key)
         {
@@ -2594,6 +2653,39 @@ impl NativeAgentState {
         let builtin = intrinsic_builtin(receiver, &key)?;
         self.native_callable(NativeCallableKind::Builtin(builtin, true))
     }
+
+    /// [[Delete]] 收尾：若该键仍会被 receiver 的 own 层惰性合成命中，落墓碑
+    /// 禁止复活（`delete String.raw` / `delete Array.prototype.map`）。
+    /// %Function.prototype% 继承成员（bind/call/apply/toString）的合成不属于
+    /// own 层——删除自有属性后继承成员仍须可见，不落墓碑。
+    pub(crate) fn record_intrinsic_tombstone_after_delete(
+        &mut self,
+        receiver: i64,
+        encoded_key: i64,
+    ) {
+        let receiver = value::strip_gc_color(receiver);
+        if value::is_callable(receiver) {
+            // 仅 native callable 拥有 own 层静态合成；显式改过原型的
+            // callable 不再走隐式链尾合成。
+            if !value::is_native_callable(receiver)
+                || self.callable_prototypes.contains_key(&receiver)
+            {
+                return;
+            }
+            if let Some(text) = self.string_owned(encoded_key).and_then(|text| text.to_utf8())
+                && intrinsic_builtin(receiver, &text).is_some()
+            {
+                return;
+            }
+        }
+        if self.primitive_property(receiver, encoded_key).is_none() {
+            return;
+        }
+        if let Some(key) = dispatch::runtime::property_key(self, encoded_key) {
+            self.intrinsic_tombstones.insert((receiver, key));
+        }
+    }
+
     fn ensure_console_object(&mut self) -> Option<i64> {
         if let Some(console) = self.console_object {
             return Some(console);
@@ -2789,6 +2881,8 @@ impl NativeAgentState {
             self.callable_property_flags
                 .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
             self.install_prototype_constructor(prototype, constructor)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.install_species_accessor(constructor)
                 .ok_or(HeapAccessV2Error::AddressOverflow)?;
             self.array_constructor = Some(constructor);
         }
@@ -3085,7 +3179,23 @@ impl NativeAgentState {
         self.array_prototype = Some(prototype);
         self.array_constructor = Some(constructor);
         self.install_prototype_constructor(prototype, constructor)?;
+        self.install_species_accessor(constructor)?;
         Some(constructor)
+    }
+
+    /// 在构造器上安装 @@species 访问器属性（§23.1.2.5 get Array
+    /// [ %Symbol.species% ] 等）：getter 为共享的 SpeciesGetter（返回 this，
+    /// 子类经静态原型链继承取回子类自身），无 setter，
+    /// { enumerable: false, configurable: true }。
+    fn install_species_accessor(&mut self, constructor: i64) -> Option<()> {
+        let getter = self.native_callable(NativeCallableKind::SpeciesGetter)?;
+        let key = PropertyKey::symbol(wjsm_ir::wk_symbol::SPECIES);
+        let constructor = value::strip_gc_color(constructor);
+        self.callable_accessors
+            .insert((constructor, key), (getter, value::encode_undefined()));
+        self.callable_property_flags
+            .insert((constructor, key), FUNCTION_METADATA_FLAGS);
+        Some(())
     }
 
     fn ensure_error_prototype(&mut self, name: &str) -> Option<i64> {
@@ -3178,6 +3288,28 @@ impl NativeAgentState {
             self.global_object == Some(receiver) || dispatch::node_vm::is_context(self, receiver);
         if !is_realm_global {
             return None;
+        }
+        // 全局对象的自有属性（含用户赋值 / defineProperty 访问器）与删除
+        // 墓碑先于惰性内建合成：返回 None 让通用对象路径解析真实属性，
+        // 使 `globalThis.parseInt = f` 的读取与 `delete globalThis.parseInt`
+        // 的缺失都与 Node 一致。
+        if let Some(property_key) = dispatch::runtime::property_key(self, key) {
+            if self
+                .gc
+                .heap()
+                .get_property_slot(value::decode_handle(receiver), property_key)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return None;
+            }
+            if self
+                .intrinsic_tombstones
+                .contains(&(value::strip_gc_color(receiver), property_key))
+            {
+                return None;
+            }
         }
         let name = self.string_owned(key)?.to_utf8()?;
         if matches!(name.as_str(), "globalThis" | "global") {
@@ -3459,6 +3591,7 @@ impl NativeAgentState {
             | NativeCallableKind::ProcessNextTick
             | NativeCallableKind::ProcessOn
             | NativeCallableKind::Gc
+            | NativeCallableKind::SpeciesGetter
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
@@ -5227,6 +5360,13 @@ impl NativeAgentState {
             names.extend(record.lexical.keys().filter_map(|key| key.name_id()));
             names.extend(record.var_names.iter().filter_map(|key| key.name_id()));
         }
+        // intrinsic 删除墓碑的键名必须常驻：键字符串一旦被 GC 剪出驻留表，
+        // 同名的后续驻留会得到新句柄，墓碑失配将令被删除的 intrinsic 复活。
+        names.extend(
+            self.intrinsic_tombstones
+                .iter()
+                .filter_map(|(_, key)| key.name_id()),
+        );
         self.string_ids
             .values()
             .copied()
@@ -5304,7 +5444,7 @@ impl NativeAgentState {
 
     /// 去重命中时复用既有句柄；键为（内容哈希, UTF-16 长度），同一内容无论
     /// Latin-1 还是 UTF-16 载荷都得到同一键，表示选择不影响句柄唯一性。
-    fn dedup_string_handle(&self, key: &(u32, u32)) -> Option<i64> {
+    pub(crate) fn dedup_string_handle(&self, key: &(u32, u32)) -> Option<i64> {
         self.string_ids
             .get(key)
             .copied()
@@ -6212,14 +6352,18 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::Intl(callable) => {
             dispatch::intl::call(ctx, state, callable, this_value, &arguments)
         }
-        NativeCallableKind::ArrayConstructor => dispatch::construct_array(ctx, state, &arguments),
+        NativeCallableKind::ArrayConstructor => {
+            let new_target = array_construct_new_target(state, callee);
+            dispatch::construct_array(ctx, state, &arguments, new_target)
+        }
         NativeCallableKind::ObjectConstructor => dispatch::construct_object(ctx, state, &arguments),
         NativeCallableKind::RealmArrayConstructor(context) => {
+            let new_target = array_construct_new_target(state, callee);
             let previous = state.array_prototype;
             if let Some(prototype) = dispatch::node_vm::array_prototype_for_handle(state, context) {
                 state.array_prototype = Some(prototype);
             }
-            let result = dispatch::construct_array(ctx, state, &arguments);
+            let result = dispatch::construct_array(ctx, state, &arguments, new_target);
             state.array_prototype = previous;
             result
         }
@@ -6452,6 +6596,8 @@ unsafe extern "C" fn native_callable_call(
             result.unwrap_or_else(value::encode_undefined)
         }
         NativeCallableKind::FunctionPrototype => value::encode_undefined(),
+        // `get [Symbol.species]` 恒返回 this（§23.1.2.5）。
+        NativeCallableKind::SpeciesGetter => this_value,
         NativeCallableKind::TimerConstructor(_) => this_value,
         NativeCallableKind::SetImmediate => {
             let Some(callback) = arguments

@@ -146,6 +146,21 @@ pub(super) fn is_constructor_proxy(state: &NativeAgentState, encoded: i64) -> bo
     entry(state, encoded).is_some_and(|proxy| is_constructor_value(state, proxy.target))
 }
 
+/// IsArray（§7.2.2）步骤 3 的 Proxy 穿透：沿 [[ProxyTarget]] 链解包判定；
+/// revoked proxy 返回 None（调用方按规范抛 TypeError）。
+pub(super) fn is_array_target(state: &NativeAgentState, encoded: i64) -> Option<bool> {
+    let mut current = encoded;
+    loop {
+        if value::is_array(current) {
+            return Some(true);
+        }
+        if !value::is_proxy(current) {
+            return Some(false);
+        }
+        current = entry(state, current)?.target;
+    }
+}
+
 fn entry(state: &NativeAgentState, encoded: i64) -> Option<NativeProxy> {
     if !value::is_proxy(encoded) {
         return None;
@@ -506,7 +521,14 @@ pub(crate) fn define_property(
 ) -> i64 {
     match try_define_property(ctx, state, proxy, key, descriptor) {
         Ok(true) => proxy,
-        Ok(false) => proxy_invariant_error(ctx, state, "Proxy defineProperty trap returned false"),
+        Ok(false) => {
+            // V8 falsish 文案（与 set / deleteProperty trap 同款式）。
+            let key_text = super::runtime::render_value(state, key);
+            let message = format!(
+                "'defineProperty' on proxy: trap returned falsish for property '{key_text}'"
+            );
+            proxy_invariant_error(ctx, state, &message)
+        }
         Err(exception) => exception,
     }
 }
@@ -1112,35 +1134,5 @@ fn reflect_construct(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     let Some(arguments) = array_arguments(state, *arguments) else {
         return fail_dispatch(ctx);
     };
-    if value::is_proxy(*target) {
-        return construct(ctx, state, *target, &arguments, new_target);
-    }
-    let Ok(this_value) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
-        return fail_dispatch(ctx);
-    };
-    let Some(prototype_key) = state.intern_text("prototype".into(), value::TAG_STRING) else {
-        return fail_dispatch(ctx);
-    };
-    let prototype =
-        get_property(ctx, state, new_target, prototype_key).unwrap_or_else(|()| fail_dispatch(ctx));
-    if value::is_exception(prototype) {
-        return prototype;
-    }
-    if let Some(prototype) = object_handle(prototype)
-        && state
-            .gc
-            .heap()
-            .set_prototype(value::decode_handle(this_value), prototype)
-            .is_err()
-    {
-        return fail_dispatch(ctx);
-    }
-    let result = state
-        .invoke_constructor(ctx, *target, new_target, this_value, &arguments)
-        .unwrap_or_else(|| fail_dispatch(ctx));
-    if value::is_js_object(result) {
-        result
-    } else {
-        this_value
-    }
+    super::runtime::construct_value(ctx, state, *target, &arguments, new_target)
 }

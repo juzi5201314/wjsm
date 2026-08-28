@@ -514,6 +514,16 @@ pub enum Builtin {
     ArrayAllocate,
     /// 判断数组索引处是否存在非 hole 元素。
     ArrayHasElement,
+    /// 内联快路径守卫：值是否为裸真数组（不穿透 Proxy，区别于用户可见的
+    /// `Array.isArray`）。Proxy 包装数组的 length/元素读取须走 trap 完整
+    /// 协议，退回慢路径 builtin。
+    ArrayIsPlain,
+    /// 内联快路径守卫（map/filter）：裸真数组且 ArraySpeciesCreate
+    /// （§23.1.3.2）保证走缺省 ArrayCreate 且全程不可观察——实例无自有
+    /// constructor、[[Prototype]] 为当前 realm %Array.prototype% 且其
+    /// constructor 仍为固有 %Array% 数据属性、%Array% 的 @@species 仍为
+    /// 固有 getter。任一不满足退回慢路径 builtin 执行完整 species 协议。
+    ArraySpeciesDefault,
     /// JS truthiness → bool。
     ToBoolean,
     /// `Object.prototype.propertyIsEnumerable`
@@ -660,6 +670,22 @@ pub enum Builtin {
     /// 文本段与替换值；template 或其 raw 属性为 undefined/null 时抛
     /// TypeError（ToObject 失败）。args: [template, ...substitutions]。
     StringRaw,
+    /// intrinsic 调用快路径守卫：判定站点对应的 intrinsic 属性仍处于
+    /// 原始（pristine）状态——未被赋值覆盖、未被 delete、未被换成访问器、
+    /// 容器全局名未被运行时遮蔽。守卫为纯查询，无任何可观察副作用，也不
+    /// 新增字符串驻留（属性名由宿主按 wire_id 经 `intrinsic_sites` 反查）；
+    /// 返回 bool，false 时语义层落入通用属性查找 + 动态调用路径。
+    /// args: [family(常量，见 `constants::INTRINSIC_FAMILY_*`), wire_id,
+    /// receiver?(仅 STRING_PROTO / ARRAY_PROTO)]。
+    IntrinsicPristine,
+    /// intrinsic 慢路径的 callee/容器解析：按站点家族以完整属性语义解析
+    /// （全局名经 GlobalEnvGet 语义，缺失抛 ReferenceError；成员经通用
+    /// [[Get]]，getter 生效），返回解析出的值或异常。属性名同样由宿主经
+    /// `intrinsic_sites` 反查，不进制品常量池。
+    /// args: [family, wire_id] 解析全局名（GLOBAL_IDENT 为站点全局名、
+    /// STATIC_MEMBER 为容器全局名）；[family, wire_id, receiver] 解析
+    /// receiver 上的站点属性成员。
+    IntrinsicResolve,
     /// 全局 `EventTarget` 构造器（WHATWG DOM §2.7）：创建空监听器列表的
     /// 事件目标对象。args: []（实参忽略）。
     EventTargetConstructor,
@@ -1186,6 +1212,8 @@ impl Builtin {
             Self::BigIntProtoValueOf => "BigInt.prototype.valueOf",
             Self::ArrayAllocate => "array.allocate",
             Self::ArrayHasElement => "array.has_element",
+            Self::ArrayIsPlain => "array.is_plain",
+            Self::ArraySpeciesDefault => "array.species_default",
             Self::ToBoolean => "to_boolean",
             Self::PropertyIsEnumerable => "property_is_enumerable",
             Self::StringBuilderAppend => "string.builder_append",
@@ -1225,6 +1253,8 @@ impl Builtin {
             Self::ObjectProtoLookupGetter => "Object.prototype.__lookupGetter__",
             Self::ObjectProtoLookupSetter => "Object.prototype.__lookupSetter__",
             Self::StringRaw => "string.raw",
+            Self::IntrinsicPristine => "intrinsic_pristine",
+            Self::IntrinsicResolve => "intrinsic_resolve",
             Self::EventTargetConstructor => "EventTarget",
             Self::AbortSignalConstructor => "AbortSignal",
             Self::EventConstructor => "Event",

@@ -44,7 +44,7 @@ impl Lowerer {
     pub(crate) fn call_args_have_spread(args: &[swc_ast::ExprOrSpread]) -> bool {
         args.iter().any(|arg| arg.spread.is_some())
     }
-    fn lower_call_array_element(
+    pub(crate) fn lower_call_array_element(
         &mut self,
         array: ValueId,
         index: u32,
@@ -62,7 +62,11 @@ impl Lowerer {
         );
         dest
     }
-    fn lower_optional_spread_call(
+    /// 可选调用的短路发射：`callee?.(args)` 的短路点在 ArgumentListEvaluation
+    /// 之前（§13.3.9.1），callee 为 nullish 时直接产出 undefined，实参一律
+    /// 不求值。非 nullish 分支才求值实参：spread 形态经参数数组 + FuncApply，
+    /// 非 spread 形态发 OptionalCall（由 backend 处理非可调用 TypeError）。
+    fn lower_optional_call_short_circuit(
         &mut self,
         callee: ValueId,
         this_val: ValueId,
@@ -120,16 +124,36 @@ impl Lowerer {
             },
         );
 
-        let (args_array, args_end) = self.lower_call_args_to_array(args, call_block)?;
-        let called = self.alloc_value();
-        self.current_function.append_instruction(
-            args_end,
-            Instruction::CallBuiltin {
-                dest: Some(called),
-                builtin: Builtin::FuncApply,
-                args: vec![callee, this_val, args_array],
-            },
-        );
+        let (called, args_end) = if Self::call_args_have_spread(args) {
+            let (args_array, args_end) = self.lower_call_args_to_array(args, call_block)?;
+            let called = self.alloc_value();
+            self.current_function.append_instruction(
+                args_end,
+                Instruction::CallBuiltin {
+                    dest: Some(called),
+                    builtin: Builtin::FuncApply,
+                    args: vec![callee, this_val, args_array],
+                },
+            );
+            (called, args_end)
+        } else {
+            let mut args_end = call_block;
+            let mut arg_vals = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_vals.push(self.lower_call_operand_then_continue(&arg.expr, &mut args_end)?);
+            }
+            let called = self.alloc_value();
+            self.current_function.append_instruction(
+                args_end,
+                Instruction::OptionalCall {
+                    dest: called,
+                    callee,
+                    this_val,
+                    args: arg_vals,
+                },
+            );
+            (called, args_end)
+        };
         self.current_function.set_terminator(
             args_end,
             Terminator::Jump {
@@ -157,101 +181,6 @@ impl Lowerer {
         self.expr_merge_block = Some(merge_block);
         Ok(result)
     }
-    fn emit_guarded_string_proto_builtin_call(
-        &mut self,
-        builtin: Builtin,
-        member_expr: &swc_ast::MemberExpr,
-        args: &[swc_ast::ExprOrSpread],
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
-        if Self::call_args_have_spread(args) {
-            return self.emit_proto_builtin_call(builtin, member_expr, args, block);
-        }
-        let mut eval_block = block;
-        let receiver =
-            self.lower_call_operand_then_continue(member_expr.obj.as_ref(), &mut eval_block)?;
-        let mut values = Vec::with_capacity(args.len());
-        for arg in args {
-            values.push(self.lower_call_operand_then_continue(&arg.expr, &mut eval_block)?);
-        }
-        let guard = self.alloc_value();
-        self.current_function.append_instruction(
-            eval_block,
-            Instruction::CallBuiltin {
-                dest: Some(guard),
-                builtin: Builtin::IsString,
-                args: vec![receiver],
-            },
-        );
-        let fast_block = self.current_function.new_block();
-        let slow_block = self.current_function.new_block();
-        let merge_block = self.current_function.new_block();
-        self.current_function.set_terminator(
-            eval_block,
-            Terminator::Branch {
-                condition: guard,
-                true_block: fast_block,
-                false_block: slow_block,
-            },
-        );
-        let fast_result = self.alloc_value();
-        let mut fast_args = Vec::with_capacity(values.len() + 1);
-        fast_args.push(receiver);
-        fast_args.extend(values.iter().copied());
-        self.current_function.append_instruction(
-            fast_block,
-            Instruction::CallBuiltin {
-                dest: Some(fast_result),
-                builtin,
-                args: fast_args,
-            },
-        );
-        self.current_function.set_terminator(
-            fast_block,
-            Terminator::Jump {
-                target: merge_block,
-            },
-        );
-        let mut slow_call_block = slow_block;
-        let callee =
-            self.lower_member_expr_from_object(member_expr, receiver, &mut slow_call_block, false)?;
-        let slow_result = self.alloc_value();
-        self.current_function.append_instruction(
-            slow_call_block,
-            Instruction::Call {
-                dest: Some(slow_result),
-                callee,
-                this_val: receiver,
-                args: values,
-            },
-        );
-        self.current_function.set_terminator(
-            slow_call_block,
-            Terminator::Jump {
-                target: merge_block,
-            },
-        );
-        let result = self.alloc_value();
-        self.current_function.append_instruction(
-            merge_block,
-            Instruction::Phi {
-                dest: result,
-                sources: vec![
-                    PhiSource {
-                        predecessor: fast_block,
-                        value: fast_result,
-                    },
-                    PhiSource {
-                        predecessor: slow_call_block,
-                        value: slow_result,
-                    },
-                ],
-            },
-        );
-        self.expr_merge_block = Some(merge_block);
-        Ok(result)
-    }
-
     /// 原型方法拦截的公共发射逻辑：把 `obj.method(args...)` 降为
     /// `CallBuiltin(builtin, [this, args...])`，其中 this = obj。
     ///
@@ -259,7 +188,7 @@ impl Lowerer {
     /// SharedArrayBuffer/DataView 原型方法）共用这段「lower obj 为 this →
     /// lower 每个实参 → 追加 CallBuiltin → 返回 dest」样板，
     /// 拦截点只保留各自的「模式识别 + receiver guard」判定。
-    fn emit_proto_builtin_call(
+    pub(crate) fn emit_proto_builtin_call(
         &mut self,
         builtin: Builtin,
         member_expr: &swc_ast::MemberExpr,
@@ -422,11 +351,17 @@ impl Lowerer {
                         return Ok(val);
                     }
                     // 词法/模块绑定（含导入别名与 TDZ 声明）遮蔽全局 intrinsic：
-                    // 只有名字未被遮蔽时才允许 CallBuiltin 快路径。
+                    // 只有名字未被遮蔽时才允许 CallBuiltin 快路径；运行时的
+                    // 赋值 / delete / defineProperty 遮蔽由 pristine 守卫分流。
                     if let Some(builtin) = builtin_from_global_ident(&ident.sym)
                         && !self.global_intrinsic_shadowed(&ident.sym)
                     {
-                        return self.lower_host_builtin_call_expr(call, block, builtin);
+                        return self.lower_intrinsic_guarded_call(
+                            call,
+                            block,
+                            builtin,
+                            IntrinsicCallSite::GlobalIdent,
+                        );
                     }
                 }
 
@@ -449,7 +384,9 @@ impl Lowerer {
 
                     // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
                     // 对象名被词法/模块绑定遮蔽或解析穿越 with 作用域时禁用
-                    // （导入别名、TDZ 声明与 with 对象都可能提供同名值）。
+                    // （导入别名、TDZ 声明与 with 对象都可能提供同名值）；
+                    // 运行时的赋值 / delete / getter 替换由 pristine 守卫分流，
+                    // Promise 静态方法的 species 构造器位形状在守卫发射内保持。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(builtin) =
@@ -460,68 +397,12 @@ impl Lowerer {
                             .with_scopes_for_ident(obj_ident.sym.as_ref())
                             .is_empty()
                     {
-                        // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
-                        if matches!(
+                        return self.lower_intrinsic_guarded_call(
+                            call,
+                            block,
                             builtin,
-                            Builtin::PromiseResolveStatic
-                                | Builtin::PromiseRejectStatic
-                                | Builtin::PromiseAll
-                                | Builtin::PromiseRace
-                                | Builtin::PromiseAllSettled
-                                | Builtin::PromiseAny
-                                | Builtin::PromiseWithResolvers
-                        ) {
-                            let undef_const = self.module.add_constant(Constant::Undefined);
-                            let mut call_block = block;
-                            let constructor_val = self.alloc_value();
-                            self.current_function.append_instruction(
-                                call_block,
-                                Instruction::Const {
-                                    dest: constructor_val,
-                                    constant: undef_const,
-                                },
-                            );
-                            let mut args = vec![constructor_val];
-                            if Self::call_args_have_spread(&call.args) {
-                                let (args_array, end_block) =
-                                    self.lower_call_args_to_array(&call.args, call_block)?;
-                                call_block = end_block;
-                                args.push(self.lower_call_array_element(args_array, 0, call_block));
-                            } else {
-                                for arg in &call.args {
-                                    args.push(self.lower_call_operand_then_continue(
-                                        &arg.expr,
-                                        &mut call_block,
-                                    )?);
-                                }
-                                // 无参数时补 undefined。
-                                if args.len() == 1 {
-                                    let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(
-                                        call_block,
-                                        Instruction::Const {
-                                            dest: undef_val,
-                                            constant: undef_const,
-                                        },
-                                    );
-                                    args.push(undef_val);
-                                }
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                call_block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin,
-                                    args,
-                                },
-                            );
-                            if call_block != block {
-                                self.expr_merge_block = Some(call_block);
-                            }
-                            return Ok(dest);
-                        }
-                        return self.lower_host_builtin_call_expr(call, block, builtin);
+                            IntrinsicCallSite::StaticMember { optional: false },
+                        );
                     }
 
                     // TypedArray.prototype 方法调用优化（必须在 String 之前，因为 at/indexOf/includes/toString
@@ -601,51 +482,40 @@ impl Lowerer {
                     }
                     // Array.prototype 方法调用优化（带 receiver guard）。
                     // 仅静态已知 Array receiver 直连（含链式高阶函数中间结果）；
-                    // Map/Set 的 forEach/entries 等必须走自身方法。
+                    // Map/Set 的 forEach/entries 等必须走自身方法。运行时的
+                    // 自有覆盖 / 原型改写 / delete 由 pristine 守卫分流。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(array_builtin) =
                             builtin_from_array_proto_method(&prop_ident.sym)
                         && self.is_array_producing_expr(member_expr.obj.as_ref())
                     {
-                        return self.emit_proto_builtin_call(
+                        return self.lower_intrinsic_guarded_proto_call(
+                            wjsm_ir::constants::INTRINSIC_FAMILY_ARRAY_PROTO,
                             array_builtin,
                             member_expr,
                             &call.args,
                             block,
                         );
                     }
-                    // let 字符串绑定可被重新赋值：先内联 IsString 守卫，miss 保留完整动态语义。
+                    // String.prototype 方法调用优化。pristine 守卫内含字符串
+                    // receiver 判定：与 Array 同名的方法（concat/includes/
+                    // indexOf/lastIndexOf/slice）只在 receiver 可证明为字符串
+                    // 时启用守卫直连，否则保持通用路径避免静态劫持；其余方法
+                    // 名对非字符串 receiver（自有同名方法的普通对象）由守卫
+                    // 判 false 落入通用属性查找 + 动态调用。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(string_builtin) =
                             builtin_from_string_proto_method(&prop_ident.sym)
-                        && matches!(
-                            prop_ident.sym.as_ref(),
-                            "concat" | "includes" | "indexOf" | "lastIndexOf" | "slice"
-                        )
-                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
-                        && self.is_maybe_string_binding(receiver_ident)
-                        && !self.is_string_producing_expr(member_expr.obj.as_ref())
-                    {
-                        return self.emit_guarded_string_proto_builtin_call(
-                            string_builtin,
-                            member_expr,
-                            &call.args,
-                            block,
-                        );
-                    }
-                    // String.prototype 方法调用优化。
-                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
-                        && let Some(string_builtin) =
-                            builtin_from_string_proto_method(&prop_ident.sym)
-                        // 与 Array.prototype 同名的方法只在 receiver 可证明为字符串时直连，
-                        // 否则保持通用属性查找 + 动态调用，避免劫持数组同名方法。
                         && (self.is_string_producing_expr(member_expr.obj.as_ref())
                             || !matches!(
                                 prop_ident.sym.as_ref(),
                                 "concat" | "includes" | "indexOf" | "lastIndexOf" | "slice"
-                            ))
+                            )
+                            || matches!(member_expr.obj.as_ref(), swc_ast::Expr::Ident(receiver_ident)
+                                if self.is_maybe_string_binding(receiver_ident)))
                     {
-                        return self.emit_proto_builtin_call(
+                        return self.lower_intrinsic_guarded_proto_call(
+                            wjsm_ir::constants::INTRINSIC_FAMILY_STRING_PROTO,
                             string_builtin,
                             member_expr,
                             &call.args,
@@ -1039,8 +909,14 @@ impl Lowerer {
                 .with_scopes_for_ident(obj_ident.sym.as_ref())
                 .is_empty()
         {
-            // 静态方法在引擎中恒存在；可选链只是语法糖，语义等于直接 CallBuiltin。
-            return self.lower_host_builtin_call_expr(call, block, builtin);
+            // pristine 时静态方法恒存在，可选链不短路，等于直接 CallBuiltin；
+            // 被改写 / 删除后慢路径按可选调用对 nullish callee 短路。
+            return self.lower_intrinsic_guarded_call(
+                call,
+                block,
+                builtin,
+                IntrinsicCallSite::StaticMember { optional: true },
+            );
         }
 
         let callee_val: ValueId;
@@ -1114,15 +990,19 @@ impl Lowerer {
             }
         }
 
-        let mut call_block = self.resolve_store_block(callee_block);
-        if Self::call_args_have_spread(&call.args) {
-            return self.lower_optional_spread_call(callee_val, this_val, &call.args, call_block);
-        }
-        let mut args = Vec::with_capacity(call.args.len());
-        for arg in &call.args {
-            args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
+        let call_block = self.resolve_store_block(callee_block);
+        if !call.args.is_empty() {
+            // 有实参：短路点必须在 ArgumentListEvaluation 之前（§13.3.9.1），
+            // nullish callee 不得触发实参求值的副作用。
+            return self.lower_optional_call_short_circuit(
+                callee_val,
+                this_val,
+                &call.args,
+                call_block,
+            );
         }
 
+        // 无实参：不存在实参求值顺序问题，OptionalCall 自身完成 nullish 短路。
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             call_block,
@@ -1130,7 +1010,7 @@ impl Lowerer {
                 dest,
                 callee: callee_val,
                 this_val,
-                args,
+                args: Vec::new(),
             },
         );
         if call_block != block {

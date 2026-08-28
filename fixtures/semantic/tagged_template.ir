@@ -24,19 +24,26 @@ module {
     c21 = number(1)
     c22 = number(2)
     c23 = functionref(@0)
-    c24 = string("Hello, ")
-    c25 = string("! Goodbye, ")
-    c26 = string("!")
-    c27 = string("Hello, ")
-    c28 = string("! Goodbye, ")
-    c29 = string("!")
-    c30 = string("raw")
-    c31 = string("value")
-    c32 = undefined
-    c33 = string("World")
-    c34 = string("Moon")
-    c35 = bool(true)
-    c36 = bool(false)
+    c24 = number(1)
+    c25 = number(0)
+    c26 = number(1)
+    c27 = number(0)
+    c28 = number(1)
+    c29 = number(0)
+    c30 = undefined
+    c31 = string("Hello, ")
+    c32 = string("! Goodbye, ")
+    c33 = string("!")
+    c34 = string("Hello, ")
+    c35 = string("! Goodbye, ")
+    c36 = string("!")
+    c37 = string("raw")
+    c38 = string("value")
+    c39 = undefined
+    c40 = string("World")
+    c41 = string("Moon")
+    c42 = bool(true)
+    c43 = bool(false)
 
   fn @tag [needs_prototype] [direct_callable] [js_length 3] [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
     bb0:
@@ -139,111 +146,149 @@ module {
       store var $this, %20
       %21 = const c23
       store var $0.tag, %21
-      %22 = new_array(capacity=3)
-      %23 = const c24
-      call builtin.array.push(%22, %23)
-      %24 = const c25
-      call builtin.array.push(%22, %24)
-      %25 = const c26
-      call builtin.array.push(%22, %25)
-      %26 = new_array(capacity=3)
-      %27 = const c27
-      call builtin.array.push(%26, %27)
-      %28 = const c28
-      call builtin.array.push(%26, %28)
-      %29 = const c29
-      call builtin.array.push(%26, %29)
-      %30 = const c30
-      %31 = new_object(capacity=4)
-      %32 = const c31
-      %33 = set_prop %31, %32, %26
-      call builtin.define_property(%22, %30, %31)
-      %36 = const c33
-      %37 = const c34
-      %44 = const c0
-      jump bb6
+      %22 = const c24
+      %23 = const c25
+      %24 = call builtin.intrinsic_pristine(%22, %23)
+      branch %24, bb1, bb2
     bb1:
-      %41 = call builtin.console.log(%71)
-      %42 = is_exception %41
-      branch %42, bb4, bb3
+      %35 = const c30
+      jump bb8
     bb2:
-      %40 = call builtin.exception_value(%71)
-      throw %40
+      %25 = const c26
+      %26 = const c27
+      %27 = call builtin.intrinsic_resolve(%25, %26)
+      %28 = is_exception %27
+      branch %28, bb4, bb3
     bb3:
-      return
+      %30 = const c28
+      %31 = const c29
+      %32 = call builtin.intrinsic_resolve(%30, %31, %27)
+      %33 = is_exception %32
+      branch %33, bb6, bb5
     bb4:
-      %43 = call builtin.exception_value(%41)
-      throw %43
+      %29 = call builtin.exception_value(%27)
+      throw %29
     bb5:
-      %39 = is_exception %71
-      branch %39, bb2, bb1
+      jump bb8
     bb6:
-      %46 = const c20
-      %47 = get_elem %22, %46
-      %48 = is_exception %47
-      branch %48, bb8, bb7
+      %34 = call builtin.exception_value(%32)
+      throw %34
     bb7:
-      %51 = add %47, %36
-      %52 = is_exception %51
-      branch %52, bb10, bb9
-    bb8:
-      %49 = call builtin.exception_value(%47)
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
-      throw %49
-    bb9:
-      %55 = const c21
-      %56 = get_elem %22, %55
-      %57 = is_exception %56
-      branch %57, bb12, bb11
-    bb10:
-      %53 = call builtin.exception_value(%51)
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
-      throw %53
-    bb11:
-      %59 = add %51, %56
+      %59 = phi [(bb11, %57), (bb12, %58)]
       %60 = is_exception %59
       branch %60, bb14, bb13
+    bb8:
+      %36 = phi [(bb1, %35), (bb5, %32)]
+      %37 = phi [(bb1, %35), (bb5, %27)]
+      %38 = new_array(capacity=3)
+      %39 = const c31
+      call builtin.array.push(%38, %39)
+      %40 = const c32
+      call builtin.array.push(%38, %40)
+      %41 = const c33
+      call builtin.array.push(%38, %41)
+      %42 = new_array(capacity=3)
+      %43 = const c34
+      call builtin.array.push(%42, %43)
+      %44 = const c35
+      call builtin.array.push(%42, %44)
+      %45 = const c36
+      call builtin.array.push(%42, %45)
+      %46 = const c37
+      %47 = new_object(capacity=4)
+      %48 = const c38
+      %49 = set_prop %47, %48, %42
+      call builtin.define_property(%38, %46, %47)
+      %52 = const c40
+      %53 = const c41
+      %62 = const c0
+      jump bb16
+    bb9:
+      branch %24, bb11, bb12
+    bb10:
+      %56 = call builtin.exception_value(%89)
+      throw %56
+    bb11:
+      %57 = call builtin.console.log(%89)
+      jump bb7
     bb12:
-      %58 = call builtin.exception_value(%56)
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
-      throw %58
+      %58 = call %36, this=%37, args=[%89]
+      jump bb7
     bb13:
-      %63 = add %59, %37
-      %64 = is_exception %63
-      branch %64, bb16, bb15
+      return
     bb14:
       %61 = call builtin.exception_value(%59)
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
       throw %61
     bb15:
-      %67 = const c22
-      %68 = get_elem %22, %67
-      %69 = is_exception %68
-      branch %69, bb18, bb17
+      %55 = is_exception %89
+      branch %55, bb10, bb9
     bb16:
-      %65 = call builtin.exception_value(%63)
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
-      throw %65
+      %64 = const c20
+      %65 = get_elem %38, %64
+      %66 = is_exception %65
+      branch %66, bb18, bb17
     bb17:
-      %71 = add %63, %68
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
-      jump bb5
+      %69 = add %65, %52
+      %70 = is_exception %69
+      branch %70, bb20, bb19
     bb18:
-      %70 = call builtin.exception_value(%68)
-      store var $1.a, %44
-      store var $1.b, %44
-      store var $1.strings, %44
-      throw %70
+      %67 = call builtin.exception_value(%65)
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      throw %67
+    bb19:
+      %73 = const c21
+      %74 = get_elem %38, %73
+      %75 = is_exception %74
+      branch %75, bb22, bb21
+    bb20:
+      %71 = call builtin.exception_value(%69)
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      throw %71
+    bb21:
+      %77 = add %69, %74
+      %78 = is_exception %77
+      branch %78, bb24, bb23
+    bb22:
+      %76 = call builtin.exception_value(%74)
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      throw %76
+    bb23:
+      %81 = add %77, %53
+      %82 = is_exception %81
+      branch %82, bb26, bb25
+    bb24:
+      %79 = call builtin.exception_value(%77)
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      throw %79
+    bb25:
+      %85 = const c22
+      %86 = get_elem %38, %85
+      %87 = is_exception %86
+      branch %87, bb28, bb27
+    bb26:
+      %83 = call builtin.exception_value(%81)
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      throw %83
+    bb27:
+      %89 = add %81, %86
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      jump bb15
+    bb28:
+      %88 = call builtin.exception_value(%86)
+      store var $1.a, %62
+      store var $1.b, %62
+      store var $1.strings, %62
+      throw %88
 }

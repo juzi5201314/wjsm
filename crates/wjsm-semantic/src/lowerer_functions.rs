@@ -114,7 +114,8 @@ impl Lowerer {
         if let Some(scope_id) = self_name_scope {
             let (callee_val, callee_block) =
                 self.materialize_wrapper_closure(block, wrapper_fn_id, captured, fn_expr.span())?;
-            let end_block = self.finish_fn_expr_name_scope(callee_block, name, scope_id, callee_val);
+            let end_block =
+                self.finish_fn_expr_name_scope(callee_block, name, scope_id, callee_val);
             self.expr_merge_block = Some(end_block);
             return Ok(callee_val);
         }
@@ -373,8 +374,12 @@ impl Lowerer {
             self.lower_async_function_parts(&name, fn_expr, MethodSuperBinding::None)?;
         self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
 
-        let (callee_val, callee_block) =
-            self.materialize_wrapper_closure(outer_block, wrapper_fn_id, &captured, fn_expr.span())?;
+        let (callee_val, callee_block) = self.materialize_wrapper_closure(
+            outer_block,
+            wrapper_fn_id,
+            &captured,
+            fn_expr.span(),
+        )?;
 
         // 具名表达式：wrapper 函数对象写入自身名字绑定并弹出名字作用域。
         if let Some(scope_id) = self_name_scope {

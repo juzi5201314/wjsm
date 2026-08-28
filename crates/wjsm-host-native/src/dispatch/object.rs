@@ -1352,10 +1352,13 @@ fn define_ordinary_property(
         Err(_) => return fail_dispatch(ctx),
     };
     if current.is_none() && state.non_extensible_objects.contains(&handle) {
+        // V8 文案：`Cannot define property <key>, object is not extensible`。
+        let rendered =
+            super::runtime::render_value(state, super::runtime::encoded_property_key(key));
         return super::runtime::type_error(
             ctx,
             state,
-            "Cannot define property on a non-extensible object",
+            &format!("Cannot define property {rendered}, object is not extensible"),
         );
     }
 
@@ -1576,10 +1579,13 @@ fn define_callable_property(
     let exists = current_accessor.is_some() || current_value.is_some();
     if !exists {
         if state.non_extensible_callables.contains(&callable) {
+            // V8 文案：`Cannot define property <key>, object is not extensible`。
+            let rendered =
+                super::runtime::render_value(state, super::runtime::encoded_property_key(key));
             return type_error(
                 ctx,
                 state,
-                "Cannot define property on a non-extensible object",
+                &format!("Cannot define property {rendered}, object is not extensible"),
             );
         }
     } else {
@@ -1704,6 +1710,21 @@ fn define_array_property(
         return define_array_length(ctx, state, object, handle, descriptor);
     }
     let index = super::runtime::array_index(state, encoded_key);
+    let Ok(old_length) = state.gc.heap().array_length(handle) else {
+        return fail_dispatch(ctx);
+    };
+    // ArraySetLength 不可写 length 拒绝新增越界下标（§10.4.2.1 步骤 2.d，
+    // V8 文案）。
+    if let Some(index) = index
+        && index >= old_length
+        && state.array_fixed_length.contains(&handle)
+    {
+        return super::runtime::type_error(
+            ctx,
+            state,
+            &format!("Cannot define property {index}, object is not extensible"),
+        );
+    }
     let current_accessor = state.array_accessors.get(&(handle, key)).copied();
     let element_value = index.and_then(|index| {
         state
@@ -1732,10 +1753,11 @@ fn define_array_property(
         None
     };
     if current.is_none() && state.non_extensible_objects.contains(&handle) {
+        let rendered = super::runtime::render_value(state, encoded_key);
         return super::runtime::type_error(
             ctx,
             state,
-            "Cannot define property on a non-extensible object",
+            &format!("Cannot define property {rendered}, object is not extensible"),
         );
     }
     if let Some((current_flags, current_is_accessor)) = current
@@ -1822,6 +1844,13 @@ fn define_array_property(
                 flags,
             ),
         );
+        // §10.4.2.1 步骤 2.g：新增越界下标定义成功后 length 提升为 index+1。
+        if let Some(index) = index
+            && index >= old_length
+            && state.gc.heap().set_array_length(handle, index + 1).is_err()
+        {
+            return fail_dispatch(ctx);
+        }
         return object;
     }
     set_flag(&mut flags, WRITABLE, descriptor.writable);
@@ -1834,17 +1863,20 @@ fn define_array_property(
     state.array_property_flags.insert((handle, key), flags);
     // 在范围下标同步元素存储，保持 render / 迭代等直读路径与 [[Get]] 一致。
     if let Some(index) = index
-        && state
-            .gc
-            .heap()
-            .array_length(handle)
-            .is_ok_and(|length| index < length)
+        && index < old_length
     {
         let _ =
             state
                 .gc
                 .heap()
                 .set_element(handle, index, u64::from_ne_bytes(stored.to_ne_bytes()));
+    }
+    // §10.4.2.1 步骤 2.g：新增越界下标定义成功后 length 提升为 index+1。
+    if let Some(index) = index
+        && index >= old_length
+        && state.gc.heap().set_array_length(handle, index + 1).is_err()
+    {
+        return fail_dispatch(ctx);
     }
     object
 }

@@ -31,26 +31,61 @@ module {
     c28 = functionref(@1)
     c29 = string("$0.rejectB")
     c30 = undefined
-    c31 = undefined
-    c32 = string("name")
-    c33 = string("errors")
-    c34 = string("length")
-    c35 = string("errors")
-    c36 = number(0)
-    c37 = string("errors")
-    c38 = number(1)
-    c39 = functionref(@2)
-    c40 = undefined
-    c41 = string("queueMicrotask")
-    c42 = undefined
-    c43 = string("$0.rejectB")
-    c44 = number(2)
+    c31 = number(1)
+    c32 = number(156)
+    c33 = number(1)
+    c34 = number(156)
+    c35 = number(1)
+    c36 = number(156)
+    c37 = undefined
+    c38 = undefined
+    c39 = number(1)
+    c40 = number(0)
+    c41 = number(1)
+    c42 = number(0)
+    c43 = number(1)
+    c44 = number(0)
     c45 = undefined
-    c46 = string("$0.rejectA")
+    c46 = string("name")
     c47 = number(1)
-    c48 = functionref(@3)
-    c49 = bool(true)
-    c50 = bool(false)
+    c48 = number(0)
+    c49 = number(1)
+    c50 = number(0)
+    c51 = number(1)
+    c52 = number(0)
+    c53 = undefined
+    c54 = string("errors")
+    c55 = string("length")
+    c56 = number(1)
+    c57 = number(0)
+    c58 = number(1)
+    c59 = number(0)
+    c60 = number(1)
+    c61 = number(0)
+    c62 = undefined
+    c63 = string("errors")
+    c64 = number(0)
+    c65 = number(1)
+    c66 = number(0)
+    c67 = number(1)
+    c68 = number(0)
+    c69 = number(1)
+    c70 = number(0)
+    c71 = undefined
+    c72 = string("errors")
+    c73 = number(1)
+    c74 = functionref(@2)
+    c75 = undefined
+    c76 = string("queueMicrotask")
+    c77 = undefined
+    c78 = string("$0.rejectB")
+    c79 = number(2)
+    c80 = undefined
+    c81 = string("$0.rejectA")
+    c82 = number(1)
+    c83 = functionref(@3)
+    c84 = bool(true)
+    c85 = bool(false)
 
   fn @arrow_0 [js_name ""] [js_length 2] [captures: $0.rejectA] [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
     bb0:
@@ -82,94 +117,246 @@ module {
 
   fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.err] [entry=bb0]:
     bb0:
-      %0 = load var $3.err
-      %1 = const c32
-      %2 = get_prop %0, %1
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %0 = const c39
+      %1 = const c40
+      %2 = call builtin.intrinsic_pristine(%0, %1)
+      branch %2, bb1, bb2
     bb1:
-      %5 = call builtin.console.log(%2)
+      %13 = const c45
+      jump bb8
+    bb2:
+      %3 = const c41
+      %4 = const c42
+      %5 = call builtin.intrinsic_resolve(%3, %4)
       %6 = is_exception %5
       branch %6, bb4, bb3
-    bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
     bb3:
-      %8 = load var $3.err
-      %9 = const c33
-      %10 = get_prop %8, %9
-      %11 = const c34
-      %12 = get_prop %10, %11
-      %13 = is_exception %12
-      branch %13, bb6, bb5
+      %8 = const c43
+      %9 = const c44
+      %10 = call builtin.intrinsic_resolve(%8, %9, %5)
+      %11 = is_exception %10
+      branch %11, bb6, bb5
     bb4:
       %7 = call builtin.exception_value(%5)
       throw %7
     bb5:
-      %15 = call builtin.console.log(%12)
-      %16 = is_exception %15
-      branch %16, bb8, bb7
+      jump bb8
     bb6:
-      %14 = call builtin.exception_value(%12)
-      throw %14
+      %12 = call builtin.exception_value(%10)
+      throw %12
     bb7:
-      %18 = load var $3.err
-      %19 = const c35
-      %20 = get_prop %18, %19
-      %21 = const c36
-      %22 = get_elem %20, %21
-      %23 = is_exception %22
-      branch %23, bb10, bb9
+      %23 = phi [(bb11, %21), (bb12, %22)]
+      %24 = is_exception %23
+      branch %24, bb14, bb13
     bb8:
-      %17 = call builtin.exception_value(%15)
-      throw %17
+      %14 = phi [(bb1, %13), (bb5, %10)]
+      %15 = phi [(bb1, %13), (bb5, %5)]
+      %16 = load var $3.err
+      %17 = const c46
+      %18 = get_prop %16, %17
+      %19 = is_exception %18
+      branch %19, bb10, bb9
     bb9:
-      %25 = call builtin.console.log(%22)
-      %26 = is_exception %25
-      branch %26, bb12, bb11
+      branch %2, bb11, bb12
     bb10:
-      %24 = call builtin.exception_value(%22)
-      throw %24
+      %20 = call builtin.exception_value(%18)
+      throw %20
     bb11:
-      %28 = load var $3.err
-      %29 = const c37
-      %30 = get_prop %28, %29
-      %31 = const c38
-      %32 = get_elem %30, %31
-      %33 = is_exception %32
-      branch %33, bb14, bb13
+      %21 = call builtin.console.log(%18)
+      jump bb7
     bb12:
-      %27 = call builtin.exception_value(%25)
-      throw %27
+      %22 = call %14, this=%15, args=[%18]
+      jump bb7
     bb13:
-      %35 = call builtin.console.log(%32)
-      %36 = is_exception %35
-      branch %36, bb16, bb15
+      %26 = const c47
+      %27 = const c48
+      %28 = call builtin.intrinsic_pristine(%26, %27)
+      branch %28, bb15, bb16
     bb14:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %25 = call builtin.exception_value(%23)
+      throw %25
     bb15:
-      return
+      %39 = const c53
+      jump bb22
     bb16:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %29 = const c49
+      %30 = const c50
+      %31 = call builtin.intrinsic_resolve(%29, %30)
+      %32 = is_exception %31
+      branch %32, bb18, bb17
+    bb17:
+      %34 = const c51
+      %35 = const c52
+      %36 = call builtin.intrinsic_resolve(%34, %35, %31)
+      %37 = is_exception %36
+      branch %37, bb20, bb19
+    bb18:
+      %33 = call builtin.exception_value(%31)
+      throw %33
+    bb19:
+      jump bb22
+    bb20:
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb21:
+      %51 = phi [(bb25, %49), (bb26, %50)]
+      %52 = is_exception %51
+      branch %52, bb28, bb27
+    bb22:
+      %40 = phi [(bb15, %39), (bb19, %36)]
+      %41 = phi [(bb15, %39), (bb19, %31)]
+      %42 = load var $3.err
+      %43 = const c54
+      %44 = get_prop %42, %43
+      %45 = const c55
+      %46 = get_prop %44, %45
+      %47 = is_exception %46
+      branch %47, bb24, bb23
+    bb23:
+      branch %28, bb25, bb26
+    bb24:
+      %48 = call builtin.exception_value(%46)
+      throw %48
+    bb25:
+      %49 = call builtin.console.log(%46)
+      jump bb21
+    bb26:
+      %50 = call %40, this=%41, args=[%46]
+      jump bb21
+    bb27:
+      %54 = const c56
+      %55 = const c57
+      %56 = call builtin.intrinsic_pristine(%54, %55)
+      branch %56, bb29, bb30
+    bb28:
+      %53 = call builtin.exception_value(%51)
+      throw %53
+    bb29:
+      %67 = const c62
+      jump bb36
+    bb30:
+      %57 = const c58
+      %58 = const c59
+      %59 = call builtin.intrinsic_resolve(%57, %58)
+      %60 = is_exception %59
+      branch %60, bb32, bb31
+    bb31:
+      %62 = const c60
+      %63 = const c61
+      %64 = call builtin.intrinsic_resolve(%62, %63, %59)
+      %65 = is_exception %64
+      branch %65, bb34, bb33
+    bb32:
+      %61 = call builtin.exception_value(%59)
+      throw %61
+    bb33:
+      jump bb36
+    bb34:
+      %66 = call builtin.exception_value(%64)
+      throw %66
+    bb35:
+      %79 = phi [(bb39, %77), (bb40, %78)]
+      %80 = is_exception %79
+      branch %80, bb42, bb41
+    bb36:
+      %68 = phi [(bb29, %67), (bb33, %64)]
+      %69 = phi [(bb29, %67), (bb33, %59)]
+      %70 = load var $3.err
+      %71 = const c63
+      %72 = get_prop %70, %71
+      %73 = const c64
+      %74 = get_elem %72, %73
+      %75 = is_exception %74
+      branch %75, bb38, bb37
+    bb37:
+      branch %56, bb39, bb40
+    bb38:
+      %76 = call builtin.exception_value(%74)
+      throw %76
+    bb39:
+      %77 = call builtin.console.log(%74)
+      jump bb35
+    bb40:
+      %78 = call %68, this=%69, args=[%74]
+      jump bb35
+    bb41:
+      %82 = const c65
+      %83 = const c66
+      %84 = call builtin.intrinsic_pristine(%82, %83)
+      branch %84, bb43, bb44
+    bb42:
+      %81 = call builtin.exception_value(%79)
+      throw %81
+    bb43:
+      %95 = const c71
+      jump bb50
+    bb44:
+      %85 = const c67
+      %86 = const c68
+      %87 = call builtin.intrinsic_resolve(%85, %86)
+      %88 = is_exception %87
+      branch %88, bb46, bb45
+    bb45:
+      %90 = const c69
+      %91 = const c70
+      %92 = call builtin.intrinsic_resolve(%90, %91, %87)
+      %93 = is_exception %92
+      branch %93, bb48, bb47
+    bb46:
+      %89 = call builtin.exception_value(%87)
+      throw %89
+    bb47:
+      jump bb50
+    bb48:
+      %94 = call builtin.exception_value(%92)
+      throw %94
+    bb49:
+      %107 = phi [(bb53, %105), (bb54, %106)]
+      %108 = is_exception %107
+      branch %108, bb56, bb55
+    bb50:
+      %96 = phi [(bb43, %95), (bb47, %92)]
+      %97 = phi [(bb43, %95), (bb47, %87)]
+      %98 = load var $3.err
+      %99 = const c72
+      %100 = get_prop %98, %99
+      %101 = const c73
+      %102 = get_elem %100, %101
+      %103 = is_exception %102
+      branch %103, bb52, bb51
+    bb51:
+      branch %84, bb53, bb54
+    bb52:
+      %104 = call builtin.exception_value(%102)
+      throw %104
+    bb53:
+      %105 = call builtin.console.log(%102)
+      jump bb49
+    bb54:
+      %106 = call %96, this=%97, args=[%102]
+      jump bb49
+    bb55:
+      return
+    bb56:
+      %109 = call builtin.exception_value(%107)
+      throw %109
 
   fn @arrow_3 [js_name ""] [js_length 0] [captures: $0.rejectB, $0.rejectA] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
-      %0 = const c42
+      %0 = const c77
       %1 = load var $env
-      %2 = const c43
+      %2 = const c78
       %3 = get_prop %1, %2
-      %4 = const c44
+      %4 = const c79
       %5 = call %3, this=%0, args=[%4]
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = const c45
+      %8 = const c80
       %9 = load var $env
-      %10 = const c46
+      %10 = const c81
       %11 = get_prop %9, %10
-      %12 = const c47
+      %12 = const c82
       %13 = call %11, this=%8, args=[%12]
       %14 = is_exception %13
       branch %14, bb4, bb3
@@ -242,8 +429,8 @@ module {
       %30 = set_prop %26, %29, %28
       %32 = call builtin.promise.create_resolve_function(%23)
       %33 = call builtin.promise.create_reject_function(%23)
-      %77 = const c0
-      jump bb16
+      %95 = const c0
+      jump bb26
     bb1:
       store var $0.p1, %23
       %37 = new_promise
@@ -253,80 +440,118 @@ module {
       %42 = set_prop %39, %41, %40
       %44 = call builtin.promise.create_resolve_function(%37)
       %45 = call builtin.promise.create_reject_function(%37)
-      %70 = const c0
-      jump bb12
+      %88 = const c0
+      jump bb22
     bb2:
       %36 = call builtin.exception_value(%23)
       throw %36
     bb3:
       store var $0.p2, %37
       %49 = const c31
-      %50 = new_array(capacity=4)
-      %51 = load var $0.p1
-      call builtin.array.push(%50, %51)
-      %52 = load var $0.p2
-      call builtin.array.push(%50, %52)
-      %53 = call builtin.promise.any(%49, %50)
-      %54 = is_exception %53
-      branch %54, bb6, bb5
+      %50 = const c32
+      %51 = call builtin.intrinsic_pristine(%49, %50)
+      branch %51, bb5, bb6
     bb4:
       %48 = call builtin.exception_value(%37)
       throw %48
     bb5:
-      %56 = const c39
-      %57 = call builtin.promise.catch(%53, %56)
-      %58 = is_exception %57
-      branch %58, bb8, bb7
+      %62 = const c37
+      jump bb12
     bb6:
-      %55 = call builtin.exception_value(%53)
-      throw %55
+      %52 = const c33
+      %53 = const c34
+      %54 = call builtin.intrinsic_resolve(%52, %53)
+      %55 = is_exception %54
+      branch %55, bb8, bb7
     bb7:
-      %60 = const c40
-      %61 = load var $0.$global
-      %62 = const c41
-      %63 = get_prop %61, %62
-      %64 = const c48
-      %65 = load var $0.$shared_env
-      %66 = call builtin.create_closure(%64, %65)
-      %67 = call %63, this=%60, args=[%66]
-      %68 = is_exception %67
-      branch %68, bb10, bb9
+      %57 = const c35
+      %58 = const c36
+      %59 = call builtin.intrinsic_resolve(%57, %58, %54)
+      %60 = is_exception %59
+      branch %60, bb10, bb9
     bb8:
-      %59 = call builtin.exception_value(%57)
-      throw %59
+      %56 = call builtin.exception_value(%54)
+      throw %56
     bb9:
-      return
+      jump bb12
     bb10:
-      %69 = call builtin.exception_value(%67)
-      throw %69
+      %61 = call builtin.exception_value(%59)
+      throw %61
     bb11:
-      %47 = is_exception %37
-      branch %47, bb4, bb3
+      %71 = phi [(bb13, %69), (bb14, %70)]
+      %72 = is_exception %71
+      branch %72, bb16, bb15
     bb12:
-      %72 = const c27
-      %74 = set_prop %39, %72, %45
-      %75 = is_exception %74
-      branch %75, bb14, bb13
+      %63 = phi [(bb5, %62), (bb9, %59)]
+      %64 = phi [(bb5, %62), (bb9, %54)]
+      %65 = new_array(capacity=4)
+      %66 = load var $0.p1
+      call builtin.array.push(%65, %66)
+      %67 = load var $0.p2
+      call builtin.array.push(%65, %67)
+      branch %51, bb13, bb14
     bb13:
-      store var $2.reject, %70
+      %68 = const c38
+      %69 = call builtin.promise.any(%68, %65)
       jump bb11
     bb14:
-      %76 = call builtin.exception_value(%74)
-      store var $2.reject, %70
-      throw %76
+      %70 = call %63, this=%64, args=[%65]
+      jump bb11
     bb15:
+      %74 = const c74
+      %75 = call builtin.promise.catch(%71, %74)
+      %76 = is_exception %75
+      branch %76, bb18, bb17
+    bb16:
+      %73 = call builtin.exception_value(%71)
+      throw %73
+    bb17:
+      %78 = const c75
+      %79 = load var $0.$global
+      %80 = const c76
+      %81 = get_prop %79, %80
+      %82 = const c83
+      %83 = load var $0.$shared_env
+      %84 = call builtin.create_closure(%82, %83)
+      %85 = call %81, this=%78, args=[%84]
+      %86 = is_exception %85
+      branch %86, bb20, bb19
+    bb18:
+      %77 = call builtin.exception_value(%75)
+      throw %77
+    bb19:
+      return
+    bb20:
+      %87 = call builtin.exception_value(%85)
+      throw %87
+    bb21:
+      %47 = is_exception %37
+      branch %47, bb4, bb3
+    bb22:
+      %90 = const c27
+      %92 = set_prop %39, %90, %45
+      %93 = is_exception %92
+      branch %93, bb24, bb23
+    bb23:
+      store var $2.reject, %88
+      jump bb21
+    bb24:
+      %94 = call builtin.exception_value(%92)
+      store var $2.reject, %88
+      throw %94
+    bb25:
       %35 = is_exception %23
       branch %35, bb2, bb1
-    bb16:
-      %79 = const c22
-      %81 = set_prop %26, %79, %33
-      %82 = is_exception %81
-      branch %82, bb18, bb17
-    bb17:
-      store var $1.reject, %77
-      jump bb15
-    bb18:
-      %83 = call builtin.exception_value(%81)
-      store var $1.reject, %77
-      throw %83
+    bb26:
+      %97 = const c22
+      %99 = set_prop %26, %97, %33
+      %100 = is_exception %99
+      branch %100, bb28, bb27
+    bb27:
+      store var $1.reject, %95
+      jump bb25
+    bb28:
+      %101 = call builtin.exception_value(%99)
+      store var $1.reject, %95
+      throw %101
 }

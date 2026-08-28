@@ -55,29 +55,36 @@ module {
     c52 = string("$0.inner")
     c53 = undefined
     c54 = number(1)
-    c55 = number(5)
-    c56 = undefined
-    c57 = number(0)
-    c58 = number(1)
-    c59 = number(0)
-    c60 = functionref(@2)
-    c61 = number(7)
-    c62 = number(0)
-    c63 = number(0)
-    c64 = number(1)
-    c65 = bool(false)
-    c66 = number(2)
-    c67 = number(3)
-    c68 = number(4)
-    c69 = number(6)
+    c55 = number(1)
+    c56 = number(0)
+    c57 = number(1)
+    c58 = number(0)
+    c59 = number(1)
+    c60 = number(0)
+    c61 = undefined
+    c62 = number(5)
+    c63 = undefined
+    c64 = number(0)
+    c65 = number(1)
+    c66 = number(0)
+    c67 = functionref(@2)
+    c68 = number(7)
+    c69 = number(0)
     c70 = number(0)
-    c71 = undefined
+    c71 = number(1)
     c72 = bool(false)
-    c73 = functionref(@3)
-    c74 = undefined
-    c75 = string("$0.inner")
-    c76 = undefined
-    c77 = bool(true)
+    c73 = number(2)
+    c74 = number(3)
+    c75 = number(4)
+    c76 = number(6)
+    c77 = number(0)
+    c78 = undefined
+    c79 = bool(false)
+    c80 = functionref(@3)
+    c81 = undefined
+    c82 = string("$0.inner")
+    c83 = undefined
+    c84 = bool(true)
 
   fn @inner$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -173,8 +180,8 @@ module {
     bb1:
       %14 = const c50
       store var $3.$shared_env, %14
-      %43 = load var $3.$state
-      switch %43 [case c57 -> bb2, case c58 -> bb5], default bb12, exit bb13
+      %63 = load var $3.$state
+      switch %63 [case c64 -> bb2, case c65 -> bb5], default bb22, exit bb23
     bb2:
       %15 = const c51
       %16 = load var $3.$closure_env
@@ -206,66 +213,108 @@ module {
     bb7:
       %30 = load var $3.$resume_val
       store var $3.v, %30
-      %31 = load var $3.v
-      %32 = const c55
-      %33 = add %31, %32
-      %34 = is_exception %33
-      branch %34, bb9, bb8
+      %31 = const c55
+      %32 = const c56
+      %33 = call builtin.intrinsic_pristine(%31, %32)
+      branch %33, bb8, bb9
     bb8:
-      %37 = call builtin.console.log(%33)
-      %38 = is_exception %37
-      branch %38, bb11, bb10
+      %46 = const c61
+      jump bb15
     bb9:
-      %35 = call builtin.exception_value(%33)
-      %36 = load var $3.$promise
-      promise_reject %36, %35
-      return
+      %34 = const c57
+      %35 = const c58
+      %36 = call builtin.intrinsic_resolve(%34, %35)
+      %37 = is_exception %36
+      branch %37, bb11, bb10
     bb10:
-      %41 = const c56
-      %42 = load var $3.$promise
-      promise_resolve %42, %41
-      return
+      %40 = const c59
+      %41 = const c60
+      %42 = call builtin.intrinsic_resolve(%40, %41, %36)
+      %43 = is_exception %42
+      branch %43, bb13, bb12
     bb11:
-      %39 = call builtin.exception_value(%37)
-      %40 = load var $3.$promise
-      promise_reject %40, %39
+      %38 = call builtin.exception_value(%36)
+      %39 = load var $3.$promise
+      promise_reject %39, %38
       return
     bb12:
-      return
+      jump bb15
     bb13:
+      %44 = call builtin.exception_value(%42)
+      %45 = load var $3.$promise
+      promise_reject %45, %44
+      return
+    bb14:
+      %57 = phi [(bb18, %55), (bb19, %56)]
+      %58 = is_exception %57
+      branch %58, bb21, bb20
+    bb15:
+      %47 = phi [(bb8, %46), (bb12, %42)]
+      %48 = phi [(bb8, %46), (bb12, %36)]
+      %49 = load var $3.v
+      %50 = const c62
+      %51 = add %49, %50
+      %52 = is_exception %51
+      branch %52, bb17, bb16
+    bb16:
+      branch %33, bb18, bb19
+    bb17:
+      %53 = call builtin.exception_value(%51)
+      %54 = load var $3.$promise
+      promise_reject %54, %53
+      return
+    bb18:
+      %55 = call builtin.console.log(%51)
+      jump bb14
+    bb19:
+      %56 = call %47, this=%48, args=[%51]
+      jump bb14
+    bb20:
+      %61 = const c63
+      %62 = load var $3.$promise
+      promise_resolve %62, %61
+      return
+    bb21:
+      %59 = call builtin.exception_value(%57)
+      %60 = load var $3.$promise
+      promise_reject %60, %59
+      return
+    bb22:
+      return
+    bb23:
       unreachable
 
   fn @outer [needs_prototype] [js_name "outer"] [js_length 0] [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c59
+      %1 = const c66
       %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $4.arguments, %2
       %3 = new_promise
-      %4 = const c60
+      %4 = const c67
       %5 = load var $env
       %6 = call builtin.create_closure(%4, %5)
-      %7 = const c61
+      %7 = const c68
       %8 = call builtin.continuation.create(%6, %3, %7)
-      %9 = const c62
-      %10 = const c63
+      %9 = const c69
+      %10 = const c70
       call builtin.continuation.save_var(%8, %9, %10)
-      %11 = const c64
-      %12 = const c65
+      %11 = const c71
+      %12 = const c72
       call builtin.continuation.save_var(%8, %11, %12)
-      %13 = const c66
+      %13 = const c73
       call builtin.continuation.save_var(%8, %13, %3)
-      %14 = const c67
+      %14 = const c74
       call builtin.continuation.save_var(%8, %14, %5)
       %15 = load var $4.arguments
-      %16 = const c68
+      %16 = const c75
       call builtin.continuation.save_var(%8, %16, %15)
       %17 = load var $4.$this
-      %18 = const c69
+      %18 = const c76
       call builtin.continuation.save_var(%8, %18, %17)
-      %19 = const c70
-      %20 = const c71
-      %21 = const c72
+      %19 = const c77
+      %20 = const c78
+      %21 = const c79
       call builtin.async_function.resume(%6, %8, %19, %20, %21)
       return %3
 
@@ -315,19 +364,19 @@ module {
       store var $this, %20
       %21 = const c43
       store var $0.inner, %21
-      %22 = const c73
-      %23 = const c74
+      %22 = const c80
+      %23 = const c81
       store var $0.$shared_env, %23
       %24 = new_object(capacity=1)
       %25 = load var $env
       set_proto %24, %25
       store var $0.$shared_env, %24
       %26 = load var $0.inner
-      %27 = const c75
+      %27 = const c82
       %28 = set_prop %24, %27, %26
       %29 = call builtin.create_closure(%22, %24)
       store var $0.outer, %29
-      %30 = const c76
+      %30 = const c83
       %31 = load var $0.outer
       %32 = call %31, this=%30
       %33 = is_exception %32
