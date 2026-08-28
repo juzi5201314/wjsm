@@ -1,0 +1,31 @@
+exit_code: 0
+--- stdout ---
+function function
+true true
+false true
+cancel true true true cancel 0
+getReader true true true getReader 0
+pipeThrough true true true pipeThrough 1
+pipeTo true true true pipeTo 1
+function undefined true true
+get locked 0
+false true true
+two false
+false
+TypeError Value of "this" must be of type ReadableStream
+TypeError Value of "this" must be of type ReadableStream
+cancel reject: TypeError Value of "this" must be of type ReadableStream
+function
+true true
+false true
+get locked undefined
+TypeError Value of "this" must be of type WritableStream
+abort reject: TypeError Value of "this" must be of type WritableStream
+function undefined true true
+get readable get writable
+true true
+true true
+TypeError Value of "this" must be of type TransformStream
+TypeError Value of "this" must be of type TransformStream
+done streams proto identity
+--- stderr ---

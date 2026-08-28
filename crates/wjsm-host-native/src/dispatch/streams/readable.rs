@@ -176,27 +176,6 @@ pub(super) fn create_stream(
     Some((stream_object, controller_object))
 }
 
-pub(super) fn readable_property(
-    state: &NativeAgentState,
-    handle: u32,
-    key: &str,
-) -> Option<StreamProperty> {
-    let stream = state.streams.readables.get(handle)?;
-    let method = match key {
-        "cancel" => ReadableMethod::Cancel,
-        "getReader" => ReadableMethod::GetReader,
-        "pipeThrough" => ReadableMethod::PipeThrough,
-        "pipeTo" => ReadableMethod::PipeTo,
-        "locked" => {
-            return Some(StreamProperty::Value(value::encode_bool(stream.locked)));
-        }
-        _ => return None,
-    };
-    Some(StreamProperty::Callable(StreamCallable::Readable(
-        handle, method,
-    )))
-}
-
 pub(super) fn reader_property(
     state: &NativeAgentState,
     handle: u32,
@@ -213,9 +192,7 @@ pub(super) fn reader_property(
         "releaseLock" => ReaderMethod::ReleaseLock,
         _ => return None,
     };
-    Some(StreamProperty::Callable(StreamCallable::Reader(
-        handle, method,
-    )))
+    Some(StreamProperty::Callable(StreamCallable::Reader(method)))
 }
 
 pub(super) fn controller_property(
@@ -232,18 +209,15 @@ pub(super) fn controller_property(
                 .map_or_else(value::encode_null, |request| request.object),
         )),
         "close" => Some(StreamProperty::Callable(StreamCallable::Controller(
-            handle,
             ControllerMethod::Close,
         ))),
         "desiredSize" => Some(StreamProperty::Value(value::encode_f64(
             controller.high_water_mark - controller.queue.len() as f64,
         ))),
         "enqueue" => Some(StreamProperty::Callable(StreamCallable::Controller(
-            handle,
             ControllerMethod::Enqueue,
         ))),
         "error" => Some(StreamProperty::Callable(StreamCallable::Controller(
-            handle,
             ControllerMethod::Error,
         ))),
         _ => None,
@@ -258,7 +232,6 @@ pub(super) fn byob_property(
     let request = state.streams.byob_requests.get(handle)?;
     match key {
         "respond" => Some(StreamProperty::Callable(StreamCallable::Byob(
-            handle,
             ByobMethod::Respond,
         ))),
         "view" => Some(StreamProperty::Value(request.view)),
@@ -266,10 +239,10 @@ pub(super) fn byob_property(
     }
 }
 
-pub(super) fn async_iterator_property(handle: u32, key: &str) -> Option<StreamProperty> {
+pub(super) fn async_iterator_property(key: &str) -> Option<StreamProperty> {
     let callable = match key {
-        "next" => StreamCallable::AsyncIteratorNext(handle),
-        "return" => StreamCallable::AsyncIteratorReturn(handle),
+        "next" => StreamCallable::AsyncIteratorNext,
+        "return" => StreamCallable::AsyncIteratorReturn,
         _ => return None,
     };
     Some(StreamProperty::Callable(callable))

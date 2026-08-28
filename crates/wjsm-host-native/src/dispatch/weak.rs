@@ -719,22 +719,11 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
             | NativeCallableKind::PromiseReject(handle) => {
                 add(owner, value::encode_object_handle(*handle));
             }
-            NativeCallableKind::ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
+            NativeCallableKind::            ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
                 add(owner, value::encode_proxy_handle(*handle));
             }
-            // 提取为独立值的 fetch/stream 方法以侧表槽位编码，方法值存活期间
-            // 必须钉住对应包装对象，否则槽位清扫复用后旧方法操作新 owner。
-            NativeCallableKind::Fetch(callable) => {
-                if let Some(target) = super::fetch::callable_gc_target(&state.fetch, *callable) {
-                    add(owner, target);
-                }
-            }
-            NativeCallableKind::Stream(callable) => {
-                if let Some(target) = super::streams::callable_gc_target(&state.streams, *callable)
-                {
-                    add(owner, target);
-                }
-            }
+            // fetch/stream 方法值不再携带实例句柄（按实际 this 分派），
+            // 无须为其建钉扎边。
             _ => {}
         }
     }

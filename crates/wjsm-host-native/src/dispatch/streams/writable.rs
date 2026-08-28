@@ -209,26 +209,6 @@ fn create_writable(
     Some((object, controller_object))
 }
 
-pub(super) fn writable_property(
-    state: &NativeAgentState,
-    handle: u32,
-    key: &str,
-) -> Option<StreamProperty> {
-    let stream = state.streams.writables.get(handle)?;
-    let method = match key {
-        "abort" => WritableMethod::Abort,
-        "close" => WritableMethod::Close,
-        "getWriter" => WritableMethod::GetWriter,
-        "locked" => {
-            return Some(StreamProperty::Value(value::encode_bool(stream.locked)));
-        }
-        _ => return None,
-    };
-    Some(StreamProperty::Callable(StreamCallable::Writable(
-        handle, method,
-    )))
-}
-
 pub(super) fn writer_property(
     state: &NativeAgentState,
     handle: u32,
@@ -237,11 +217,9 @@ pub(super) fn writer_property(
     let writer = state.streams.writers.get(handle)?;
     match key {
         "abort" => Some(StreamProperty::Callable(StreamCallable::Writer(
-            handle,
             WriterMethod::Abort,
         ))),
         "close" => Some(StreamProperty::Callable(StreamCallable::Writer(
-            handle,
             WriterMethod::Close,
         ))),
         "closed" => Some(StreamProperty::Value(value::encode_object_handle(
@@ -252,11 +230,9 @@ pub(super) fn writer_property(
             writer.ready_promise,
         ))),
         "releaseLock" => Some(StreamProperty::Callable(StreamCallable::Writer(
-            handle,
             WriterMethod::ReleaseLock,
         ))),
         "write" => Some(StreamProperty::Callable(StreamCallable::Writer(
-            handle,
             WriterMethod::Write,
         ))),
         _ => None,
@@ -271,7 +247,7 @@ pub(super) fn controller_property(
     let controller = state.streams.writable_controllers.get(handle)?;
     match key {
         "error" => Some(StreamProperty::Callable(
-            StreamCallable::WritableController(handle, WritableControllerMethod::Error),
+            StreamCallable::WritableController(WritableControllerMethod::Error),
         )),
         "signal" => Some(StreamProperty::Value(controller.signal)),
         _ => None,

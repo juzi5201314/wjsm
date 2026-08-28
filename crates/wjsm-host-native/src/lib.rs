@@ -72,6 +72,15 @@ pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERA
     | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const BUILTIN_PROTOTYPE_PROPERTY_FLAGS: u32 =
     wjsm_ir::constants::FLAG_CONFIGURABLE as u32 | wjsm_ir::constants::FLAG_WRITABLE as u32;
+/// Web IDL 常规操作（方法）在接口 prototype 上的属性描述符：
+/// { writable: true, enumerable: true, configurable: true }。
+pub(crate) const WEB_IDL_METHOD_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32
+    | wjsm_ir::constants::FLAG_ENUMERABLE as u32
+    | wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
+/// Web IDL attribute 访问器在接口 prototype 上的属性描述符：
+/// { enumerable: true, configurable: true }。
+pub(crate) const WEB_IDL_ACCESSOR_FLAGS: u32 =
+    wjsm_ir::constants::FLAG_ENUMERABLE as u32 | wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 pub(crate) const FUNCTION_PROTOTYPE_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_METADATA_FLAGS: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 
@@ -283,6 +292,8 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::ProcessCpuUsage => Some(("cpuUsage", 1)),
         NativeCallableKind::Intl(kind) => dispatch::intl::metadata(kind),
         NativeCallableKind::DateMethod(method) => dispatch::date::method_metadata(method),
+        NativeCallableKind::Fetch(callable) => dispatch::fetch::metadata(callable),
+        NativeCallableKind::Stream(callable) => dispatch::streams::metadata(callable),
         _ => None,
     }
 }
@@ -2429,12 +2440,7 @@ impl NativeAgentState {
             };
         }
         if let Some(property) = dispatch::fetch::property(self, receiver, &key) {
-            return match property {
-                dispatch::fetch::FetchProperty::Callable(callable) => {
-                    self.native_callable(NativeCallableKind::Fetch(callable))
-                }
-                dispatch::fetch::FetchProperty::Value(value) => Some(value),
-            };
+            return Some(property);
         }
         if let Some(property) = dispatch::streams::property(self, receiver, &key) {
             return match property {
@@ -4872,8 +4878,9 @@ impl NativeAgentState {
     }
 
     /// fetch / Streams / AbortController 构造器的 `prototype` 对象：懒创建并
-    /// 缓存，仅安装不可枚举 `constructor` 数据属性。实例方法仍经侧表虚拟属性
-    /// 解析，此对象的职责是承载 instanceof 的原型链身份。
+    /// 缓存，安装不可枚举 `constructor` 数据属性与已实现的方法/访问器
+    ///（Web IDL 描述符，按实际 this 分派），承载 instanceof 的原型链身份
+    /// 与实例方法的共享身份。
     fn ensure_web_prototype(&mut self, constructor: i64, builtin: wjsm_ir::Builtin) -> Option<i64> {
         if let Some(prototype) = self.web_prototypes.get(&builtin).copied() {
             return Some(prototype);
@@ -4890,8 +4897,66 @@ impl NativeAgentState {
                 BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
             )
             .ok()?;
+        // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会
+        // 回收尚未挂满成员的 prototype 对象。
         self.web_prototypes.insert(builtin, prototype);
+        dispatch::fetch::install_prototype_members(self, prototype, builtin)?;
+        dispatch::streams::install_prototype_members(self, prototype, builtin)?;
         Some(prototype)
+    }
+
+    /// 把方法可调用值安装为 prototype 的自有数据属性（Web IDL 方法描述符），
+    /// 并显式挂接 %Function.prototype% 使其原型链与普通内建函数一致。
+    pub(crate) fn install_web_prototype_method(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        kind: NativeCallableKind,
+    ) -> Option<()> {
+        let callable = self.native_callable(kind)?;
+        self.attach_function_prototype(callable);
+        let key = self.intern_property_string(name.to_owned().into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                key,
+                callable as u64,
+                WEB_IDL_METHOD_FLAGS,
+            )
+            .ok()
+    }
+
+    /// 把 getter 可调用值安装为 prototype 的自有访问器属性（Web IDL
+    /// readonly attribute 描述符，无 setter）。
+    pub(crate) fn install_web_prototype_getter(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        kind: NativeCallableKind,
+    ) -> Option<()> {
+        let getter = self.native_callable(kind)?;
+        self.attach_function_prototype(getter);
+        let key = self.intern_property_string(name.to_owned().into())?;
+        self.gc
+            .heap()
+            .define_accessor_property_with_flags(
+                value::decode_handle(prototype),
+                key,
+                getter as u64,
+                value::encode_undefined() as u64,
+                WEB_IDL_ACCESSOR_FLAGS,
+            )
+            .ok()
+    }
+
+    /// 给宿主合成的可调用值挂显式 [[Prototype]] = %Function.prototype%。
+    fn attach_function_prototype(&mut self, callable: i64) {
+        if let Some(prototype) = self.native_callable(NativeCallableKind::FunctionPrototype) {
+            self.callable_prototypes
+                .entry(callable)
+                .or_insert(prototype);
+        }
     }
 
     /// builtin 是否为 fetch / Streams / AbortController 家族的全局构造器
@@ -6114,7 +6179,7 @@ unsafe extern "C" fn native_callable_call(
             }
         }
         NativeCallableKind::Fetch(callable) => {
-            dispatch::fetch::call(ctx, state, callable, &arguments)
+            dispatch::fetch::call(ctx, state, callable, this_value, &arguments)
         }
         NativeCallableKind::WebEncoding(callable) => {
             dispatch::web_encoding::call(ctx, state, callable, this_value, &arguments)
@@ -6345,7 +6410,7 @@ unsafe extern "C" fn native_callable_call(
                 .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
         }
         NativeCallableKind::Stream(callable) => {
-            dispatch::streams::call(ctx, state, callable, &arguments)
+            dispatch::streams::call(ctx, state, callable, this_value, &arguments)
         }
         NativeCallableKind::ProcessOn => {
             dispatch::node_child_process::process_on(ctx, state, this_value, &arguments)

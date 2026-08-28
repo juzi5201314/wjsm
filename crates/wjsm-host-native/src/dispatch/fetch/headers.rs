@@ -1,12 +1,10 @@
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty, HeadersMethod};
+use super::{FetchObjectKind, HeadersMethod};
 use crate::NativeAgentState;
 
 pub(super) struct HeadersState {
-    /// 包装对象；供 GC 边图把提取的实例方法钉到 owner 上。
-    pub(super) object: i64,
     pub(super) entries: Vec<(String, Vec<String>)>,
 }
 
@@ -62,10 +60,7 @@ fn create(state: &mut NativeAgentState, entries: Vec<(String, Vec<String>)>) -> 
     state
         .set_web_instance_prototype(object, wjsm_ir::Builtin::HeadersConstructor)
         .ok()?;
-    let handle = state
-        .fetch
-        .headers
-        .insert(HeadersState { object, entries })?;
+    let handle = state.fetch.headers.insert(HeadersState { entries })?;
     super::register_object(state, object, FetchObjectKind::Headers(handle));
     Some(object)
 }
@@ -188,21 +183,6 @@ fn collect_sequence(
         append_entry(&mut entries, name, value);
     }
     Ok(entries)
-}
-
-pub(super) fn property(state: &NativeAgentState, handle: u32, key: &str) -> Option<FetchProperty> {
-    state.fetch.headers.get(handle)?;
-    let method = match key {
-        "append" => HeadersMethod::Append,
-        "delete" => HeadersMethod::Delete,
-        "get" => HeadersMethod::Get,
-        "has" => HeadersMethod::Has,
-        "set" => HeadersMethod::Set,
-        _ => return None,
-    };
-    Some(FetchProperty::Callable(FetchCallable::Headers(
-        handle, method,
-    )))
 }
 
 pub(super) fn call(
