@@ -2233,7 +2233,9 @@ fn intrinsic_iterator_source(
             super::super::NativeIteratorSource::Array(handle),
             super::super::NativeIteratorKind::Values,
         )),
-        wjsm_ir::Builtin::IteratorFrom if let Some(text) = primitive_string(state, source) => {
+        wjsm_ir::Builtin::IteratorFrom | wjsm_ir::Builtin::StringIterator
+            if let Some(text) = primitive_string(state, source) =>
+        {
             Some((
                 super::super::NativeIteratorSource::String(text),
                 super::super::NativeIteratorKind::Values,

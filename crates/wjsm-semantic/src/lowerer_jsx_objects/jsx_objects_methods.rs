@@ -110,6 +110,8 @@ impl Lowerer {
                         block = continuation;
                         // getter 的 length 恒为 0（无形参）；name 为 `get x`。
                         self.set_function_js_metadata(function.function_id, None, 0);
+                        let source_text = self.span_source_text(getter.span).map(str::to_owned);
+                        self.set_function_source_text(function.function_id, source_text);
                         self.apply_method_js_name(
                             block,
                             function.function_id,
@@ -159,6 +161,8 @@ impl Lowerer {
                             None,
                             Self::expected_argument_count(std::slice::from_ref(&*setter.param)),
                         );
+                        let source_text = self.span_source_text(setter.span).map(str::to_owned);
+                        self.set_function_source_text(function.function_id, source_text);
                         self.apply_method_js_name(
                             block,
                             function.function_id,
@@ -208,6 +212,9 @@ impl Lowerer {
                             None,
                             Self::expected_param_count(&method.function.params),
                         );
+                        let source_text =
+                            self.span_source_text(method.span()).map(str::to_owned);
+                        self.set_function_source_text(function.function_id, source_text);
                         self.apply_method_js_name(
                             block,
                             function.function_id,

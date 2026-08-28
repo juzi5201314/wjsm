@@ -591,6 +591,9 @@ impl Lowerer {
         if let Some(span) = self.span_to_source_span(fn_decl.span()) {
             wrapper_ir_function.set_source_span(span);
         }
+        if let Some(text) = self.span_source_text(fn_decl.span()) {
+            wrapper_ir_function.set_source_text(text);
+        }
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
         if let MethodSuperBinding::Static(home) = method_super {

@@ -119,8 +119,33 @@ pub(super) fn dispatch_function(
             set_runtime_function_name(ctx, state, *function, *key, *prefix)
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
+        Builtin::FunctionToString => {
+            let Some(&receiver) = args.first() else {
+                return Some(fail_dispatch(ctx));
+            };
+            function_to_string(ctx, state, receiver)
+        }
         _ => return None,
     })
+}
+
+/// `Function.prototype.toString`（ES §20.2.3.5）：this 非 callable 抛 TypeError
+/// （步骤 5，文案对齐 V8）；其余按 [[SourceText]] / NativeFunction 形态返回。
+fn function_to_string(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) -> i64 {
+    let receiver = value::strip_gc_color(receiver);
+    if !state.is_callable_value(receiver) {
+        return type_error(
+            ctx,
+            state,
+            "Function.prototype.toString requires that 'this' be a Function",
+        );
+    }
+    let Some(text) = state.callable_to_string_source(receiver) else {
+        return fail_dispatch(ctx);
+    };
+    state
+        .intern_text(text, value::TAG_STRING)
+        .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
 /// SetFunctionName（ES §10.2.9）的运行时形态：计算键在 ToPropertyKey 之后才

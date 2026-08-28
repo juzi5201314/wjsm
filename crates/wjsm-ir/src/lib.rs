@@ -803,6 +803,12 @@ pub struct Function {
     /// ExpectedArgumentCount——首个带默认值或 rest 的形参之前的形参个数。
     /// None 表示按 IR 形参槽数推导（`params.len() - $env/$this 两固定槽`）。
     js_length: Option<u32>,
+    /// [[SourceText]]（ES §10.2 表 30）：函数定义匹配的原始源码片段，
+    /// `Function.prototype.toString`（ES §20.2.3.5 步骤 2）返回该文本。
+    /// None 表示宿主无源文本（HostHasSourceTextAvailable=false），toString
+    /// 回退 NativeFunction 形态。仅 JS 可见函数（wrapper/普通函数）携带；
+    /// generator/async 状态机内部体函数不冗余存储。
+    source_text: Option<String>,
 }
 impl Function {
     pub fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
@@ -821,6 +827,7 @@ impl Function {
             class_ctor_name: None,
             js_name: None,
             js_length: None,
+            source_text: None,
         }
     }
 
@@ -991,6 +998,15 @@ impl Function {
         self.js_length = Some(length);
     }
 
+    /// [[SourceText]]（None = 宿主无源文本，toString 走 NativeFunction 形态）。
+    pub fn source_text(&self) -> Option<&str> {
+        self.source_text.as_deref()
+    }
+
+    pub fn set_source_text(&mut self, text: impl Into<String>) {
+        self.source_text = Some(text.into());
+    }
+
     /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。
     pub fn known_callee_vars(&self) -> &std::collections::HashMap<String, FunctionId> {
         &self.known_callee_vars
@@ -1065,6 +1081,9 @@ impl Function {
         }
         if let Some(length) = self.js_length {
             let _ = write!(out, " [js_length {length}]");
+        }
+        if let Some(text) = &self.source_text {
+            let _ = write!(out, " [source_text {text:?}]");
         }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");

@@ -118,6 +118,14 @@ impl Lowerer {
         }
     }
 
+    /// 回填已入模函数的 [[SourceText]]：方法/访问器等定义点在函数入模后才知道
+    /// 准确的 MethodDefinition 文本（含 `static` 剥离），此处覆盖通用路径的值。
+    pub(crate) fn set_function_source_text(&mut self, function_id: FunctionId, text: Option<String>) {
+        if let (Some(function), Some(text)) = (self.module.function_mut(function_id), text) {
+            function.set_source_text(text);
+        }
+    }
+
     /// 发射运行时 SetFunctionName（ES §10.2.9）：`key_value` 为 ToPropertyKey
     /// 之后的键（字符串 / symbol / 数字），宿主按 symbol description 与前缀
     /// 规则合成 `name` 并写入 callable 侧表。

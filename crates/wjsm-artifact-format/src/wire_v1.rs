@@ -352,6 +352,13 @@ fn encode_function(encoder: &mut Encoder, function: &Function) -> Result<(), Art
             encoder.u32(length);
         }
     }
+    match function.source_text() {
+        None => encoder.bool(false),
+        Some(text) => {
+            encoder.bool(true);
+            encoder.string(text)?;
+        }
+    }
     encoder.len(function.blocks().len())?;
     for block in function.blocks() {
         encode_block(encoder, block)?;
@@ -394,6 +401,9 @@ fn decode_function(
     }
     if decoder.bool()? {
         function.set_js_length(decoder.u32()?);
+    }
+    if decoder.bool()? {
+        function.set_source_text(decoder.string()?);
     }
     let block_count = decoder.count(limits.max_blocks_per_function)?;
     for _ in 0..block_count {
