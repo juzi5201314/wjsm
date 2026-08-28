@@ -99,7 +99,7 @@ impl Lowerer {
         }
         let ctor_param_pats: Vec<&swc_ast::Pat> = ctor_param_pats_owned.iter().collect();
         let param_ir_names =
-            self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id)?;
+            self.build_param_ir_names_impl(&ctor_param_pats, env_scope_id, this_scope_id, false)?;
         // 形参 IR 名此时才确定，回填成 (形参绑定, 字段名)；绑定携带作用域
         // id，箭头 super() 站点可经捕获链读取外层构造器帧的形参。
         let param_prop_fields: Vec<(CapturedBinding, String)> = param_prop_slots

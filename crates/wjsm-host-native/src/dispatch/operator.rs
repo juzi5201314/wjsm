@@ -318,6 +318,17 @@ fn instance_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
             &format!("Function has non-object prototype '{rendered}' in instanceof check"),
         );
     }
+    // 左操作数是可调用值时，其默认原型链经 %Function.prototype% →
+    // %Object.prototype%（见 prototype_chain_contains_value）；两个 intrinsic
+    // 都是惰性分配，先确保存在，避免链遍历因尚未分配而漏判。
+    if value::is_callable(*object)
+        && (state
+            .native_callable(NativeCallableKind::FunctionPrototype)
+            .is_none()
+            || state.ensure_intrinsic_prototypes().is_err())
+    {
+        return fail_dispatch(ctx);
+    }
     value::encode_bool(state.prototype_chain_contains_value(*object, prototype))
 }
 

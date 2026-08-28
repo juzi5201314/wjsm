@@ -16,7 +16,7 @@ struct WithStrictValidator {
 }
 
 /// 函数体指令序言中是否含 `"use strict"`（遇到首个非指令语句即停）。
-fn stmts_have_use_strict(stmts: &[swc_ast::Stmt]) -> bool {
+pub(crate) fn stmts_have_use_strict(stmts: &[swc_ast::Stmt]) -> bool {
     for stmt in stmts {
         let swc_ast::Stmt::Expr(expr_stmt) = stmt else {
             break;
