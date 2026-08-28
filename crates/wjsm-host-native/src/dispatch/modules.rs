@@ -37,7 +37,10 @@ struct CjsModuleRecord {
 pub(crate) struct NativeScopeBinding {
     pub(crate) value: i64,
     pub(crate) initialized: bool,
-    pub(crate) constant: bool,
+    /// 不可变绑定及其 S 位（CreateImmutableBinding 的 strict 参数）：
+    /// None = 可变；Some(true) = const（写恒 TypeError）；Some(false) =
+    /// 具名函数表达式自身名字（严格写 TypeError、非严格写静默忽略）。
+    pub(crate) immutable: Option<bool>,
 }
 
 /// with 对象环境层（§9.1.1.2）：`object` 为 with 对象；`inner_names` 为声明于
@@ -67,6 +70,9 @@ pub(crate) enum ScopeBindingRead {
 pub(crate) enum ScopeBindingWrite {
     Missing,
     Constant,
+    /// 非严格不可变绑定（S=false）：写入语义随写点严格性分流，
+    /// 严格代码 TypeError、非严格代码静默忽略。
+    SloppyImmutable,
     Updated,
 }
 
@@ -127,12 +133,19 @@ pub(crate) fn scope_record_add(
     // 运行时 TDZ 哨兵优先于静态标志：跨函数前向引用的绑定在 lowering 期无法
     // 静态判定初始化状态，语义层传 is_tdz=0 并让此处按当前 env 值动态判定。
     let initialized = initialized == 0 && !value::is_uninitialized(stored);
+    // constant 实参为 NaN-box 编码的数字，标记不可变形态：0 = 可变，
+    // 1 = const（S=true），2 = 具名函数表达式自身名字（S=false）。
+    let immutable = match value::decode_f64(constant) as i64 {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    };
     scope.bindings.insert(
         key,
         NativeScopeBinding {
             value: stored,
             initialized,
-            constant: constant != 0,
+            immutable,
         },
     );
     true
@@ -154,8 +167,10 @@ pub(crate) fn scope_record_set(
     else {
         return ScopeBindingWrite::Missing;
     };
-    if binding.constant && binding.initialized {
-        return ScopeBindingWrite::Constant;
+    match binding.immutable {
+        Some(true) if binding.initialized => return ScopeBindingWrite::Constant,
+        Some(false) if binding.initialized => return ScopeBindingWrite::SloppyImmutable,
+        _ => {}
     }
     binding.value = stored;
     binding.initialized = true;

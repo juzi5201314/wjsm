@@ -27,6 +27,120 @@ impl Lowerer {
         );
     }
 
+    /// generator / async generator 表达式的名字入场：具名时压入自身名字作用
+    /// 域与 funcEnv 帧（§15.5.5 / §15.8.4），匿名时在外层作用域声明临时名供
+    /// wrapper 存取。返回 `(承载 wrapper 的绑定名, 具名作用域 id)`。
+    fn enter_wrapper_expr_name(
+        &mut self,
+        fn_expr: &swc_ast::FnExpr,
+        block: &mut BasicBlockId,
+        temp_name: &str,
+    ) -> Result<(String, Option<usize>), LoweringError> {
+        if let Some(ident) = &fn_expr.ident {
+            let name = ident.sym.to_string();
+            let scope_id = self.begin_fn_expr_name_scope(&name, block, fn_expr.span())?;
+            Ok((name, Some(scope_id)))
+        } else {
+            let _ = self
+                .scopes
+                .declare(temp_name, VarKind::Let, true)
+                .map_err(|msg| self.error(fn_expr.span(), msg))?;
+            Ok((temp_name.to_string(), None))
+        }
+    }
+
+    /// 以 `name` 为 ident 构造复用声明路径的 fake FnDecl。
+    fn wrapper_expr_fake_decl(fn_expr: &swc_ast::FnExpr, name: &str) -> swc_ast::FnDecl {
+        swc_ast::FnDecl {
+            ident: swc_ast::Ident::new(
+                name.to_string().into(),
+                fn_expr.span(),
+                swc_core::common::SyntaxContext::empty(),
+            ),
+            declare: false,
+            function: fn_expr.function.clone(),
+        }
+    }
+
+    /// 在外层函数物化 wrapper 闭包值：无捕获时直接用 FunctionRef 常量，
+    /// 有捕获时经共享 env 创建闭包。返回 `(闭包值, 延续块)`。
+    fn materialize_wrapper_closure(
+        &mut self,
+        block: BasicBlockId,
+        wrapper_fn_id: FunctionId,
+        captured: &[CapturedBinding],
+        span: Span,
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
+        let wrapper_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let wrapper_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: wrapper_ref_val,
+                constant: wrapper_ref_const,
+            },
+        );
+        if captured.is_empty() {
+            return Ok((wrapper_ref_val, block));
+        }
+        let env_val = self.ensure_shared_env(block, captured, span)?;
+        let closure_block = self.resolve_store_block(block);
+        let closure_val = self.alloc_value();
+        self.current_function.append_instruction(
+            closure_block,
+            Instruction::CallBuiltin {
+                dest: Some(closure_val),
+                builtin: Builtin::CreateClosure,
+                args: vec![wrapper_ref_val, env_val],
+            },
+        );
+        Ok((closure_val, closure_block))
+    }
+
+    /// generator / async generator 表达式收尾：具名时 wrapper 闭包写入
+    /// funcEnv 自有属性（InitializeBinding）后直接作为表达式值并弹出名字
+    /// 作用域；匿名时经外层临时名的声明路径存取。
+    fn store_and_load_wrapper_expr(
+        &mut self,
+        fn_expr: &swc_ast::FnExpr,
+        block: BasicBlockId,
+        name: &str,
+        self_name_scope: Option<usize>,
+        wrapper_fn_id: FunctionId,
+        captured: &[CapturedBinding],
+    ) -> Result<ValueId, LoweringError> {
+        if let Some(scope_id) = self_name_scope {
+            let (callee_val, callee_block) =
+                self.materialize_wrapper_closure(block, wrapper_fn_id, captured, fn_expr.span())?;
+            let end_block = self.finish_fn_expr_name_scope(callee_block, name, scope_id, callee_val);
+            self.expr_merge_block = Some(end_block);
+            return Ok(callee_val);
+        }
+        let flow = self.store_wrapper_in_outer_scope(
+            StmtFlow::Open(block),
+            name,
+            wrapper_fn_id,
+            captured,
+            fn_expr.span(),
+        )?;
+        let load_block = self.ensure_open(flow)?;
+        let (scope_id, _) = self
+            .scopes
+            .lookup(name)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let callee = self.alloc_value();
+        self.current_function.append_instruction(
+            load_block,
+            Instruction::LoadVar {
+                dest: callee,
+                name: format!("${scope_id}.{name}"),
+            },
+        );
+        Ok(callee)
+    }
+
     /// Lower an anonymous function expression `function(...) { ... }`.
     /// Returns a ValueId for the FunctionRef constant.
     pub(crate) fn lower_fn_expr(
@@ -36,95 +150,62 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         // NamedEvaluation 提示入口即取走：嵌套表达式降级不得再消费。
         let named_eval = self.named_eval_hint.take();
+        let mut outer_block = block;
         if fn_expr.function.is_async && fn_expr.function.is_generator {
-            // async generator 表达式复用声明路径（与同步 generator 表达式的临时名技巧一致）。
-            let temp_name = format!("$__wjsm_async_gen_expr_{}", self.module.functions().len());
-            let _ = self
-                .scopes
-                .declare(&temp_name, VarKind::Let, true)
-                .map_err(|msg| self.error(fn_expr.span(), msg))?;
-            let fake_decl = swc_ast::FnDecl {
-                ident: swc_ast::Ident::new(
-                    temp_name.clone().into(),
-                    fn_expr.span(),
-                    swc_core::common::SyntaxContext::empty(),
-                ),
-                declare: false,
-                function: fn_expr.function.clone(),
-            };
+            // async generator 表达式复用声明路径：具名时真名绑定于 funcEnv
+            // （体内自引用可解析、对外不可见），匿名沿用外层作用域临时名。
+            let (name, self_name_scope) = self.enter_wrapper_expr_name(
+                fn_expr,
+                &mut outer_block,
+                &format!("$__wjsm_async_gen_expr_{}", self.module.functions().len()),
+            )?;
+            let fake_decl = Self::wrapper_expr_fake_decl(fn_expr, &name);
             let (wrapper_fn_id, captured) =
                 self.lower_async_gen_function(&fake_decl, MethodSuperBinding::None)?;
             self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
-            let flow = self.store_wrapper_in_outer_scope(
-                StmtFlow::Open(block),
-                &temp_name,
+            return self.store_and_load_wrapper_expr(
+                fn_expr,
+                outer_block,
+                &name,
+                self_name_scope,
                 wrapper_fn_id,
                 &captured,
-                fn_expr.span(),
-            )?;
-            let load_block = self.ensure_open(flow)?;
-            let (scope_id, _) = self
-                .scopes
-                .lookup(&temp_name)
-                .map_err(|msg| self.error(fn_expr.span(), msg))?;
-            let callee = self.alloc_value();
-            self.current_function.append_instruction(
-                load_block,
-                Instruction::LoadVar {
-                    dest: callee,
-                    name: format!("${scope_id}.{temp_name}"),
-                },
             );
-            return Ok(callee);
         }
         if fn_expr.function.is_async {
             self.named_eval_hint = named_eval;
             return self.lower_async_fn_expr(fn_expr, block);
         }
         if fn_expr.function.is_generator {
-            let temp_name = format!("$__wjsm_gen_expr_{}", self.module.functions().len());
-            let _ = self
-                .scopes
-                .declare(&temp_name, VarKind::Let, true)
-                .map_err(|msg| self.error(fn_expr.span(), msg))?;
-            let fake_decl = swc_ast::FnDecl {
-                ident: swc_ast::Ident::new(
-                    temp_name.clone().into(),
-                    fn_expr.span(),
-                    swc_core::common::SyntaxContext::empty(),
-                ),
-                declare: false,
-                function: fn_expr.function.clone(),
-            };
+            let (name, self_name_scope) = self.enter_wrapper_expr_name(
+                fn_expr,
+                &mut outer_block,
+                &format!("$__wjsm_gen_expr_{}", self.module.functions().len()),
+            )?;
+            let fake_decl = Self::wrapper_expr_fake_decl(fn_expr, &name);
             let (wrapper_fn_id, captured) = self.lower_gen_function(&fake_decl)?;
             self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
-            let flow = self.store_wrapper_in_outer_scope(
-                StmtFlow::Open(block),
-                &temp_name,
+            return self.store_and_load_wrapper_expr(
+                fn_expr,
+                outer_block,
+                &name,
+                self_name_scope,
                 wrapper_fn_id,
                 &captured,
-                fn_expr.span(),
-            )?;
-            let load_block = self.ensure_open(flow)?;
-            let (scope_id, _) = self
-                .scopes
-                .lookup(&temp_name)
-                .map_err(|msg| self.error(fn_expr.span(), msg))?;
-            let callee = self.alloc_value();
-            self.current_function.append_instruction(
-                load_block,
-                Instruction::LoadVar {
-                    dest: callee,
-                    name: format!("${scope_id}.{temp_name}"),
-                },
             );
-            return Ok(callee);
         }
         let name = fn_expr.ident.as_ref().map_or_else(
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
         );
         let js_name = Self::fn_expr_js_name(fn_expr, named_eval);
+        // 具名表达式：外层压入自身名字作用域与 funcEnv 帧（§15.2.5），
+        // 体内（含形参默认值）自引用经闭包捕获解析到同一函数对象。
+        let self_name_scope = if fn_expr.ident.is_some() {
+            Some(self.begin_fn_expr_name_scope(&name, &mut outer_block, fn_expr.span())?)
+        } else {
+            None
+        };
         self.push_function_context(&name, BasicBlockId(0));
         self.apply_function_strictness(fn_expr.function.body.as_ref());
 
@@ -138,14 +219,6 @@ impl Lowerer {
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_expr.span(), msg))?;
-
-        // Register the function's own name (named function expression) so it is accessible within the body.
-        if let Some(ident) = &fn_expr.ident {
-            let _ = self
-                .scopes
-                .declare(ident.sym.as_ref(), VarKind::Let, true)
-                .map_err(|msg| self.error(fn_expr.span(), msg))?;
-        }
 
         let param_ir_names = self.build_plain_function_param_ir_names(
             &fn_expr.function,
@@ -223,7 +296,7 @@ impl Lowerer {
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
         let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            outer_block,
             Instruction::Const {
                 dest: func_ref_val,
                 constant: func_ref_const,
@@ -231,7 +304,7 @@ impl Lowerer {
         );
 
         // 始终 materialize 为闭包，保证 func_idx 经 closure_create 解析（含无捕获箭头/函数表达式）
-        let mut closure_block = block;
+        let mut closure_block = outer_block;
         let env_val = if captured.is_empty() {
             if self.eval_scope_bridge_active() {
                 // eval / vm 上下文：把 sandbox（$eval_env / outer $env）传入闭包 env，
@@ -265,8 +338,15 @@ impl Lowerer {
                 args: vec![func_ref_val, env_val],
             },
         );
+        // 具名表达式：闭包写入自身名字绑定（InitializeBinding，§15.2.5 步骤 7）
+        // 并弹出名字作用域，名字对外不可见。
+        let mut callee_block = closure_block;
+        if let Some(scope_id) = self_name_scope {
+            callee_block =
+                self.finish_fn_expr_name_scope(callee_block, &name, scope_id, closure_val);
+        }
         let callee_val = closure_val;
-        self.expr_merge_block = Some(closure_block);
+        self.expr_merge_block = Some(callee_block);
 
         Ok(callee_val)
     }
@@ -281,38 +361,31 @@ impl Lowerer {
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
         );
+        // 具名 async 表达式：外层压入自身名字作用域与 funcEnv 帧（§15.8.4），
+        // 体内自引用取 wrapper 函数对象。
+        let mut outer_block = block;
+        let self_name_scope = if fn_expr.ident.is_some() {
+            Some(self.begin_fn_expr_name_scope(&name, &mut outer_block, fn_expr.span())?)
+        } else {
+            None
+        };
         let (wrapper_fn_id, captured) =
             self.lower_async_function_parts(&name, fn_expr, MethodSuperBinding::None)?;
         self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
 
-        let wrapper_ref_const = self
-            .module
-            .add_constant(Constant::FunctionRef(wrapper_fn_id));
-        let wrapper_ref_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: wrapper_ref_val,
-                constant: wrapper_ref_const,
-            },
-        );
+        let (callee_val, callee_block) =
+            self.materialize_wrapper_closure(outer_block, wrapper_fn_id, &captured, fn_expr.span())?;
 
-        let callee_val = if captured.is_empty() {
-            wrapper_ref_val
-        } else {
-            let env_val = self.ensure_shared_env(block, &captured, fn_expr.span())?;
-            let closure_block = self.resolve_store_block(block);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                closure_block,
-                Instruction::CallBuiltin {
-                    dest: Some(closure_val),
-                    builtin: Builtin::CreateClosure,
-                    args: vec![wrapper_ref_val, env_val],
-                },
-            );
-            closure_val
-        };
+        // 具名表达式：wrapper 函数对象写入自身名字绑定并弹出名字作用域。
+        if let Some(scope_id) = self_name_scope {
+            let store_block =
+                self.finish_fn_expr_name_scope(callee_block, &name, scope_id, callee_val);
+            if store_block != block {
+                self.expr_merge_block = Some(store_block);
+            }
+        } else if callee_block != block {
+            self.expr_merge_block = Some(callee_block);
+        }
 
         Ok(callee_val)
     }
@@ -344,13 +417,6 @@ impl Lowerer {
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_expr.span(), msg))?;
-
-        if let Some(ident) = &fn_expr.ident {
-            let _ = self
-                .scopes
-                .declare(ident.sym.as_ref(), VarKind::Let, true)
-                .map_err(|msg| self.error(fn_expr.span(), msg))?;
-        }
 
         let state_scope_id = self
             .scopes

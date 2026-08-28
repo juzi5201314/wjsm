@@ -124,6 +124,7 @@ mod lowerer_classes_ts;
 mod lowerer_construct;
 mod lowerer_core;
 mod lowerer_declarations;
+mod lowerer_fn_expr_name;
 mod lowerer_function_decls;
 mod lowerer_function_names;
 mod lowerer_functions;

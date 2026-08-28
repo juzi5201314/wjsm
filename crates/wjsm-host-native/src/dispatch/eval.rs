@@ -245,6 +245,23 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
                 ),
             );
         }
+        // 非严格不可变绑定（具名函数表达式自身名字，S=false）：写入按
+        // eval 体有效严格性分流——严格 TypeError、非严格静默忽略
+        // （赋值表达式值仍为 RHS）。
+        modules::ScopeBindingWrite::SloppyImmutable => {
+            if modules::scope_record_is_strict(state, *environment) {
+                return javascript_error(
+                    ctx,
+                    state,
+                    "TypeError",
+                    format!(
+                        "assignment to constant `{}`",
+                        eval_binding_name(state, *key)
+                    ),
+                );
+            }
+            return *stored;
+        }
         modules::ScopeBindingWrite::Missing => {}
     }
     // 全局环境声明式记录命中：SetMutableBinding（TDZ / const 检查）先于对象记录。

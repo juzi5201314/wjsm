@@ -1243,9 +1243,17 @@ impl Lowerer {
                 1
             };
             let is_tdz = self.const_val_i64(eval_block, is_tdz_flag);
+            // 不可变形态编码：1 = const（S=true，写恒 TypeError）；2 = 具名
+            // 函数表达式自身名字（S=false，非严格写静默忽略）；0 = 可变。
             let is_const = self.const_val_i64(
                 eval_block,
-                if matches!(kind, VarKind::Const) { 1 } else { 0 },
+                if self.scopes.is_fn_expr_name(*scope_id, name) {
+                    2
+                } else if matches!(kind, VarKind::Const) {
+                    1
+                } else {
+                    0
+                },
             );
 
             self.current_function.append_instruction(
