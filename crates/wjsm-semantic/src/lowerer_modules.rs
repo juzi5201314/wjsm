@@ -161,7 +161,8 @@ pub fn lower_modules_with_debug_meta(
     apply_re_export_map(&mut lowerer)?;
     let _flow = process_import_aliases(&mut lowerer, &modules, StmtFlow::Open(entry))?;
 
-    let flow = lower_module_bodies(&mut lowerer, &modules)?;
+    let body_flow = StmtFlow::Open(lowerer.current_function.last_block_id());
+    let flow = lower_module_bodies(&mut lowerer, &modules, body_flow)?;
 
     finalize_multi_module(&mut lowerer, flow, has_tla)?;
 
@@ -225,7 +226,15 @@ pub fn lower_modules_with_builtin_seed(
     apply_re_export_map(&mut lowerer)?;
     let _flow = process_import_aliases(&mut lowerer, &modules, StmtFlow::Open(entry))?;
 
-    let flow = lower_module_bodies(&mut lowerer, &modules)?;
+    // builtin 段模块不在用户 `modules` 列表里，`lower_module_bodies` 的逐模块
+    // 安装不会以它们为来源执行；不补装则静态 `import * as` / 静态说明符
+    // `import()` 指向 builtin 的命名空间恒为空对象。此处在用户模块体之前补装：
+    // 运行时顺序上入口块头部的 `$builtin_main` 前缀调用先初始化 builtin 导出
+    // 绑定，随后才执行这里发射的 getter 安装代码。
+    let body_flow = StmtFlow::Open(lowerer.current_function.last_block_id());
+    let body_flow = install_builtin_namespace_getters(&mut lowerer, &builtin, body_flow)?;
+
+    let flow = lower_module_bodies(&mut lowerer, &modules, body_flow)?;
 
     // builtin 顶层先执行：用户入口块头部 Call `$builtin_main`。
     emit_builtin_entry_call(&mut lowerer, &builtin);
@@ -816,9 +825,8 @@ fn emit_cjs_module_binding(
 fn lower_module_bodies(
     lowerer: &mut Lowerer,
     modules: &[ModuleLoweringInput],
+    mut flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
-    let entry_block = lowerer.current_function.last_block_id();
-    let mut flow = StmtFlow::Open(entry_block);
     for module in modules {
         let module_id = module.id;
         let module_ast = &module.ast;
@@ -1188,6 +1196,26 @@ pub(crate) fn parse_ir_name_to_binding(ir_name: &str) -> CapturedBinding {
     CapturedBinding::new(ir_name.to_string(), 0)
 }
 
+/// 为 builtin 段来源的命名空间对象安装 live binding getter（种子路径专用）。
+///
+/// builtin 模块在种子路径下由独立段 lower（issue #344），不进入用户 `modules`
+/// 列表，因此逐模块的 [`install_live_namespace_getters_for_source`] 不会覆盖它们。
+/// 此处按 module_id 升序对段内全部模块补装（无命名空间目标的模块在被调函数内
+/// 直接跳过）。builtin 导出全部在 `$builtin_main` 顶层初始化完成且封装源不含
+/// `export let/var`，安装时经共享 env 快照的值与 live binding 语义一致。
+fn install_builtin_namespace_getters(
+    lowerer: &mut Lowerer,
+    builtin: &BuiltinSegment,
+    mut flow: StmtFlow,
+) -> Result<StmtFlow, LoweringError> {
+    let mut builtin_module_ids: Vec<ModuleId> = builtin.module_scopes.keys().copied().collect();
+    builtin_module_ids.sort_by_key(|id| id.0);
+    for module_id in builtin_module_ids {
+        flow = install_live_namespace_getters_for_source(lowerer, module_id, flow)?;
+    }
+    Ok(flow)
+}
+
 /// 为某来源模块 `source_module_id` 关联的所有命名空间对象安装 live binding getter（#45）。
 ///
 /// 在该模块体降级完成后调用（拓扑序保证来源先于导入方）。覆盖两类命名空间对象：
@@ -1245,17 +1273,51 @@ fn install_live_namespace_getters_for_source(
     Ok(StmtFlow::Open(block))
 }
 
-/// 为命名空间对象设置 `Symbol.toStringTag = "Module"`（ECMAScript §10.4.6.2）。
+/// 为命名空间对象定义 `@@toStringTag = "Module"`（ECMAScript §10.4.6.2）。
+///
+/// 必须用 well-known symbol 真键与全 false 特性的数据描述符：字符串键
+/// `"Symbol.toStringTag"` 会被 `Object.keys` 枚举出来，且
+/// `Object.prototype.toString` 只读真符号键（否则呈现 `[object Object]`）。
 fn set_namespace_string_tag(lowerer: &mut Lowerer, ns_obj: wjsm_ir::ValueId, block: BasicBlockId) {
-    let tag_key = lowerer
-        .module
-        .add_constant(Constant::String("Symbol.toStringTag".to_string()));
-    let tag_key_val = lowerer.alloc_value();
+    let index_const = lowerer.module.add_constant(Constant::Number(f64::from(
+        wjsm_ir::wk_symbol::TO_STRING_TAG,
+    )));
+    let index_val = lowerer.alloc_value();
     lowerer.current_function.append_instruction(
         block,
         Instruction::Const {
-            dest: tag_key_val,
-            constant: tag_key,
+            dest: index_val,
+            constant: index_const,
+        },
+    );
+    let tag_symbol = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::CallBuiltin {
+            dest: Some(tag_symbol),
+            builtin: Builtin::SymbolWellKnown,
+            args: vec![index_val],
+        },
+    );
+    // 数据描述符 { value: "Module" }：writable/enumerable/configurable 缺省 false，
+    // 与 §10.4.6.2 的属性特性一致。
+    let descriptor = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::NewObject {
+            dest: descriptor,
+            capacity: 1,
+        },
+    );
+    let value_key = lowerer
+        .module
+        .add_constant(Constant::String("value".to_string()));
+    let value_key_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::Const {
+            dest: value_key_val,
+            constant: value_key,
         },
     );
     let tag_value = lowerer
@@ -1269,7 +1331,15 @@ fn set_namespace_string_tag(lowerer: &mut Lowerer, ns_obj: wjsm_ir::ValueId, blo
             constant: tag_value,
         },
     );
-    lowerer.emit_set_prop(block, ns_obj, tag_key_val, tag_value_val);
+    lowerer.emit_set_prop(block, descriptor, value_key_val, tag_value_val);
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::CallBuiltin {
+            dest: None,
+            builtin: Builtin::DefineProperty,
+            args: vec![ns_obj, tag_symbol, descriptor],
+        },
+    );
 }
 
 /// 完成 main 函数构建（处理 TLA 或普通返回）
