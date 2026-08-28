@@ -177,12 +177,6 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
             this_val,
             args,
             ..
-        }
-        | OptionalCall {
-            callee,
-            this_val,
-            args,
-            ..
         } => {
             replace(callee);
             replace(this_val);
@@ -190,8 +184,6 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
         }
         GetProp { object, key, .. }
         | DeleteProp { object, key, .. }
-        | OptionalGetProp { object, key, .. }
-        | OptionalGetElem { object, key, .. }
         | GetElem {
             object, index: key, ..
         } => {

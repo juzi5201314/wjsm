@@ -1344,18 +1344,6 @@ pub enum Instruction {
         #[serde(default)]
         strict: bool,
     },
-    /// 可选链属性访问：object?.key，object 为 null/undefined 时返回 undefined
-    OptionalGetProp {
-        dest: ValueId,
-        object: ValueId,
-        key: ValueId,
-    },
-    /// 可选链索引访问：object?.[expr]
-    OptionalGetElem {
-        dest: ValueId,
-        object: ValueId,
-        key: ValueId,
-    },
     /// 元素 shape 守卫（licm elem-guard 外提专用，仅出现在循环 pre-header）：
     /// 宿主一次性校验 `array` 当前是无洞的普通 packed 数组、全部元素都是
     /// shape 等于 `template` 烘焙 shape 的普通对象、且元素各值槽均非对象
@@ -1386,13 +1374,6 @@ pub enum Instruction {
         key: ValueId,
         guard: ValueId,
         template: ConstantId,
-    },
-    /// 可选链调用：callee?.(...args)，callee 为 null/undefined 时返回 undefined
-    OptionalCall {
-        dest: ValueId,
-        callee: ValueId,
-        this_val: ValueId,
-        args: Vec<ValueId>,
     },
     /// 对象 spread：将 source 的 own enumerable 属性复制到 object。
     /// dest 接收运行时结果——成功为 object 本身，属性读取/getter 抛错时为
@@ -1677,12 +1658,6 @@ impl fmt::Display for Instruction {
                 }
                 Ok(())
             }
-            Self::OptionalGetProp { dest, object, key } => {
-                write!(formatter, "{dest} = optional_get_prop {object}, {key}")
-            }
-            Self::OptionalGetElem { dest, object, key } => {
-                write!(formatter, "{dest} = optional_get_elem {object}, {key}")
-            }
             Self::ElemShapeGuard {
                 dest,
                 array,
@@ -1712,28 +1687,6 @@ impl fmt::Display for Instruction {
                     formatter,
                     "{dest} = get_prop_guarded {object}, {key}, guard={guard}, template={template}"
                 )
-            }
-            Self::OptionalCall {
-                dest,
-                callee,
-                this_val,
-                args,
-            } => {
-                write!(
-                    formatter,
-                    "{dest} = optional_call {callee}, this={this_val}"
-                )?;
-                if !args.is_empty() {
-                    formatter.write_str(", args=[")?;
-                    for (index, arg) in args.iter().enumerate() {
-                        if index > 0 {
-                            formatter.write_str(", ")?;
-                        }
-                        write!(formatter, "{arg}")?;
-                    }
-                    formatter.write_char(']')?;
-                }
-                Ok(())
             }
             Self::ObjectSpread {
                 dest,
@@ -1950,16 +1903,6 @@ impl Instruction {
                 *index = f(*index);
                 *value = f(*value);
             }
-            Self::OptionalGetProp { dest, object, key } => {
-                *dest = f(*dest);
-                *object = f(*object);
-                *key = f(*key);
-            }
-            Self::OptionalGetElem { dest, object, key } => {
-                *dest = f(*dest);
-                *object = f(*object);
-                *key = f(*key);
-            }
             Self::ElemShapeGuard { dest, array, .. } => {
                 *dest = f(*dest);
                 *array = f(*array);
@@ -1986,19 +1929,6 @@ impl Instruction {
                 *object = f(*object);
                 *key = f(*key);
                 *guard = f(*guard);
-            }
-            Self::OptionalCall {
-                dest,
-                callee,
-                this_val,
-                args,
-            } => {
-                *dest = f(*dest);
-                *callee = f(*callee);
-                *this_val = f(*this_val);
-                for arg in args {
-                    *arg = f(*arg);
-                }
             }
             Self::ObjectSpread {
                 dest,

@@ -276,62 +276,6 @@ pub(super) fn dispatch_runtime(
                 .invoke_callable(ctx, *getter, *receiver, &[])
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
-        NativeRuntimeOp::OptionalGetProp => {
-            let [object, key] = args else {
-                return fail_dispatch(ctx);
-            };
-            // 链式求值的 TAG_EXCEPTION 基座原样透传（可选链短路只针对 nullish）。
-            if value::is_exception(*object) {
-                return *object;
-            }
-            if value::is_null(*object) || value::is_undefined(*object) {
-                value::encode_undefined()
-            } else {
-                get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
-            }
-        }
-        NativeRuntimeOp::OptionalGetElem => {
-            let [object, key] = args else {
-                return fail_dispatch(ctx);
-            };
-            // 链式求值的 TAG_EXCEPTION 基座/键原样透传。
-            if value::is_exception(*object) {
-                return *object;
-            }
-            if value::is_exception(*key) {
-                return *key;
-            }
-            if value::is_null(*object) || value::is_undefined(*object) {
-                return value::encode_undefined();
-            }
-            // 基座非空后才做 ToPropertyKey（可选链短路时不得再入用户转换）。
-            let key = &match to_property_key_value(ctx, state, *key) {
-                Ok(key) => key,
-                Err(exception) => return exception,
-            };
-            if let Some(index) = array_index(state, *key) {
-                if let Some(stored) =
-                    super::typedarray::get_element_intern(state, *object, index as usize)
-                {
-                    return stored;
-                }
-                if value::is_array(*object) {
-                    let handle = value::decode_handle(*object);
-                    if state.gc.heap().array_kind(handle).ok()
-                        != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
-                    {
-                        match state.gc.heap().get_element(handle, index) {
-                            Ok(Some(stored)) if !value::is_array_hole(stored as i64) => {
-                                return stored as i64;
-                            }
-                            Ok(_) => {}
-                            Err(_) => return fail_dispatch(ctx),
-                        }
-                    }
-                }
-            }
-            get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
-        }
         NativeRuntimeOp::SetProp | NativeRuntimeOp::SetPropStrict => {
             let [object, key, stored] = args else {
                 return fail_dispatch(ctx);

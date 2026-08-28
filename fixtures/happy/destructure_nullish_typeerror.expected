@@ -1,0 +1,28 @@
+exit_code: 0
+--- stdout ---
+top-null true Cannot destructure property 'a' of 'null' as it is null.
+top-undefined true Cannot destructure property 'a' of 'undefined' as it is undefined.
+top-multi true Cannot destructure property 'a' of 'null' as it is null.
+top-empty true Cannot destructure 'null' as it is null.
+top-rest true Cannot destructure 'null' as it is null.
+top-default true Cannot read properties of null (reading 'a')
+source-ident true Cannot destructure property 'x' of 'value' as it is null.
+source-member true Cannot destructure property 'x' of 'holder.field' as it is undefined.
+source-call true Cannot destructure property 'x' of 'make(...)' as it is null.
+nested-in-object true Cannot read properties of null (reading 'inner')
+nested-in-object-undefined true Cannot read properties of undefined (reading 'inner')
+nested-deep true Cannot read properties of null (reading 'c')
+nested-in-array true Cannot read properties of null (reading 'x')
+nested-in-array-undefined true Cannot read properties of undefined (reading 'x')
+assign-null true Cannot destructure property 'm' of 'null' as it is null.
+assign-array-nested true Cannot read properties of null (reading 'q')
+param-null true Cannot destructure property 'p' of 'object null' as it is null.
+param-missing true Cannot destructure property 'p' of 'undefined' as it is undefined.
+param-default-null true Cannot destructure property 'p' of '(intermediate value)(intermediate value)(intermediate value)' as it is null.
+for-of-head true Cannot destructure property 'z' of '.for' as it is null.
+catch-param true Cannot destructure property 'cause' of '.catch' as it is null.
+catch-param-undefined true Cannot destructure property 'cause' of '.catch' as it is undefined.
+catch-binding caught-ok
+finally-ran
+primitive-ok 3
+--- stderr ---

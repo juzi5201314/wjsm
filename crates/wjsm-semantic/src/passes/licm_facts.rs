@@ -306,15 +306,15 @@ fn record_use_verdict(
         // 读取：对象只有自有数据属性，读不产生用户代码也不泄漏引用。
         // 键本身是家族值则会流入 ToPropertyKey（this=对象的 toString）→ 拒绝。
         Instruction::GetProp { object, key, .. }
-        | Instruction::OptionalGetProp { object, key, .. }
             if fam.contains(object) && !fam.contains(key) =>
         {
             UseVerdict::Ok
         }
         Instruction::GetElem { object, index, .. }
-        | Instruction::OptionalGetElem {
-            object, key: index, ..
-        } if fam.contains(object) && !fam.contains(index) => UseVerdict::Ok,
+            if fam.contains(object) && !fam.contains(index) =>
+        {
+            UseVerdict::Ok
+        }
         // 常量键数据写：保持数据属性，不可能引入 accessor。
         Instruction::SetProp {
             object, key, value, ..

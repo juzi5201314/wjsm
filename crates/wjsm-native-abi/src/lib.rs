@@ -441,8 +441,8 @@ pub enum NativeRuntimeOp {
     GetElem = 0x1_0507,
     SetElem = 0x1_0508,
     ObjectSpread = 0x1_0509,
-    OptionalGetProp = 0x1_050a,
-    OptionalGetElem = 0x1_050b,
+    // 0x1_050a / 0x1_050b 曾是 OptionalGetProp / OptionalGetElem：可选链改为
+    // 链级短路分叉后由 GetProp / GetElem 承载，编号保留空洞。
     GetSuperBase = 0x1_050c,
     GetSuperConstructor = 0x1_050d,
     /// 带 IC 槽回填的 [[Get]]：`[object, key, ic_slot_ptr]`，miss 时回填槽。
@@ -529,8 +529,6 @@ impl NativeRuntimeOp {
             0x1_0511 => Some(Self::CreateDataProperty),
             0x1_0504 => Some(Self::DeleteProp),
             0x1_0509 => Some(Self::ObjectSpread),
-            0x1_050a => Some(Self::OptionalGetProp),
-            0x1_050b => Some(Self::OptionalGetElem),
             0x1_050c => Some(Self::GetSuperBase),
             0x1_050d => Some(Self::GetSuperConstructor),
             0x1_050e => Some(Self::GetPropIc),
@@ -973,8 +971,6 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::GetElem,
             NativeRuntimeOp::SetElem,
             NativeRuntimeOp::ObjectSpread,
-            NativeRuntimeOp::OptionalGetProp,
-            NativeRuntimeOp::OptionalGetElem,
             NativeRuntimeOp::GetSuperBase,
             NativeRuntimeOp::GetSuperConstructor,
             NativeRuntimeOp::GetPropIc,

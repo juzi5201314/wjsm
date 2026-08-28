@@ -60,7 +60,14 @@ impl Lowerer {
             swc_ast::Expr::Unary(unary) => match unary.op {
                 swc_ast::UnaryOp::Minus | swc_ast::UnaryOp::Plus | swc_ast::UnaryOp::Tilde => true,
                 swc_ast::UnaryOp::Delete => {
-                    matches!(unary.arg.as_ref(), swc_ast::Expr::Member(_))
+                    // 括号透传 Reference：`delete (o.x)` 与 `delete o.x` 同为
+                    // DeleteProp（strict 不可配置属性可抛）；可选链 delete 的
+                    // 异常已在链内分叉，结果不携带哨兵。
+                    let mut target = unary.arg.as_ref();
+                    while let swc_ast::Expr::Paren(paren) = target {
+                        target = paren.expr.as_ref();
+                    }
+                    matches!(target, swc_ast::Expr::Member(_))
                 }
                 _ => false,
             },
@@ -733,8 +740,13 @@ impl Lowerer {
                 Ok(dest)
             }
             Delete => {
-                // delete 操作符
-                match unary.arg.as_ref() {
+                // delete 操作符。括号求值透传 Reference（§13.2.6.5），
+                // `delete (o.x)` / `delete (o?.x)` 穿透 Paren 层匹配目标。
+                let mut target = unary.arg.as_ref();
+                while let swc_ast::Expr::Paren(paren) = target {
+                    target = paren.expr.as_ref();
+                }
+                match target {
                     // delete obj.prop → DeleteProp 指令
                     swc_ast::Expr::Member(member) => {
                         let mut current_block = block;
@@ -787,6 +799,13 @@ impl Lowerer {
                     swc_ast::Expr::OptChain(oc) => self.lower_optchain_delete(oc, block),
                     // delete x：绑定不可删除时返回 false，其余沿用既有恒 true。
                     swc_ast::Expr::Ident(ident) => {
+                        // §13.5.1.1 早期错误：严格模式下 delete 无限定标识符。
+                        if self.strict_mode {
+                            return Err(self.error(
+                                unary.span(),
+                                "Delete of an unqualified identifier in strict mode.".to_string(),
+                            ));
+                        }
                         // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。
                         let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
                         if !crossed.is_empty() {

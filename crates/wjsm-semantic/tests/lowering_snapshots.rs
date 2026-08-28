@@ -783,6 +783,10 @@ fn using_block_scope_fixture_matches_ir_snapshot() {
     assert_snapshot("using_block_scope");
 }
 #[test]
+fn optional_chain_short_circuit_fixture_matches_ir_snapshot() {
+    assert_snapshot("optional_chain_short_circuit");
+}
+#[test]
 fn jsx_basic_fixture_matches_ir_snapshot() {
     assert_snapshot("jsx_basic");
 }
