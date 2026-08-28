@@ -215,7 +215,8 @@ impl Lowerer {
                 self.emit_set_elem(current_block, obj_val, key_val, src_val)
             }
             swc_ast::MemberProp::PrivateName(name) => {
-                let field_name = self.resolve_private_storage_name(name.name.as_ref(), name.span)?;
+                let field_name =
+                    self.resolve_private_storage_name(name.name.as_ref(), name.span)?;
                 let key_const = self.module.add_constant(Constant::String(field_name));
                 let key_val = self.alloc_value();
                 self.current_function.append_instruction(

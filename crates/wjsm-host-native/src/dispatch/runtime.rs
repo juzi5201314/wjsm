@@ -313,12 +313,15 @@ pub(super) fn dispatch_runtime(
                 Err(exception) => return exception,
             };
             let strict = operation == NativeRuntimeOp::SetPropStrict;
-            if let Some(result) = set_on_primitive_receiver(ctx, state, *object, key, *stored, strict)
+            if let Some(result) =
+                set_on_primitive_receiver(ctx, state, *object, key, *stored, strict)
             {
                 return result;
             }
             let completion = set_property_completion(ctx, state, *object, key, *stored);
-            property_write::finish_property_set(ctx, state, *object, key, *stored, strict, completion)
+            property_write::finish_property_set(
+                ctx, state, *object, key, *stored, strict, completion,
+            )
         }
         NativeRuntimeOp::CreateDataProperty => {
             let [object, key, stored] = args else {
@@ -348,7 +351,9 @@ pub(super) fn dispatch_runtime(
             // 属性）的槽位命中会让后续快路径绕过可写性检查直接改值。
             let success = matches!(completion, Ok(property_write::SetCompletion::Written));
             backfill_set_prop_ic(state, *object, *key, success, *ic_slot_ptr);
-            property_write::finish_property_set(ctx, state, *object, *key, *stored, strict, completion)
+            property_write::finish_property_set(
+                ctx, state, *object, *key, *stored, strict, completion,
+            )
         }
         NativeRuntimeOp::DeleteProp => {
             let [object, key] = args else {
