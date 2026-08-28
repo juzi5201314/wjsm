@@ -490,7 +490,7 @@ module {
     c487 = string("$0.B")
     c488 = string("$0.derived")
 
-  fn @A.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "A"] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @A.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "A"] [js_name "A"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = load var $2.$this
       %1 = const c20
@@ -504,29 +504,29 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @A.m [home_object=@0.prototype] [direct_callable] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @A.m [home_object=@0.prototype] [direct_callable] [js_name "m"] [js_length 0] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = const c25
       return %0
 
-  fn @A.get_p [home_object=@0.prototype] [direct_callable] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @A.get_p [home_object=@0.prototype] [direct_callable] [js_name "get p"] [js_length 0] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = const c28
       return %0
 
-  fn @A.who [home_object=@0.prototype] [direct_callable] [params: $5.$env, $5.$this] [entry=bb0]:
+  fn @A.who [home_object=@0.prototype] [direct_callable] [js_name "who"] [js_length 0] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
       %0 = load var $5.$this
       %1 = const c36
       %2 = get_prop %0, %1
       return %2
 
-  fn @A.s [home_object=@0] [direct_callable] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @A.s [home_object=@0] [direct_callable] [js_name "s"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = const c39
       return %0
 
-  fn @B.constructor [home_object=@5.prototype] [needs_prototype] [class_ctor "B"] [params: $8.$env, $8.$this] [entry=bb0]:
+  fn @B.constructor [home_object=@5.prototype] [needs_prototype] [class_ctor "B"] [js_name "B"] [js_length 0] [params: $8.$env, $8.$this] [entry=bb0]:
     bb0:
       %0 = load var $8.$this
       %1 = call builtin.object.get_prototype_of(%0)
@@ -648,7 +648,7 @@ module {
       promise_reject %25, %24
       return
 
-  fn @callBeforeAwait [home_object=@5.prototype] [needs_prototype] [params: $10.$env, $10.$this] [entry=bb0]:
+  fn @callBeforeAwait [home_object=@5.prototype] [needs_prototype] [js_name "callBeforeAwait"] [js_length 0] [params: $10.$env, $10.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c59
@@ -777,7 +777,7 @@ module {
     bb15:
       unreachable
 
-  fn @callAfterAwait [home_object=@5.prototype] [needs_prototype] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @callAfterAwait [home_object=@5.prototype] [needs_prototype] [js_name "callAfterAwait"] [js_length 0] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c92
@@ -848,7 +848,7 @@ module {
       promise_resolve %19, %18
       return
 
-  fn @readAccessor [home_object=@5.prototype] [needs_prototype] [params: $14.$env, $14.$this] [entry=bb0]:
+  fn @readAccessor [home_object=@5.prototype] [needs_prototype] [js_name "readAccessor"] [js_length 0] [params: $14.$env, $14.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c119
@@ -936,7 +936,7 @@ module {
       promise_reject %25, %24
       return
 
-  fn @thisReceiver [home_object=@5.prototype] [needs_prototype] [params: $16.$env, $16.$this] [entry=bb0]:
+  fn @thisReceiver [home_object=@5.prototype] [needs_prototype] [js_name "thisReceiver"] [js_length 0] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c146
@@ -1023,7 +1023,7 @@ module {
       promise_reject %27, %26
       return
 
-  fn @assignThrough [home_object=@5.prototype] [needs_prototype] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @assignThrough [home_object=@5.prototype] [needs_prototype] [js_name "assignThrough"] [js_length 0] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c175
@@ -1057,7 +1057,7 @@ module {
       call builtin.async_function.resume(%5, %7, %19, %20, %21)
       return %4
 
-  fn @arrow_16 [home_object=@5.prototype] [captures: $this] [params: $20.$env, $20.$this] [entry=bb0]:
+  fn @arrow_16 [home_object=@5.prototype] [js_name "f"] [js_length 0] [captures: $this] [params: $20.$env, $20.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c201
@@ -1177,7 +1177,7 @@ module {
     bb13:
       unreachable
 
-  fn @arrowAfterResume [home_object=@5.prototype] [needs_prototype] [params: $21.$env, $21.$this] [entry=bb0]:
+  fn @arrowAfterResume [home_object=@5.prototype] [needs_prototype] [js_name "arrowAfterResume"] [js_length 0] [params: $21.$env, $21.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c214
@@ -1281,7 +1281,7 @@ module {
       promise_reject %33, %32
       return
 
-  fn @writeCaptured [home_object=@5.prototype] [needs_prototype] [captures: $0.counter] [params: $23.$env, $23.$this] [entry=bb0]:
+  fn @writeCaptured [home_object=@5.prototype] [needs_prototype] [js_name "writeCaptured"] [js_length 0] [captures: $0.counter] [params: $23.$env, $23.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c244
@@ -1370,7 +1370,7 @@ module {
       promise_reject %25, %24
       return
 
-  fn @staticSuper [home_object=@5] [needs_prototype] [params: $25.$env, $25.$this] [entry=bb0]:
+  fn @staticSuper [home_object=@5] [needs_prototype] [js_name "staticSuper"] [js_length 0] [params: $25.$env, $25.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c272
@@ -1567,7 +1567,7 @@ module {
     bb29:
       unreachable
 
-  fn @genSuper [home_object=@5.prototype] [needs_prototype] [params: $27.$env, $27.$this] [entry=bb0]:
+  fn @genSuper [home_object=@5.prototype] [needs_prototype] [js_name "genSuper"] [js_length 0] [params: $27.$env, $27.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c313
@@ -1591,7 +1591,7 @@ module {
       call builtin.continuation.save_var(%7, %14, %13)
       return %8
 
-  fn @$0.m [params: $28.$env, $28.$this] [entry=bb0]:
+  fn @$0.m [js_name "m"] [js_length 0] [params: $28.$env, $28.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c325
@@ -1726,7 +1726,7 @@ module {
     bb19:
       unreachable
 
-  fn @m [needs_prototype] [params: $30.$env, $30.$this] [entry=bb0]:
+  fn @m [needs_prototype] [js_name "m"] [js_length 0] [params: $30.$env, $30.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c346
@@ -1847,7 +1847,7 @@ module {
     bb13:
       unreachable
 
-  fn @g [needs_prototype] [params: $32.$env, $32.$this] [entry=bb0]:
+  fn @g [needs_prototype] [js_name "g"] [js_length 0] [params: $32.$env, $32.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c379
@@ -2635,7 +2635,7 @@ module {
     bb135:
       unreachable
 
-  fn @arrow_30 [captures: $0.B, $0.counter, $0.derived] [params: $34.$env, $34.$this] [entry=bb0]:
+  fn @arrow_30 [js_name ""] [js_length 0] [captures: $0.B, $0.counter, $0.derived] [params: $34.$env, $34.$this] [entry=bb0]:
     bb0:
       %0 = new_promise
       %1 = const c475

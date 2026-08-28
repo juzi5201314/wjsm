@@ -186,7 +186,7 @@ module {
     bb18:
       unreachable
 
-  fn @multi [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @multi [needs_prototype] [js_name "multi"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c41

@@ -4,6 +4,8 @@ impl Lowerer {
     /// 共享类体降级：构造器函数、原型对象、超类链、方法/访问器/静态块/字段、装饰器。
     ///
     /// 调用方负责类名词法作用域的 push/pop 与最终名字绑定。
+    /// `js_ctor_name` 为构造器的 JS 可见 `name`（SetFunctionName：类声明/命名
+    /// 类表达式取 ident；匿名类表达式取 NamedEvaluation 绑定名，无则空串）。
     /// 返回（最终 block、构造器值、未被 class decorator 替换的构造器 FunctionId）。
     pub(super) fn lower_class_body(
         &mut self,
@@ -11,6 +13,7 @@ impl Lowerer {
         class: &swc_ast::Class,
         class_span: Span,
         decorator_name: Option<&str>,
+        js_ctor_name: &str,
         block: BasicBlockId,
     ) -> Result<(BasicBlockId, ValueId, Option<FunctionId>), LoweringError> {
         let constructor = class.body.iter().find_map(|member| match member {
@@ -363,6 +366,10 @@ impl Lowerer {
         // 抛 TypeError。显示名取源码 ident（匿名类表达式为空串，文案对齐 V8
         // 的 "Class constructors cannot be invoked without 'new'"）。
         ir_function.set_class_ctor_name(decorator_name.unwrap_or(""));
+        // SetFunctionName（ClassDefinitionEvaluation 步骤 "SetFunctionName(F,
+        // className)"）：`C.name === "C"`，匿名类表达式按 NamedEvaluation。
+        ir_function.set_js_name(js_ctor_name);
+        ir_function.set_js_length(Self::expected_argument_count(ctor_param_pats_owned.iter()));
         ir_function.set_has_eval(has_eval);
         if let Some(span) =
             self.span_to_source_span(constructor.map(|c| c.span()).unwrap_or_else(|| class_span))
@@ -540,6 +547,15 @@ impl Lowerer {
                     let field_name =
                         self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
                     let key_dest = self.emit_string_const(block, &field_name);
+                    // NamedEvaluation：静态私有字段的匿名函数定义按私有名
+                    // description（含 `#`）命名（§10.2.9 步骤 2）。
+                    if prop
+                        .value
+                        .as_deref()
+                        .is_some_and(Self::is_anonymous_fn_definition)
+                    {
+                        self.named_eval_hint = Some(format!("#{}", prop.key.name));
+                    }
                     block = self.lower_static_field_member(
                         block,
                         &static_field::StaticFieldInit {
@@ -561,6 +577,16 @@ impl Lowerer {
                         // 静态属性名只发射 Const，不产生控制流。
                         None => self.lower_prop_name(&prop.key, block)?,
                     };
+                    // NamedEvaluation：静态键字段的匿名函数定义按键名命名；
+                    // 计算键无静态名，由 lower_static_field_member 运行时命名。
+                    if prop
+                        .value
+                        .as_deref()
+                        .is_some_and(Self::is_anonymous_fn_definition)
+                        && let Some(name) = Self::static_prop_name_text(&prop.key)
+                    {
+                        self.named_eval_hint = Some(name);
+                    }
                     block = self.lower_static_field_member(
                         block,
                         &static_field::StaticFieldInit {
@@ -652,6 +678,19 @@ impl Lowerer {
                         method.function.span,
                     )?;
                     block = continuation;
+                    self.set_function_js_metadata(
+                        function.function_id,
+                        None,
+                        Self::expected_param_count(&method.function.params),
+                    );
+                    self.apply_method_js_name(
+                        block,
+                        function.function_id,
+                        method_value,
+                        &method.key,
+                        m_key_dest,
+                        AccessorPrefix::None,
+                    );
                     if !method.function.decorators.is_empty() {
                         (block, method_value) = self.emit_apply_value_decorators(
                             block,
@@ -681,6 +720,19 @@ impl Lowerer {
                 let (continuation, mut m_dest) =
                     self.materialize_class_function_value(block, &function, method.span)?;
                 block = continuation;
+                self.set_function_js_metadata(
+                    function.function_id,
+                    None,
+                    Self::expected_param_count(&method.function.params),
+                );
+                self.apply_method_js_name(
+                    block,
+                    function.function_id,
+                    m_dest,
+                    &method.key,
+                    m_key_dest,
+                    AccessorPrefix::None,
+                );
                 if !method.function.decorators.is_empty() {
                     (block, m_dest) = self.emit_apply_value_decorators(
                         block,
@@ -715,6 +767,24 @@ impl Lowerer {
                 let (continuation, mut fn_dest) =
                     self.materialize_class_function_value(block, &function, method.span)?;
                 block = continuation;
+                let prefix = if matches!(method.kind, swc_ast::MethodKind::Getter) {
+                    AccessorPrefix::Get
+                } else {
+                    AccessorPrefix::Set
+                };
+                self.set_function_js_metadata(
+                    function.function_id,
+                    None,
+                    Self::expected_param_count(&method.function.params),
+                );
+                self.apply_method_js_name(
+                    block,
+                    function.function_id,
+                    fn_dest,
+                    &method.key,
+                    m_key_dest,
+                    prefix,
+                );
                 if !method.function.decorators.is_empty() {
                     let kind = if matches!(method.kind, swc_ast::MethodKind::Getter) {
                         "getter"

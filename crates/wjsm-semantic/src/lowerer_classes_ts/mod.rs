@@ -571,6 +571,15 @@ impl Lowerer {
                     self.check_field_initializer_arguments(prop.value.as_deref())?;
                     let field_name =
                         self.resolve_private_storage_name(prop.key.name.as_ref(), prop.key.span)?;
+                    // NamedEvaluation：私有字段的匿名函数定义按私有名
+                    // description（含 `#`）命名（§10.2.9 步骤 2）。
+                    if prop
+                        .value
+                        .as_deref()
+                        .is_some_and(Self::is_anonymous_fn_definition)
+                    {
+                        self.named_eval_hint = Some(format!("#{}", prop.key.name));
+                    }
                     block =
                         self.emit_field_init(block, &field_name, prop.value.as_deref(), true)?;
                 }

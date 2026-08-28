@@ -25,17 +25,18 @@ module {
     c22 = string("dispose")
     c23 = functionref(@0)
     c24 = undefined
-    c25 = functionref(@1)
-    c26 = undefined
-    c27 = string("a")
-    c28 = string("using")
-    c29 = undefined
-    c30 = number(6)
-    c31 = string("after")
-    c32 = bool(true)
-    c33 = bool(false)
+    c25 = number(0)
+    c26 = functionref(@1)
+    c27 = undefined
+    c28 = string("a")
+    c29 = string("using")
+    c30 = undefined
+    c31 = number(6)
+    c32 = string("after")
+    c33 = bool(true)
+    c34 = bool(false)
 
-  fn @anon_0 [needs_prototype] [direct_callable] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @anon_0 [needs_prototype] [direct_callable] [js_name ""] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = const c22
       %1 = call builtin.console.log(%0)
@@ -47,7 +48,7 @@ module {
       %3 = call builtin.exception_value(%1)
       throw %3
 
-  fn @makeDisposable [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
+  fn @makeDisposable [needs_prototype] [direct_callable] [js_length 1] [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
     bb0:
       %0 = new_object(capacity=4)
       %1 = const c20
@@ -68,7 +69,9 @@ module {
       %11 = const c23
       %12 = const c24
       %13 = call builtin.create_closure(%11, %12)
-      %14 = set_prop %0, %8, %13
+      %14 = const c25
+      call builtin.function.set_name(%13, %8, %14)
+      %15 = set_prop %0, %8, %13
       return %0
     bb4:
       %10 = call builtin.exception_value(%8)
@@ -118,14 +121,14 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c25
+      %21 = const c26
       store var $0.makeDisposable, %21
-      %24 = const c27
+      %24 = const c28
       %40 = const c0
       jump bb9
     bb1:
       %30 = load var $3.a
-      %32 = const c29
+      %32 = const c30
       %31 = stricteq %30, %32
       branch %31, bb3, bb4
     bb2:
@@ -134,13 +137,13 @@ module {
     bb3:
       jump bb5
     bb4:
-      %33 = const c30
+      %33 = const c31
       %34 = call builtin.symbol.well_known(%33)
       %35 = get_prop %30, %34
       call %35, this=%30
       jump bb5
     bb5:
-      %36 = const c31
+      %36 = const c32
       %37 = call builtin.console.log(%36)
       %38 = is_exception %37
       branch %38, bb7, bb6
@@ -151,7 +154,7 @@ module {
       throw %39
     bb8:
       store var $3.a, %41
-      %26 = const c28
+      %26 = const c29
       %27 = call builtin.console.log(%26)
       %28 = is_exception %27
       branch %28, bb2, bb1
@@ -175,7 +178,9 @@ module {
       %52 = const c23
       %53 = const c24
       %54 = call builtin.create_closure(%52, %53)
-      %55 = set_prop %41, %49, %54
+      %55 = const c25
+      call builtin.function.set_name(%54, %49, %55)
+      %56 = set_prop %41, %49, %54
       store var $1.name, %40
       jump bb8
     bb13:

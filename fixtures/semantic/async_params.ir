@@ -197,7 +197,7 @@ module {
     bb16:
       unreachable
 
-  fn @add [needs_prototype] [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
+  fn @add [needs_prototype] [js_name "add"] [js_length 2] [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c42
@@ -248,7 +248,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
       %0 = load var $3.v
       %1 = call builtin.console.log(%0)

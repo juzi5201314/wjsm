@@ -176,7 +176,7 @@ module {
     bb14:
       unreachable
 
-  fn @gen [needs_prototype] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @gen [needs_prototype] [js_name "gen"] [js_length 0] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c44
@@ -330,7 +330,7 @@ module {
     bb19:
       unreachable
 
-  fn @run [needs_prototype] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @run [needs_prototype] [js_name "run"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c67

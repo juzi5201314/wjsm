@@ -194,42 +194,42 @@ module {
     c191 = string("length")
     c192 = number(-1)
 
-  fn @arrow_0 [captures: $1.i] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @arrow_0 [js_name ""] [js_length 0] [captures: $1.i] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c29
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_1 [direct_callable] [params: $4.$env, $4.$this, $4.read] [entry=bb0]:
+  fn @arrow_1 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.read] [entry=bb0]:
     bb0:
       %0 = const c35
       %1 = load var $4.read
       %2 = call %1, this=%0
       return %2
 
-  fn @arrow_2 [captures: $0.j] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @arrow_2 [js_name ""] [js_length 0] [captures: $0.j] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c47
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_3 [direct_callable] [params: $7.$env, $7.$this, $7.read] [entry=bb0]:
+  fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $7.$env, $7.$this, $7.read] [entry=bb0]:
     bb0:
       %0 = const c53
       %1 = load var $7.read
       %2 = call %1, this=%0
       return %2
 
-  fn @arrow_4 [captures: $0.whileValue] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @arrow_4 [js_name "read"] [js_length 0] [captures: $0.whileValue] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c65
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_5 [captures: $0.closureWrite] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @arrow_5 [js_name ""] [js_length 0] [captures: $0.closureWrite] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c83
@@ -252,21 +252,21 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_6 [captures: $13.i] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @arrow_6 [js_name ""] [js_length 0] [captures: $13.i] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c97
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_7 [direct_callable] [params: $16.$env, $16.$this, $16.read] [entry=bb0]:
+  fn @arrow_7 [direct_callable] [js_name ""] [js_length 1] [params: $16.$env, $16.$this, $16.read] [entry=bb0]:
     bb0:
       %0 = const c103
       %1 = load var $16.read
       %2 = call %1, this=%0
       return %2
 
-  fn @captureInsideFunction [needs_prototype] [params: $12.$env, $12.$this] [entry=bb0]:
+  fn @captureInsideFunction [needs_prototype] [js_length 0] [params: $12.$env, $12.$this] [entry=bb0]:
     bb0:
       %0 = new_array(capacity=4)
       store var $12.closures, %0
@@ -432,7 +432,7 @@ module {
       store var $16.read, %82
       jump bb35
 
-  fn @arrow_9 [captures: $17.outer, $19.inner] [params: $21.$env, $21.$this] [entry=bb0]:
+  fn @arrow_9 [js_name ""] [js_length 0] [captures: $17.outer, $19.inner] [params: $21.$env, $21.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c123
@@ -451,54 +451,54 @@ module {
       %6 = call builtin.exception_value(%4)
       throw %6
 
-  fn @arrow_10 [direct_callable] [params: $22.$env, $22.$this, $22.read] [entry=bb0]:
+  fn @arrow_10 [direct_callable] [js_name ""] [js_length 1] [params: $22.$env, $22.$this, $22.read] [entry=bb0]:
     bb0:
       %0 = const c135
       %1 = load var $22.read
       %2 = call %1, this=%0
       return %2
 
-  fn @arrow_11 [captures: $0.createdBefore] [params: $23.$env, $23.$this] [entry=bb0]:
+  fn @arrow_11 [js_name "readCreatedBefore"] [js_length 0] [captures: $0.createdBefore] [params: $23.$env, $23.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c140
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_12 [direct_callable] [params: $27.$env, $27.$this] [entry=bb0]:
+  fn @arrow_12 [direct_callable] [js_name ""] [js_length 0] [params: $27.$env, $27.$this] [entry=bb0]:
     bb0:
       %0 = const c161
       return %0
 
-  fn @arrow_13 [direct_callable] [params: $28.$env, $28.$this, $28.read] [entry=bb0]:
+  fn @arrow_13 [direct_callable] [js_name ""] [js_length 1] [params: $28.$env, $28.$this, $28.read] [entry=bb0]:
     bb0:
       %0 = const c164
       %1 = load var $28.read
       %2 = call %1, this=%0
       return %2
 
-  fn @arrow_14 [captures: $29.key] [params: $31.$env, $31.$this] [entry=bb0]:
+  fn @arrow_14 [js_name ""] [js_length 0] [captures: $29.key] [params: $31.$env, $31.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c173
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_15 [direct_callable] [params: $32.$env, $32.$this, $32.read] [entry=bb0]:
+  fn @arrow_15 [direct_callable] [js_name ""] [js_length 1] [params: $32.$env, $32.$this, $32.read] [entry=bb0]:
     bb0:
       %0 = const c176
       %1 = load var $32.read
       %2 = call %1, this=%0
       return %2
 
-  fn @arrow_16 [captures: $33.value] [params: $35.$env, $35.$this] [entry=bb0]:
+  fn @arrow_16 [js_name ""] [js_length 0] [captures: $33.value] [params: $35.$env, $35.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c184
       %2 = get_prop %0, %1
       return %2
 
-  fn @arrow_17 [direct_callable] [params: $36.$env, $36.$this, $36.read] [entry=bb0]:
+  fn @arrow_17 [direct_callable] [js_name ""] [js_length 1] [params: $36.$env, $36.$this, $36.read] [entry=bb0]:
     bb0:
       %0 = const c187
       %1 = load var $36.read

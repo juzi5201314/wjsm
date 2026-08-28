@@ -38,7 +38,7 @@ module {
     c35 = bool(true)
     c36 = bool(false)
 
-  fn @tag [needs_prototype] [direct_callable] [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
+  fn @tag [needs_prototype] [direct_callable] [js_length 3] [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
     bb0:
       %0 = load var $1.strings
       %1 = const c20

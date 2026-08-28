@@ -148,7 +148,7 @@ module {
     bb11:
       unreachable
 
-  fn @inc [needs_prototype] [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @inc [needs_prototype] [js_name "inc"] [js_length 0] [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c38
@@ -194,7 +194,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [captures: $0.x] [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @arrow_2 [js_name ""] [js_length 0] [captures: $0.x] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
       %1 = const c60

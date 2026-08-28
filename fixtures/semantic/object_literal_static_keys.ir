@@ -149,14 +149,14 @@ module {
     c146 = string("frozenKey")
     c147 = bool(false)
 
-  fn @get [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.o, $2.k] [entry=bb0]:
+  fn @get [needs_prototype] [direct_callable] [js_length 2] [params: $2.$env, $2.$this, $2.o, $2.k] [entry=bb0]:
     bb0:
       %0 = load var $2.o
       %1 = load var $2.k
       %2 = get_elem %0, %1
       return %2
 
-  fn @$0.x [params: $3.$env, $3.$this] [entry=bb0]:
+  fn @$0.x [js_name "get x"] [js_length 0] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c119

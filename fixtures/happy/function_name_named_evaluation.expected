@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+v w z 1 y
+cb g h
+kv arrow 2 m
+get acc set acc
+123 str key dynamic
+"[tag]" ""
+pub #priv compField
+st 1 computedSt
+Klass paren ""
+--- stderr ---

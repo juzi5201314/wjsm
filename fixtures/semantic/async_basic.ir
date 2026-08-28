@@ -86,7 +86,7 @@ module {
       promise_resolve %16, %15
       return
 
-  fn @foo [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @foo [needs_prototype] [js_name "foo"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c28
@@ -131,7 +131,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
       %0 = load var $3.v
       %1 = call builtin.console.log(%0)

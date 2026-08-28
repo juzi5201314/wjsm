@@ -910,6 +910,10 @@ fn lower_export_default_expr(
     flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
     let outer_block = lowerer.ensure_open(flow)?;
+    // NamedEvaluation（§16.2.3.7）：`export default <匿名函数定义>` 命名为 "default"。
+    if Lowerer::is_anonymous_fn_definition(&default_expr.expr) {
+        lowerer.named_eval_hint = Some("default".to_string());
+    }
     let value_val = lowerer.lower_expr(&default_expr.expr, outer_block)?;
     let outer_block = lowerer.resolve_store_block(outer_block);
     if let Some(current_mid) = lowerer.current_module_id {
@@ -951,23 +955,15 @@ fn lower_export_default_decl(
 ) -> Result<StmtFlow, LoweringError> {
     match &default_decl.decl {
         swc_ast::DefaultDecl::Fn(fn_expr) => {
-            let name = fn_expr.ident.as_ref().map_or_else(
-                || {
-                    format!(
-                        "_default_export_mod{}",
-                        lowerer.current_module_id.map_or(0, |m| m.0)
-                    )
-                },
-                |ident| ident.sym.to_string(),
-            );
             let outer_block = lowerer.ensure_open(flow)?;
+            // NamedEvaluation（§16.2.3.7）：匿名 `export default function` 的
+            // `name` 为 "default"；命名形态取自身 ident（保留自引用绑定）。
+            if fn_expr.ident.is_none() {
+                lowerer.named_eval_hint = Some("default".to_string());
+            }
             let fn_val = lowerer.lower_fn_expr(
                 &swc_ast::FnExpr {
-                    ident: Some(swc_ast::Ident::new(
-                        name.clone().into(),
-                        default_decl.span,
-                        swc_core::common::SyntaxContext::default(),
-                    )),
+                    ident: fn_expr.ident.clone(),
                     function: fn_expr.function.clone(),
                 },
                 outer_block,
@@ -990,6 +986,11 @@ fn lower_export_default_decl(
         }
         swc_ast::DefaultDecl::Class(class_expr) => {
             let outer_block = lowerer.ensure_open(flow)?;
+            // NamedEvaluation（§16.2.3.7）：匿名 `export default class` 的
+            // 构造器 `name` 为 "default"。
+            if class_expr.ident.is_none() {
+                lowerer.named_eval_hint = Some("default".to_string());
+            }
             let class_val = lowerer.lower_class_expr(
                 &swc_ast::ClassExpr {
                     ident: class_expr.ident.clone(),

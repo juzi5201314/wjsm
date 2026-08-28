@@ -119,7 +119,7 @@ module {
       promise_resolve %16, %15
       return
 
-  fn @inner [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @inner [needs_prototype] [js_name "inner"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c28
@@ -253,7 +253,7 @@ module {
     bb13:
       unreachable
 
-  fn @outer [needs_prototype] [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @outer [needs_prototype] [js_name "outer"] [js_length 0] [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c62

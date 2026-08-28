@@ -206,6 +206,23 @@ impl Lowerer {
         assign: &swc_ast::AssignExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // NamedEvaluation（§13.15.2）：`x = <匿名函数定义>`（含 &&= / ||= / ??=
+        // 的赋值分支）按目标标识符命名；成员 / 解构目标与算术复合赋值不触发。
+        // 提示由右值降级时的 `lower_expr` 入口消费，覆盖所有下游赋值路径
+        // （本地 / 捕获 / eval env / with）。
+        if let swc_ast::AssignTarget::Simple(swc_ast::SimpleAssignTarget::Ident(target)) =
+            &assign.left
+            && matches!(
+                assign.op,
+                swc_ast::AssignOp::Assign
+                    | swc_ast::AssignOp::AndAssign
+                    | swc_ast::AssignOp::OrAssign
+                    | swc_ast::AssignOp::NullishAssign
+            )
+            && Self::is_anonymous_fn_definition(assign.right.as_ref())
+        {
+            self.named_eval_hint = Some(target.id.sym.to_string());
+        }
         if let swc_ast::AssignTarget::Simple(simple) = &assign.left
             && let swc_ast::SimpleAssignTarget::SuperProp(super_prop) = simple
         {
@@ -463,7 +480,9 @@ impl Lowerer {
                     return Ok(result);
                 }
                 if self.strict_mode && !self.eval_scope_bridge_active() {
-                    // strict script/module: 对未声明变量赋值 → ReferenceError
+                    // strict script/module: 对未声明变量赋值 → ReferenceError。
+                    // 右值不再降级，清除已暂存的 NamedEvaluation 提示防止泄漏。
+                    self.named_eval_hint = None;
                     let msg_const = self.module.add_constant(Constant::String(format!(
                         "assignment to undeclared variable '{name}'"
                     )));

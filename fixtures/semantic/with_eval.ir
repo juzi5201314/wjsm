@@ -535,7 +535,7 @@ module {
     c532 = bool(true)
     c533 = bool(false)
 
-  fn @f [has_eval] [needs_prototype] [captures: $0.f, $0.o, $0.shadow] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @f [has_eval] [needs_prototype] [js_length 0] [captures: $0.f, $0.o, $0.shadow] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c130

@@ -198,7 +198,7 @@ module {
     bb23:
       unreachable
 
-  fn @run [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @run [needs_prototype] [js_name "run"] [js_length 0] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c39
@@ -243,7 +243,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $10.$env, $10.$this, $10.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $10.$env, $10.$this, $10.v] [entry=bb0]:
     bb0:
       %0 = load var $10.v
       %1 = call builtin.console.log(%0)

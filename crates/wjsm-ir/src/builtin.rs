@@ -565,6 +565,10 @@ pub enum Builtin {
     /// 说明 super() 已成功执行过一次，再次调用抛 ReferenceError；仍为未初始化
     /// 哨兵时原样返回。args: [value(当前 this 绑定)]。
     SuperCallOnceCheck,
+    /// SetFunctionName（ES §10.2.9）的运行时形态：计算属性键的方法/访问器与
+    /// 匿名函数定义在键求值后设置 `name`。args: [function, key(ToPropertyKey
+    /// 后的字符串或 symbol), prefix(0=无 1="get " 2="set ")]。无返回值。
+    FunctionSetName,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -600,7 +604,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::SuperCallOnceCheck as u16
+        Self::FunctionSetName as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1096,6 +1100,7 @@ impl Builtin {
             Self::EvalWithBase => "eval.with_base",
             Self::ThisTdzCheck => "this_tdz_check",
             Self::SuperCallOnceCheck => "super_call_once_check",
+            Self::FunctionSetName => "function.set_name",
         }
     }
 }

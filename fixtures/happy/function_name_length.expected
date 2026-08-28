@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+nt: C
+C 2
+m 1
+get x 0 set x 1
+sm 3
+computed 2
+nt: D
+D 0
+bound f 2
+bound bound f 0
+bound C 1
+decl 1
+g 1 ag 2 agen 0
+inner
+--- stderr ---

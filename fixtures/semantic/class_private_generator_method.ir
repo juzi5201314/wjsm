@@ -581,7 +581,7 @@ module {
     bb26:
       unreachable
 
-  fn @Seq.#gen [needs_prototype] [captures: $0.outer] [params: $3.$env, $3.$this, $3.step] [entry=bb0]:
+  fn @Seq.#gen [needs_prototype] [js_name "Seq.#gen"] [js_length 1] [captures: $0.outer] [params: $3.$env, $3.$this, $3.step] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c45
@@ -697,7 +697,7 @@ module {
     bb14:
       unreachable
 
-  fn @Seq.static_#sgen [needs_prototype] [params: $5.$env, $5.$this] [entry=bb0]:
+  fn @Seq.static_#sgen [needs_prototype] [js_name "Seq.static_#sgen"] [js_length 0] [params: $5.$env, $5.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c72
@@ -808,7 +808,7 @@ module {
     bb14:
       unreachable
 
-  fn @Seq.#inner [needs_prototype] [params: $7.$env, $7.$this] [entry=bb0]:
+  fn @Seq.#inner [needs_prototype] [js_name "Seq.#inner"] [js_length 0] [params: $7.$env, $7.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c98
@@ -987,7 +987,7 @@ module {
     bb26:
       unreachable
 
-  fn @Seq.#outer [needs_prototype] [params: $9.$env, $9.$this] [entry=bb0]:
+  fn @Seq.#outer [needs_prototype] [js_name "Seq.#outer"] [js_length 0] [params: $9.$env, $9.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c130
@@ -1126,7 +1126,7 @@ module {
     bb18:
       unreachable
 
-  fn @Seq.#viaArguments [needs_prototype] [params: $11.$env, $11.$this] [entry=bb0]:
+  fn @Seq.#viaArguments [needs_prototype] [js_name "Seq.#viaArguments"] [js_length 0] [params: $11.$env, $11.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c158
@@ -1263,7 +1263,7 @@ module {
     bb19:
       unreachable
 
-  fn @Seq.#agen [needs_prototype] [params: $13.$env, $13.$this] [entry=bb0]:
+  fn @Seq.#agen [needs_prototype] [js_name "Seq.#agen"] [js_length 0] [params: $13.$env, $13.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c188
@@ -1374,7 +1374,7 @@ module {
     bb14:
       unreachable
 
-  fn @Seq.static_#sagen [needs_prototype] [params: $15.$env, $15.$this] [entry=bb0]:
+  fn @Seq.static_#sagen [needs_prototype] [js_name "Seq.static_#sagen"] [js_length 0] [params: $15.$env, $15.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c214
@@ -1398,7 +1398,7 @@ module {
       call builtin.continuation.save_var(%7, %14, %13)
       return %8
 
-  fn @Seq.constructor [home_object=@14.prototype] [needs_prototype] [class_ctor "Seq"] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3, $1.$private_function#1_4] [params: $16.$env, $16.$this] [entry=bb0]:
+  fn @Seq.constructor [home_object=@14.prototype] [needs_prototype] [class_ctor "Seq"] [js_name "Seq"] [js_length 0] [captures: $1.$private_function#1_0, $1.$private_function#1_1, $1.$private_function#1_2, $1.$private_function#1_3, $1.$private_function#1_4] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
       %0 = const c223
       %1 = const c224
@@ -1436,7 +1436,7 @@ module {
       call builtin.private_set(%23, %27, %26)
       return
 
-  fn @Seq.collect [home_object=@14.prototype] [direct_callable] [params: $17.$env, $17.$this, $17.step] [entry=bb0]:
+  fn @Seq.collect [home_object=@14.prototype] [direct_callable] [js_name "collect"] [js_length 1] [params: $17.$env, $17.$this, $17.step] [entry=bb0]:
     bb0:
       %0 = new_array(capacity=4)
       %1 = load var $17.$this
@@ -1465,7 +1465,7 @@ module {
       %12 = call builtin.exception_value(%10)
       throw %12
 
-  fn @Seq.collectStatic [home_object=@14] [captures: $1.Seq] [params: $18.$env, $18.$this] [entry=bb0]:
+  fn @Seq.collectStatic [home_object=@14] [js_name "collectStatic"] [js_length 0] [captures: $1.Seq] [params: $18.$env, $18.$this] [entry=bb0]:
     bb0:
       %0 = new_array(capacity=4)
       %1 = load var $env
@@ -1495,7 +1495,7 @@ module {
       %13 = call builtin.exception_value(%11)
       throw %13
 
-  fn @Seq.delegated [home_object=@14.prototype] [direct_callable] [params: $19.$env, $19.$this] [entry=bb0]:
+  fn @Seq.delegated [home_object=@14.prototype] [direct_callable] [js_name "delegated"] [js_length 0] [params: $19.$env, $19.$this] [entry=bb0]:
     bb0:
       %0 = new_array(capacity=4)
       %1 = load var $19.$this
@@ -1523,7 +1523,7 @@ module {
       %11 = call builtin.exception_value(%9)
       throw %11
 
-  fn @Seq.argInfo [home_object=@14.prototype] [direct_callable] [params: $20.$env, $20.$this] [entry=bb0]:
+  fn @Seq.argInfo [home_object=@14.prototype] [direct_callable] [js_name "argInfo"] [js_length 0] [params: $20.$env, $20.$this] [entry=bb0]:
     bb0:
       %0 = new_array(capacity=4)
       %1 = load var $20.$this
@@ -1758,7 +1758,7 @@ module {
     bb31:
       unreachable
 
-  fn @sum [home_object=@14.prototype] [needs_prototype] [params: $23.$env, $23.$this] [entry=bb0]:
+  fn @sum [home_object=@14.prototype] [needs_prototype] [js_name "sum"] [js_length 0] [params: $23.$env, $23.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c299
@@ -2035,7 +2035,7 @@ module {
     bb39:
       unreachable
 
-  fn @joinStatic [home_object=@14] [needs_prototype] [captures: $1.Seq] [params: $26.$env, $26.$this] [entry=bb0]:
+  fn @joinStatic [home_object=@14] [needs_prototype] [js_name "joinStatic"] [js_length 0] [captures: $1.Seq] [params: $26.$env, $26.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c350
@@ -2070,7 +2070,7 @@ module {
       call builtin.async_function.resume(%7, %9, %20, %21, %22)
       return %4
 
-  fn @Seq.tryCall [home_object=@14] [direct_callable] [params: $27.$env, $27.$this, $27.target] [entry=bb0]:
+  fn @Seq.tryCall [home_object=@14] [direct_callable] [js_name "tryCall"] [js_length 1] [params: $27.$env, $27.$this, $27.target] [entry=bb0]:
     bb0:
       jump bb1
     bb1:
@@ -2128,14 +2128,14 @@ module {
       %22 = phi [(bb12, %20), (bb13, %21)]
       return %22
 
-  fn @arrow_24 [direct_callable] [params: $32.$env, $32.$this, $32.total] [entry=bb0]:
+  fn @arrow_24 [direct_callable] [js_name ""] [js_length 1] [params: $32.$env, $32.$this, $32.total] [entry=bb0]:
     bb0:
       %0 = const c410
       %1 = load var $32.total
       %2 = call builtin.console.log(%0, %1)
       return %2
 
-  fn @arrow_25 [direct_callable] [params: $33.$env, $33.$this, $33.joined] [entry=bb0]:
+  fn @arrow_25 [direct_callable] [js_name ""] [js_length 1] [params: $33.$env, $33.$this, $33.joined] [entry=bb0]:
     bb0:
       %0 = const c414
       %1 = load var $33.joined

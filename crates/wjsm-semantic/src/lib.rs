@@ -22,6 +22,7 @@ mod scan_await;
 mod scope;
 mod wk_symbol_map;
 pub(crate) use function_builder::*;
+pub(crate) use lowerer_function_names::{AccessorPrefix, js_number_property_key};
 pub use lowerer_modules::{
     BuiltinSegment, LoweringMetadata, ModuleKind, ModuleLinking, ModuleLoweringInput,
     ModuleMetadata, lower_modules, lower_modules_with_builtin_seed, lower_modules_with_debug,
@@ -113,6 +114,7 @@ mod lowerer_construct;
 mod lowerer_core;
 mod lowerer_declarations;
 mod lowerer_function_decls;
+mod lowerer_function_names;
 mod lowerer_functions;
 mod lowerer_jsx_objects;
 mod lowerer_predeclare;
