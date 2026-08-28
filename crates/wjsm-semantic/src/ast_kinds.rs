@@ -18,6 +18,16 @@ pub(crate) fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
     }
 }
 
+/// 字符串字面量（WTF-8）→ 常量：SWC 用 WTF-8 保留孤立代理项，UTF-8 `String`
+/// 无法承载。常规文本走 `Constant::String`；含孤立代理项时以
+/// `Constant::Utf16String` 直存码元序列，避免 lossy 转换替换成 U+FFFD。
+pub(crate) fn string_literal_constant(value: &swc_core::atoms::Wtf8Atom) -> Constant {
+    match value.as_atom() {
+        Some(atom) => Constant::String(atom.to_string()),
+        None => Constant::Utf16String(value.as_wtf8().to_ill_formed_utf16().collect()),
+    }
+}
+
 // ── Kind strings ────────────────────────────────────────────────────────
 
 pub(crate) fn expr_kind(expr: &swc_ast::Expr) -> &'static str {

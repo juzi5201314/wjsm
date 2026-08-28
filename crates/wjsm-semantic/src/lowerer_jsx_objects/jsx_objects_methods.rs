@@ -278,8 +278,9 @@ impl Lowerer {
                 Ok(key_dest)
             }
             swc_ast::PropName::Str(s) => {
-                let key_str = s.value.to_string_lossy().into_owned();
-                let key_const = self.module.add_constant(Constant::String(key_str));
+                // 键须与成员访问同一转换（孤立代理项经 Utf16String 保留），
+                // 否则 `({"\ud800":1})["\ud800"]` 会因键/访问不一致查不到。
+                let key_const = self.module.add_constant(string_literal_constant(&s.value));
                 let key_dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
@@ -869,7 +870,9 @@ fn static_object_literal_property_key(
 
     let key_str = match key {
         swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+        // 含孤立代理项的键无法进 `Constant::String` name-ref：退回通用
+        // SetProp 路径（lower_prop_name 会以 Utf16String 保真）。
+        swc_ast::PropName::Str(s) => s.value.as_atom()?.to_string(),
         swc_ast::PropName::Num(num) => num
             .raw
             .as_ref()
