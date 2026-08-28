@@ -1,0 +1,20 @@
+exit_code: 0
+--- stdout ---
+explicit in-ctor: 1
+explicit: 1
+implicit: 1
+fields: 5 1 true 10
+proto: true
+non-object: 7 proto
+expr: true 9 1
+branch: b 1
+branch: b 1
+return-super: 3 1
+return-object: x undefined
+return-undefined: 1
+chain: 1 m t
+spread: 7
+reflect: 1 8
+primitive: finally ran
+primitive: true
+--- stderr ---

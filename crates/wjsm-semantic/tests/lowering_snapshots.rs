@@ -830,6 +830,16 @@ fn class_private_async_method_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn class_super_constructor_fixture_matches_ir_snapshot() {
+    assert_snapshot("class_super_constructor");
+}
+
+#[test]
+fn class_super_return_object_fixture_matches_ir_snapshot() {
+    assert_snapshot("class_super_return_object");
+}
+
+#[test]
 fn private_in_brand_check_fixture_matches_ir_snapshot() {
     assert_snapshot("private_in_brand_check");
 }

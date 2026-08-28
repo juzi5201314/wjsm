@@ -21,6 +21,12 @@ impl Lowerer {
         self.lexical_home_object = inherited_home_object;
         self.super_allowed = outer_super_allowed;
         self.super_call_allowed = outer_super_call_allowed;
+        // 箭头体内的 super() 属于外层派生构造器的求值（SuperCall 步骤 11）：
+        // 实例初始化上下文随词法 super 能力克隆进入，站点照常发射初始化。
+        self.derived_ctor_init_ctx = self
+            .function_derived_ctor_init_ctx_stack
+            .last()
+            .and_then(|ctx| ctx.clone());
         // 声明 $env（闭包环境对象）
         let env_scope_id = self
             .scopes
@@ -166,6 +172,11 @@ impl Lowerer {
         self.lexical_home_object = inherited_home_object;
         self.super_allowed = outer_super_allowed;
         self.super_call_allowed = outer_super_call_allowed;
+        // 同步箭头同理：async 箭头体内的 super() 也要在站点发射实例初始化。
+        self.derived_ctor_init_ctx = self
+            .function_derived_ctor_init_ctx_stack
+            .last()
+            .and_then(|ctx| ctx.clone());
         let env_scope_id = self
             .scopes
             .declare("$env", VarKind::Let, true)

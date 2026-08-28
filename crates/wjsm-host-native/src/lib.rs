@@ -5591,7 +5591,17 @@ unsafe extern "C" fn native_callable_call(
             | wjsm_ir::Builtin::TypeErrorConstructor
             | wjsm_ir::Builtin::URIErrorConstructor),
             _,
-        ) => dispatch::error_constructor(ctx, state, builtin, this_value, &arguments),
+        ) => {
+            // 可调用对象路径（`new TypeError(...)`、error 子类 super() 等）
+            // 有自己的激活帧：new.target 由调用形态决定（构造为构造器本身，
+            // 普通调用为 undefined），照原样传入。
+            let new_target = state
+                .activations
+                .last()
+                .map(|activation| activation.new_target)
+                .unwrap_or_else(value::encode_undefined);
+            dispatch::error_constructor(ctx, state, builtin, this_value, new_target, &arguments)
+        }
         NativeCallableKind::Builtin(wjsm_ir::Builtin::PromiseCreate, _) => {
             dispatch::promise::construct(ctx, state, this_value, &arguments)
         }
