@@ -809,23 +809,38 @@ impl Lowerer {
             return Ok(block);
         }
         // 形参绑定必须都解析得到，否则映射会指向错误的槽位——宁可不建映射。
+        //
+        // §10.4.4 CreateMappedArgumentsObject 步骤 21 自后向前扫描并维护 mappedNames：
+        // 同名形参（`function f(a, a)`）只有最后一次出现进 parameter map，靠前的下标
+        // 退化为普通数据属性。这里对靠前的重复项发 undefined 占位，宿主据此跳过。
+        let mut mapped_names = std::collections::HashSet::new();
         let mut bindings = Vec::with_capacity(names.len());
-        for name in &names {
+        for name in names.iter().rev() {
+            if !mapped_names.insert(name.as_str()) {
+                bindings.push(None);
+                continue;
+            }
             let Ok((scope_id, _)) = self.scopes.lookup(name) else {
                 return Ok(block);
             };
-            bindings.push(CapturedBinding::new(name, scope_id));
+            bindings.push(Some(CapturedBinding::new(name, scope_id)));
         }
-        // 同名形参（`function f(a, a)`）只有最后一个绑定有效，映射会把两个下标
-        // 指到同一 binding，与规范的 §10.2.11 步骤 22 处理一致。
+        bindings.reverse();
+        let shared: Vec<CapturedBinding> = bindings.iter().flatten().cloned().collect();
+        if shared.is_empty() {
+            return Ok(block);
+        }
         let span = swc_core::common::DUMMY_SP;
-        let env_val = self.ensure_shared_env(block, &bindings, span)?;
+        let env_val = self.ensure_shared_env(block, &shared, span)?;
         let mut block = self.resolve_store_block(block);
         let mut args = Vec::with_capacity(bindings.len() + 2);
         args.push(arguments_obj);
         args.push(env_val);
         for binding in &bindings {
-            args.push(self.append_env_key_const(block, binding));
+            args.push(match binding {
+                Some(binding) => self.append_env_key_const(block, binding),
+                None => self.alloc_undefined_value(block),
+            });
         }
         self.current_function.append_instruction(
             block,

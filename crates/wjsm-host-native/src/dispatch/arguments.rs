@@ -18,8 +18,9 @@ const HIDDEN_DATA_FLAGS: u32 = (constants::FLAG_CONFIGURABLE | constants::FLAG_W
 pub(crate) struct ArgumentsParamMap {
     /// 形参所在的共享 env 对象（编码值）。
     pub(crate) env: i64,
-    /// 按形参次序排列的 env 属性键。
-    pub(crate) keys: Vec<PropertyKey>,
+    /// 按形参次序排列的 env 属性键；`None` 是同名形参里靠前的那些下标，按
+    /// §10.4.4 步骤 21 的 mappedNames 去重规则不进 parameter map。
+    pub(crate) keys: Vec<Option<PropertyKey>>,
 }
 
 pub(super) fn dispatch_arguments(
@@ -66,15 +67,29 @@ fn bind_param_map(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     let mapped_count = keys.len().min(length);
     let mut resolved = Vec::with_capacity(mapped_count);
     for key in &keys[..mapped_count] {
+        if value::is_undefined(*key) {
+            resolved.push(None);
+            continue;
+        }
         let Some(key) = super::runtime::property_key(state, *key) else {
             return fail_dispatch(ctx);
         };
-        resolved.push(key);
+        resolved.push(Some(key));
+    }
+    if resolved.iter().all(Option::is_none) {
+        return value::encode_undefined();
     }
     state
         .arguments_param_maps
         .insert(handle, ArgumentsParamMap { env, keys: resolved });
     for index in 0..mapped_count {
+        let skip = state
+            .arguments_param_maps
+            .get(&handle)
+            .is_none_or(|map| map.keys.get(index).is_none_or(Option::is_none));
+        if skip {
+            continue;
+        }
         if !install_mapped_accessor(state, handle, index) {
             state.arguments_param_maps.remove(&handle);
             return fail_dispatch(ctx);
@@ -136,7 +151,7 @@ fn mapped_binding(
     index: u32,
 ) -> Option<(i64, PropertyKey)> {
     let map = state.arguments_param_maps.get(&handle)?;
-    let key = map.keys.get(index as usize).copied()?;
+    let key = map.keys.get(index as usize).copied().flatten()?;
     Some((map.env, key))
 }
 
