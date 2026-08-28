@@ -645,12 +645,11 @@ fn construct(
     // §23.2.5.1 AllocateTypedArray 步骤 1：GetPrototypeFromConstructor 先于
     // 长度求值与缓冲分配，newTarget.prototype 的 getter（含 Proxy trap）
     // 异常先行传播。
-    let proto_override = match super::typedarray_create::instance_prototype_slot(
-        ctx, state, new_target,
-    ) {
-        Ok(slot) => slot,
-        Err(exception) => return exception,
-    };
+    let proto_override =
+        match super::typedarray_create::instance_prototype_slot(ctx, state, new_target) {
+            Ok(slot) => slot,
+            Err(exception) => return exception,
+        };
     if let Some(sab) = args
         .first()
         .and_then(|encoded| {
