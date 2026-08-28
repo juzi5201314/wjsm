@@ -666,8 +666,10 @@ pub(crate) fn ensure_node_module_bridge(state: &mut NativeAgentState) -> Option<
     if let Some(bridge) = state.node_module_bridge {
         return Some(bridge);
     }
-    let create_require =
-        state.native_callable(NativeCallableKind::Builtin(Builtin::CjsCreateRequire, false))?;
+    let create_require = state.native_callable(NativeCallableKind::Builtin(
+        Builtin::CjsCreateRequire,
+        false,
+    ))?;
     let mut names = Vec::new();
     for canonical in wjsm_module::builtin_module_names() {
         names.push(state.intern_text(canonical.to_owned(), value::TAG_STRING)?);

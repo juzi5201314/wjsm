@@ -328,16 +328,20 @@ pub(crate) fn ensure_web_bridge(state: &mut NativeAgentState) -> Option<i64> {
         ("ReadableStream", Builtin::ReadableStreamConstructor),
         ("WritableStream", Builtin::WritableStreamConstructor),
         ("TransformStream", Builtin::TransformStreamConstructor),
-        ("CountQueuingStrategy", Builtin::CountQueuingStrategyConstructor),
+        (
+            "CountQueuingStrategy",
+            Builtin::CountQueuingStrategyConstructor,
+        ),
         (
             "ByteLengthQueuingStrategy",
             Builtin::ByteLengthQueuingStrategyConstructor,
         ),
     ];
-    let bridge = state.allocate_object(constructors.len() as u32, false).ok()?;
+    let bridge = state
+        .allocate_object(constructors.len() as u32, false)
+        .ok()?;
     for (name, builtin) in constructors {
-        let callable =
-            state.native_callable(crate::NativeCallableKind::Builtin(builtin, false))?;
+        let callable = state.native_callable(crate::NativeCallableKind::Builtin(builtin, false))?;
         super::modules::set_named_property(state, bridge, name, callable).ok()?;
     }
     state.streams.web_bridge = Some(bridge);
