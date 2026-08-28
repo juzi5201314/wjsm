@@ -54,7 +54,7 @@ module {
     c51 = undefined
     c52 = bool(true)
 
-  fn @work [needs_prototype] [captures: $0.RECORD] [params: $1.$env, $1.$this] [entry=bb0]:
+  fn @work [needs_prototype] [js_length 0] [captures: $0.RECORD] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %82 = load var $sroa.$0.RECORD.name
       %83 = load var $sroa.$0.RECORD.value

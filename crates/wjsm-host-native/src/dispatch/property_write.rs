@@ -130,8 +130,9 @@ fn render_receiver_brief(state: &NativeAgentState, receiver: i64) -> String {
 
 /// 引擎对 callable 的统一 toString 表示：V8 native-code 形态（带函数名）。
 /// 不追踪源码文本，无法复现 V8 嵌入原始源码的消息，取次优的原生形态。
+/// 名字取 JS 可见 `name`（SetFunctionName 结果），不泄漏内部 IR 函数名。
 fn callable_source_text(state: &NativeAgentState, receiver: i64) -> String {
-    match state.callable_display_name(receiver) {
+    match state.callable_js_name(receiver) {
         Some(name) if !name.is_empty() => format!("function {name}() {{ [native code] }}"),
         _ => "function () { [native code] }".into(),
     }

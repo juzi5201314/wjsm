@@ -83,6 +83,9 @@ impl Lowerer {
         field: &StaticFieldInit<'_>,
     ) -> Result<BasicBlockId, LoweringError> {
         self.check_field_initializer_arguments(field.init_value)?;
+        // 调用方是否已按静态键 / 私有名暂存 NamedEvaluation 提示（提示随
+        // 合成初始化器函数体的降级被消费，须在此先行记录）。
+        let staged_named_eval = self.named_eval_hint.is_some();
         let mut block = block;
         let init_val = if let Some(init) = field.init_value {
             let fn_name = format!(
@@ -111,6 +114,16 @@ impl Lowerer {
             // DefineField 的 `? Call(initializer, receiver)`：初始化器抛出的
             // 异常必须在类定义期传播，不得流入属性定义。
             block = self.lower_value_exception_branch(block, value)?;
+            // NamedEvaluation：计算键静态字段的匿名函数定义以实际键值
+            // 运行时命名（私有 / 静态键由调用方以降级期提示命名）。
+            if !field.is_private && !staged_named_eval && Self::is_anonymous_fn_definition(init) {
+                self.emit_runtime_set_function_name(
+                    block,
+                    value,
+                    field.key_dest,
+                    AccessorPrefix::None,
+                );
+            }
             value
         } else {
             let constant = self.module.add_constant(Constant::Undefined);

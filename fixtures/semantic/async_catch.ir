@@ -126,7 +126,7 @@ module {
     bb10:
       unreachable
 
-  fn @recover [needs_prototype] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @recover [needs_prototype] [js_name "recover"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c35
@@ -171,7 +171,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_2 [direct_callable] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
+  fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
     bb0:
       %0 = load var $7.v
       %1 = call builtin.console.log(%0)

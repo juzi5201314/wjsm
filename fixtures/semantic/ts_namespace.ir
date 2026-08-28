@@ -29,7 +29,7 @@ module {
     c26 = bool(true)
     c27 = bool(false)
 
-  fn @double [needs_prototype] [direct_callable] [params: $2.$env, $2.$this, $2.n] [entry=bb0]:
+  fn @double [needs_prototype] [direct_callable] [js_length 1] [params: $2.$env, $2.$this, $2.n] [entry=bb0]:
     bb0:
       %0 = load var $2.n
       %1 = const c21

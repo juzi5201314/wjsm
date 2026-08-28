@@ -30,6 +30,9 @@ impl Lowerer {
 
         for declarator in &var_decl.decls {
             if let Some(init) = &declarator.init {
+                // NamedEvaluation（§14.3.1.2 / §14.3.2.1）：`let f = <匿名函数定义>`
+                // 按绑定标识符命名；解构声明目标不触发。
+                self.stage_named_eval_for_binding(&declarator.name, init);
                 let value = self.lower_expr(init, block)?;
                 block = self.resolve_store_block(block);
                 // 初始化器位于声明语句的顶层表达式位置：若它可能返回 TAG_EXCEPTION
@@ -365,6 +368,13 @@ impl Lowerer {
         init_value: Option<&swc_ast::Expr>,
     ) -> Result<BasicBlockId, LoweringError> {
         let key_dest = self.lower_prop_name(key, block)?;
+        // NamedEvaluation（ClassFieldDefinitionEvaluation）：静态键字段的
+        // 匿名函数定义初始化器按键名命名。
+        if init_value.is_some_and(Self::is_anonymous_fn_definition)
+            && let Some(name) = Self::static_prop_name_text(key)
+        {
+            self.named_eval_hint = Some(name);
+        }
         self.emit_field_init_common(block, key_dest, init_value, false)
     }
 
@@ -378,8 +388,19 @@ impl Lowerer {
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
     ) -> Result<BasicBlockId, LoweringError> {
+        // 调用方是否已按静态键 / 私有名暂存 NamedEvaluation 提示（提示在
+        // 初始化器降级时被消费，须在此先行记录）。
+        let staged_named_eval = self.named_eval_hint.is_some();
         let mut block = block;
         let init_val = self.lower_field_init_value(&mut block, init_value)?;
+        // NamedEvaluation：计算键字段的匿名函数定义以实际键值运行时命名
+        // （私有字段恒由调用方以 `#name` 提示命名，不走运行时键）。
+        if !is_private
+            && !staged_named_eval
+            && init_value.is_some_and(Self::is_anonymous_fn_definition)
+        {
+            self.emit_runtime_set_function_name(block, init_val, key_dest, AccessorPrefix::None);
+        }
         // 字段定义目标是当前绑定的 this：super() 返回对象重绑后即该对象。
         let this_val = self.emit_read_ctor_this(block);
         if is_private {

@@ -35,13 +35,13 @@ module {
     c32 = bool(true)
     c33 = bool(false)
 
-  fn @arrow_0 [direct_callable] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
+  fn @arrow_0 [direct_callable] [js_name ""] [js_length 1] [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
       %0 = load var $1.value
       %1 = call builtin.console.log(%0)
       return %1
 
-  fn @arrow_1 [direct_callable] [params: $2.$env, $2.$this, $2.reason] [entry=bb0]:
+  fn @arrow_1 [direct_callable] [js_name ""] [js_length 1] [params: $2.$env, $2.$this, $2.reason] [entry=bb0]:
     bb0:
       %0 = load var $2.reason
       %1 = call builtin.console.log(%0)

@@ -6,6 +6,25 @@ impl Lowerer {
         expr: &swc_ast::Expr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // NamedEvaluation 提示只对匿名函数定义形态（含括号 / TS 断言透传）
+        // 有效；其余表达式形态一律在此丢弃，防止提示穿透进子表达式
+        // （如 `const a = [() => {}]` 不得命名数组元素）。
+        let named_eval = self.named_eval_hint.take();
+        if matches!(
+            expr,
+            swc_ast::Expr::Paren(_)
+                | swc_ast::Expr::Fn(_)
+                | swc_ast::Expr::Arrow(_)
+                | swc_ast::Expr::Class(_)
+                | swc_ast::Expr::TsTypeAssertion(_)
+                | swc_ast::Expr::TsConstAssertion(_)
+                | swc_ast::Expr::TsNonNull(_)
+                | swc_ast::Expr::TsAs(_)
+                | swc_ast::Expr::TsSatisfies(_)
+                | swc_ast::Expr::TsInstantiation(_)
+        ) {
+            self.named_eval_hint = named_eval;
+        }
         match expr {
             swc_ast::Expr::Bin(bin) => self.lower_binary(bin, block),
             swc_ast::Expr::Lit(lit) => self.lower_literal(lit, block),

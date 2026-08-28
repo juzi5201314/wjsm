@@ -794,6 +794,15 @@ pub struct Function {
     /// [[Call]] 调用（无 new）必须抛 TypeError；值为错误文案用的类显示名
     /// （类声明/命名类表达式的 ident，匿名类表达式为空串）。
     class_ctor_name: Option<String>,
+    /// JS 可见的 `name` 属性值（SetFunctionName，ES §10.2.9）。
+    /// None 表示与内部名一致（函数声明/命名函数表达式）；Some 为语义层按
+    /// 定义形态计算的结果：类构造器为类名、方法为属性名、访问器带
+    /// `get `/`set ` 前缀、匿名函数按 NamedEvaluation 取绑定名或空串。
+    js_name: Option<String>,
+    /// JS 可见的 `length` 属性值（SetFunctionLength，ES §10.2.10）：
+    /// ExpectedArgumentCount——首个带默认值或 rest 的形参之前的形参个数。
+    /// None 表示按 IR 形参槽数推导（`params.len() - $env/$this 两固定槽`）。
+    js_length: Option<u32>,
 }
 impl Function {
     pub fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
@@ -810,6 +819,8 @@ impl Function {
             source_span: None,
             direct_callable: false,
             class_ctor_name: None,
+            js_name: None,
+            js_length: None,
         }
     }
 
@@ -962,6 +973,24 @@ impl Function {
         self.class_ctor_name.is_some()
     }
 
+    /// JS 可见的 `name` 属性值（None = 与内部名一致）。
+    pub fn js_name(&self) -> Option<&str> {
+        self.js_name.as_deref()
+    }
+
+    pub fn set_js_name(&mut self, name: impl Into<String>) {
+        self.js_name = Some(name.into());
+    }
+
+    /// JS 可见的 `length` 属性值（None = 按 IR 形参槽数推导）。
+    pub fn js_length(&self) -> Option<u32> {
+        self.js_length
+    }
+
+    pub fn set_js_length(&mut self, length: u32) {
+        self.js_length = Some(length);
+    }
+
     /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。
     pub fn known_callee_vars(&self) -> &std::collections::HashMap<String, FunctionId> {
         &self.known_callee_vars
@@ -1030,6 +1059,12 @@ impl Function {
         }
         if let Some(name) = &self.class_ctor_name {
             let _ = write!(out, " [class_ctor \"{name}\"]");
+        }
+        if let Some(name) = &self.js_name {
+            let _ = write!(out, " [js_name \"{name}\"]");
+        }
+        if let Some(length) = self.js_length {
+            let _ = write!(out, " [js_length {length}]");
         }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");

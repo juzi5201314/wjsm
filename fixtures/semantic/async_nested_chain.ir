@@ -153,7 +153,7 @@ module {
       promise_resolve %16, %15
       return
 
-  fn @c [needs_prototype] [params: $2.$env, $2.$this] [entry=bb0]:
+  fn @c [needs_prototype] [js_name "c"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c28
@@ -261,7 +261,7 @@ module {
     bb7:
       unreachable
 
-  fn @b [needs_prototype] [captures: $0.c] [params: $4.$env, $4.$this] [entry=bb0]:
+  fn @b [needs_prototype] [js_name "b"] [js_length 0] [captures: $0.c] [params: $4.$env, $4.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c61
@@ -370,7 +370,7 @@ module {
     bb7:
       unreachable
 
-  fn @a [needs_prototype] [captures: $0.b] [params: $6.$env, $6.$this] [entry=bb0]:
+  fn @a [needs_prototype] [js_name "a"] [js_length 0] [captures: $0.b] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c95
@@ -416,7 +416,7 @@ module {
       %10 = call builtin.exception_value(%8)
       throw %10
 
-  fn @arrow_6 [direct_callable] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
+  fn @arrow_6 [direct_callable] [js_name ""] [js_length 1] [params: $7.$env, $7.$this, $7.v] [entry=bb0]:
     bb0:
       %0 = load var $7.v
       %1 = call builtin.console.log(%0)

@@ -38,7 +38,7 @@ module {
     c35 = bool(true)
     c36 = bool(false)
 
-  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
+  fn @Base.constructor [home_object=@0.prototype] [needs_prototype] [direct_callable] [class_ctor "Base"] [js_name "Base"] [js_length 1] [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
     bb0:
       %0 = load var $2.$this
       %1 = const c20
@@ -52,7 +52,7 @@ module {
       %5 = call builtin.exception_value(%3)
       throw %5
 
-  fn @Derived.constructor [home_object=@1.prototype] [needs_prototype] [class_ctor "Derived"] [params: $4.$env, $4.$this, $4.x] [entry=bb0]:
+  fn @Derived.constructor [home_object=@1.prototype] [needs_prototype] [class_ctor "Derived"] [js_name "Derived"] [js_length 1] [params: $4.$env, $4.$this, $4.x] [entry=bb0]:
     bb0:
       %0 = load var $4.$this
       %1 = call builtin.object.get_prototype_of(%0)

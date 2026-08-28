@@ -62,6 +62,11 @@ pub(crate) struct Lowerer {
     pub(crate) active_finalizers: Vec<PendingFinalizer>,
     /// 匿名类 / 匿名函数计数器
     pub(crate) anon_counter: u32,
+    /// NamedEvaluation（ES §8.4.5）的名字提示：变量声明 / 赋值 / 属性定义 /
+    /// 默认值 / export default 在降级匿名函数定义（无名函数表达式、箭头、
+    /// 无名类表达式）之前设置；`lower_expr` 入口取走，只对匿名函数定义形态
+    /// （含括号 / TS 断言透传）回填，其余表达式形态自然丢弃。
+    pub(crate) named_eval_hint: Option<String>,
     /// 类私有名词法栈：源名 → 该声明类的槽名与 `in` 错误显示名。
     pub(crate) private_name_stack: Vec<std::collections::HashMap<String, PrivateNameEntry>>,
     pub(crate) next_private_name_id: u32,

@@ -1,6 +1,32 @@
 use super::*;
 
 impl Lowerer {
+    /// 函数表达式的 JS 可见 `name`：命名表达式取自身 ident；匿名表达式按
+    /// NamedEvaluation（ES §8.4.5）取绑定名提示，无提示为空串。
+    fn fn_expr_js_name(fn_expr: &swc_ast::FnExpr, named_eval: Option<String>) -> String {
+        fn_expr
+            .ident
+            .as_ref()
+            .map(|ident| ident.sym.to_string())
+            .or(named_eval)
+            .unwrap_or_default()
+    }
+
+    /// 回填函数表达式（含 async / generator wrapper）的 js name/length 元数据。
+    fn set_fn_expr_js_metadata(
+        &mut self,
+        function_id: FunctionId,
+        fn_expr: &swc_ast::FnExpr,
+        named_eval: Option<String>,
+    ) {
+        let js_name = Self::fn_expr_js_name(fn_expr, named_eval);
+        self.set_function_js_metadata(
+            function_id,
+            Some(&js_name),
+            Self::expected_param_count(&fn_expr.function.params),
+        );
+    }
+
     /// Lower an anonymous function expression `function(...) { ... }`.
     /// Returns a ValueId for the FunctionRef constant.
     pub(crate) fn lower_fn_expr(
@@ -8,6 +34,8 @@ impl Lowerer {
         fn_expr: &swc_ast::FnExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // NamedEvaluation 提示入口即取走：嵌套表达式降级不得再消费。
+        let named_eval = self.named_eval_hint.take();
         if fn_expr.function.is_async && fn_expr.function.is_generator {
             // async generator 表达式复用声明路径（与同步 generator 表达式的临时名技巧一致）。
             let temp_name = format!("$__wjsm_async_gen_expr_{}", self.module.functions().len());
@@ -24,7 +52,16 @@ impl Lowerer {
                 declare: false,
                 function: fn_expr.function.clone(),
             };
-            let flow = self.lower_async_gen_fn_decl(&fake_decl, StmtFlow::Open(block))?;
+            let (wrapper_fn_id, captured) =
+                self.lower_async_gen_function(&fake_decl, MethodSuperBinding::None)?;
+            self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
+            let flow = self.store_wrapper_in_outer_scope(
+                StmtFlow::Open(block),
+                &temp_name,
+                wrapper_fn_id,
+                &captured,
+                fn_expr.span(),
+            )?;
             let load_block = self.ensure_open(flow)?;
             let (scope_id, _) = self
                 .scopes
@@ -41,6 +78,7 @@ impl Lowerer {
             return Ok(callee);
         }
         if fn_expr.function.is_async {
+            self.named_eval_hint = named_eval;
             return self.lower_async_fn_expr(fn_expr, block);
         }
         if fn_expr.function.is_generator {
@@ -58,7 +96,15 @@ impl Lowerer {
                 declare: false,
                 function: fn_expr.function.clone(),
             };
-            let flow = self.lower_gen_fn_decl(&fake_decl, StmtFlow::Open(block))?;
+            let (wrapper_fn_id, captured) = self.lower_gen_function(&fake_decl)?;
+            self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
+            let flow = self.store_wrapper_in_outer_scope(
+                StmtFlow::Open(block),
+                &temp_name,
+                wrapper_fn_id,
+                &captured,
+                fn_expr.span(),
+            )?;
             let load_block = self.ensure_open(flow)?;
             let (scope_id, _) = self
                 .scopes
@@ -78,6 +124,7 @@ impl Lowerer {
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
         );
+        let js_name = Self::fn_expr_js_name(fn_expr, named_eval);
         self.push_function_context(&name, BasicBlockId(0));
         self.apply_function_strictness(fn_expr.function.body.as_ref());
 
@@ -151,6 +198,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
+        ir_function.set_js_name(js_name);
+        ir_function.set_js_length(Self::expected_param_count(&fn_expr.function.params));
         if let Some(span) = self.span_to_source_span(fn_expr.span()) {
             ir_function.set_source_span(span);
         }
@@ -223,12 +272,14 @@ impl Lowerer {
         fn_expr: &swc_ast::FnExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        let named_eval = self.named_eval_hint.take();
         let name = fn_expr.ident.as_ref().map_or_else(
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
         );
         let (wrapper_fn_id, captured) =
             self.lower_async_function_parts(&name, fn_expr, MethodSuperBinding::None)?;
+        self.set_fn_expr_js_metadata(wrapper_fn_id, fn_expr, named_eval);
 
         let wrapper_ref_const = self
             .module
@@ -976,6 +1027,9 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(name, BasicBlockId(0));
         wrapper_ir_function.set_has_eval(has_eval);
+        // 默认 JS 名取内部名；表达式/方法调用方按各自 SetFunctionName 语义覆盖。
+        wrapper_ir_function.set_js_name(name);
+        wrapper_ir_function.set_js_length(Self::expected_param_count(&fn_expr.function.params));
         if let Some(span) = self.span_to_source_span(fn_expr.span()) {
             wrapper_ir_function.set_source_span(span);
         }
