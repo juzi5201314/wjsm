@@ -59,6 +59,7 @@ pub(crate) struct NativeTypedArray {
 
 pub(crate) fn create_uint8_array(state: &mut NativeAgentState, bytes: &[u8]) -> Option<i64> {
     let object = state.allocate_object(2, false).ok()?;
+    attach_instance_prototype(state, object, TypedArrayKind::Uint8)?;
     let storage = bytes
         .iter()
         .map(|byte| value::encode_f64(f64::from(*byte)))
@@ -161,6 +162,7 @@ pub(crate) fn from_values(
 ) -> Option<i64> {
     let length = values.len();
     let object = state.allocate_object(2, false).ok()?;
+    attach_instance_prototype(state, object, kind)?;
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {
@@ -194,6 +196,7 @@ pub(crate) fn from_buffer(
         return None;
     }
     let object = state.allocate_object(2, false).ok()?;
+    attach_instance_prototype(state, object, kind)?;
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {
@@ -224,6 +227,7 @@ pub(crate) fn from_shared_buffer(
         return None;
     }
     let object = state.allocate_object(2, false).ok()?;
+    attach_instance_prototype(state, object, kind)?;
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {
@@ -315,8 +319,8 @@ pub(super) fn dispatch_typed_array(
 }
 
 /// %TypedArray%.prototype 的方法名 → Builtin 映射（不含 length / byteLength /
-/// byteOffset / buffer 访问器），实例取值（`typed_array_builtin`）与各构造器
-/// `prototype` 对象安装（`install_typed_array_prototype_methods`）共用。
+/// byteOffset / buffer 访问器），实例取值（`typed_array_builtin`）与共享原型
+/// 对象安装（`install_typed_array_prototype_methods`）共用。
 pub(crate) const TYPED_ARRAY_PROTO_METHODS: &[(&str, Builtin)] = &[
     ("at", Builtin::TypedArrayProtoAt),
     ("copyWithin", Builtin::TypedArrayProtoCopyWithin),
@@ -347,24 +351,57 @@ pub(crate) const TYPED_ARRAY_PROTO_METHODS: &[(&str, Builtin)] = &[
 
 /// 判定 builtin 是否为 TypedArray 构造器（11 种元素类型之一）。
 pub(crate) fn is_typed_array_constructor(builtin: Builtin) -> bool {
-    matches!(
-        builtin,
-        Builtin::Int8ArrayConstructor
-            | Builtin::Uint8ArrayConstructor
-            | Builtin::Uint8ClampedArrayConstructor
-            | Builtin::Int16ArrayConstructor
-            | Builtin::Uint16ArrayConstructor
-            | Builtin::Int32ArrayConstructor
-            | Builtin::Uint32ArrayConstructor
-            | Builtin::Float32ArrayConstructor
-            | Builtin::Float64ArrayConstructor
-            | Builtin::BigInt64ArrayConstructor
-            | Builtin::BigUint64ArrayConstructor
-    )
+    constructor_kind(builtin).is_some()
 }
 
-/// 把 %TypedArray%.prototype 方法作为不可枚举数据属性安装到原型对象上，使
-/// `Uint8Array.prototype.slice` 等可取值并经 `call`/`apply` 调用。
+/// TypedArray 构造器 builtin → 元素类型；非 TypedArray 构造器为 None。
+pub(crate) fn constructor_kind(builtin: Builtin) -> Option<TypedArrayKind> {
+    Some(match builtin {
+        Builtin::Int8ArrayConstructor => TypedArrayKind::Int8,
+        Builtin::Uint8ArrayConstructor => TypedArrayKind::Uint8,
+        Builtin::Uint8ClampedArrayConstructor => TypedArrayKind::Uint8Clamped,
+        Builtin::Int16ArrayConstructor => TypedArrayKind::Int16,
+        Builtin::Uint16ArrayConstructor => TypedArrayKind::Uint16,
+        Builtin::Int32ArrayConstructor => TypedArrayKind::Int32,
+        Builtin::Uint32ArrayConstructor => TypedArrayKind::Uint32,
+        Builtin::Float32ArrayConstructor => TypedArrayKind::Float32,
+        Builtin::Float64ArrayConstructor => TypedArrayKind::Float64,
+        Builtin::BigInt64ArrayConstructor => TypedArrayKind::BigInt64,
+        Builtin::BigUint64ArrayConstructor => TypedArrayKind::BigUint64,
+        _ => return None,
+    })
+}
+
+/// 元素类型 → 对应 TypedArray 构造器 builtin。
+fn constructor_builtin(kind: TypedArrayKind) -> Builtin {
+    match kind {
+        TypedArrayKind::Int8 => Builtin::Int8ArrayConstructor,
+        TypedArrayKind::Uint8 => Builtin::Uint8ArrayConstructor,
+        TypedArrayKind::Uint8Clamped => Builtin::Uint8ClampedArrayConstructor,
+        TypedArrayKind::Int16 => Builtin::Int16ArrayConstructor,
+        TypedArrayKind::Uint16 => Builtin::Uint16ArrayConstructor,
+        TypedArrayKind::Int32 => Builtin::Int32ArrayConstructor,
+        TypedArrayKind::Uint32 => Builtin::Uint32ArrayConstructor,
+        TypedArrayKind::Float32 => Builtin::Float32ArrayConstructor,
+        TypedArrayKind::Float64 => Builtin::Float64ArrayConstructor,
+        TypedArrayKind::BigInt64 => Builtin::BigInt64ArrayConstructor,
+        TypedArrayKind::BigUint64 => Builtin::BigUint64ArrayConstructor,
+    }
+}
+
+/// 新建实例的 [[Prototype]] 挂到对应构造器的 `prototype` 对象（§23.2.5.1），
+/// 使 Object.getPrototypeOf / instanceof 沿三层链成立。
+fn attach_instance_prototype(
+    state: &mut NativeAgentState,
+    object: i64,
+    kind: TypedArrayKind,
+) -> Option<()> {
+    state.set_typed_array_instance_prototype(object, constructor_builtin(kind))
+}
+
+/// 把 %TypedArray%.prototype 方法作为不可枚举数据属性安装到共享原型对象上，
+/// 各构造器 `prototype` 沿链继承，`Uint8Array.prototype.slice` 等可取值并经
+/// `call`/`apply` 调用。
 pub(crate) fn install_typed_array_prototype_methods(
     state: &mut NativeAgentState,
     prototype: i64,
@@ -594,6 +631,9 @@ fn construct(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
+    if attach_instance_prototype(state, object, kind).is_none() {
+        return fail_dispatch(ctx);
+    }
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {
@@ -655,6 +695,9 @@ fn construct_buffer_view(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
+    if attach_instance_prototype(state, object, kind).is_none() {
+        return fail_dispatch(ctx);
+    }
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {
@@ -709,6 +752,9 @@ fn construct_shared_buffer_view(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
+    if attach_instance_prototype(state, object, kind).is_none() {
+        return fail_dispatch(ctx);
+    }
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {
@@ -726,27 +772,106 @@ fn construct_shared_buffer_view(
     object
 }
 
-fn property_length(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
-    args.first()
-        .and_then(|object| state.typed_arrays.get(&value::decode_handle(*object)))
-        .and_then(|array| u32::try_from(array.length).ok())
+/// getter 的品牌检查（RequireInternalSlot(O, [[TypedArrayName]])，
+/// §23.2.3.21 等）：receiver 必须是登记在侧表中的 TypedArray 实例。
+fn receiver_typed_array<'a>(
+    state: &'a NativeAgentState,
+    args: &[i64],
+) -> Option<&'a NativeTypedArray> {
+    let object = args.first().copied()?;
+    if !value::is_object(object) {
+        return None;
+    }
+    state.typed_arrays.get(&value::decode_handle(object))
+}
+
+/// 品牌检查失败：按 V8 口径抛 `Method get TypedArray.prototype.<name>
+/// called on incompatible receiver <receiver>` 的 TypeError。
+fn incompatible_receiver(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    name: &str,
+    receiver: Option<i64>,
+) -> i64 {
+    let rendered = render_getter_receiver(state, receiver);
+    let message = format!(
+        "Method get TypedArray.prototype.{name} called on incompatible receiver {rendered}"
+    );
+    type_error(ctx, state, &message)
+}
+
+/// getter 错误消息中的 receiver 渲染，对齐 V8 NoSideEffectsToString 的常见
+/// 形态：基元按值渲染；数组 `[object Array]`；callable 用源文本；原型对象
+/// （各 Ctor.prototype、%TypedArray%.prototype、%Object.prototype%）
+/// `[object Object]`；DataView 实例 `#<DataView>`；其余对象 `#<Object>`。
+fn render_getter_receiver(state: &NativeAgentState, receiver: Option<i64>) -> String {
+    let Some(receiver) = receiver else {
+        return "undefined".into();
+    };
+    if value::is_array(receiver) {
+        return "[object Array]".into();
+    }
+    if value::is_callable(receiver) {
+        return state
+            .callable_to_string_source(receiver)
+            .unwrap_or_else(|| "function () { [native code] }".into());
+    }
+    if value::is_js_object(receiver) || value::is_proxy(receiver) {
+        let handle = value::decode_handle(receiver);
+        if state.is_typed_array_prototype(handle)
+            || state.object_prototype == Some(receiver)
+            || state
+                .view_prototypes
+                .values()
+                .any(|prototype| *prototype == receiver)
+        {
+            return "[object Object]".into();
+        }
+        if state.data_views.contains_key(&handle) {
+            return "#<DataView>".into();
+        }
+        return "#<Object>".into();
+    }
+    render_value(state, receiver)
+}
+
+fn property_length(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let Some(length) = receiver_typed_array(state, args).map(|array| array.length) else {
+        return incompatible_receiver(ctx, state, "length", args.first().copied());
+    };
+    u32::try_from(length)
+        .ok()
         .map(|length| value::encode_f64(f64::from(length)))
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
-fn property_byte_length(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
-    args.first()
-        .and_then(|object| state.typed_arrays.get(&value::decode_handle(*object)))
-        .and_then(|array| array.length.checked_mul(array.kind.element_size()))
+fn property_byte_length(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let Some(byte_length) = receiver_typed_array(state, args)
+        .map(|array| array.length.checked_mul(array.kind.element_size()))
+    else {
+        return incompatible_receiver(ctx, state, "byteLength", args.first().copied());
+    };
+    byte_length
         .and_then(|length| u32::try_from(length).ok())
         .map(|length| value::encode_f64(f64::from(length)))
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
-fn property_byte_offset(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
-    args.first()
-        .and_then(|object| state.typed_arrays.get(&value::decode_handle(*object)))
-        .and_then(|array| array.offset.checked_mul(array.kind.element_size()))
+fn property_byte_offset(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let Some(byte_offset) = receiver_typed_array(state, args)
+        .map(|array| array.offset.checked_mul(array.kind.element_size()))
+    else {
+        return incompatible_receiver(ctx, state, "byteOffset", args.first().copied());
+    };
+    byte_offset
         .and_then(|offset| u32::try_from(offset).ok())
         .map(|offset| value::encode_f64(f64::from(offset)))
         .unwrap_or_else(|| fail_dispatch(ctx))
@@ -825,6 +950,9 @@ fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };
+    if attach_instance_prototype(state, object, array.kind).is_none() {
+        return fail_dispatch(ctx);
+    }
     state.typed_arrays.insert(
         value::decode_handle(object),
         NativeTypedArray {

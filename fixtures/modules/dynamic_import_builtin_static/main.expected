@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+function function function object
+http://example.com/c
+true false
+[object Module] Module
+Module false false false
+function a=1
+--- stderr ---
