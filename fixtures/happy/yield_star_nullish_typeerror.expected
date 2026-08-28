@@ -11,9 +11,10 @@ sync-caught true true
 async-null true Cannot read properties of null (reading 'Symbol(Symbol.asyncIterator)')
 async-undefined true Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')
 async-noncallable true number 1 is not a function
+async-sync-null-method true object null is not a function
 async-nonobject true Result of the Symbol.asyncIterator method is not an object
 async-sync-nonobject true Result of the Symbol.iterator method is not an object
-async-object true object is not async iterable
-async-number true number 1 is not async iterable
+async-object true undefined is not a function
+async-number true undefined is not a function
 async-caught true true
 --- stderr ---
