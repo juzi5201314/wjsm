@@ -165,11 +165,7 @@ fn encode_constant(
                     &owned
                 }
             };
-            encoder.u8(if meta.latin1 { 1 } else { 2 });
-            encoder.u32(meta.hash);
-            encoder.len(meta.unit_len() as usize)?;
-            encoder.len(meta.payload.len())?;
-            encoder.bytes(&meta.payload);
+            encode_string_meta(encoder, meta)?;
         }
         Constant::Bool(value) => {
             encoder.u16(2);
@@ -210,8 +206,75 @@ fn encode_constant(
             }
         }
         Constant::Uninitialized => encoder.u16(12),
+        Constant::Utf16String(units) => {
+            encoder.u16(13);
+            let owned;
+            let meta = match meta {
+                Some(meta) => meta,
+                None => {
+                    owned = wjsm_ir::StringConstantMeta::from_units(units);
+                    &owned
+                }
+            };
+            encode_string_meta(encoder, meta)?;
+        }
     }
     Ok(())
+}
+
+/// 字符串常量的烘焙元数据编码（tag 1 / tag 13 共用形状）：
+/// repr(1=Latin-1, 2=UTF-16LE) + hash + 码元长度 + 载荷。
+fn encode_string_meta(
+    encoder: &mut Encoder,
+    meta: &wjsm_ir::StringConstantMeta,
+) -> Result<(), ArtifactFormatError> {
+    encoder.u8(if meta.latin1 { 1 } else { 2 });
+    encoder.u32(meta.hash);
+    encoder.len(meta.unit_len() as usize)?;
+    encoder.len(meta.payload.len())?;
+    encoder.bytes(&meta.payload);
+    Ok(())
+}
+
+/// 解码字符串烘焙元数据并展开为 UTF-16 码元序列（tag 1 / tag 13 共用）。
+fn decode_string_meta(
+    decoder: &mut Decoder<'_>,
+    limits: &ArtifactLimits,
+) -> Result<(Vec<u16>, wjsm_ir::StringConstantMeta), ArtifactFormatError> {
+    let repr = decoder.u8()?;
+    let hash = decoder.u32()?;
+    let unit_len = decoder.count(limits.max_string_bytes)?;
+    let payload_len = decoder.count(limits.max_string_bytes.saturating_mul(2))?;
+    let payload = decoder.take(payload_len)?.to_vec();
+    let (latin1, expected_len) = match repr {
+        1 => (true, unit_len),
+        2 => (
+            false,
+            unit_len
+                .checked_mul(2)
+                .ok_or(ArtifactFormatError::LengthOverflow)?,
+        ),
+        _ => return Err(ArtifactFormatError::InvalidStringPayload("repr")),
+    };
+    if payload.len() != expected_len {
+        return Err(ArtifactFormatError::InvalidStringPayload("length"));
+    }
+    let units: Vec<u16> = if latin1 {
+        payload.iter().map(|byte| u16::from(*byte)).collect()
+    } else {
+        payload
+            .chunks(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect()
+    };
+    Ok((
+        units,
+        wjsm_ir::StringConstantMeta {
+            hash,
+            latin1,
+            payload,
+        },
+    ))
 }
 
 /// 解码常量；String 变体同时返回烘焙元数据（hash 与载荷直接来自 wire）。
@@ -223,42 +286,11 @@ fn decode_constant(
     match tag {
         0 => Ok((Constant::Number(f64::from_bits(decoder.u64()?)), None)),
         1 => {
-            let repr = decoder.u8()?;
-            let hash = decoder.u32()?;
-            let unit_len = decoder.count(limits.max_string_bytes)?;
-            let payload_len = decoder.count(limits.max_string_bytes.saturating_mul(2))?;
-            let payload = decoder.take(payload_len)?.to_vec();
-            let (latin1, expected_len) = match repr {
-                1 => (true, unit_len),
-                2 => (
-                    false,
-                    unit_len
-                        .checked_mul(2)
-                        .ok_or(ArtifactFormatError::LengthOverflow)?,
-                ),
-                _ => return Err(ArtifactFormatError::InvalidStringPayload("repr")),
-            };
-            if payload.len() != expected_len {
-                return Err(ArtifactFormatError::InvalidStringPayload("length"));
-            }
-            let units: Vec<u16> = if latin1 {
-                payload.iter().map(|byte| u16::from(*byte)).collect()
-            } else {
-                payload
-                    .chunks(2)
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                    .collect()
-            };
+            let (units, meta) = decode_string_meta(decoder, limits)?;
+            // tag 1 只承载良构 UTF-16；孤立代理项属于 tag 13（Utf16String）。
             let text = String::from_utf16(&units)
                 .map_err(|_| ArtifactFormatError::InvalidStringPayload("utf16"))?;
-            Ok((
-                Constant::String(text),
-                Some(wjsm_ir::StringConstantMeta {
-                    hash,
-                    latin1,
-                    payload,
-                }),
-            ))
+            Ok((Constant::String(text), Some(meta)))
         }
         2 => Ok((Constant::Bool(decoder.bool()?), None)),
         3 => Ok((Constant::Null, None)),
@@ -291,6 +323,10 @@ fn decode_constant(
             Ok((Constant::ObjectTemplate { keys }, None))
         }
         12 => Ok((Constant::Uninitialized, None)),
+        13 => {
+            let (units, meta) = decode_string_meta(decoder, limits)?;
+            Ok((Constant::Utf16String(units), Some(meta)))
+        }
         _ => Err(ArtifactFormatError::UnknownTag("constant", tag.into())),
     }
 }

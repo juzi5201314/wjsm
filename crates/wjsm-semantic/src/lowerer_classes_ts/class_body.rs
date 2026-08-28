@@ -1067,8 +1067,18 @@ impl Lowerer {
                 Ok((name, self.emit_string_const(*block, ident.sym.as_ref())))
             }
             swc_ast::PropName::Str(s) => {
+                // name 仅用于 `.name` 元数据，lossy 可接受；运行时 key 必须
+                // 保留孤立代理项（与成员访问同一转换），否则方法查不到。
                 let name = s.value.to_string_lossy().into_owned();
-                let key_dest = self.emit_string_const(*block, &name);
+                let key_const = self.module.add_constant(string_literal_constant(&s.value));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    *block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
                 Ok((name, key_dest))
             }
             swc_ast::PropName::Computed(_)
