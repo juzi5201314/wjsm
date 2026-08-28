@@ -219,6 +219,21 @@ pub(crate) struct Lowerer {
     /// 收集好的 rest 实参数组时设置；`emit_pat_inits_impl` 在入口 take 消费，
     /// 命中时直接解构该数组而不再发射 `CollectRestArgs`。
     pub(crate) rest_args_source_override: Option<ValueId>,
+    /// mapped arguments 的形参别名元数据（ES §10.4.4.7 [[ParameterMap]]）：
+    /// 全部形参为简单标识符时为各形参 IR 名（`$scope.name`，含重复形参改名
+    /// 后的临时槽）的有序列表；非简单列表 / 不适用的降级点置 None。
+    /// 各函数降级点在 `emit_arguments_init` 前设置，其入口 take 消费。
+    pub(crate) arguments_simple_param_ir_names: Option<Vec<String>>,
+    /// 函数（含嵌套闭包子树）可能包含 direct eval：eval 经激活记录读写局部
+    /// 槽位，与形参别名重定向不相容；命中时禁用 [[ParameterMap]]（mapped
+    /// 对象仍创建，但保持普通属性行为）。与上一字段成对设置/消费。
+    pub(crate) arguments_alias_blocked: bool,
+    /// mapped arguments 形参别名表：(形参声明作用域, 形参名) → 别名信息。
+    /// 命中的绑定读写全部改经 MappedArgumentsBindingRead/Write，形参绑定
+    /// 真值由 arguments 对象（映射期间的自有索引属性 / 解除后的宿主侧
+    /// 绑定槽）持有，原生局部槽成为死存储。按 scope_id 全局唯一，无需出栈。
+    pub(crate) mapped_arg_aliases:
+        std::collections::HashMap<(usize, String), lowerer_mapped_args::MappedArgAlias>,
     pub(crate) script_mode: bool,
     /// 脚本模式主程序的顶层声明名 → 全局环境绑定类别（ES §16.1.7 GDI）。
     /// 命中的名字在读/写/typeof/delete 全部路由到 GlobalEnv 系列 builtin，

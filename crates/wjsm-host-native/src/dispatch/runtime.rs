@@ -2123,7 +2123,27 @@ pub(super) fn delete_property(
     {
         return Ok(false);
     }
-    state.gc.heap().delete_property(handle, key).map_err(|_| ())
+    // mapped arguments（ES §10.4.4.4）：删除前先取属性值（映射期间即形参绑定
+    // 真值），删除成功后解除映射并把该值快照进绑定槽。
+    let mapped_slot = super::arguments::live_mapped_index(state, handle, key).map(|index| {
+        let previous = state
+            .gc
+            .heap()
+            .get_property_slot(handle, key)
+            .ok()
+            .flatten()
+            .map_or_else(value::encode_undefined, |property| property.value as i64);
+        (index, previous)
+    });
+    let removed = state
+        .gc
+        .heap()
+        .delete_property(handle, key)
+        .map_err(|_| ())?;
+    if removed && let Some((index, previous)) = mapped_slot {
+        super::arguments::after_delete_property(state, handle, index, previous);
+    }
+    Ok(removed)
 }
 pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_key: i64) -> bool {
     if value::is_array(object) && state.text_matches(encoded_key, "length") {

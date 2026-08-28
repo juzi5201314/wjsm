@@ -48,6 +48,7 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
+        self.stage_arguments_alias_meta(&fn_decl.function, &param_ir_names);
         let body_entry = self.emit_arguments_init(
             body_entry,
             Self::function_needs_arguments_object(&fn_decl.function),
@@ -168,6 +169,13 @@ impl Lowerer {
             )
         {
             return self.emit_script_global_declare_func(block, name, callee_val);
+        }
+        // 与形参同名的函数声明（§10.2.11 步骤 36 SetMutableBinding）：绑定
+        // 已别名到 arguments 索引属性时改写对象；该绑定可经 arguments[i]
+        // 重赋，不得登记 known-callee。
+        let decl_binding = CapturedBinding::new(name, scope_id);
+        if let Some(alias) = self.mapped_arg_alias(&decl_binding) {
+            return self.emit_mapped_arg_write(block, &alias, callee_val);
         }
         let ir_name = format!("${scope_id}.{name}");
         // 记录 callee 变量→FunctionId 映射（Layer 3 callee no-GC 分析）。

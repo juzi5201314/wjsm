@@ -192,6 +192,10 @@ impl Lowerer {
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
+        // mapped arguments 形参别名：绑定真值在 arguments 对象上（ES §10.4.4）。
+        if let Some(alias) = self.mapped_arg_alias(&binding) {
+            return self.lower_mapped_arg_read(block, &alias);
+        }
         if self.iteration_env_for_binding(&binding).is_some() {
             return Ok(self.load_iteration_binding(block, &binding));
         }
@@ -560,6 +564,10 @@ impl Lowerer {
         };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
+        // mapped arguments 形参别名：全部赋值形态改写 arguments 对象（ES §10.4.4）。
+        if let Some(alias) = self.mapped_arg_alias(&binding) {
+            return self.lower_assign_mapped_arg(assign, block, &alias);
+        }
         if !self.binding_belongs_to_current_function(&binding)
             || self.is_shared_binding(&binding)
             || self.iteration_env_for_binding(&binding).is_some()
@@ -694,6 +702,12 @@ impl Lowerer {
         // 宿主全局环境记录（声明初始化已由调用方经 GlobalEnvInitLex 分流）。
         if binding.scope_id == Some(0) && self.script_global_names.contains_key(&binding.name) {
             return self.emit_script_global_set(block, &binding.name, value);
+        }
+        // mapped arguments 形参别名：解构/循环头/with 回退等一切收口写入
+        // 全部改写 arguments 对象（ES §10.4.4）。
+        if let Some(alias) = self.mapped_arg_alias(binding) {
+            let store_block = self.resolve_store_block(block);
+            return self.emit_mapped_arg_write(store_block, &alias, value);
         }
         let mut store_block = self.resolve_store_block(block);
         self.current_function.append_instruction(

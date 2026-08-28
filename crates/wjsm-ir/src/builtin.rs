@@ -619,6 +619,15 @@ pub enum Builtin {
     /// 相同位型（ToBigUint64 与 ToBigInt64 的字节表示一致）。
     /// args: [view, byteOffset, value, littleEndian?]。
     DataViewProtoSetBigUint64,
+    /// mapped arguments 形参绑定读取（ES §10.4.4 [[ParameterMap]] 的实现侧）：
+    /// 索引仍在 map 中时读 arguments 对象自有索引属性（映射期间该属性即绑定
+    /// 真值），已解除映射（defineProperty 降级 / delete / freeze）后读侧表中
+    /// 快照出的独立绑定槽。args: [arguments, index]。
+    MappedArgumentsBindingRead,
+    /// mapped arguments 形参绑定写入：索引在 map 中时写 arguments 对象自有
+    /// 索引属性（对 `arguments[i]` 立即可见），解除映射后写侧表绑定槽。
+    /// args: [arguments, index, value]，dest 回传写入值。
+    MappedArgumentsBindingWrite,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -654,7 +663,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::DataViewProtoSetBigUint64 as u16
+        Self::MappedArgumentsBindingWrite as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1164,6 +1173,8 @@ impl Builtin {
             Self::DataViewProtoGetBigUint64 => "DataView.prototype.getBigUint64",
             Self::DataViewProtoSetBigInt64 => "DataView.prototype.setBigInt64",
             Self::DataViewProtoSetBigUint64 => "DataView.prototype.setBigUint64",
+            Self::MappedArgumentsBindingRead => "mapped_arguments_binding_read",
+            Self::MappedArgumentsBindingWrite => "mapped_arguments_binding_write",
         }
     }
 }

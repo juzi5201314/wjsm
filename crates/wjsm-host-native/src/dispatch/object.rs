@@ -1495,6 +1495,15 @@ fn define_ordinary_property(
         }
     }
 
+    // mapped arguments（ES §10.4.4.2）：define 成功后按描述符种类维护
+    // [[ParameterMap]]。`previous` 取 define 前的属性值——映射期间该值即形参
+    // 绑定真值，访问器降级解除映射时作为绑定快照保留。
+    let mapped_slot = super::arguments::live_mapped_index(state, handle, key).map(|index| {
+        (
+            index,
+            current.map_or_else(value::encode_undefined, |current| current.value as i64),
+        )
+    });
     let current_is_accessor = current.is_some_and(|current| current.flags & ACCESSOR != 0);
     let use_accessor = if descriptor.is_accessor() {
         true
@@ -1511,7 +1520,7 @@ fn define_ordinary_property(
     };
     set_flag(&mut flags, CONFIGURABLE, descriptor.configurable);
     set_flag(&mut flags, ENUMERABLE, descriptor.enumerable);
-    if use_accessor {
+    let result = if use_accessor {
         let getter = descriptor.getter.unwrap_or_else(|| {
             current
                 .filter(|current| current.flags & ACCESSOR != 0 && !switching_kind)
@@ -1575,7 +1584,20 @@ fn define_ordinary_property(
             }
             Err(_) => fail_dispatch(ctx),
         }
+    };
+    if result == object
+        && let Some((index, previous)) = mapped_slot
+    {
+        super::arguments::after_define_own_property(
+            state,
+            handle,
+            index,
+            previous,
+            descriptor.is_accessor(),
+            descriptor.writable == Some(false),
+        );
     }
+    result
 }
 
 fn set_flag(flags: &mut u32, bit: u32, update: Option<bool>) {
@@ -2134,6 +2156,12 @@ fn seal_or_freeze(
     };
     if value::is_array(object) && seal_or_freeze_array(state, handle, freeze).is_none() {
         return fail_dispatch(ctx);
+    }
+    // mapped arguments：freeze 等价于对每个数据属性应用 writable:false 的
+    // [[DefineOwnProperty]]（§10.4.4.2 步骤 7.b.ii 逐一解除映射并快照绑定）；
+    // seal 只收紧 configurable，映射存续。须在收紧前快照属性值。
+    if freeze {
+        super::arguments::unmap_all_for_freeze(state, handle);
     }
     let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
         return fail_dispatch(ctx);

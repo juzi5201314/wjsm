@@ -660,6 +660,13 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
     for (handle, view) in &state.data_views {
         add(owner(*handle), value::encode_object_handle(view.buffer));
     }
+    // mapped arguments 侧表：解除映射后的绑定槽是宿主侧持有的 JS 值，须作为
+    // GC 边保活（映射中的槽为 undefined 占位，按 tag 甄别无害）。
+    for (handle, entry) in &state.mapped_arguments {
+        for stored in &entry.bindings {
+            add(owner(*handle), *stored);
+        }
+    }
     for (handle, buffer) in &state.buffers {
         add(owner(*handle), buffer.array_buffer);
     }

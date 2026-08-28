@@ -861,6 +861,10 @@ impl Lowerer {
                 };
 
                 let binding = CapturedBinding::new(name.clone(), scope_id);
+                // mapped arguments 形参别名：读改写整链落在 arguments 对象上。
+                if let Some(alias) = self.mapped_arg_alias(&binding) {
+                    return self.lower_update_mapped_arg(update, block, &alias);
+                }
                 if self.iteration_env_for_binding(&binding).is_some() {
                     let env = self.load_iteration_env_for_binding(block, &binding);
                     let key = self.append_env_key_const(block, &binding);
