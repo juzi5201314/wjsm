@@ -437,9 +437,7 @@ fn verify_instruction_uses(
         | Instruction::DeleteProp { object, key, .. }
         | Instruction::GetElem {
             object, index: key, ..
-        }
-        | Instruction::OptionalGetProp { object, key, .. }
-        | Instruction::OptionalGetElem { object, key, .. } => {
+        } => {
             verify_value_use(function, definitions, *object, site, dominance)?;
             verify_value_use(function, definitions, *key, site, dominance)?;
         }
@@ -489,16 +487,6 @@ fn verify_instruction_uses(
         Instruction::SetProto { object, value } => {
             verify_value_use(function, definitions, *object, site, dominance)?;
             verify_value_use(function, definitions, *value, site, dominance)?;
-        }
-        Instruction::OptionalCall {
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            verify_value_use(function, definitions, *callee, site, dominance)?;
-            verify_value_use(function, definitions, *this_val, site, dominance)?;
-            verify_value_slice(function, definitions, args, site, dominance)?;
         }
         Instruction::NewObject { .. }
         | Instruction::NewArray { .. }
@@ -657,12 +645,9 @@ fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::InitObjectLiteral { dest, .. }
         | Instruction::GetElem { dest, .. }
         | Instruction::SetElem { dest, .. }
-        | Instruction::OptionalGetProp { dest, .. }
-        | Instruction::OptionalGetElem { dest, .. }
         | Instruction::ElemShapeGuard { dest, .. }
         | Instruction::GetElemGuarded { dest, .. }
         | Instruction::GetPropGuarded { dest, .. }
-        | Instruction::OptionalCall { dest, .. }
         | Instruction::GetSuperBase { dest }
         | Instruction::GetSuperConstructor { dest }
         | Instruction::NewPromise { dest }

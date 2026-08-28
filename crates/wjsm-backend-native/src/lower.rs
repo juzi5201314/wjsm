@@ -433,15 +433,12 @@ pub(crate) fn root_frame_capacity(
             Instruction::GeneratorSuspend { .. } => 1,
             Instruction::Call { .. }
             | Instruction::SuperCall { .. }
-            | Instruction::ConstructCall { .. }
-            | Instruction::OptionalCall { .. } => 1,
+            | Instruction::ConstructCall { .. } => 1,
             // IC accessor 命中时会把刚 load 出的 getter 作为临时 root 发布后再
-            // 调用宿主 invoke_callable；保守起见所有 GetProp/OptionalGetProp 都
-            // 预留一个临时槽（多预留不影响正确性）。GetPropGuarded 的慢路径
-            // 复用同一 IC 核心，同样预留。
-            Instruction::GetProp { .. }
-            | Instruction::OptionalGetProp { .. }
-            | Instruction::GetPropGuarded { .. } => 1,
+            // 调用宿主 invoke_callable；保守起见所有 GetProp 都预留一个临时槽
+            // （多预留不影响正确性）。GetPropGuarded 的慢路径复用同一 IC 核心，
+            // 同样预留。
+            Instruction::GetProp { .. } | Instruction::GetPropGuarded { .. } => 1,
             _ => 0,
         })
         .max()
@@ -464,7 +461,7 @@ pub(crate) fn slots_from_program(
         .collect()
 }
 
-/// 为「常量字符串键的 GetProp / OptionalGetProp / SetProp」分配全局 IC 槽。
+/// 为「常量字符串键的 GetProp / SetProp」分配全局 IC 槽。
 pub(crate) fn allocate_ic_slots(program: &Program) -> (Vec<HashMap<ValueId, u32>>, u32) {
     let plan = plan_ic_slots(program);
     (plan.per_function, plan.total)
@@ -529,7 +526,6 @@ fn instruction_owns_feedback_slot(instruction: &Instruction) -> bool {
             | Instruction::Compare { .. }
             | Instruction::CallBuiltin { .. }
             | Instruction::Call { .. }
-            | Instruction::OptionalCall { .. }
             | Instruction::SuperCall { .. }
             | Instruction::ConstructCall { .. }
     )
@@ -3757,25 +3753,6 @@ fn lower_instruction(
             roots,
             feedback_ptr,
         ),
-        Instruction::OptionalCall {
-            dest,
-            callee,
-            this_val,
-            args,
-        } => lower_optional_call_instruction(
-            cx,
-            tables.slow_call_signature,
-            CallLowering {
-                destination: Some(*dest),
-                callee: *callee,
-                this_value: *this_val,
-                args,
-                operation: NativeRuntimeOp::PrepareCall,
-                forward_args: false,
-            },
-            roots,
-            feedback_ptr,
-        ),
         Instruction::StringConcatVa { dest, parts } => {
             lower_value_operation(cx, NativeRuntimeOp::StringConcat, parts, Some(*dest))
         }
@@ -3917,29 +3894,6 @@ fn lower_instruction(
             *index,
             *value,
             *strict,
-        ),
-        Instruction::OptionalGetProp { dest, object, key } => {
-            if let Some(slot) = tables.ic_slots.get(dest).copied() {
-                lower_optional_get_prop_ic(
-                    cx,
-                    tables.barrier_thunks,
-                    prop_access(tables, *dest, *object, *key, slot),
-                    roots,
-                )
-            } else {
-                lower_value_operation(
-                    cx,
-                    NativeRuntimeOp::OptionalGetProp,
-                    &[*object, *key],
-                    Some(*dest),
-                )
-            }
-        }
-        Instruction::OptionalGetElem { dest, object, key } => lower_value_operation(
-            cx,
-            NativeRuntimeOp::OptionalGetElem,
-            &[*object, *key],
-            Some(*dest),
         ),
         Instruction::GetSuperBase { dest } => {
             let result = cx.call(NativeRuntimeOp::GetSuperBase.id(), &[], None)?;
@@ -4314,70 +4268,6 @@ fn lower_call_instruction(
     Ok(())
 }
 
-fn lower_optional_call_instruction(
-    cx: &mut LoweringCx<'_, '_>,
-    slow_call_signature: ir::SigRef,
-    call: CallLowering<'_>,
-    roots: &[ValueId],
-    feedback_ptr: Option<ir::Value>,
-) -> Result<()> {
-    let CallLowering {
-        destination,
-        callee,
-        this_value,
-        args,
-        ..
-    } = call;
-    let destination = destination.context("optional call requires a destination")?;
-    let encoded_callee = use_value_boxed(cx.builder, cx.variables, callee)?;
-    let nullish = cx.call(
-        NativeRuntimeOp::UnaryIsNullish.id(),
-        &[encoded_callee],
-        None,
-    )?;
-    let is_nullish = cx.builder.ins().icmp_imm_s(
-        ir::condcodes::IntCC::Equal,
-        nullish,
-        value::encode_bool(true),
-    );
-    let skip_block = cx.builder.create_block();
-    let call_block = cx.builder.create_block();
-    let continuation = cx.builder.create_block();
-    cx.builder
-        .ins()
-        .brif(is_nullish, skip_block, &[], call_block, &[]);
-
-    cx.builder.switch_to_block(skip_block);
-    cx.builder.seal_block(skip_block);
-    let undefined = cx
-        .builder
-        .ins()
-        .iconst(types::I64, value::encode_undefined());
-    define_value_boxed(cx.builder, cx.variables, destination, undefined)?;
-    cx.builder.ins().jump(continuation, &[]);
-
-    cx.builder.switch_to_block(call_block);
-    cx.builder.seal_block(call_block);
-    lower_call_instruction(
-        cx,
-        slow_call_signature,
-        CallLowering {
-            destination: Some(destination),
-            callee,
-            this_value,
-            args,
-            operation: NativeRuntimeOp::PrepareCall,
-            forward_args: false,
-        },
-        roots,
-        feedback_ptr,
-    )?;
-    cx.builder.ins().jump(continuation, &[]);
-
-    cx.builder.switch_to_block(continuation);
-    cx.builder.seal_block(continuation);
-    Ok(())
-}
 fn lower_builtin_operation(
     cx: &mut LoweringCx<'_, '_>,
     builtin: Builtin,
@@ -7536,7 +7426,7 @@ fn emit_inline_binary_feedback(
 }
 
 /// 常量字符串键的 GetProp 快路径入口：创建 merge 块后交给共享的非 nullish
-/// IC 核心。GetProp 与 OptionalGetProp 的非 nullish 分支语义相同。
+/// IC 核心。
 fn lower_get_prop_ic(
     cx: &mut LoweringCx<'_, '_>,
     barrier_thunks: &BarrierThunks,
@@ -7550,8 +7440,7 @@ fn lower_get_prop_ic(
     Ok(())
 }
 
-/// GetProp IC 的共享核心：调用方保证 `object` 已通过 OptionalGetProp 的
-/// nullish 检查（GetProp 自身无需）。命中路径有三条：
+/// GetProp IC 的共享核心。命中路径有三条：
 /// - OWN_DATA：接收者 shape 命中后单 load 值槽；
 /// - PROTO_DATA：接收者 shape + proto 世代命中后，从 holder 值槽 load；
 /// - ACCESSOR：接收者 shape + proto 世代命中后 load getter，并直接
@@ -8334,54 +8223,6 @@ fn lower_set_prop_ic(
     let result = cx.call(set_prop_ic_op.id(), &[obj, key_value, stored, ic_ptr], None)?;
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
-
-    cx.builder.switch_to_block(merge_block);
-    cx.builder.seal_block(merge_block);
-    Ok(())
-}
-
-fn lower_optional_get_prop_ic(
-    cx: &mut LoweringCx<'_, '_>,
-    barrier_thunks: &BarrierThunks,
-    access: PropAccess,
-    roots: &[ValueId],
-) -> Result<()> {
-    let PropAccess { dest, object, .. } = access;
-    let obj = use_value_boxed(cx.builder, cx.variables, object)?;
-
-    // 第零级：null / undefined 检查。
-    let is_null =
-        cx.builder
-            .ins()
-            .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_null());
-    let is_undefined =
-        cx.builder
-            .ins()
-            .icmp_imm_s(ir::condcodes::IntCC::Equal, obj, value::encode_undefined());
-    let is_nullish = cx.builder.ins().bor(is_null, is_undefined);
-
-    let nullish_block = cx.builder.create_block();
-    let ic_entry_block = cx.builder.create_block();
-    let merge_block = cx.builder.create_block();
-
-    cx.builder
-        .ins()
-        .brif(is_nullish, nullish_block, &[], ic_entry_block, &[]);
-
-    // nullish 分支：提前返回 undefined。
-    cx.builder.switch_to_block(nullish_block);
-    cx.builder.seal_block(nullish_block);
-    let undefined = cx
-        .builder
-        .ins()
-        .iconst(types::I64, value::encode_undefined());
-    define_value_boxed(cx.builder, cx.variables, dest, undefined)?;
-    cx.builder.ins().jump(merge_block, &[]);
-
-    // IC 分支入口：非 nullish 值走与 GetProp 相同的共享核心。
-    cx.builder.switch_to_block(ic_entry_block);
-    cx.builder.seal_block(ic_entry_block);
-    lower_get_prop_ic_non_nullish(cx, barrier_thunks, access, roots, merge_block)?;
 
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);

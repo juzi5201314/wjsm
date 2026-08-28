@@ -5,8 +5,8 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::promise::{new_promise, settle_promise};
 use super::runtime::{
-    create_iterator_result, fail_dispatch, get_property, iterator_from, object_handle,
-    property_key, type_error,
+    create_iterator_result, default_call_site, fail_dispatch, get_property, iterator_from_method,
+    object_handle, property_key, type_error,
 };
 use crate::NativeAgentState;
 
@@ -82,8 +82,29 @@ pub(super) fn is_managed_async_iterator(state: &NativeAgentState, args: &[i64]) 
     })
 }
 
+/// GetIterator(source, async) 的 sync 回退（§7.4.3 步骤 1.b）：GetMethod(source,
+/// @@iterator) 后经 CreateAsyncFromSyncIterator 语义包裹。nullish 基座已由
+/// `async_iterator_from` 按 @@asyncIterator 键先行抛出，不会到达这里。
 fn wrap_sync_iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, source: i64) -> i64 {
-    let iterator = iterator_from(ctx, state, &[source]);
+    let symbol = value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ITERATOR);
+    let method = match get_property(ctx, state, source, symbol) {
+        Ok(method) => method,
+        Err(()) => return fail_dispatch(ctx),
+    };
+    if value::is_exception(method) {
+        return method;
+    }
+    // 两个迭代器方法皆缺（步骤 1.b.ii）：V8 kNotAsyncIterable 回退形态。
+    if value::is_undefined(method) || value::is_null(method) {
+        let callsite = default_call_site(state, source);
+        return type_error(ctx, state, &format!("{callsite} is not async iterable"));
+    }
+    // GetMethod（§7.3.10）非可调用：V8 按候选方法值渲染 kCalledNonCallable。
+    if !value::is_callable(method) {
+        let callsite = default_call_site(state, method);
+        return type_error(ctx, state, &format!("{callsite} is not a function"));
+    }
+    let iterator = iterator_from_method(ctx, state, source, method);
     if value::is_exception(iterator) {
         return iterator;
     }
@@ -167,6 +188,12 @@ fn async_iterator_from(
     }
     let async_iterator =
         value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ASYNC_ITERATOR);
+    // GetIterator(obj, async)（§7.4.3）的 GetMethod 对 nullish 做 ToObject：
+    // V8 按普通属性读取渲染（reading 'Symbol(Symbol.asyncIterator)'）。
+    if let Some(exception) = super::runtime::get_on_nullish_base(ctx, state, source, async_iterator)
+    {
+        return exception;
+    }
     let method = match get_property(ctx, state, source, async_iterator) {
         Ok(method) => method,
         Err(()) => return wrap_sync_iterator(ctx, state, source),
@@ -174,11 +201,13 @@ fn async_iterator_from(
     if value::is_exception(method) {
         return method;
     }
-    if value::is_undefined(method) {
+    if value::is_undefined(method) || value::is_null(method) {
         return wrap_sync_iterator(ctx, state, source);
     }
+    // GetMethod（§7.3.10）非可调用：V8 按候选方法值渲染 kCalledNonCallable。
     if !value::is_callable(method) {
-        return type_error(ctx, state, "async iterator method is not callable");
+        let callsite = default_call_site(state, method);
+        return type_error(ctx, state, &format!("{callsite} is not a function"));
     }
     let iterator = state
         .invoke_callable(ctx, method, source, &[])
@@ -189,7 +218,12 @@ fn async_iterator_from(
         state.async_iterator_objects.insert(iterator);
         iterator
     } else {
-        type_error(ctx, state, "async iterator method did not return an object")
+        // §7.4.2 GetIteratorFromMethod 步骤 2：文案对齐 V8 kSymbolAsyncIteratorInvalid。
+        type_error(
+            ctx,
+            state,
+            "Result of the Symbol.asyncIterator method is not an object",
+        )
     }
 }
 

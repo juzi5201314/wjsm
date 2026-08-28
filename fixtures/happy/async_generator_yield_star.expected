@@ -1,0 +1,18 @@
+exit_code: 0
+--- stdout ---
+value 1
+value 2
+received inner-done
+value 3
+value 4
+value a
+value b
+value 5
+final outer-done
+catching t1
+caught RangeError boom
+catching recovered
+first 1
+returned 7 true
+after-return true
+--- stderr ---

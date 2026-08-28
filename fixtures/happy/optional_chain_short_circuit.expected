@@ -1,0 +1,28 @@
+exit_code: 0
+--- stdout ---
+undefined
+undefined
+undefined
+undefined
+undefined
+undefined
+undefined
+undefined
+null
+undefined false
+undefined false
+undefined false
+1 2 true true
+9
+3
+20
+7 undefined undefined
+3
+true Cannot read properties of undefined (reading 'b')
+42
+true
+true false
+true
+true true
+undefined fallback
+--- stderr ---

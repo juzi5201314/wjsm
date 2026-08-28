@@ -633,26 +633,6 @@ fn encode_instruction(
             value_id(encoder, *value);
             encoder.u16(u16::from(*strict));
         }
-        Instruction::OptionalGetProp { dest, object, key } => {
-            encoder.u16(20);
-            three_values(encoder, *dest, *object, *key);
-        }
-        Instruction::OptionalGetElem { dest, object, key } => {
-            encoder.u16(21);
-            three_values(encoder, *dest, *object, *key);
-        }
-        Instruction::OptionalCall {
-            dest,
-            callee,
-            this_val,
-            args,
-        } => {
-            encoder.u16(22);
-            value_id(encoder, *dest);
-            value_id(encoder, *callee);
-            value_id(encoder, *this_val);
-            value_ids(encoder, args)?;
-        }
         Instruction::ObjectSpread {
             dest,
             object,
@@ -921,20 +901,9 @@ fn decode_instruction(
             value: next_value(decoder)?,
             strict: decoder.u16()? != 0,
         }),
-        20 => {
-            let (dest, object, key) = decode_three(decoder)?;
-            Ok(Instruction::OptionalGetProp { dest, object, key })
-        }
-        21 => {
-            let (dest, object, key) = decode_three(decoder)?;
-            Ok(Instruction::OptionalGetElem { dest, object, key })
-        }
-        22 => Ok(Instruction::OptionalCall {
-            dest: next_value(decoder)?,
-            callee: next_value(decoder)?,
-            this_val: next_value(decoder)?,
-            args: decode_value_ids(decoder, limits)?,
-        }),
+        // 20/21/22 曾是 OptionalGetProp / OptionalGetElem / OptionalCall：
+        // 可选链改为链级短路分叉后由普通 GetProp / GetElem / Call 承载，
+        // 编号保留空洞（FORMAT_VERSION 已提升，旧制品按版本拒收）。
         23 => {
             let (dest, object, source) = decode_three(decoder)?;
             Ok(Instruction::ObjectSpread {

@@ -859,24 +859,7 @@ fn replace_in_instruction(ins: &mut Instruction, replacements: &HashMap<ValueId,
                 changed = true;
             }
         }
-        Instruction::OptionalGetProp { object, key, .. }
-        | Instruction::OptionalGetElem { object, key, .. } => {
-            if let Some(new) = replacements.get(object) {
-                *object = *new;
-                changed = true;
-            }
-            if let Some(new) = replacements.get(key) {
-                *key = *new;
-                changed = true;
-            }
-        }
-        Instruction::OptionalCall {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | Instruction::Call {
+        Instruction::Call {
             callee,
             this_val,
             args,

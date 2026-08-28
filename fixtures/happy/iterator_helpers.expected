@@ -1,0 +1,117 @@
+exit_code: 0
+--- stdout ---
+ctor: function Iterator 0
+ctor own: length,name,prototype,from
+proto own: constructor,reduce,toArray,forEach,some,every,find,map,filter,take,drop,flatMap
+proto syms: Symbol(Symbol.iterator),Symbol(Symbol.toStringTag)
+chains: true true
+map desc: true false true map 1
+prototype desc: false false false
+ctor accessor: function function false true get constructor set constructor true
+tag accessor: function function true Iterator
+@@iterator: [Symbol.iterator] 0
+@@iterator self: true
+from: from 1
+method identity: true true
+helper proto: next,return | Symbol(Symbol.toStringTag)
+helper chain: true Iterator Helper
+helper toString: [object Iterator Helper]
+helper tag desc: Iterator Helper false false true
+helper next desc: true true next 0
+wrap proto: next,return 0 true
+map: 2,4,6
+filter: 2,4
+take: 1,2
+drop: 3,4
+flatMap: 1,10,2,20
+reduce: 6 16
+toArray: true 1,2
+forEach: 10@0,20@1 true
+some: true false
+every: true false
+find: 2 undefined
+chain: 20,40
+chain2: 4,9,16
+take limits: 1,2 | 1 | 1,2
+drop limits: 1,2 | 2,3,4 | 0
+counters: 10@0|f10@0|11@1|f11@1|12@2|f12@2
+reduce args: 106 100:1:0|101:2:1|103:3:2
+created, no next yet
+A next 1
+A first: 2 false
+B next 1
+B next 2
+B return called
+B take: [1,2]
+C next 1
+C next 2
+C return called
+C find: 2
+D next 1
+D return called
+D return: {"done":true}
+D next after return: {"done":true}
+E return called
+E return: {"done":true}
+F next 1
+F return called
+F caught: boom
+F next after throw: {"done":true}
+take(0): {"done":true} true
+done next calls: 1
+steps before: 0
+lazy step: 2 steps 2
+gen map: 3,6,9
+from(gen): true
+string iter: A,B,C
+map entries: a1,b2 a,b
+set filter: 2,3
+for-of: 2,4,6
+spread: 6,7
+flatMap gen: 1,100,2,200
+flatMap iter: 1,2,3
+flatMap string wrap: a,A,b,B
+gen finally
+gen return: {"done":true}
+from(arrayIt): true
+from(array): 7,8
+from(string): a,b
+wrap helpers: 7,7
+wrap raw next: 42
+wrap no return: {"done":true}
+wrap fwd return: {} 0 0
+sub ctor: 9 {"value":9,"writable":true,"enumerable":true,"configurable":true}
+sub tag: custom
+subclass: true true function true []
+map noncallable | TypeError | string "Iterator.prototype.map" is not a function
+flatMap noncallable | TypeError | Iterator.prototype.flatMap is not a function
+reduce noncallable | TypeError | string "Iterator.prototype.reduce" is not a function
+find noncallable | TypeError | string "Iterator.prototype.find" is not a function
+toArray this=str | TypeError | Iterator.prototype.toArray called on non-object
+take this=null | TypeError | Iterator.prototype.take called on non-object
+map this=1 | TypeError | Iterator.prototype.map called on non-object
+take() | RangeError | undefined must be positive
+take(-1) | RangeError | -1 must be positive
+take(NaN) | RangeError | NaN must be positive
+reduce empty | TypeError | Reduce of a done iterator with no initial value
+new Iterator | TypeError | Abstract class Iterator not directly constructable
+Iterator() | TypeError | Constructor Iterator requires 'new'
+from(1) | TypeError | Iterator.from called on non-object
+from(null) | TypeError | Iterator.from called on non-object
+from bad @@iterator | TypeError | #<Object> is not iterable
+set proto ctor | TypeError | Cannot assign to read only property 'constructor' of object '[object Object]'
+set proto tag | TypeError | Cannot assign to read only property 'Symbol(Symbol.toStringTag)' of object '[object Object]'
+helper next bad this | TypeError | Method Iterator Helper.prototype.next called on incompatible receiver #<Object>
+helper return bad this | TypeError | Method Iterator Helper.prototype.return called on incompatible receiver #<Object>
+wrap next bad this | TypeError | Method %WrapForValidIteratorPrototype%.next called on incompatible receiver #<Object>
+flatMap primitive | TypeError | Iterator.prototype.flatMap called on non-object
+bad result | TypeError | Iterator result 42 is not an object
+map on {next:5} created
+step noncallable | TypeError | number 5 is not a function
+reentrancy | TypeError | Generator is already running
+next getter | getter boom
+drop(-0.5) ok: 1,2
+patched: patched:9
+deleted: undefined undefined
+restored: 6
+--- stderr ---

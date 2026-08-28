@@ -134,7 +134,7 @@ impl Lowerer {
         dest
     }
 
-    fn append_bool_const(&mut self, block: BasicBlockId, value: bool) -> ValueId {
+    pub(crate) fn append_bool_const(&mut self, block: BasicBlockId, value: bool) -> ValueId {
         let constant = self.module.add_constant(Constant::Bool(value));
         let dest = self.alloc_value();
         self.current_function

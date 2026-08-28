@@ -1,4 +1,4 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-UnhandledPromiseRejection: TypeError: value is not iterable
+UnhandledPromiseRejection: TypeError: number 42 is not async iterable

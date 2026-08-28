@@ -1,0 +1,22 @@
+exit_code: 0
+--- stdout ---
+read-null-named true Cannot read properties of null (reading 'p')
+read-undefined-named true Cannot read properties of undefined (reading 'x')
+read-null-computed true Cannot read properties of null (reading 'k')
+read-undefined-index true Cannot read properties of undefined (reading '0')
+read-chained true Cannot read properties of null (reading 'deep')
+read-symbol true Cannot read properties of null (reading 'Symbol(tag)')
+read-async-iterator true Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')
+read-iterator-null true object null is not iterable (cannot read property Symbol(Symbol.iterator))
+read-iterator-undefined true undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+read-object-key true Cannot read properties of null
+key-coerced false
+write-null-named true Cannot set properties of null (setting 'p')
+write-undefined-named true Cannot set properties of undefined (setting 'q')
+write-null-computed true Cannot set properties of null (setting 'k')
+compound-null true Cannot read properties of null (reading 'p')
+update-null true Cannot read properties of null (reading 'p')
+delete-null true Cannot convert undefined or null to object
+array-destructure-nested-null true object null is not iterable (cannot read property Symbol(Symbol.iterator))
+for-await-null true Cannot read properties of null (reading 'Symbol(Symbol.asyncIterator)')
+--- stderr ---

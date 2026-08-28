@@ -783,6 +783,10 @@ fn using_block_scope_fixture_matches_ir_snapshot() {
     assert_snapshot("using_block_scope");
 }
 #[test]
+fn optional_chain_short_circuit_fixture_matches_ir_snapshot() {
+    assert_snapshot("optional_chain_short_circuit");
+}
+#[test]
 fn jsx_basic_fixture_matches_ir_snapshot() {
     assert_snapshot("jsx_basic");
 }
@@ -802,6 +806,16 @@ fn jsx_fragment_fixture_matches_ir_snapshot() {
 #[test]
 fn sync_generator_basic_fixture_matches_ir_snapshot() {
     assert_snapshot("sync_generator_basic");
+}
+
+#[test]
+fn sync_generator_yield_star_fixture_matches_ir_snapshot() {
+    assert_snapshot("sync_generator_yield_star");
+}
+
+#[test]
+fn async_generator_yield_star_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_generator_yield_star");
 }
 
 #[test]

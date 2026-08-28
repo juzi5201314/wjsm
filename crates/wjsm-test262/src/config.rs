@@ -148,6 +148,8 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "Atomics.waitAsync",
     // ── Array grouping ──
     "array-grouping",
+    // ── Iterator Helpers（ES2025 §27.1）──
+    "iterator-helpers",
     // ── ECMA-402（不要加光秃的 "Intl"：会前缀误选 Temporal + Intl.Era-monthcode）──
     "Intl.Locale",
     "Intl.Locale-info",

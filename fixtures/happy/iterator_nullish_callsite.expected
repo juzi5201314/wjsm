@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+for-of-null true object null is not iterable (cannot read property Symbol(Symbol.iterator))
+for-of-undefined true undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+spread-null true object null is not iterable (cannot read property Symbol(Symbol.iterator))
+spread-undefined true undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+top-destructure-null true object null is not iterable (cannot read property Symbol(Symbol.iterator))
+--- stderr ---

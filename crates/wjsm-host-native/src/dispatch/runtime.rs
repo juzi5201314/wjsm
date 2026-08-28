@@ -226,6 +226,20 @@ pub(super) fn dispatch_runtime(
             let [object, key] = args else {
                 return fail_dispatch(ctx);
             };
+            // 链式求值（`a.b.c`）不插表达式级分叉：上一跳的异常以 TAG_EXCEPTION
+            // 流入本 op，原样透传（与 Binary / PrivateHas 同一约定），不得再
+            // 触发 ToObject TypeError 或键转换的用户代码。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*key) {
+                return *key;
+            }
+            // GetValue 步骤 3.a：ToObject(base) 先于 ToPropertyKey，null/undefined
+            // 基座须在键转换（可能执行用户代码）之前抛 TypeError。
+            if let Some(exception) = get_on_nullish_base(ctx, state, *object, *key) {
+                return exception;
+            }
             // 动态键（`o[k]++` / 解构计算键等）可能是对象，须先 ToPropertyKey 再入。
             let key = &match to_property_key_value(ctx, state, *key) {
                 Ok(key) => key,
@@ -237,6 +251,15 @@ pub(super) fn dispatch_runtime(
             let [object, key, ic_slot_ptr] = args else {
                 return fail_dispatch(ctx);
             };
+            // 内联 IC 快路径只放行 TAG_OBJECT，异常与 nullish 基座必然 miss
+            // 到此：异常原样透传，nullish 与 GetProp 同口径抛 ToObject
+            // TypeError（键为编译期常量字符串）。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if let Some(exception) = get_on_nullish_base(ctx, state, *object, *key) {
+                return exception;
+            }
             let result =
                 get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx));
             backfill_get_prop_ic(state, *object, *key, *ic_slot_ptr);
@@ -253,55 +276,22 @@ pub(super) fn dispatch_runtime(
                 .invoke_callable(ctx, *getter, *receiver, &[])
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
-        NativeRuntimeOp::OptionalGetProp => {
-            let [object, key] = args else {
-                return fail_dispatch(ctx);
-            };
-            if value::is_null(*object) || value::is_undefined(*object) {
-                value::encode_undefined()
-            } else {
-                get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
-            }
-        }
-        NativeRuntimeOp::OptionalGetElem => {
-            let [object, key] = args else {
-                return fail_dispatch(ctx);
-            };
-            if value::is_null(*object) || value::is_undefined(*object) {
-                return value::encode_undefined();
-            }
-            // 基座非空后才做 ToPropertyKey（可选链短路时不得再入用户转换）。
-            let key = &match to_property_key_value(ctx, state, *key) {
-                Ok(key) => key,
-                Err(exception) => return exception,
-            };
-            if let Some(index) = array_index(state, *key) {
-                if let Some(stored) =
-                    super::typedarray::get_element_intern(state, *object, index as usize)
-                {
-                    return stored;
-                }
-                if value::is_array(*object) {
-                    let handle = value::decode_handle(*object);
-                    if state.gc.heap().array_kind(handle).ok()
-                        != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
-                    {
-                        match state.gc.heap().get_element(handle, index) {
-                            Ok(Some(stored)) if !value::is_array_hole(stored as i64) => {
-                                return stored as i64;
-                            }
-                            Ok(_) => {}
-                            Err(_) => return fail_dispatch(ctx),
-                        }
-                    }
-                }
-            }
-            get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx))
-        }
         NativeRuntimeOp::SetProp | NativeRuntimeOp::SetPropStrict => {
             let [object, key, stored] = args else {
                 return fail_dispatch(ctx);
             };
+            // 链式/复合求值的 TAG_EXCEPTION 操作数原样透传：复合赋值的读取
+            // 异常（`null.p += 1` 经 Binary 透传流入 stored）必须先于本 op 的
+            // ToObject TypeError 传播（读在写前，§13.15.2）。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*key) {
+                return *key;
+            }
+            if value::is_exception(*stored) {
+                return *stored;
+            }
             // PutValue 步骤 3.a：ToObject(base) 先于 ToPropertyKey，null/undefined
             // 基座须在键转换（可能执行用户代码）之前抛 TypeError。
             if let Some(exception) = set_on_nullish_receiver(ctx, state, *object, *key) {
@@ -338,6 +328,13 @@ pub(super) fn dispatch_runtime(
             let [object, key, stored, ic_slot_ptr] = args else {
                 return fail_dispatch(ctx);
             };
+            // 链式/复合求值的 TAG_EXCEPTION 操作数原样透传（键为编译期常量）。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*stored) {
+                return *stored;
+            }
             let strict = operation == NativeRuntimeOp::SetPropIcStrict;
             if let Some(result) =
                 set_on_primitive_receiver(ctx, state, *object, *key, *stored, strict)
@@ -359,6 +356,13 @@ pub(super) fn dispatch_runtime(
             let [object, key] = args else {
                 return fail_dispatch(ctx);
             };
+            // 链式求值的 TAG_EXCEPTION 基座/键原样透传（`delete a.b.c`）。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*key) {
+                return *key;
+            }
             let strict = operation == NativeRuntimeOp::DeletePropStrict;
             delete_property_operator(ctx, state, *object, *key, strict)
         }
@@ -409,6 +413,17 @@ pub(super) fn dispatch_runtime(
             let [object, index] = args else {
                 return fail_dispatch(ctx);
             };
+            // 链式求值的 TAG_EXCEPTION 基座/键原样透传（与 GetProp 同约定）。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*index) {
+                return *index;
+            }
+            // GetValue 步骤 3.a：null/undefined 基座先于 ToPropertyKey 抛 TypeError。
+            if let Some(exception) = get_on_nullish_base(ctx, state, *object, *index) {
+                return exception;
+            }
             // `o[k]`：[[Get]]（含 proxy trap）之前先做 ToPropertyKey 再入。
             let index = &match to_property_key_value(ctx, state, *index) {
                 Ok(key) => key,
@@ -447,6 +462,16 @@ pub(super) fn dispatch_runtime(
             let [object, index, stored] = args else {
                 return fail_dispatch(ctx);
             };
+            // 链式/复合求值的 TAG_EXCEPTION 操作数原样透传（读异常先于写检查）。
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*index) {
+                return *index;
+            }
+            if value::is_exception(*stored) {
+                return *stored;
+            }
             // PutValue 步骤 3.a：null/undefined 基座先于 ToPropertyKey 抛 TypeError。
             if let Some(exception) = set_on_nullish_receiver(ctx, state, *object, *index) {
                 return exception;
@@ -723,7 +748,7 @@ pub(super) fn binary_add(
 /// 普通对象（实例 `this`）、callable（静态字段的类构造器）、array
 /// （`class C extends Array` 实例）、Proxy（基类构造器返回 Proxy 时走
 /// [[DefineOwnProperty]] trap）。`key_value` 已完成 ToPropertyKey。
-fn create_data_property_impl(
+pub(super) fn create_data_property_impl(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,
@@ -1139,6 +1164,116 @@ fn is_primitive_value(encoded: i64) -> bool {
         || value::is_bigint(encoded)
 }
 
+/// GetValue 步骤 3.a（§6.2.5.5）：属性引用的 ToObject(base) 对 null/undefined
+/// 抛 TypeError，且先于 ToPropertyKey——键转换可能执行用户代码，其副作用不得
+/// 在本 TypeError 之前发生。返回 `None` 表示基座不是 null/undefined。
+///
+/// 文案对齐 V8 ThrowLoadFromNullOrUndefined 三态：
+/// - 键恰为 %Symbol.iterator%：kNotIterableNoSymbolLoad，「<callsite> is not
+///   iterable (cannot read property Symbol(Symbol.iterator))」，callsite 按
+///   BuildDefaultCallSite 渲染（typeof 前缀：null → "object null"，undefined
+///   → "undefined"）；
+/// - 键为基元：无副作用渲染进「(reading '<key>')」后缀；
+/// - 键为对象：ToPropertyKey 尚未执行，无法无副作用取键名，省略后缀（V8 对
+///   带用户 toString 的对象与数组同样省略；纯对象的 "#<Object>" 渲染未实现）。
+pub(super) fn get_on_nullish_base(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+) -> Option<i64> {
+    if !value::is_null(object) && !value::is_undefined(object) {
+        return None;
+    }
+    let base = if value::is_null(object) {
+        "null"
+    } else {
+        "undefined"
+    };
+    if value::is_symbol(key) && value::decode_handle(key) == wjsm_ir::wk_symbol::ITERATOR {
+        let callsite = if value::is_null(object) {
+            "object null"
+        } else {
+            "undefined"
+        };
+        return Some(type_error(
+            ctx,
+            state,
+            &format!("{callsite} is not iterable (cannot read property Symbol(Symbol.iterator))"),
+        ));
+    }
+    let message = match render_key_no_side_effects(state, key) {
+        Some(rendered) => format!("Cannot read properties of {base} (reading '{rendered}')"),
+        None => format!("Cannot read properties of {base}"),
+    };
+    Some(type_error(ctx, state, &message))
+}
+
+/// 无副作用的属性键渲染（V8 Object::NoSideEffectsToMaybeString 的基元子集）：
+/// 数字按 JS Number::toString 精确格式化，其余基元复用 `render_value`（字符串
+/// 原文 / Symbol(desc) / BigInt 十进制 / 布尔与 null/undefined 字面量）。对象
+/// 键需要 ToPropertyKey（可执行用户代码）才能得到键名，返回 `None` 表示不可
+/// 无副作用渲染。
+fn render_key_no_side_effects(state: &NativeAgentState, key: i64) -> Option<String> {
+    if value::is_f64(key) {
+        return Some(wjsm_builtins::number_format::format_number_js(
+            value::decode_f64(key),
+        ));
+    }
+    (value::is_string(key)
+        || value::is_symbol(key)
+        || value::is_bigint(key)
+        || value::is_bool(key)
+        || value::is_null(key)
+        || value::is_undefined(key))
+    .then(|| render_value(state, key))
+}
+
+/// V8 BuildDefaultCallSite：`typeof` 前缀加有限值渲染（string 截断 100 单元
+/// 带引号 / null / true / false / number），其余类型（undefined / symbol /
+/// bigint / object / function）只保留 typeof 名。GetIterator 家族无源文本时
+/// 的回退 callsite 渲染（CallPrinter 的源文本渲染未实现）。
+pub(super) fn default_call_site(state: &NativeAgentState, encoded: i64) -> String {
+    let type_name = super::operator::type_of_name(state, encoded);
+    if value::is_string(encoded) {
+        let text = render_value(state, encoded);
+        // V8 kMaxPrintedStringLength = 100：超长字符串截断加省略号。
+        let rendered: String = if text.chars().count() <= 100 {
+            text
+        } else {
+            let mut truncated: String = text.chars().take(100).collect();
+            truncated.push_str("...");
+            truncated
+        };
+        format!("{type_name} \"{rendered}\"")
+    } else if value::is_f64(encoded) {
+        // 数字按 JS Number::toString 精确格式化（-0 渲染为 "0"，与 V8 一致）。
+        format!(
+            "{type_name} {}",
+            wjsm_builtins::number_format::format_number_js(value::decode_f64(encoded))
+        )
+    } else if value::is_null(encoded) || value::is_bool(encoded) {
+        format!("{type_name} {}", render_value(state, encoded))
+    } else {
+        type_name.to_string()
+    }
+}
+
+/// GetIterator（§7.4.3）源缺少可调用 @@iterator 方法时的 TypeError：V8
+/// kNotIterableNoSymbolLoad 回退形态。
+pub(super) fn not_iterable_type_error(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    source: i64,
+) -> i64 {
+    let callsite = default_call_site(state, source);
+    type_error(
+        ctx,
+        state,
+        &format!("{callsite} is not iterable (cannot read property Symbol(Symbol.iterator))"),
+    )
+}
+
 /// PutValue 步骤 3.a：ToObject 对 null/undefined 基座直接抛 TypeError（与
 /// strict 无关），且先于 ToPropertyKey——后者可能执行用户代码，其副作用不得
 /// 在本 TypeError 之前发生。返回 `None` 表示基座不是 null/undefined。
@@ -1433,6 +1568,21 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
             crate::NativeCallableKind::TypedArrayFrom
             | crate::NativeCallableKind::TypedArrayOf
             | crate::NativeCallableKind::TypedArrayToStringTag,
+        ) => false,
+        // %Iterator% 本体是构造器（抽象性在调用期抛错），其余 Iterator
+        // Helper 家族函数（from / 原型方法 / 访问器 / next / return）皆非。
+        Some(
+            crate::NativeCallableKind::IteratorStaticFrom
+            | crate::NativeCallableKind::IteratorProto(_)
+            | crate::NativeCallableKind::IteratorProtoIterator
+            | crate::NativeCallableKind::IteratorConstructorGetter
+            | crate::NativeCallableKind::IteratorConstructorSetter
+            | crate::NativeCallableKind::IteratorToStringTagGetter
+            | crate::NativeCallableKind::IteratorToStringTagSetter
+            | crate::NativeCallableKind::IteratorHelperNext
+            | crate::NativeCallableKind::IteratorHelperReturn
+            | crate::NativeCallableKind::IteratorWrapNext
+            | crate::NativeCallableKind::IteratorWrapReturn,
         ) => false,
         Some(_) => true,
         None => state
@@ -1840,6 +1990,10 @@ pub(super) fn get_property_with_receiver(
     key: i64,
     receiver: i64,
 ) -> Result<i64, ()> {
+    // 本函数是宿主内部 Get(O, P)（§7.3.2，规范前提 O 为对象）；成员访问的
+    // ToObject TypeError 由 GetProp / GetPropIc / GetElem 入口的
+    // `get_on_nullish_base` 负责。内部调用点传入 nullish 时按安全网返回
+    // undefined，不得在此抛错——否则选项包缺省读取等合法路径会被误伤。
     if value::is_null(object) || value::is_undefined(object) {
         return Ok(value::encode_undefined());
     }
@@ -2727,8 +2881,14 @@ pub(super) fn iterator_from(
         return fail_dispatch(ctx);
     };
     let symbol = value::encode_handle(value::TAG_SYMBOL, wjsm_ir::wk_symbol::ITERATOR);
+    // GetIterator（§7.4.3）经 GetMethod → GetV 对 nullish 做 ToObject：文案与
+    // 成员访问同源（V8 kNotIterableNoSymbolLoad 回退形态，CallPrinter 的源
+    // 文本渲染未实现）。
+    if let Some(exception) = get_on_nullish_base(ctx, state, source, symbol) {
+        return exception;
+    }
     let Ok(method) = get_property(ctx, state, source, symbol) else {
-        return type_error(ctx, state, "value is not iterable");
+        return not_iterable_type_error(ctx, state, source);
     };
     if value::is_exception(method) {
         return method;
@@ -2742,8 +2902,10 @@ pub(super) fn iterator_from_method(
     source: i64,
     method: i64,
 ) -> i64 {
+    // 方法缺失或非可调用：V8 对 sync GetIterator 统一按 kNotIterableNoSymbolLoad
+    // 渲染源值（非「is not a function」形态）。
     if !value::is_callable(method) {
-        return type_error(ctx, state, "value is not iterable");
+        return not_iterable_type_error(ctx, state, source);
     }
     if let Some((source_kind, iterator_kind)) = intrinsic_iterator_source(state, source, method) {
         let Ok(iterator) = state.allocate_object_with_gc_retry(ctx, 0, false) else {
@@ -2767,8 +2929,14 @@ pub(super) fn iterator_from_method(
     if value::is_exception(iterator) {
         return iterator;
     }
+    // §7.4.2 GetIteratorFromMethod 步骤 2：调用结果非对象抛 TypeError，
+    // 文案对齐 V8 kSymbolIteratorInvalid。
     if !value::is_js_object(iterator) {
-        return type_error(ctx, state, "iterator method did not return an object");
+        return type_error(
+            ctx,
+            state,
+            "Result of the Symbol.iterator method is not an object",
+        );
     }
     let handle = value::decode_handle(iterator);
     state
