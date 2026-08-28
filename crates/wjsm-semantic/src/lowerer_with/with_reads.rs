@@ -310,12 +310,14 @@ impl Lowerer {
 
         let key = self.append_string_const(hit, &name);
         let deleted = self.alloc_value();
+        // with 语句在严格代码中是 early error，本路径必然处于 sloppy。
         self.current_function.append_instruction(
             hit,
             Instruction::DeleteProp {
                 dest: deleted,
                 object: base,
                 key,
+                strict: false,
             },
         );
         let hit_end = self.fork_with_dispatch_exception(hit, deleted)?;
@@ -342,6 +344,7 @@ impl Lowerer {
                     dest: deleted_global,
                     object: global,
                     key: miss_key,
+                    strict: false,
                 },
             );
             deleted_global

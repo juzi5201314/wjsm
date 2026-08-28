@@ -346,6 +346,7 @@ pub(super) unsafe extern "C" fn native_host_operation(
                 | NativeRuntimeOp::SetPropStrict
                 | NativeRuntimeOp::CreateDataProperty
                 | NativeRuntimeOp::DeleteProp
+                | NativeRuntimeOp::DeletePropStrict
                 | NativeRuntimeOp::SetProto
                 | NativeRuntimeOp::SetPropIc
                 | NativeRuntimeOp::SetPropIcStrict

@@ -169,7 +169,9 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             add(key);
             add(value);
         }
-        DeleteProp { dest, object, key } => {
+        DeleteProp {
+            dest, object, key, ..
+        } => {
             add(dest);
             add(object);
             add(key);
@@ -430,7 +432,9 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             rep(key);
             rep(value);
         }
-        DeleteProp { dest, object, key } => {
+        DeleteProp {
+            dest, object, key, ..
+        } => {
             rep(dest);
             rep(object);
             rep(key);

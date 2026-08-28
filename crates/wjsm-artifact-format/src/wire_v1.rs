@@ -551,9 +551,15 @@ fn encode_instruction(
             value_id(encoder, *value);
             encoder.u16(u16::from(*strict));
         }
-        Instruction::DeleteProp { dest, object, key } => {
+        Instruction::DeleteProp {
+            dest,
+            object,
+            key,
+            strict,
+        } => {
             encoder.u16(15);
             three_values(encoder, *dest, *object, *key);
+            encoder.u16(u16::from(*strict));
         }
         Instruction::SetProto { object, value } => {
             encoder.u16(16);
@@ -849,7 +855,12 @@ fn decode_instruction(
         }),
         15 => {
             let (dest, object, key) = decode_three(decoder)?;
-            Ok(Instruction::DeleteProp { dest, object, key })
+            Ok(Instruction::DeleteProp {
+                dest,
+                object,
+                key,
+                strict: decoder.u16()? != 0,
+            })
         }
         16 => {
             let (object, value) = decode_two(decoder)?;

@@ -1277,6 +1277,10 @@ pub enum Instruction {
         dest: ValueId,
         object: ValueId,
         key: ValueId,
+        /// 该 delete 点是否处于严格模式代码：[[Delete]] 返回 false 时
+        /// strict 抛 TypeError（§13.5.5.9 步骤 5.d），sloppy 返回 false。
+        #[serde(default)]
+        strict: bool,
     },
     /// 直接设置对象的 __proto__ 槽位（offset 0），用于原型链构建。
     SetProto {
@@ -1589,8 +1593,17 @@ impl fmt::Display for Instruction {
                     "{dest} = create_data_property {object}, {key}, {value}"
                 )
             }
-            Self::DeleteProp { dest, object, key } => {
-                write!(formatter, "{dest} = delete_prop {object}, {key}")
+            Self::DeleteProp {
+                dest,
+                object,
+                key,
+                strict,
+            } => {
+                write!(formatter, "{dest} = delete_prop {object}, {key}")?;
+                if *strict {
+                    formatter.write_str(", strict")?;
+                }
+                Ok(())
             }
             Self::SetProto { object, value } => {
                 write!(formatter, "set_proto {object}, {value}")
@@ -1880,7 +1893,9 @@ impl Instruction {
                 *key = f(*key);
                 *value = f(*value);
             }
-            Self::DeleteProp { dest, object, key } => {
+            Self::DeleteProp {
+                dest, object, key, ..
+            } => {
                 *dest = f(*dest);
                 *object = f(*object);
                 *key = f(*key);

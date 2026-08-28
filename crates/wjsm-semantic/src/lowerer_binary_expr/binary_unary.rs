@@ -764,14 +764,21 @@ impl Lowerer {
                             }
                         };
                         let dest = self.alloc_value();
+                        // strict 位随降级点静态确定：deleteStatus 为 false 时
+                        // strict 抛 TypeError（§13.5.5.9 步骤 5.d）。
                         self.current_function.append_instruction(
                             current_block,
-                            Instruction::DeleteProp { dest, object, key },
+                            Instruction::DeleteProp {
+                                dest,
+                                object,
+                                key,
+                                strict: self.strict_mode,
+                            },
                         );
                         self.publish_expr_continuation(block, current_block);
                         Ok(dest)
                     }
-                    // delete x 对变量总是返回 true（不能删除变量）
+                    // delete x：绑定不可删除时返回 false，其余沿用既有恒 true。
                     swc_ast::Expr::Ident(ident) => {
                         // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。
                         let crossed = self.with_scopes_for_ident(ident.sym.as_ref());
@@ -786,13 +793,18 @@ impl Lowerer {
                         {
                             return self.lower_script_global_delete(block, &name);
                         }
-                        let true_const = self.module.add_constant(Constant::Bool(true));
+                        // 函数环境的 `arguments` 绑定按 CreateMutableBinding(
+                        // "arguments", false) 创建（§10.2.11 步骤 27/34），
+                        // deletable=false：DeleteBinding 返回 false（§9.1.1.1.8）。
+                        // 显式 var/形参名 arguments 同为不可删除的声明式绑定。
+                        let deletable = !(name == "arguments" && self.scopes.lookup(&name).is_ok());
+                        let bool_const = self.module.add_constant(Constant::Bool(deletable));
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
                             block,
                             Instruction::Const {
                                 dest,
-                                constant: true_const,
+                                constant: bool_const,
                             },
                         );
                         Ok(dest)
