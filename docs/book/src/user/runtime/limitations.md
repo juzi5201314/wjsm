@@ -20,12 +20,17 @@ typeof fetch         // "undefined"，但 fetch(url) 正常工作
 
 ## String 原型方法
 
-String 原型方法基本可取值传递（`replace`、`split`、`trim`、locale 相关方法等）。当前例外是 `match`，取值得到 `undefined`，只能在调用点使用：
+`String.prototype` 是真实固有原型对象：已实现的方法（含 `match`、`matchAll`、`replace`、`split`、`trim`、locale 相关方法等）都是原型上的不可枚举数据属性，可取值后经 `call` / `apply` / `bind` 传递，`String.raw` 也已实现：
 
 ```js
-"hello".match(/l/)           // 可用：直接调用
-const fn = "hello".match     // undefined：取值失败
+"hello".match(/l/)                          // 可用：直接调用
+const fn = "hello".match                    // function：取值成功
+fn.call("world", /o/)[0]                    // "o"
+String.prototype.slice.call("abcdef", 1, 4) // "bcd"
+String.raw`a\nb${1}`                        // "a\\nb1"
 ```
+
+未实现的名字不占位：Annex B 的 HTML 方法族（`anchor`、`big` 等）、`substr`、`isWellFormed` / `toWellFormed`、`trimLeft` / `trimRight` 在原型上不存在，读取得到 `undefined`。
 
 ## TypedArray / DataView
 

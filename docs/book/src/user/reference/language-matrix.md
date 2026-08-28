@@ -44,7 +44,7 @@
 | --- | --- | --- |
 | 可选链、`??`、逻辑赋值 | 可用 | |
 | `**` | 可用 | |
-| 模板字面量、标签模板 | 可用 | `String.raw` 未实现 |
+| 模板字面量、标签模板 | 可用 | 含 `String.raw`（标签模板与显式 array-like 调用形态） |
 | `for-in` / `for-of` | 可用 | |
 | 自定义 `Symbol.iterator` | 可用 | |
 
@@ -53,7 +53,7 @@
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
 | `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性；`toLocaleString` 委托元素的 locale 方法 |
-| `String` 方法 | 多数仅调用点 | `normalize` / `toLowerCase` / `toUpperCase` / `toLocale*` / `localeCompare` 是真实原型方法；`slice`/`concat`/`includes`/`startsWith`/`indexOf` 可取值传递，其余方法取值得到 `undefined` |
+| `String` 方法 | 可用 | `String.prototype` 方法是真实不可枚举属性，可取值经 `call`/`apply`/`bind` 传递；`String.raw` 已实现；Annex B HTML 方法族、`substr`、`isWellFormed`/`toWellFormed`、`trimLeft`/`trimRight` 未实现 |
 | `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 同构造器与跨构造器的 `instanceof` 返回布尔；其他构造器的 `instanceof` 边界仍以 fixture/test262 覆盖为准 |
 | `Promise` 及组合子 | 可用 | 含 `allSettled`、`withResolvers` |
 | `Proxy` / `Reflect` | 可用 | |
