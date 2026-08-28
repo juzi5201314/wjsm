@@ -2499,6 +2499,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 .load_word(HeapAddress::new(object))
                 .map_err(HeapAccessV2Error::Memory)?;
             let object_type = header_heap_type(header);
+            // 链中途的数组层（class extends Array 的子类原型链途经
+            // %Array.prototype% 等）：其命名属性在宿主侧表、内建方法为宿主
+            // 惰性合成，堆槽行走不可见——与 Proxy / RegExp 同法以逃逸错误
+            // 交还宿主按数组语义继续解析。
+            if object_type == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) && current != handle {
+                return Err(HeapAccessV2Error::ExoticPrototype { slot: current });
+            }
             if object_type != u32::from(wjsm_ir::HEAP_TYPE_ARRAY)
                 && let Some(property) = self.get_property_slot(current, key)?
             {

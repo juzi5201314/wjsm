@@ -9,9 +9,7 @@
 use wjsm_ir::{Builtin, value, wk_symbol};
 
 use super::intl::IntlCallable;
-use crate::{
-    BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind, PropertyKey,
-};
+use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind, PropertyKey};
 
 /// 原型方法值家族：多数为带 receiver 的 Builtin；locale 敏感方法
 /// （ECMA-402 §1.4.1 覆盖 §22.1.3 对应条目）沿用 Intl owner。
@@ -27,30 +25,48 @@ enum ProtoMethod {
 const PROTO_METHODS: &[(&str, ProtoMethod)] = &[
     ("at", ProtoMethod::Builtin(Builtin::StringAt)),
     ("charAt", ProtoMethod::Builtin(Builtin::StringCharAt)),
-    ("charCodeAt", ProtoMethod::Builtin(Builtin::StringCharCodeAt)),
-    ("codePointAt", ProtoMethod::Builtin(Builtin::StringCodePointAt)),
+    (
+        "charCodeAt",
+        ProtoMethod::Builtin(Builtin::StringCharCodeAt),
+    ),
+    (
+        "codePointAt",
+        ProtoMethod::Builtin(Builtin::StringCodePointAt),
+    ),
     ("concat", ProtoMethod::Builtin(Builtin::StringConcatVa)),
     ("endsWith", ProtoMethod::Builtin(Builtin::StringEndsWith)),
     ("includes", ProtoMethod::Builtin(Builtin::StringIncludes)),
     ("indexOf", ProtoMethod::Builtin(Builtin::StringIndexOf)),
-    ("lastIndexOf", ProtoMethod::Builtin(Builtin::StringLastIndexOf)),
+    (
+        "lastIndexOf",
+        ProtoMethod::Builtin(Builtin::StringLastIndexOf),
+    ),
     (
         "localeCompare",
         ProtoMethod::Intl(IntlCallable::StringLocaleCompare),
     ),
     ("match", ProtoMethod::Builtin(Builtin::StringMatch)),
     ("matchAll", ProtoMethod::Builtin(Builtin::StringMatchAll)),
-    ("normalize", ProtoMethod::Intl(IntlCallable::StringNormalize)),
+    (
+        "normalize",
+        ProtoMethod::Intl(IntlCallable::StringNormalize),
+    ),
     ("padEnd", ProtoMethod::Builtin(Builtin::StringPadEnd)),
     ("padStart", ProtoMethod::Builtin(Builtin::StringPadStart)),
     ("repeat", ProtoMethod::Builtin(Builtin::StringRepeat)),
     ("replace", ProtoMethod::Builtin(Builtin::StringReplace)),
-    ("replaceAll", ProtoMethod::Builtin(Builtin::StringReplaceAll)),
+    (
+        "replaceAll",
+        ProtoMethod::Builtin(Builtin::StringReplaceAll),
+    ),
     ("search", ProtoMethod::Builtin(Builtin::StringSearch)),
     ("slice", ProtoMethod::Builtin(Builtin::StringSlice)),
     ("split", ProtoMethod::Builtin(Builtin::StringSplit)),
     ("substring", ProtoMethod::Builtin(Builtin::StringSubstring)),
-    ("startsWith", ProtoMethod::Builtin(Builtin::StringStartsWith)),
+    (
+        "startsWith",
+        ProtoMethod::Builtin(Builtin::StringStartsWith),
+    ),
     ("toString", ProtoMethod::Builtin(Builtin::StringToString)),
     ("trim", ProtoMethod::Builtin(Builtin::StringTrim)),
     ("trimStart", ProtoMethod::Builtin(Builtin::StringTrimStart)),
@@ -116,7 +132,12 @@ pub(crate) fn ensure_string_prototype(state: &mut NativeAgentState) -> Option<i6
         state
             .gc
             .heap()
-            .define_data_property(handle, key, callable as u64, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .define_data_property(
+                handle,
+                key,
+                callable as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
             .ok()?;
     }
     let iterator =
@@ -135,7 +156,9 @@ pub(crate) fn ensure_string_prototype(state: &mut NativeAgentState) -> Option<i6
     state
         .callable_properties
         .insert((constructor, prototype_key), prototype);
-    state.callable_property_flags.insert((constructor, prototype_key), 0);
+    state
+        .callable_property_flags
+        .insert((constructor, prototype_key), 0);
     state.intl.string_prototype = Some(prototype);
     Some(prototype)
 }

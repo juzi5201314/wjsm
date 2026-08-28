@@ -299,7 +299,7 @@ fn to_length(number: f64) -> u64 {
 }
 
 /// 十进制索引串的属性键驻留（与 arguments / 对象属性创建同一驻留形态）。
-fn index_key(
+pub(super) fn index_key(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     index: u64,

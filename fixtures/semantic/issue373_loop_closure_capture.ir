@@ -380,7 +380,7 @@ module {
       %59 = call builtin.exception_value(%57)
       throw %59
     bb22:
-      %64 = call builtin.array.is_array(%51)
+      %64 = call builtin.array.species_default(%51)
       branch %64, bb24, bb23
     bb23:
       %62 = call builtin.array.map(%51, %52)
@@ -1623,7 +1623,7 @@ module {
       %584 = call builtin.exception_value(%582)
       throw %584
     bb249:
-      %587 = call builtin.array.is_array(%566)
+      %587 = call builtin.array.species_default(%566)
       branch %587, bb251, bb250
     bb250:
       %585 = call builtin.array.map(%566, %567)
@@ -1673,7 +1673,7 @@ module {
       %569 = is_exception %568
       branch %569, bb240, bb239
     bb264:
-      %609 = call builtin.array.is_array(%510)
+      %609 = call builtin.array.species_default(%510)
       branch %609, bb266, bb265
     bb265:
       %607 = call builtin.array.map(%510, %511)
@@ -1723,7 +1723,7 @@ module {
       %513 = is_exception %512
       branch %513, bb214, bb213
     bb279:
-      %631 = call builtin.array.is_array(%461)
+      %631 = call builtin.array.species_default(%461)
       branch %631, bb281, bb280
     bb280:
       %629 = call builtin.array.map(%461, %462)
@@ -1773,7 +1773,7 @@ module {
       %464 = is_exception %463
       branch %464, bb194, bb193
     bb294:
-      %653 = call builtin.array.is_array(%359)
+      %653 = call builtin.array.species_default(%359)
       branch %653, bb296, bb295
     bb295:
       %651 = call builtin.array.map(%359, %360)
@@ -1823,7 +1823,7 @@ module {
       %362 = is_exception %361
       branch %362, bb145, bb144
     bb309:
-      %675 = call builtin.array.is_array(%142)
+      %675 = call builtin.array.species_default(%142)
       branch %675, bb311, bb310
     bb310:
       %673 = call builtin.array.map(%142, %143)
@@ -1873,7 +1873,7 @@ module {
       %145 = is_exception %144
       branch %145, bb52, bb51
     bb324:
-      %697 = call builtin.array.is_array(%73)
+      %697 = call builtin.array.species_default(%73)
       branch %697, bb326, bb325
     bb325:
       %695 = call builtin.array.map(%73, %74)

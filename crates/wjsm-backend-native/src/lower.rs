@@ -8893,6 +8893,8 @@ pub(crate) fn infer_boolean_values(
                             | Builtin::IsCallable
                             | Builtin::IsJsObject
                             | Builtin::ArrayHasElement
+                            | Builtin::ArrayIsPlain
+                            | Builtin::ArraySpeciesDefault
                             | Builtin::ObjectIs,
                         ..
                     } => Some(*dest),
