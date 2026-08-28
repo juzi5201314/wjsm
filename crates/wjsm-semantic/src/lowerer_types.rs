@@ -228,6 +228,11 @@ pub(crate) struct Lowerer {
     /// 槽位，与形参别名重定向不相容；命中时禁用 [[ParameterMap]]（mapped
     /// 对象仍创建，但保持普通属性行为）。与上一字段成对设置/消费。
     pub(crate) arguments_alias_blocked: bool,
+    /// 形参列表是否为 simple parameter list（无默认值 / rest / 解构）。
+    /// §10.2.11 步骤 22.a：严格模式**或**非简单形参列表都建 unmapped 对象，
+    /// 所以这条不能和上面的别名列表合并——零形参函数是简单列表（callee 为
+    /// 数据属性）但没有可别名的形参。与上两字段成对设置/消费。
+    pub(crate) arguments_simple_param_list: bool,
     /// mapped arguments 形参别名表：(形参声明作用域, 形参名) → 别名信息。
     /// 命中的绑定读写全部改经 MappedArgumentsBindingRead/Write，形参绑定
     /// 真值由 arguments 对象（映射期间的自有索引属性 / 解除后的宿主侧

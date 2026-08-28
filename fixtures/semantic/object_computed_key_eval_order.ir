@@ -202,7 +202,7 @@ module {
     c199 = string("setter key boom")
     c200 = functionref(@7)
     c201 = undefined
-    c202 = number(0)
+    c202 = number(1)
     c203 = functionref(@8)
     c204 = functionref(@8)
     c205 = number(2)
@@ -610,6 +610,7 @@ module {
       %3 = const c203
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $39.arguments, %2
+      store var $39.$args.mapped, %2
       return
 
   fn @$0.anonymous [js_name ""] [js_length 0] [params: $43.$env, $43.$this] [entry=bb0]:

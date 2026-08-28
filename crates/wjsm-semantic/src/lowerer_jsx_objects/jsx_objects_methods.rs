@@ -437,6 +437,11 @@ impl Lowerer {
         // 缺陷，使方法体被截断为 unreachable（见 for-await + [Symbol.iterator] 复现）。
         // 且对象方法必然分配（闭包/对象），恒为 may-GC，消除 arguments 对 Layer 3 零收益。
         // 故安全且无损地保持基线行为。
+        let all_simple = accessor_params
+            .is_none_or(|pats| pats.iter().all(|pat| matches!(pat, swc_ast::Pat::Ident(_))));
+        self.arguments_param_count =
+            u32::try_from(accessor_params.map_or(0, <[swc_ast::Pat]>::len)).unwrap_or(0);
+        self.stage_arguments_alias_meta_parts(all_simple, &method_param_ir_names, Some(body));
         let m_entry = self.emit_arguments_init(m_entry, true)?;
         self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
@@ -575,6 +580,8 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&function.params, &param_ir_names, entry)?;
 
         // 对象字面量方法始终物化 arguments（见上方 lower_method_to_fn 处的说明）。
+        self.arguments_param_count = Self::count_regular_params(&function.params);
+        self.stage_arguments_alias_meta(function, &param_ir_names);
         let body_entry = self.emit_arguments_init(body_entry, true)?;
         self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 

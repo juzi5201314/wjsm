@@ -608,6 +608,7 @@ impl Lowerer {
         let args_override = self.arguments_source_override.take();
         let alias_param_ir_names = self.arguments_simple_param_ir_names.take();
         let alias_blocked = std::mem::take(&mut self.arguments_alias_blocked);
+        let simple_param_list = std::mem::take(&mut self.arguments_simple_param_list);
         if self.scopes.current_function_has_param_arguments() {
             return Ok(block);
         }
@@ -649,7 +650,7 @@ impl Lowerer {
             // 登记别名，两侧决策必然同真同假。
             if !self.strict_mode
                 && !self.is_arrow
-                && !self.is_method
+                && simple_param_list
                 && !alias_blocked
                 && let Some(names) = &alias_param_ir_names
             {
@@ -671,7 +672,9 @@ impl Lowerer {
             },
         );
 
-        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
+        // §10.2.11 步骤 22.a：严格模式**或**非简单形参列表建 unmapped 对象；
+        // 其余（含对象字面量方法/访问器——它们并非恒严格）建 mapped 对象。
+        let needs_mapped = !self.strict_mode && !self.is_arrow && simple_param_list;
         // 形参别名（[[ParameterMap]]）启用条件齐备时把真实形参个数传给宿主
         // 建侧表；否则传 0 保持普通对象行为（宿主对该实参只作侧表开关）。
         let alias_names = (needs_mapped && !alias_blocked)
@@ -703,10 +706,24 @@ impl Lowerer {
             None
         };
 
-        // D5: 精确发 Const — mapped && 无 binding → FunctionRef；mapped && 有 binding → undefined；unmapped → 不发
+        // callee 的取值在建对象之前就备好，作为 args[2] 交给 builtin 按
+        // §10.2.1.1 的 `{[[Writable]]: true, [[Enumerable]]: false,
+        // [[Configurable]]: true}` 定义。先建对象再 SetProp 回填会把 callee
+        // 建成可枚举属性，`Object.keys(arguments)` / for-in / 展开都会看到它。
         let func_ref_val = if needs_mapped {
             let val = self.alloc_value();
-            if mapped_self_binding.is_none() {
+            if let Some(binding) = mapped_self_binding.as_ref() {
+                let env_val = self.load_env_object(block);
+                let env_key_val = self.append_env_key_const(block, binding);
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: val,
+                        object: env_val,
+                        key: env_key_val,
+                    },
+                );
+            } else {
                 let function_id = wjsm_ir::FunctionId(self.module.functions().len() as u32);
                 let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
                 self.current_function.append_instruction(
@@ -714,15 +731,6 @@ impl Lowerer {
                     Instruction::Const {
                         dest: val,
                         constant: func_ref_const,
-                    },
-                );
-            } else {
-                let undef_const = self.module.add_constant(Constant::Undefined);
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: val,
-                        constant: undef_const,
                     },
                 );
             }
@@ -770,33 +778,6 @@ impl Lowerer {
         );
         if let Some(names) = &alias_names {
             self.register_mapped_arg_aliases(store_block, names, arguments_obj);
-        }
-
-        if let Some(binding) = mapped_self_binding {
-            let patch_block = self.resolve_store_block(store_block);
-            let env_val = self.load_env_object(patch_block);
-            let env_key_val = self.append_env_key_const(patch_block, &binding);
-            let closure_val = self.alloc_value();
-            self.current_function.append_instruction(
-                patch_block,
-                Instruction::GetProp {
-                    dest: closure_val,
-                    object: env_val,
-                    key: env_key_val,
-                },
-            );
-            let callee_key = self.alloc_value();
-            self.current_function.append_instruction(
-                patch_block,
-                Instruction::Const {
-                    dest: callee_key,
-                    constant: self
-                        .module
-                        .add_constant(Constant::String("callee".to_string())),
-                },
-            );
-            let result = self.emit_set_prop(patch_block, arguments_obj, callee_key, closure_val);
-            return self.lower_value_exception_branch(patch_block, result);
         }
 
         if self.scopes.mark_initialised("arguments").is_err() {

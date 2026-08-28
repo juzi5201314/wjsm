@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+shorthand 2,3,no-throw
+property 3,no-throw
+setter 3
+getter 0,no-throw
+computed 2
+generator 2
+non-simple 1,TypeError
+class-ctor 1,TypeError
+class-method 1,TypeError
+class-static 1,TypeError
+async 2
+--- stderr ---

@@ -50,14 +50,23 @@ impl Lowerer {
             .params
             .iter()
             .all(|param| matches!(param.pat, swc_ast::Pat::Ident(_)));
+        self.stage_arguments_alias_meta_parts(all_simple, param_ir_names, function.body.as_ref());
+    }
+
+    /// `stage_arguments_alias_meta` 的形参列表拆解版本：对象字面量访问器没有
+    /// `swc_ast::Function`（getter 无形参、setter 单个 pat），按同一规则登记。
+    pub(crate) fn stage_arguments_alias_meta_parts(
+        &mut self,
+        all_simple: bool,
+        param_ir_names: &[String],
+        body: Option<&swc_ast::BlockStmt>,
+    ) {
+        self.arguments_simple_param_list = all_simple;
         self.arguments_simple_param_ir_names = all_simple
             .then(|| param_ir_names.get(2..).unwrap_or_default().to_vec())
             .filter(|names| !names.is_empty());
         self.arguments_alias_blocked = all_simple
-            && function
-                .body
-                .as_ref()
-                .is_some_and(|body| body.stmts.iter().any(stmt_subtree_may_call_eval));
+            && body.is_some_and(|body| body.stmts.iter().any(stmt_subtree_may_call_eval));
     }
 
     /// 登记形参别名并把 arguments 对象存入隐藏绑定。声明失败（同函数重复

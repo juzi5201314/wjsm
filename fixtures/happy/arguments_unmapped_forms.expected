@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+1,5,TypeError
+1,2,TypeError
+3,3,TypeError
+1,TypeError
+2,no-throw,true
+7
+1,5
+1,TypeError
+--- stderr ---
