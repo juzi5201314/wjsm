@@ -162,6 +162,7 @@ pub fn lower_modules_with_debug_meta(
     let _flow = process_import_aliases(&mut lowerer, &modules, StmtFlow::Open(entry))?;
 
     let body_flow = StmtFlow::Open(lowerer.current_function.last_block_id());
+    let body_flow = install_all_namespace_getters(&mut lowerer, body_flow)?;
     let flow = lower_module_bodies(&mut lowerer, &modules, body_flow)?;
 
     finalize_multi_module(&mut lowerer, flow, has_tla)?;
@@ -226,13 +227,12 @@ pub fn lower_modules_with_builtin_seed(
     apply_re_export_map(&mut lowerer)?;
     let _flow = process_import_aliases(&mut lowerer, &modules, StmtFlow::Open(entry))?;
 
-    // builtin 段模块不在用户 `modules` 列表里，`lower_module_bodies` 的逐模块
-    // 安装不会以它们为来源执行；不补装则静态 `import * as` / 静态说明符
-    // `import()` 指向 builtin 的命名空间恒为空对象。此处在用户模块体之前补装：
-    // 运行时顺序上入口块头部的 `$builtin_main` 前缀调用先初始化 builtin 导出
-    // 绑定，随后才执行这里发射的 getter 安装代码。
+    // 统一序幕安装（用户 + builtin 来源）：builtin 段模块不在用户 `modules`
+    // 列表里，但其命名空间来源已登记进 namespace_object_modules；运行时顺序
+    // 上入口块头部的 `$builtin_main` 前缀调用先初始化 builtin 导出绑定，
+    // 随后才执行这里发射的 getter 安装代码。
     let body_flow = StmtFlow::Open(lowerer.current_function.last_block_id());
-    let body_flow = install_builtin_namespace_getters(&mut lowerer, &builtin, body_flow)?;
+    let body_flow = install_all_namespace_getters(&mut lowerer, body_flow)?;
 
     let flow = lower_module_bodies(&mut lowerer, &modules, body_flow)?;
 
@@ -295,10 +295,19 @@ fn setup_multi_module_lowerer(
     lowerer.re_export_map = linking.re_export_map.clone();
     lowerer.module_metadata = module_metadata;
 
-    // 收集需要构建命名空间对象的模块
+    // 收集需要构建命名空间对象的模块：动态 import 目标 ∪ 静态 `import * as`
+    // 来源。二者共享同一 canonical 对象（§10.4.6.12 GetModuleNamespace 缓存），
+    // 静态命名空间局部与 import() 结果必须是同一对象身份。
     for targets in linking.dynamic_import_targets.values() {
         for &target_id in targets {
-            lowerer.dynamic_import_namespace_modules.insert(target_id);
+            lowerer.namespace_object_modules.insert(target_id);
+        }
+    }
+    for bindings in linking.import_map.values() {
+        for binding in bindings {
+            if binding.names.iter().any(|(_, imported)| imported == "*") {
+                lowerer.namespace_object_modules.insert(binding.source_module);
+            }
         }
     }
 
@@ -493,19 +502,13 @@ fn process_import_aliases(
                         .declare(local_name, VarKind::Const, true)
                         .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
                     let block = lowerer.ensure_open(flow)?;
-                    let export_names_set = lowerer
-                        .module_export_names
+                    // 复用来源模块的 canonical 命名空间对象（入口块已创建并
+                    // 注册）：跨模块同源 `import * as` 与动态 import() 必须是
+                    // 同一对象身份（§10.4.6.12 GetModuleNamespace 缓存）。
+                    let ns_obj = *lowerer
+                        .namespace_objects
                         .get(&binding.source_module)
-                        .cloned();
-                    let capacity = export_names_set.as_ref().map_or(0, |s| s.len()) + 1;
-                    let ns_obj = lowerer.alloc_value();
-                    lowerer.current_function.append_instruction(
-                        block,
-                        Instruction::NewObject {
-                            dest: ns_obj,
-                            capacity: capacity as u32,
-                        },
-                    );
+                        .expect("命名空间来源模块已在 setup 阶段登记并于入口块创建对象");
                     let (scope_id, _) = lowerer
                         .scopes
                         .lookup(local_name)
@@ -521,11 +524,6 @@ fn process_import_aliases(
                     lowerer
                         .static_namespace_import_objects
                         .insert((module_id, local_name.clone()), ns_obj);
-                    lowerer.static_namespace_import_sources.push((
-                        module_id,
-                        local_name.clone(),
-                        binding.source_module,
-                    ));
                     flow = StmtFlow::Open(block);
                     continue;
                 }
@@ -644,13 +642,12 @@ fn emit_global_constants(lowerer: &mut Lowerer, entry: BasicBlockId) {
     );
 }
 
-/// 为动态 import 的目标模块创建并注册命名空间对象
+/// 为需要命名空间对象的模块（动态 import 目标 ∪ 静态 `import * as` 来源）
+/// 各创建一个 canonical 命名空间对象并注册到运行时缓存。运行时缓存注册使
+/// 同一模块的后续 `import()`（含 runtime 路径命中同一 RuntimeModuleKey）
+/// 返回同一对象，与静态命名空间局部保持对象身份一致。
 fn create_namespace_objects(lowerer: &mut Lowerer, entry: BasicBlockId) {
-    let mut namespace_modules: Vec<_> = lowerer
-        .dynamic_import_namespace_modules
-        .iter()
-        .copied()
-        .collect();
+    let mut namespace_modules: Vec<_> = lowerer.namespace_object_modules.iter().copied().collect();
     namespace_modules.sort_by_key(|id| id.0);
     for target_module_id in &namespace_modules {
         let export_names_set = lowerer.module_export_names.get(target_module_id).cloned();
@@ -688,9 +685,7 @@ fn create_namespace_objects(lowerer: &mut Lowerer, entry: BasicBlockId) {
         );
 
         // 记录 ValueId 供后续属性填充使用
-        lowerer
-            .dynamic_import_namespace_objects
-            .insert(*target_module_id, ns_obj);
+        lowerer.namespace_objects.insert(*target_module_id, ns_obj);
     }
 }
 
@@ -856,9 +851,6 @@ fn lower_module_bodies(
                 }
             }
         }
-        // 模块体执行完毕后，为以本模块为来源的命名空间对象安装 live binding getter（#45）。
-        // 拓扑序保证来源模块先于导入方降级，此时本模块的导出绑定与捕获闭包均已就绪。
-        flow = install_live_namespace_getters_for_source(lowerer, module_id, flow)?;
         lowerer.scopes.pop_scope();
     }
     Ok(flow)
@@ -923,34 +915,26 @@ fn lower_export_default_expr(
         lowerer.named_eval_hint = Some("default".to_string());
     }
     let value_val = lowerer.lower_expr(&default_expr.expr, outer_block)?;
-    let outer_block = lowerer.resolve_store_block(outer_block);
+    let mut outer_block = lowerer.resolve_store_block(outer_block);
     if let Some(current_mid) = lowerer.current_module_id {
         let default_var = format!("_default_export_mod{}", current_mid.0);
-        if let Some(ir_name) = lowerer
+        let ir_name = if let Some(ir_name) = lowerer
             .export_map
             .get(&(current_mid, "default".to_string()))
         {
-            lowerer.current_function.append_instruction(
-                outer_block,
-                Instruction::StoreVar {
-                    name: ir_name.clone(),
-                    value: value_val,
-                },
-            );
+            ir_name.clone()
         } else {
             let (scope_id, _) = lowerer
                 .scopes
                 .lookup(&default_var)
                 .map_err(|msg| lowerer.error(default_expr.span, msg))?;
-            let ir_name = format!("${scope_id}.{default_var}");
-            lowerer.current_function.append_instruction(
-                outer_block,
-                Instruction::StoreVar {
-                    name: ir_name,
-                    value: value_val,
-                },
-            );
-        }
+            format!("${scope_id}.{default_var}")
+        };
+        // 经 store_binding_value 收口：default 绑定已被命名空间 getter 捕获
+        // 进共享 env（序幕安装快照 TDZ 哨兵）时，此处必须同步 env 值。
+        let binding = parse_ir_name_to_binding(&ir_name);
+        outer_block =
+            lowerer.store_binding_value(outer_block, &binding, value_val, default_expr.span, true)?;
     }
     Ok(StmtFlow::Open(outer_block))
 }
@@ -976,19 +960,22 @@ fn lower_export_default_decl(
                 },
                 outer_block,
             )?;
-            let outer_block = lowerer.ensure_open(flow)?;
+            let mut outer_block = lowerer.ensure_open(flow)?;
             if let Some(current_mid) = lowerer.current_module_id
                 && let Some(ir_name) = lowerer
                     .export_map
                     .get(&(current_mid, "default".to_string()))
+                    .cloned()
             {
-                lowerer.current_function.append_instruction(
+                // 经 store_binding_value 收口以同步命名空间共享 env。
+                let binding = parse_ir_name_to_binding(&ir_name);
+                outer_block = lowerer.store_binding_value(
                     outer_block,
-                    Instruction::StoreVar {
-                        name: ir_name.clone(),
-                        value: fn_val,
-                    },
-                );
+                    &binding,
+                    fn_val,
+                    default_decl.span(),
+                    true,
+                )?;
             }
             Ok(StmtFlow::Open(outer_block))
         }
@@ -1007,20 +994,23 @@ fn lower_export_default_decl(
                 outer_block,
             )?;
             // 类求值可能推进 block（计算键异常分叉等）：消费延续块，
-            // 后续导出 StoreVar 不得落回已终止的入口块。
-            let outer_block = lowerer.resolve_store_block(outer_block);
+            // 后续导出存储不得落回已终止的入口块。
+            let mut outer_block = lowerer.resolve_store_block(outer_block);
             if let Some(current_mid) = lowerer.current_module_id
                 && let Some(ir_name) = lowerer
                     .export_map
                     .get(&(current_mid, "default".to_string()))
+                    .cloned()
             {
-                lowerer.current_function.append_instruction(
+                // 经 store_binding_value 收口以同步命名空间共享 env。
+                let binding = parse_ir_name_to_binding(&ir_name);
+                outer_block = lowerer.store_binding_value(
                     outer_block,
-                    Instruction::StoreVar {
-                        name: ir_name.clone(),
-                        value: class_val,
-                    },
-                );
+                    &binding,
+                    class_val,
+                    default_decl.span(),
+                    true,
+                )?;
             }
             Ok(StmtFlow::Open(outer_block))
         }
@@ -1067,8 +1057,9 @@ impl Lowerer {
     /// 闭包 env 读取该绑定的最新值，从而满足 ECMAScript §10.4.6 模块命名空间对象的
     /// live binding 语义（导出变量被改写后 `ns.x` 反映新值）。
     ///
-    /// 必须在来源模块体降级完成后调用：此时导出绑定与其捕获闭包（若存在）均已物化，
-    /// `ensure_shared_env` 不会重复快照。
+    /// 在模块体之前安装：`ensure_shared_env` 对尚未初始化的绑定快照 TDZ 哨兵
+    /// （getter 读到哨兵按 §10.4.6.8 抛 ReferenceError），声明执行时经
+    /// `store_binding_value` 同步共享 env，安装后不会重复快照。
     fn install_namespace_getter(
         &mut self,
         ns_obj: wjsm_ir::ValueId,
@@ -1154,14 +1145,17 @@ impl Lowerer {
         ];
 
         // 函数体：通过 env 读取来源绑定（getter 不属于绑定所有者函数，
-        // load_captured_binding 走 record_capture + GetProp 路径），然后返回。
+        // load_captured_binding 走 record_capture + GetProp 路径），
+        // 经 TDZ 检查后返回。§10.4.6.8 [[Get]] 对未初始化的导出绑定
+        // （循环导入下声明尚未执行）须抛 ReferenceError 而非泄漏哨兵值。
         let entry = BasicBlockId(0);
         let value_val = self.load_captured_binding(entry, binding)?;
         let ret_block = self.resolve_store_block(entry);
+        let (checked_val, ret_block) = self.emit_tdz_check(ret_block, value_val, &binding.name)?;
         self.current_function.set_terminator(
             ret_block,
             Terminator::Return {
-                value: Some(value_val),
+                value: Some(checked_val),
             },
         );
 
@@ -1196,34 +1190,48 @@ pub(crate) fn parse_ir_name_to_binding(ir_name: &str) -> CapturedBinding {
     CapturedBinding::new(ir_name.to_string(), 0)
 }
 
-/// 为 builtin 段来源的命名空间对象安装 live binding getter（种子路径专用）。
+/// 在全部模块体之前（入口序幕）为每个 canonical 命名空间对象安装 live
+/// binding getter 并收口 exotic 身份。
 ///
-/// builtin 模块在种子路径下由独立段 lower（issue #344），不进入用户 `modules`
-/// 列表，因此逐模块的 [`install_live_namespace_getters_for_source`] 不会覆盖它们。
-/// 此处按 module_id 升序对段内全部模块补装（无命名空间目标的模块在被调函数内
-/// 直接跳过）。builtin 导出全部在 `$builtin_main` 顶层初始化完成且封装源不含
-/// `export let/var`，安装时经共享 env 快照的值与 live binding 语义一致。
-fn install_builtin_namespace_getters(
+/// ECMAScript 在 Link 阶段（任何模块求值之前）即物化命名空间对象的全部
+/// 属性；循环导入下先执行的模块读取后执行模块的命名空间时，键集合、
+/// 描述符与 exotic 行为必须已就绪，未初始化的 let/const 导出经 getter 的
+/// TDZ 检查抛 ReferenceError（§10.4.6.8）。绑定快照由 `ensure_shared_env`
+/// 处理：TDZ 绑定写入未初始化哨兵，声明执行时 `store_binding_value` 同步
+/// 共享 env，live binding 语义不变。按 module_id 升序安装保证确定性输出。
+fn install_all_namespace_getters(
     lowerer: &mut Lowerer,
-    builtin: &BuiltinSegment,
     mut flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
-    let mut builtin_module_ids: Vec<ModuleId> = builtin.module_scopes.keys().copied().collect();
-    builtin_module_ids.sort_by_key(|id| id.0);
-    for module_id in builtin_module_ids {
-        flow = install_live_namespace_getters_for_source(lowerer, module_id, flow)?;
+    let mut source_module_ids: Vec<ModuleId> =
+        lowerer.namespace_objects.keys().copied().collect();
+    source_module_ids.sort_by_key(|id| id.0);
+    for module_id in source_module_ids {
+        // 进入来源模块作用域：resolve_export_ir 的作用域回退解析须命中该
+        // 模块自己的顶层绑定（builtin 段模块的占位作用域同样已登记）。
+        let module_scope = lowerer.module_scopes.get(&module_id).copied();
+        if let Some(scope) = module_scope {
+            lowerer.scopes.enter_scope(scope);
+        }
+        let result = install_live_namespace_getters_for_source(lowerer, module_id, flow);
+        if module_scope.is_some() {
+            lowerer.scopes.pop_scope();
+        }
+        flow = result?;
     }
     Ok(flow)
 }
 
-/// 为某来源模块 `source_module_id` 关联的所有命名空间对象安装 live binding getter（#45）。
+/// 为来源模块 `source_module_id` 的 canonical 命名空间对象安装 live binding
+/// getter（#45），并收口为 Module Namespace Exotic Object（§10.4.6）。
 ///
-/// 在该模块体降级完成后调用（拓扑序保证来源先于导入方）。覆盖两类命名空间对象：
-/// - 静态 `import * as ns`：以本模块为来源的全部 `ns` 局部对象；
-/// - 动态 `import()`：以本模块为目标的命名空间对象。
+/// 在入口序幕（任何模块体之前）调用，对应规范 Link 阶段的命名空间物化。
+/// 静态 `import * as` 与动态 `import()` 共享同一对象，安装只发生一次。
 ///
 /// 每个导出名安装一个 getter 访问器，getter 读取来源模块的导出绑定（经由捕获/共享 env
 /// 机制返回最新值），从而满足 ECMAScript §10.4.6 命名空间对象的 live binding 语义。
+/// 全部导出与 @@toStringTag 安装完成后发射 FinalizeModuleNamespace：
+/// [[Prototype]] 置 null、不可扩展、宿主登记 exotic 身份。
 fn install_live_namespace_getters_for_source(
     lowerer: &mut Lowerer,
     source_module_id: wjsm_ir::ModuleId,
@@ -1233,26 +1241,9 @@ fn install_live_namespace_getters_for_source(
         return Ok(flow);
     };
 
-    // 收集本模块作为来源的全部命名空间对象（静态 import * as + 动态 import()）。
-    let mut targets: Vec<wjsm_ir::ValueId> = Vec::new();
-    for (importer_mid, local, src_mid) in &lowerer.static_namespace_import_sources {
-        if *src_mid == source_module_id
-            && let Some(&ns_obj) = lowerer
-                .static_namespace_import_objects
-                .get(&(*importer_mid, local.clone()))
-        {
-            targets.push(ns_obj);
-        }
-    }
-    if let Some(&ns_obj) = lowerer
-        .dynamic_import_namespace_objects
-        .get(&source_module_id)
-    {
-        targets.push(ns_obj);
-    }
-    if targets.is_empty() {
+    let Some(&ns_obj) = lowerer.namespace_objects.get(&source_module_id) else {
         return Ok(StmtFlow::Open(block));
-    }
+    };
 
     // 解析本模块全部导出名 → 来源 IR 变量名（按名排序，保证确定性输出）。
     let mut exports: Vec<(String, String)> = Vec::new();
@@ -1264,12 +1255,18 @@ fn install_live_namespace_getters_for_source(
         }
     }
 
-    for ns_obj in targets {
-        for (export_name, source_ir_name) in &exports {
-            block = lowerer.install_namespace_getter(ns_obj, export_name, source_ir_name, block)?;
-        }
-        set_namespace_string_tag(lowerer, ns_obj, block);
+    for (export_name, source_ir_name) in &exports {
+        block = lowerer.install_namespace_getter(ns_obj, export_name, source_ir_name, block)?;
     }
+    set_namespace_string_tag(lowerer, ns_obj, block);
+    lowerer.current_function.append_instruction(
+        block,
+        Instruction::CallBuiltin {
+            dest: None,
+            builtin: Builtin::FinalizeModuleNamespace,
+            args: vec![ns_obj],
+        },
+    );
     Ok(StmtFlow::Open(block))
 }
 

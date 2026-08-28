@@ -1154,6 +1154,11 @@ struct NativeAgentState {
     non_extensible_objects: HashSet<u32>,
     /// 已 preventExtensions/seal/freeze 的 callable（编码值，去色规范形）。
     non_extensible_callables: HashSet<i64>,
+    /// Module Namespace Exotic Object（§10.4.6）身份集：FinalizeModuleNamespace
+    /// 收口时登记。命中即启用命名空间专属 MOP：[[Set]] 恒 false、导出经
+    /// [[GetOwnProperty]] 虚拟化为 writable=true 数据描述符、
+    /// [[DefineOwnProperty]] 按 §10.4.6.6 校验、错误消息按 `[object Module]` 定牌。
+    module_namespace_objects: HashSet<u32>,
     environment: HashMap<String, String>,
     working_directory: PathBuf,
     process_arguments: Vec<String>,
@@ -1378,6 +1383,7 @@ impl NativeAgentState {
             error_prototypes: HashMap::new(),
             non_extensible_objects: HashSet::new(),
             non_extensible_callables: HashSet::new(),
+            module_namespace_objects: HashSet::new(),
             next_ticks: VecDeque::new(),
             immediates: VecDeque::new(),
             timers: BinaryHeap::new(),
@@ -1707,6 +1713,7 @@ impl NativeAgentState {
         self.error_prototypes.clear();
         self.non_extensible_objects.clear();
         self.non_extensible_callables.clear();
+        self.module_namespace_objects.clear();
         self.node_worker_threads.reset_agent();
         self.node_child_process.reset_agent();
         // test262_agent 由 configure_test262_agent 注入，reset_execution 不清除，
@@ -6112,6 +6119,7 @@ impl NativeAgentState {
         self.error_objects.retain(is_live);
         self.boxed_primitives.retain(|handle, _| is_live(handle));
         self.non_extensible_objects.retain(is_live);
+        self.module_namespace_objects.retain(is_live);
         self.array_properties
             .retain(|(handle, _), _| is_live(handle));
         self.array_accessors
