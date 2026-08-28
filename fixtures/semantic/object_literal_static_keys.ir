@@ -119,7 +119,7 @@ module {
     c116 = string("computed:")
     c117 = string("dyn")
     c118 = string("x")
-    c119 = number(2)
+    c119 = number(0)
     c120 = functionref(@1)
     c121 = number(7)
     c122 = functionref(@1)

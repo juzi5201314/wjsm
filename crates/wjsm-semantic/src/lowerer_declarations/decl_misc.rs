@@ -606,6 +606,8 @@ impl Lowerer {
         // 入口即 take：即使后续任一守卫提前返回，也不会把过期的来源泄漏给
         // 之后降级的其他函数。
         let args_override = self.arguments_source_override.take();
+        let alias_param_ir_names = self.arguments_simple_param_ir_names.take();
+        let alias_blocked = std::mem::take(&mut self.arguments_alias_blocked);
         if self.scopes.current_function_has_param_arguments() {
             return Ok(block);
         }
@@ -642,6 +644,17 @@ impl Lowerer {
                     value: source,
                 },
             );
+            // body 侧与 wrapper 侧的谓词输入（同一函数 AST、同严格性、均非
+            // 箭头/方法上下文）一致：wrapper 创建对象时开侧表 ⇔ body 在此
+            // 登记别名，两侧决策必然同真同假。
+            if !self.strict_mode
+                && !self.is_arrow
+                && !self.is_method
+                && !alias_blocked
+                && let Some(names) = &alias_param_ir_names
+            {
+                self.register_mapped_arg_aliases(store_block, names, source);
+            }
             if self.scopes.mark_initialised("arguments").is_err() {
                 // 已初始化过，无需处理
             }
@@ -658,7 +671,17 @@ impl Lowerer {
             },
         );
 
-        let param_count = self.arguments_param_count as f64;
+        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
+        // 形参别名（[[ParameterMap]]）启用条件齐备时把真实形参个数传给宿主
+        // 建侧表；否则传 0 保持普通对象行为（宿主对该实参只作侧表开关）。
+        let alias_names = (needs_mapped && !alias_blocked)
+            .then_some(alias_param_ir_names)
+            .flatten();
+        let param_count = if alias_names.is_some() {
+            self.arguments_param_count as f64
+        } else {
+            0.0
+        };
         let param_count_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -669,7 +692,6 @@ impl Lowerer {
         );
 
         let arguments_obj = self.alloc_value();
-        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
 
         let fn_name = self.current_function.name().to_string();
         let mapped_self_binding = if needs_mapped {
@@ -746,6 +768,9 @@ impl Lowerer {
                 value: arguments_obj,
             },
         );
+        if let Some(names) = &alias_names {
+            self.register_mapped_arg_aliases(store_block, names, arguments_obj);
+        }
 
         if let Some(binding) = mapped_self_binding {
             let patch_block = self.resolve_store_block(store_block);

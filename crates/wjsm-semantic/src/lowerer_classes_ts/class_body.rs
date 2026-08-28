@@ -667,12 +667,19 @@ impl Lowerer {
                     } else {
                         HomeObject::Prototype(ctor_function_id)
                     };
+                    // 类体代码恒为严格模式（ClassDefinitionEvaluation）：async/
+                    // generator 方法经通用函数路径降级，body/wrapper 上下文按
+                    // push 继承当前严格性，这里显式抬升后再恢复外层值。
+                    let saved_strict = self.strict_mode;
+                    self.strict_mode = true;
                     let function = self.lower_method_prop_to_fn(
                         &method.key,
                         &method.function,
                         method_home,
                         Some(static_home),
-                    )?;
+                    );
+                    self.strict_mode = saved_strict;
+                    let function = function?;
                     if let Some(sid) = class_scope_id {
                         let _ = self.scopes.set_initialised(sid, class_name, false);
                     }

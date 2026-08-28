@@ -164,6 +164,7 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&fn_expr.function.params, &param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
+        self.stage_arguments_alias_meta(&fn_expr.function, &param_ir_names);
         let body_entry = self.emit_arguments_init(
             body_entry,
             Self::function_needs_arguments_object(&fn_expr.function),
@@ -580,6 +581,7 @@ impl Lowerer {
             self.emit_param_inits(&fn_expr.function.params, &user_param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
+        self.stage_arguments_alias_meta(&fn_expr.function, &user_param_ir_names);
         let after_inits = self.emit_arguments_init(
             after_inits,
             Self::function_needs_arguments_object(&fn_expr.function),
@@ -752,6 +754,7 @@ impl Lowerer {
         )?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
+        self.stage_arguments_alias_meta(&fn_expr.function, &wrapper_user_param_ir_names);
         let wrapper_after_inits = self.emit_arguments_init(
             wrapper_after_inits,
             Self::function_needs_arguments_object(&fn_expr.function),

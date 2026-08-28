@@ -87,7 +87,7 @@ module {
     c84 = undefined
     c85 = string("gteq")
     c86 = string("p")
-    c87 = number(1)
+    c87 = number(0)
     c88 = functionref(@3)
     c89 = string("RangeError")
     c90 = string("getter-boom")
@@ -108,7 +108,7 @@ module {
     c105 = undefined
     c106 = string("getter-eq")
     c107 = string("valueOf")
-    c108 = number(1)
+    c108 = number(0)
     c109 = functionref(@4)
     c110 = string("RangeError")
     c111 = string("valueOf-boom")

@@ -1075,6 +1075,11 @@ struct NativeAgentState {
     shared_array_buffers: HashMap<u32, dispatch::sab::NativeSharedArrayBuffer>,
     data_views: HashMap<u32, dispatch::buffers::NativeDataView>,
     typed_arrays: HashMap<u32, dispatch::typedarray::NativeTypedArray>,
+    /// mapped arguments 对象的 [[ParameterMap]] 侧表（ES §10.4.4）：映射位 +
+    /// 解除映射后的独立绑定槽。映射期间形参绑定真值就是 arguments 自有索引
+    /// 属性；defineProperty 降级 / delete / freeze 解除映射时把当时的绑定值
+    /// 快照进 `bindings`，此后形参读写只走该槽，属性与绑定各自独立演化。
+    mapped_arguments: HashMap<u32, dispatch::arguments::NativeMappedArguments>,
     buffers: HashMap<u32, dispatch::node_buffer::NativeBuffer>,
     text_decoders: HashMap<u32, dispatch::web_encoding::TextDecoderSlot>,
     text_decoder_prototype: Option<i64>,
@@ -1296,6 +1301,7 @@ impl NativeAgentState {
             shared_array_buffers: HashMap::new(),
             data_views: HashMap::new(),
             typed_arrays: HashMap::new(),
+            mapped_arguments: HashMap::new(),
             promises: HashMap::new(),
             continuations: HashMap::new(),
             generators: HashMap::new(),
@@ -1640,6 +1646,7 @@ impl NativeAgentState {
         self.shared_array_buffers.clear();
         self.data_views.clear();
         self.typed_arrays.clear();
+        self.mapped_arguments.clear();
         self.node_fs_bridge = None;
         self.callable_properties.clear();
         self.callable_accessors.clear();
@@ -5434,6 +5441,7 @@ impl NativeAgentState {
             .retain(|handle, _| is_live(handle));
         self.data_views.retain(|handle, _| is_live(handle));
         self.typed_arrays.retain(|handle, _| is_live(handle));
+        self.mapped_arguments.retain(|handle, _| is_live(handle));
         self.buffers.retain(|handle, _| is_live(handle));
         self.text_decoders.retain(|handle, _| is_live(handle));
         self.promises.retain(|handle, _| is_live(handle));

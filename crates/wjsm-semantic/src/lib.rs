@@ -128,6 +128,7 @@ mod lowerer_function_decls;
 mod lowerer_function_names;
 mod lowerer_functions;
 mod lowerer_jsx_objects;
+mod lowerer_mapped_args;
 mod lowerer_predeclare;
 mod lowerer_script_global;
 mod lowerer_stmt;
