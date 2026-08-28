@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+5
+12
+6
+6
+7
+101
+42
+undefined
+undefined
+big
+undefined
+undefined
+in-try
+object
+static
+true
+--- stderr ---

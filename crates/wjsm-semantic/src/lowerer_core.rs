@@ -164,6 +164,7 @@ impl Lowerer {
             exception_fork_suppression_depth: 0,
             deferred_exception_forks_stack: Vec::new(),
             eval_completion_var: None,
+            with_scope_count: 0,
         }
     }
 
@@ -960,9 +961,16 @@ impl Lowerer {
         // 早错误：私有名词法有效性（AllPrivateIdentifiersValid）+ 类体私有名重复校验。
         // 必须先于降级执行；覆盖单模块、eval（均经此方法）路径。
         crate::lowerer_classes_ts::validate_private_names(module)?;
+        // 保留 eval 路径预置的继承严格位（direct eval 继承调用方严格性），
+        // 与模块自身指令做并集，而非覆盖。
+        self.strict_mode = self.strict_mode || module_has_use_strict_directive(module);
+        // 早错误：严格模式代码（含函数级指令与类体）不得包含 with 语句（§14.11.1）。
+        if let Some(span) = crate::lowerer_with::find_with_in_strict_code(module, self.strict_mode)
+        {
+            return Err(self.error(span, "Strict mode code may not include a with statement"));
+        }
         // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
         self.shared_env_stack.push(None);
-        self.strict_mode = module_has_use_strict_directive(module);
         // Pre-scan: hoist variable declarations so let/const are in TDZ.
         self.predeclare_stmts(&module.body)?;
 
@@ -1322,9 +1330,18 @@ impl Lowerer {
 
 impl Lowerer {
     /// 检查指定 Ident 是否为已知的 Array 绑定。
+    /// 静态类型证明用的绑定解析：解析穿越 with 作用域时一律 Err——运行时
+    /// 可能被 with 对象属性遮蔽，编译期 receiver 类型证明不再成立。
+    pub(crate) fn lookup_for_type_proof(&self, name: &str) -> Result<(usize, VarKind), String> {
+        if !self.with_scopes_for_ident(name).is_empty() {
+            return Err(format!("`{name}` may be shadowed by a with scope"));
+        }
+        self.scopes.lookup(name)
+    }
+
     pub(crate) fn is_array_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+        if let Ok((scope_id, _)) = self.lookup_for_type_proof(&name) {
             self.array_bindings.contains(&(scope_id, name))
         } else {
             false
@@ -1362,7 +1379,7 @@ impl Lowerer {
 
     pub(crate) fn is_string_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        match self.scopes.lookup(&name) {
+        match self.lookup_for_type_proof(&name) {
             Ok((scope_id, _)) => self.string_bindings.contains(&(scope_id, name)),
             Err(_) => false,
         }
@@ -1370,7 +1387,7 @@ impl Lowerer {
 
     pub(crate) fn is_maybe_string_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        match self.scopes.lookup(&name) {
+        match self.lookup_for_type_proof(&name) {
             Ok((scope_id, _)) => self.maybe_string_bindings.contains(&(scope_id, name)),
             Err(_) => false,
         }
@@ -1419,7 +1436,7 @@ impl Lowerer {
     /// 检查指定 Ident 是否为已知的 TypedArray 绑定。
     pub(crate) fn is_typedarray_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+        if let Ok((scope_id, _)) = self.lookup_for_type_proof(&name) {
             self.typedarray_bindings.contains(&(scope_id, name))
         } else {
             false
@@ -1431,7 +1448,7 @@ impl Lowerer {
     /// 动态 receiver 回退通用 Call，避免劫持 String/Array 的同名方法。
     pub(crate) fn is_sharedarraybuffer_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+        if let Ok((scope_id, _)) = self.lookup_for_type_proof(&name) {
             self.sab_bindings.contains(&(scope_id, name))
         } else {
             false
@@ -1440,7 +1457,7 @@ impl Lowerer {
     /// 检查指定 Ident 是否为已知的 DataView 绑定。
     pub(crate) fn is_dataview_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+        if let Ok((scope_id, _)) = self.lookup_for_type_proof(&name) {
             self.dataview_bindings.contains(&(scope_id, name))
         } else {
             false
@@ -1450,7 +1467,7 @@ impl Lowerer {
     /// 检查指定 Ident 是否为已知的 Map 绑定。
     pub(crate) fn is_map_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+        if let Ok((scope_id, _)) = self.lookup_for_type_proof(&name) {
             self.map_bindings.contains(&(scope_id, name))
         } else {
             false
@@ -1460,7 +1477,7 @@ impl Lowerer {
     /// 检查指定 Ident 是否为已知的 Set 绑定。
     pub(crate) fn is_set_binding(&self, ident: &swc_ast::Ident) -> bool {
         let name = ident.sym.to_string();
-        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+        if let Ok((scope_id, _)) = self.lookup_for_type_proof(&name) {
             self.set_bindings.contains(&(scope_id, name))
         } else {
             false

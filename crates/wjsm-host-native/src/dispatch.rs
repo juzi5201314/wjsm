@@ -56,6 +56,7 @@ mod timer;
 pub(crate) mod typedarray;
 pub(crate) mod weak;
 pub(crate) mod web_encoding;
+mod with_env;
 
 pub(crate) use self::array::construct as construct_array;
 pub(crate) use self::errors::error_constructor;
@@ -466,7 +467,6 @@ fn builtin_accepts_exception_arguments(builtin: Builtin) -> bool {
             | Builtin::GetPrototypeFromConstructor
             | Builtin::ArrayPush
             | Builtin::EvalGetBinding
-            | Builtin::EvalGetBindingRaw
             | Builtin::EvalSetBinding
             | Builtin::EvalHasBinding
             | Builtin::EvalSuperBase
@@ -474,6 +474,9 @@ fn builtin_accepts_exception_arguments(builtin: Builtin) -> bool {
             | Builtin::ScopeRecordAddBinding
             | Builtin::ScopeRecordSetMeta
             | Builtin::ScopeRecordDestroy
+            | Builtin::ScopeRecordAddWithLayer
+            | Builtin::ScopeRecordGetBinding
+            | Builtin::EvalWithBase
     )
 }
 
@@ -531,11 +534,12 @@ pub(super) fn dispatch_builtin(
             string::dispatch_string => Builtin::StringAt | Builtin::StringBuilderAppend | Builtin::StringBuilderFinish | Builtin::StringCharAt | Builtin::StringCharCodeAt | Builtin::StringCodePointAt | Builtin::StringConcatVa | Builtin::StringEndsWith | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::StringIncludes | Builtin::StringIndexOf | Builtin::StringLastIndexOf | Builtin::StringMatch | Builtin::StringMatchAll | Builtin::StringNormalize | Builtin::StringPadEnd | Builtin::StringPadStart | Builtin::StringRepeat | Builtin::StringReplace | Builtin::StringReplaceAll | Builtin::StringSearch | Builtin::StringSlice | Builtin::StringSplit | Builtin::StringStartsWith | Builtin::StringSubstring | Builtin::StringToLowerCase | Builtin::StringToString | Builtin::StringToUpperCase | Builtin::StringTrim | Builtin::StringTrimEnd | Builtin::StringTrimStart | Builtin::StringValueOf,
             weak::dispatch_weak => Builtin::FinalizationRegistryConstructor | Builtin::FinalizationRegistryProtoRegister | Builtin::FinalizationRegistryProtoUnregister | Builtin::WeakMapConstructor | Builtin::WeakMapProtoDelete | Builtin::WeakMapProtoGet | Builtin::WeakMapProtoHas | Builtin::WeakMapProtoSet | Builtin::WeakRefConstructor | Builtin::WeakRefProtoDeref | Builtin::WeakSetConstructor | Builtin::WeakSetProtoAdd | Builtin::WeakSetProtoDelete | Builtin::WeakSetProtoHas,
             // ── 原 dispatch_inline 兜底 match 拆分出的领域 handler ──
-            modules::dispatch_scope => Builtin::ScopeRecordCreate | Builtin::ScopeRecordAddBinding | Builtin::ScopeRecordSetMeta | Builtin::ScopeRecordDestroy,
+            modules::dispatch_scope => Builtin::ScopeRecordCreate | Builtin::ScopeRecordAddBinding | Builtin::ScopeRecordSetMeta | Builtin::ScopeRecordDestroy | Builtin::ScopeRecordAddWithLayer | Builtin::ScopeRecordGetBinding,
             arguments::dispatch_arguments => Builtin::CreateMappedArgumentsObject | Builtin::CreateUnmappedArgumentsObject,
             console::dispatch_console => Builtin::ConsoleLog | Builtin::ConsoleInfo | Builtin::ConsoleDebug | Builtin::ConsoleWarn | Builtin::ConsoleError | Builtin::ConsoleTrace,
             errors::dispatch_error => Builtin::ErrorConstructor | Builtin::EvalErrorConstructor | Builtin::RangeErrorConstructor | Builtin::ReferenceErrorConstructor | Builtin::SyntaxErrorConstructor | Builtin::TypeErrorConstructor | Builtin::URIErrorConstructor,
-            eval::dispatch_eval => Builtin::Eval | Builtin::EvalIndirect | Builtin::EvalGetBinding | Builtin::EvalGetBindingRaw | Builtin::EvalSetBinding | Builtin::EvalHasBinding | Builtin::EvalSuperBase,
+            eval::dispatch_eval => Builtin::Eval | Builtin::EvalIndirect | Builtin::EvalGetBinding | Builtin::EvalSetBinding | Builtin::EvalHasBinding | Builtin::EvalSuperBase | Builtin::EvalWithBase,
+            with_env::dispatch_with => Builtin::WithHasBinding | Builtin::WithToObject,
             iterator::dispatch_iterator => Builtin::IteratorFrom | Builtin::IteratorDone | Builtin::IteratorValue | Builtin::IteratorStepValue | Builtin::IteratorNext | Builtin::IteratorClose,
             node_perf_hooks::dispatch_perf => Builtin::PerformanceNow,
             operator::dispatch_operator => Builtin::AbstractCompare | Builtin::AbstractEq | Builtin::StrictEq | Builtin::TypeOf | Builtin::InstanceOf | Builtin::In | Builtin::Throw | Builtin::ExceptionValue | Builtin::NewTarget | Builtin::Debugger | Builtin::IsCallable | Builtin::IsJsObject | Builtin::GetPrototypeFromConstructor | Builtin::IsString | Builtin::TdzCheck | Builtin::ToPropertyKey | Builtin::ThisTdzCheck | Builtin::SuperCallOnceCheck,

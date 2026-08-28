@@ -118,7 +118,7 @@ module {
       branch %42, bb2, bb1
     bb1:
       %44 = const c36
-      %45 = call builtin.eval_get_binding_raw(%25, %44)
+      %45 = call builtin.scope_record.get_binding(%25, %44)
       store var $0.x, %45
       call builtin.scope_record_destroy(%25)
       jump bb3

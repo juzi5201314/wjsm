@@ -532,6 +532,31 @@ pub enum Builtin {
     /// 用户 `toString` / `valueOf` / `Symbol.toPrimitive`，转换抛出的异常原样传播；
     /// 非对象输入原样返回。args: [key]。
     ToPropertyKey,
+    /// with 语句对象环境记录的 HasBinding（§9.1.1.2.1）：
+    /// `? HasProperty(bindings, N)` 后按 `@@unscopables` 过滤；Proxy trap /
+    /// unscopables getter 抛出的异常原样传播。args: [object, name]。
+    WithHasBinding,
+    /// with 语句头部的 ToObject（§7.1.18）：null/undefined 抛 TypeError，
+    /// 对象/可调用体原样返回，原语装箱为包装对象。args: [value]。
+    WithToObject,
+    /// 向 direct eval 的 ScopeRecord 追加一个 with 对象环境层（由内到外依次
+    /// 追加）：`inner_names` 为声明于该层内侧、解析时先于该层命中的静态绑定名
+    /// 集合（NUL 分隔字符串）。运行时 EvalGet/Set/HasBinding 按层序在静态绑定
+    /// 与 with 对象之间正确插入对象环境记录。args: [record, object, inner_names]。
+    ScopeRecordAddWithLayer,
+    /// 读取 ScopeRecord 自有绑定的当前值（不经过 with 层与 outer 对象）。
+    /// direct eval 结束后的绑定回写必须用平面读取：经 EvalGetBinding 会被
+    /// with 层拦截，把 with 对象属性错误回写进调用方静态绑定。绑定处于 TDZ
+    /// 时返回未初始化哨兵（写回哨兵即保持原槽 TDZ 状态——派生构造器 this
+    /// 等动态 TDZ 绑定在 eval 后可能仍未初始化，经 EvalGetBinding 会抛
+    /// ReferenceError 且异常编码会被写入槽位）；绑定缺失返回 undefined。
+    /// args: [record, name]。
+    ScopeRecordGetBinding,
+    /// 解析名字在 ScopeRecord with 层链中的 this 基座（§9.1.1.2.10
+    /// WithBaseObject）：命中某层对象环境时返回该 with 对象，被内侧静态绑定
+    /// 遮蔽或全链未命中时返回 undefined。Proxy has trap / @@unscopables
+    /// getter 异常原样传播。args: [record, name]。
+    EvalWithBase,
     /// 派生构造器 this 的 GetThisBinding 检查（ES §9.1.1.3.4）：this 绑定
     /// 仍为未初始化哨兵（super() 尚未执行）时抛 ReferenceError，否则原样
     /// 返回。args: [value(当前 this 绑定)]。
@@ -540,11 +565,6 @@ pub enum Builtin {
     /// 说明 super() 已成功执行过一次，再次调用抛 ReferenceError；仍为未初始化
     /// 哨兵时原样返回。args: [value(当前 this 绑定)]。
     SuperCallOnceCheck,
-    /// eval 站点写回专用的绑定原样读取：与 `EvalGetBinding` 不同，绑定仍处
-    /// TDZ 时返回未初始化哨兵而非抛 ReferenceError——写回哨兵即保持原槽的
-    /// TDZ 状态（派生构造器 this 等动态 TDZ 绑定在 eval 后可能仍未初始化）。
-    /// dest: i64 — value（含未初始化哨兵）。args: [record, name]。
-    EvalGetBindingRaw,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -580,7 +600,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::EvalGetBindingRaw as u16
+        Self::SuperCallOnceCheck as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1069,9 +1089,13 @@ impl Builtin {
             Self::IsString => "is_string",
             Self::TdzCheck => "tdz_check",
             Self::ToPropertyKey => "to_property_key",
+            Self::WithHasBinding => "with.has_binding",
+            Self::WithToObject => "with.to_object",
+            Self::ScopeRecordAddWithLayer => "scope_record.add_with_layer",
+            Self::ScopeRecordGetBinding => "scope_record.get_binding",
+            Self::EvalWithBase => "eval.with_base",
             Self::ThisTdzCheck => "this_tdz_check",
             Self::SuperCallOnceCheck => "super_call_once_check",
-            Self::EvalGetBindingRaw => "eval_get_binding_raw",
         }
     }
 }
