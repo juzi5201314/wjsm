@@ -15,3 +15,9 @@ try {
   threw = e instanceof TypeError;
 }
 console.log(threw);
+// Console 方法保留全部实参（含 undefined），不截到 6 项。
+custom.log(1, 2, 3, 4, 5, 6, 7, 8);
+custom.log('m %s %d', 'a', 2, 'extra', undefined, null, 9, 'tail');
+custom.info('i|%s', undefined);
+custom.warn('w', undefined, 3, 4, 5, 6, 7, 8);
+custom.error('e %d %s', 1, 2, 3, 4, 5, 6, 7, 8);

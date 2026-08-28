@@ -4,4 +4,9 @@ true
 true
 sub got payload
 false cjs:direct
+true
+true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type number (42)
+ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received an instance of Object
+false
+true 7
 --- stderr ---

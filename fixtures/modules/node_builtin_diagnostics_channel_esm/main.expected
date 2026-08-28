@@ -8,4 +8,21 @@ true
 received 42 fixture:test
 true false
 false
+number true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type number (123)
+null true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received null
+undefined true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received undefined
+object true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received an instance of Object
+array true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received an instance of Array
+boolean true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type boolean (true)
+float true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type number (1.5)
+nan true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type number (NaN)
+negzero true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type number (-0)
+bigint true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received type bigint (10n)
+function true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received function myFn
+nullproto true ERR_INVALID_ARG_TYPE The "channel" argument must be one of type string or symbol. Received [Object: null prototype] {}
+false false
+true true symbol
+sym received sym-payload Symbol(fixture:sym)
+true
+true 77 false
 --- stderr ---
