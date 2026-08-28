@@ -744,6 +744,34 @@ mod tests {
     }
 
     #[test]
+    fn utf16_string_constant_round_trip() {
+        // 孤立代理项常量（tag 13）：码元序列与烘焙元数据经 wire 往返不变。
+        let units = vec![0xD800_u16, 0x0078, 0xDFFF];
+        let mut program = Program::new();
+        let constant = program.add_constant(Constant::Utf16String(units.clone()));
+        let baked = program
+            .string_constant_meta(constant)
+            .expect("Utf16String 槽位应有烘焙元数据")
+            .clone();
+        let input = ArtifactBuildInput::new(
+            program,
+            ModuleManifest::single("input.js", true),
+            BuildOptions::default(),
+        );
+        let artifact = PortableArtifact::from_input(&input).expect("artifact should encode");
+        let decoded = PortableArtifact::decode(artifact.bytes.clone(), &ArtifactLimits::default())
+            .expect("artifact should decode");
+        assert_eq!(
+            decoded.program().constants()[constant.0 as usize],
+            Constant::Utf16String(units)
+        );
+        assert_eq!(
+            decoded.program().string_constant_meta(constant),
+            Some(&baked)
+        );
+    }
+
+    #[test]
     fn legacy_inline_object_template_still_decodes() {
         let mut program = Program::new();
         let encoded = wjsm_ir::value::encode_inline_ascii(b"name").expect("sso");
