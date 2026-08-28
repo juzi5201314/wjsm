@@ -468,7 +468,7 @@ pub(super) fn dispatch_builtin(
 ) -> i64 {
     // 实参求值异常在语义层按 ES ArgumentListEvaluation 的 `? GetValue` 语义
     // 就地分叉传播（含 async / async generator 状态机体，见语义层
-    // `expr_exception_fork_allowed`），普通值实参不会携带 TAG_EXCEPTION 哨兵。
+    // `lower_call_operand_then_continue`），普通值实参不会携带 TAG_EXCEPTION 哨兵。
     // 少数机器角色 builtin（ExceptionValue / IteratorClose / ContinuationSaveVar /
     // AsyncGenerator* / Promise 结算指令等）以 completion 载荷为业务实参，其
     // 哨兵处理在各自 handler 内实现。
