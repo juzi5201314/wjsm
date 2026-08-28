@@ -64,6 +64,7 @@ mod symbol;
 mod timer;
 pub(crate) mod typedarray;
 mod typedarray_create;
+mod typedarray_static;
 pub(crate) mod weak;
 pub(crate) mod web_encoding;
 mod with_env;
@@ -87,6 +88,10 @@ pub(crate) use self::runtime::{
     render_value, to_string_coerced,
 };
 pub(crate) use self::symbol::well_known_description;
+pub(crate) use self::typedarray_static::{
+    abstract_construct as typedarray_abstract_construct, static_from as typedarray_static_from,
+    static_of as typedarray_static_of, to_string_tag as typedarray_to_string_tag,
+};
 use crate::NativeAgentState;
 use num_bigint::BigInt;
 use wjsm_ir::{Builtin, dispatch_jumptable, value};

@@ -1,10 +1,11 @@
 //! TypedArray 创建协议：AllocateTypedArray 的 newTarget 原型解析
 //! （§23.2.5.1 / §10.1.13 OrdinaryCreateFromConstructor）与
-//! TypedArraySpeciesCreate（§23.2.4.1）的构造器解析 + 结果校验。
+//! TypedArraySpeciesCreate（§23.2.4.1）/ TypedArrayCreateFromConstructor
+//! （§23.2.4.2）的构造器解析 + 结果校验。
 //!
-//! FIX-10 将引入 %TypedArray% 抽象构造器：届时 SpeciesConstructor 的
-//! defaultConstructor 仍是各元素类型的内在构造器（Table 71），本模块的
-//! 判定不变；@@species 访问器则改由 11 种构造器的静态原型链继承。
+//! @@species 访问器安装在 %TypedArray% 抽象构造器上，11 种具体构造器经
+//! 静态原型链继承（§23.2.2.4）；SpeciesConstructor 的 defaultConstructor
+//! 仍是各元素类型的内在构造器（Table 71）。
 
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
@@ -130,6 +131,31 @@ pub(super) fn species_create(
     method: &str,
     min_length: Option<usize>,
 ) -> Result<i64, i64> {
+    create_from_constructor(
+        ctx,
+        state,
+        constructor,
+        args,
+        &format!("%TypedArray%.prototype.{method}"),
+        min_length,
+        Some(exemplar_kind),
+    )
+}
+
+/// TypedArrayCreateFromConstructor(constructor, argumentList)（§23.2.4.2）：
+/// Construct + ValidateTypedArray + 单数值实参的最小长度门槛。`content_kind`
+/// 为 TypedArraySpeciesCreate 步骤 5 的 [[ContentType]] 检查（from / of 无
+/// exemplar，不检查）；`method` 为品牌检查失败文案中的方法路径
+/// （"%TypedArray%.prototype.slice" / "%TypedArray%.from" 等）。
+pub(super) fn create_from_constructor(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    constructor: i64,
+    args: &[i64],
+    method: &str,
+    min_length: Option<usize>,
+    content_kind: Option<TypedArrayKind>,
+) -> Result<i64, i64> {
     let result = construct_value(ctx, state, constructor, args, constructor);
     if value::is_exception(result) {
         return Err(result);
@@ -142,9 +168,7 @@ pub(super) fn species_create(
     };
     let Some(created) = created else {
         let rendered = render_getter_receiver(state, Some(result));
-        let message = format!(
-            "Method %TypedArray%.prototype.{method} called on incompatible receiver {rendered}"
-        );
+        let message = format!("Method {method} called on incompatible receiver {rendered}");
         return Err(type_error(ctx, state, &message));
     };
     let created_kind = created.kind;
@@ -156,7 +180,7 @@ pub(super) fn species_create(
             "Derived TypedArray constructor created an array which was too small",
         ));
     }
-    if created_kind.is_bigint() != exemplar_kind.is_bigint() {
+    if content_kind.is_some_and(|kind| created_kind.is_bigint() != kind.is_bigint()) {
         return Err(type_error(
             ctx,
             state,

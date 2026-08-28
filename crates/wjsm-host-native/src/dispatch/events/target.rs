@@ -349,7 +349,10 @@ pub(super) fn onabort_set(
     let Some(target) = resolve_event_target(state, this_value) else {
         return onabort_invalid_this(ctx, state, this_value);
     };
-    let handler = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let handler = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let Some(data) = target_data_mut(state, target) else {
         return fail_dispatch(ctx);
     };
@@ -504,14 +507,7 @@ fn run_listeners(
             if once && let Some(data) = target_data_mut(state, target) {
                 data.unlink(event_type, index);
             }
-            let result = invoke_listener(
-                ctx,
-                state,
-                target,
-                callback,
-                handler_slot,
-                event_object,
-            );
+            let result = invoke_listener(ctx, state, target, callback, handler_slot, event_object);
             if let Some(result) = result
                 && value::is_exception(result)
             {

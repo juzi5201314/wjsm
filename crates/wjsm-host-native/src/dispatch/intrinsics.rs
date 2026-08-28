@@ -77,10 +77,10 @@ fn intrinsic_pristine(
         return runtime::fail_dispatch(ctx);
     };
     let pristine = match (value::decode_f64(*family) as i64, rest) {
-        (constants::INTRINSIC_FAMILY_GLOBAL_IDENT, []) => intrinsic_sites::global_ident_name(
-            builtin,
-        )
-        .is_some_and(|name| global_ident_pristine(state, name)),
+        (constants::INTRINSIC_FAMILY_GLOBAL_IDENT, []) => {
+            intrinsic_sites::global_ident_name(builtin)
+                .is_some_and(|name| global_ident_pristine(state, name))
+        }
         (constants::INTRINSIC_FAMILY_STATIC_MEMBER, []) => {
             intrinsic_sites::static_member_names(builtin).is_some_and(|(container, prop)| {
                 static_member_pristine(state, builtin, container, prop)
@@ -304,11 +304,7 @@ fn array_proto_pristine(
 /// args: [family, wire_id] 解析站点全局名（GLOBAL_IDENT 为站点名、
 /// STATIC_MEMBER 为容器名）；[family, wire_id, receiver] 解析 receiver 上
 /// 的站点属性成员。
-fn intrinsic_resolve(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    args: &[i64],
-) -> i64 {
+fn intrinsic_resolve(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [family, wire, rest @ ..] = args else {
         return runtime::fail_dispatch(ctx);
     };

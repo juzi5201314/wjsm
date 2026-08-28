@@ -304,8 +304,7 @@ fn illegal_invocation(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -
 /// body 消费方法（返回 promise）的品牌失败：按 Web IDL 以 rejected
 /// promise 交付 TypeError，而非同步抛出（与 Node 一致）。
 fn illegal_invocation_rejection(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
-    let Some(reason) =
-        modules::named_error_object(state, "TypeError", "Illegal invocation".into())
+    let Some(reason) = modules::named_error_object(state, "TypeError", "Illegal invocation".into())
     else {
         return fail_dispatch(ctx);
     };
@@ -333,7 +332,9 @@ pub(crate) fn call(
     let kind = this_object_kind(state, this_value);
     match callable {
         FetchCallable::AbortControllerAbort => match kind {
-            Some(FetchObjectKind::AbortController(handle)) => abort::abort(ctx, state, handle, args),
+            Some(FetchObjectKind::AbortController(handle)) => {
+                abort::abort(ctx, state, handle, args)
+            }
             _ => invalid_this(ctx, state, "AbortController"),
         },
         FetchCallable::AbortControllerSignalGetter => match kind {
@@ -346,7 +347,9 @@ pub(crate) fn call(
             _ => invalid_this(ctx, state, "AbortController"),
         },
         FetchCallable::Headers(method) => match kind {
-            Some(FetchObjectKind::Headers(handle)) => headers::call(ctx, state, handle, method, args),
+            Some(FetchObjectKind::Headers(handle)) => {
+                headers::call(ctx, state, handle, method, args)
+            }
             _ => illegal_invocation(ctx, state),
         },
         FetchCallable::Request(method) => match kind {

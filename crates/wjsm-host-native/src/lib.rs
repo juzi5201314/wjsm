@@ -285,6 +285,11 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::Gc => Some(("gc", 0)),
         // @@species 访问器 getter 的规范函数名（§23.1.2.5 步骤说明）。
         NativeCallableKind::SpeciesGetter => Some(("get [Symbol.species]", 0)),
+        NativeCallableKind::TypedArrayConstructor => Some(("TypedArray", 0)),
+        NativeCallableKind::TypedArrayFrom => Some(("from", 1)),
+        NativeCallableKind::TypedArrayOf => Some(("of", 0)),
+        // @@toStringTag 访问器 getter 的规范函数名（§23.2.3.38 步骤说明）。
+        NativeCallableKind::TypedArrayToStringTag => Some(("get [Symbol.toStringTag]", 0)),
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
@@ -672,6 +677,17 @@ enum NativeCallableKind {
     /// 内建构造器的 `get [Symbol.species]` 访问器（§23.1.2.5 等）：返回 this，
     /// 子类经静态原型链继承后取回子类自身。所有安装点共享同一实例。
     SpeciesGetter,
+    /// %TypedArray% 抽象构造器（§23.2.1）：Call / Construct 一律抛
+    /// TypeError，仅作为 11 种具体构造器的静态 [[Prototype]] 与共享
+    /// %TypedArray%.prototype 的 `constructor` 存在。
+    TypedArrayConstructor,
+    /// %TypedArray%.from（§23.2.2.1），具体构造器经静态原型链继承。
+    TypedArrayFrom,
+    /// %TypedArray%.of（§23.2.2.2），具体构造器经静态原型链继承。
+    TypedArrayOf,
+    /// get %TypedArray%.prototype [ %Symbol.toStringTag% ]（§23.2.3.38）：
+    /// this 有 [[TypedArrayName]] 槽时返回元素类型名，否则 undefined。
+    TypedArrayToStringTag,
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
@@ -1191,6 +1207,9 @@ struct NativeAgentState {
     /// 的共享父原型，方法为自有数据属性，`length` / `byteLength` /
     /// `byteOffset` 为规范 accessor；懒创建缓存。
     typed_array_prototype: Option<i64>,
+    /// %TypedArray% 抽象构造器（§23.2.1）：11 种具体构造器的静态
+    /// [[Prototype]]，own 携带 prototype / from / of / @@species；懒创建缓存。
+    typed_array_constructor: Option<i64>,
     /// fetch / Streams / AbortController 全局构造器的 `prototype` 对象，按
     /// builtin 懒创建缓存；携带不可枚举 `constructor` 自有属性，实例创建时
     /// 挂接为 [[Prototype]]，使 instanceof 与 Object.getPrototypeOf 成立。
@@ -1399,6 +1418,7 @@ impl NativeAgentState {
             weak_set_prototype: None,
             view_prototypes: HashMap::new(),
             typed_array_prototype: None,
+            typed_array_constructor: None,
             web_prototypes: HashMap::new(),
             console_object: None,
             intl: dispatch::intl::IntlState::default(),
@@ -1678,6 +1698,7 @@ impl NativeAgentState {
         self.weak_set_prototype = None;
         self.view_prototypes.clear();
         self.typed_array_prototype = None;
+        self.typed_array_constructor = None;
         self.web_prototypes.clear();
         self.array_constructor = None;
         self.global_object = None;
@@ -2685,7 +2706,9 @@ impl NativeAgentState {
             {
                 return;
             }
-            if let Some(text) = self.string_owned(encoded_key).and_then(|text| text.to_utf8())
+            if let Some(text) = self
+                .string_owned(encoded_key)
+                .and_then(|text| text.to_utf8())
                 && intrinsic_builtin(receiver, &text).is_some()
             {
                 return;
@@ -3533,11 +3556,10 @@ impl NativeAgentState {
             _ => return None,
         };
         let constructor = self.native_callable(NativeCallableKind::Builtin(builtin, false))?;
-        // §23.2.2.4 get %TypedArray% [ @@species ]：FIX-10 引入 %TypedArray%
-        // 抽象构造器后改由 11 种构造器的静态原型链继承；当前直接安装在
-        // 构造器本体上（getter 返回 this，子类经静态链取回子类自身）。
+        // §23.2.6：具体 TypedArray 构造器的 [[Prototype]] 是 %TypedArray%，
+        // from / of / @@species 经静态原型链继承（§23.2.2）。
         if dispatch::typedarray::is_typed_array_constructor(builtin) {
-            self.install_species_accessor(constructor)?;
+            self.install_typed_array_static_chain(constructor)?;
         }
         Some(constructor)
     }
@@ -3612,6 +3634,10 @@ impl NativeAgentState {
             | NativeCallableKind::ProcessOn
             | NativeCallableKind::Gc
             | NativeCallableKind::SpeciesGetter
+            | NativeCallableKind::TypedArrayConstructor
+            | NativeCallableKind::TypedArrayFrom
+            | NativeCallableKind::TypedArrayOf
+            | NativeCallableKind::TypedArrayToStringTag
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
@@ -4919,9 +4945,9 @@ impl NativeAgentState {
         if builtin == wjsm_ir::Builtin::DataViewConstructor {
             dispatch::buffers::install_data_view_prototype_methods(self, prototype).ok()?;
         } else {
-            // 经 `实例.constructor` 取回构造器的路径也要看到 @@species
-            // （§23.2.2.4）；与 global_constructor 的安装幂等。
-            self.install_species_accessor(constructor)?;
+            // 经 `实例.constructor` 取回构造器的路径也要看到静态继承的
+            // from / of / @@species（§23.2.6）；与 global_constructor 幂等。
+            self.install_typed_array_static_chain(constructor)?;
             let parent = self.ensure_typed_array_prototype()?;
             self.gc
                 .heap()
@@ -4947,16 +4973,43 @@ impl NativeAgentState {
         Some(prototype)
     }
 
-    /// %TypedArray%.prototype（§23.2.3）：懒创建共享原型对象，[[Prototype]]
-    /// 为 %Object.prototype%（allocate_object 缺省）；安装全部原型方法（数据
-    /// 属性）与 `length` / `byteLength` / `byteOffset` 访问器（getter 命名
-    /// `get length` 等，{ enumerable: false, configurable: true }，无 setter）。
+    /// %TypedArray%.prototype（§23.2.3）：经 [`ensure_typed_array_intrinsics`]
+    /// 与抽象构造器成对懒创建。
     fn ensure_typed_array_prototype(&mut self) -> Option<i64> {
-        if let Some(prototype) = self.typed_array_prototype {
-            return Some(prototype);
+        self.ensure_typed_array_intrinsics()
+            .map(|(_, prototype)| prototype)
+    }
+
+    /// %TypedArray% 抽象构造器（§23.2.1）：经
+    /// [`ensure_typed_array_intrinsics`] 与共享原型成对懒创建。
+    fn ensure_typed_array_constructor(&mut self) -> Option<i64> {
+        self.ensure_typed_array_intrinsics()
+            .map(|(constructor, _)| constructor)
+    }
+
+    /// %TypedArray% intrinsic 构造器/原型对（§23.2.1–23.2.3）懒创建。
+    ///
+    /// 共享原型：[[Prototype]] 为 %Object.prototype%（allocate_object 缺省），
+    /// 安装全部原型方法（数据属性）、`length` / `byteLength` / `byteOffset`
+    /// 访问器（getter 命名 `get length` 等，{ enumerable: false,
+    /// configurable: true }，无 setter）、指回抽象构造器的 `constructor`
+    /// （§23.2.3.4）与 @@toStringTag 访问器 getter（§23.2.3.38）。
+    ///
+    /// 抽象构造器：[[Prototype]] 保持隐式 %Function.prototype%（§23.2.2），
+    /// own `prototype` 三特性全 false（§23.2.2.3），`from` / `of` 常规方法
+    /// 描述符（§23.2.2.1–23.2.2.2），@@species 访问器（§23.2.2.4）——具体
+    /// 构造器经静态原型链继承这三者。
+    fn ensure_typed_array_intrinsics(&mut self) -> Option<(i64, i64)> {
+        if let (Some(constructor), Some(prototype)) =
+            (self.typed_array_constructor, self.typed_array_prototype)
+        {
+            return Some((constructor, prototype));
         }
         self.ensure_intrinsic_prototypes().ok()?;
         let prototype = self.allocate_object(30, false).ok()?;
+        // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会回收
+        // 尚未挂满成员的 prototype 对象。
+        self.typed_array_prototype = Some(prototype);
         dispatch::typedarray::install_typed_array_prototype_methods(self, prototype).ok()?;
         for (name, builtin) in [
             ("length", wjsm_ir::Builtin::TypedArrayProtoLength),
@@ -4976,8 +5029,57 @@ impl NativeAgentState {
                 )
                 .ok()?;
         }
-        self.typed_array_prototype = Some(prototype);
-        Some(prototype)
+        let constructor = self.native_callable(NativeCallableKind::TypedArrayConstructor)?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                constructor_key,
+                constructor as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        let tag_getter = self.native_callable(NativeCallableKind::TypedArrayToStringTag)?;
+        self.gc
+            .heap()
+            .define_accessor_property_with_flags(
+                value::decode_handle(prototype),
+                PropertyKey::symbol(wjsm_ir::wk_symbol::TO_STRING_TAG),
+                tag_getter as u64,
+                value::encode_undefined() as u64,
+                wjsm_ir::constants::FLAG_CONFIGURABLE as u32,
+            )
+            .ok()?;
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), prototype);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), 0);
+        for (name, kind) in [
+            ("from", NativeCallableKind::TypedArrayFrom),
+            ("of", NativeCallableKind::TypedArrayOf),
+        ] {
+            let method = self.native_callable(kind)?;
+            let key = self.intern_property_string(name.into())?;
+            self.callable_properties.insert((constructor, key), method);
+            self.callable_property_flags
+                .insert((constructor, key), BUILTIN_PROTOTYPE_PROPERTY_FLAGS);
+        }
+        self.install_species_accessor(constructor)?;
+        self.typed_array_constructor = Some(constructor);
+        Some((constructor, prototype))
+    }
+
+    /// 把具体 TypedArray 构造器的静态 [[Prototype]] 挂到 %TypedArray%
+    /// （§23.2.6），from / of / @@species 沿静态原型链继承（§23.2.2）；
+    /// 用户显式改设过原型（含 null）的条目不覆盖。
+    fn install_typed_array_static_chain(&mut self, constructor: i64) -> Option<()> {
+        let parent = self.ensure_typed_array_constructor()?;
+        self.callable_prototypes
+            .entry(value::strip_gc_color(constructor))
+            .or_insert(parent);
+        Some(())
     }
 
     /// 把 TypedArray 实例的 [[Prototype]] 挂到对应构造器的 `prototype` 对象，
@@ -5035,7 +5137,10 @@ impl NativeAgentState {
             )?;
             self.gc
                 .heap()
-                .set_prototype(value::decode_handle(prototype), value::decode_handle(parent))
+                .set_prototype(
+                    value::decode_handle(prototype),
+                    value::decode_handle(parent),
+                )
                 .ok()?;
         }
         dispatch::fetch::install_prototype_members(self, prototype, builtin)?;
@@ -6621,6 +6726,20 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::FunctionPrototype => value::encode_undefined(),
         // `get [Symbol.species]` 恒返回 this（§23.1.2.5）。
         NativeCallableKind::SpeciesGetter => this_value,
+        // %TypedArray% 本体 Call / Construct（含 extends 它的 super()）一律
+        // TypeError（§23.2.1 步骤 1），文案对齐 V8。
+        NativeCallableKind::TypedArrayConstructor => {
+            dispatch::typedarray_abstract_construct(ctx, state)
+        }
+        NativeCallableKind::TypedArrayFrom => {
+            dispatch::typedarray_static_from(ctx, state, this_value, &arguments)
+        }
+        NativeCallableKind::TypedArrayOf => {
+            dispatch::typedarray_static_of(ctx, state, this_value, &arguments)
+        }
+        NativeCallableKind::TypedArrayToStringTag => {
+            dispatch::typedarray_to_string_tag(ctx, state, this_value)
+        }
         NativeCallableKind::TimerConstructor(_) => this_value,
         NativeCallableKind::SetImmediate => {
             let Some(callback) = arguments
