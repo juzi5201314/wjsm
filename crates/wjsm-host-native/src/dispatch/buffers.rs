@@ -1,12 +1,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use num_bigint::{BigInt, Sign};
 use num_traits::ToPrimitive;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, to_number};
-use crate::NativeAgentState;
+use super::runtime::{fail_dispatch, to_number, type_error};
+use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
 #[derive(Clone)]
 pub(crate) struct NativeArrayBuffer {
@@ -48,8 +49,65 @@ pub(super) fn dispatch_buffer(
         Builtin::DataViewProtoSetUint16 => data_view_set(ctx, state, args, ViewType::Uint16),
         Builtin::DataViewProtoSetInt8 => data_view_set(ctx, state, args, ViewType::Int8),
         Builtin::DataViewProtoSetUint8 => data_view_set(ctx, state, args, ViewType::Uint8),
+        Builtin::DataViewProtoGetBigInt64 => data_view_get_bigint(ctx, state, args, true),
+        Builtin::DataViewProtoGetBigUint64 => data_view_get_bigint(ctx, state, args, false),
+        Builtin::DataViewProtoSetBigInt64 | Builtin::DataViewProtoSetBigUint64 => {
+            data_view_set_bigint(ctx, state, args)
+        }
         _ => return None,
     })
+}
+
+/// DataView.prototype 的方法名 → Builtin 映射，实例取值（`buffer_builtin`）与
+/// `DataView.prototype` 对象安装（`install_data_view_prototype_methods`）共用，
+/// 避免两处清单漂移。
+pub(crate) const DATA_VIEW_PROTO_METHODS: &[(&str, Builtin)] = &[
+    ("getBigInt64", Builtin::DataViewProtoGetBigInt64),
+    ("getBigUint64", Builtin::DataViewProtoGetBigUint64),
+    ("getFloat32", Builtin::DataViewProtoGetFloat32),
+    ("getFloat64", Builtin::DataViewProtoGetFloat64),
+    ("getInt8", Builtin::DataViewProtoGetInt8),
+    ("getInt16", Builtin::DataViewProtoGetInt16),
+    ("getInt32", Builtin::DataViewProtoGetInt32),
+    ("getUint8", Builtin::DataViewProtoGetUint8),
+    ("getUint16", Builtin::DataViewProtoGetUint16),
+    ("getUint32", Builtin::DataViewProtoGetUint32),
+    ("setBigInt64", Builtin::DataViewProtoSetBigInt64),
+    ("setBigUint64", Builtin::DataViewProtoSetBigUint64),
+    ("setFloat32", Builtin::DataViewProtoSetFloat32),
+    ("setFloat64", Builtin::DataViewProtoSetFloat64),
+    ("setInt8", Builtin::DataViewProtoSetInt8),
+    ("setInt16", Builtin::DataViewProtoSetInt16),
+    ("setInt32", Builtin::DataViewProtoSetInt32),
+    ("setUint8", Builtin::DataViewProtoSetUint8),
+    ("setUint16", Builtin::DataViewProtoSetUint16),
+    ("setUint32", Builtin::DataViewProtoSetUint32),
+];
+
+/// 把 DataView.prototype 方法作为不可枚举数据属性安装到原型对象上，使
+/// `DataView.prototype.getUint8` 等可取值并经 `call`/`apply` 调用。
+pub(crate) fn install_data_view_prototype_methods(
+    state: &mut NativeAgentState,
+    prototype: i64,
+) -> Result<(), ()> {
+    let prototype = value::decode_handle(prototype);
+    for &(name, builtin) in DATA_VIEW_PROTO_METHODS {
+        let key = state.intern_property_string(name.into()).ok_or(())?;
+        let callable = state
+            .native_callable(NativeCallableKind::Builtin(builtin, true))
+            .ok_or(())?;
+        state
+            .gc
+            .heap()
+            .set_property(prototype, key, callable as u64)
+            .map_err(|_| ())?;
+        state
+            .gc
+            .heap()
+            .update_property_flags(prototype, key, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn buffer_builtin(
@@ -66,25 +124,10 @@ pub(crate) fn buffer_builtin(
         });
     }
     if state.data_views.contains_key(&handle) {
-        return Some(match key {
-            "getFloat32" => Builtin::DataViewProtoGetFloat32,
-            "getFloat64" => Builtin::DataViewProtoGetFloat64,
-            "getInt8" => Builtin::DataViewProtoGetInt8,
-            "getInt16" => Builtin::DataViewProtoGetInt16,
-            "getInt32" => Builtin::DataViewProtoGetInt32,
-            "getUint8" => Builtin::DataViewProtoGetUint8,
-            "getUint16" => Builtin::DataViewProtoGetUint16,
-            "getUint32" => Builtin::DataViewProtoGetUint32,
-            "setFloat32" => Builtin::DataViewProtoSetFloat32,
-            "setFloat64" => Builtin::DataViewProtoSetFloat64,
-            "setInt8" => Builtin::DataViewProtoSetInt8,
-            "setInt16" => Builtin::DataViewProtoSetInt16,
-            "setInt32" => Builtin::DataViewProtoSetInt32,
-            "setUint8" => Builtin::DataViewProtoSetUint8,
-            "setUint16" => Builtin::DataViewProtoSetUint16,
-            "setUint32" => Builtin::DataViewProtoSetUint32,
-            _ => return None,
-        });
+        return DATA_VIEW_PROTO_METHODS
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, builtin)| *builtin);
     }
     None
 }
@@ -328,6 +371,118 @@ fn data_view_set(
         );
     }
     value::encode_undefined()
+}
+
+/// `getBigInt64` / `getBigUint64`（GetViewValue，ES §25.3.4）：按字节序读取
+/// 8 字节整数并 intern 为 BigInt。
+fn data_view_get_bigint(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    signed: bool,
+) -> i64 {
+    let Some(view) = args
+        .first()
+        .and_then(|object| state.data_views.get(&value::decode_handle(*object)))
+        .cloned()
+    else {
+        return fail_dispatch(ctx);
+    };
+    let Some(index) = args
+        .get(1)
+        .and_then(|encoded| to_number(state, *encoded))
+        .and_then(|number| number.to_usize())
+    else {
+        return fail_dispatch(ctx);
+    };
+    if index.saturating_add(8) > view.length {
+        return fail_dispatch(ctx);
+    }
+    let little_endian = args
+        .get(2)
+        .is_some_and(|encoded| value::is_bool(*encoded) && value::decode_bool(*encoded));
+    let start = view.offset.saturating_add(index);
+    let raw: [u8; 8] = if let Some(shared) = &view.shared {
+        let bytes = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match bytes.get(start..start + 8) {
+            Some(raw) => order::<8>(raw, little_endian),
+            None => return fail_dispatch(ctx),
+        }
+    } else {
+        let Some(buffer) = state.array_buffers.get(&view.buffer) else {
+            return fail_dispatch(ctx);
+        };
+        let bytes = buffer.bytes.borrow();
+        match bytes.get(start..start + 8) {
+            Some(raw) => order::<8>(raw, little_endian),
+            None => return fail_dispatch(ctx),
+        }
+    };
+    let bits = u64::from_ne_bytes(raw);
+    let integer = if signed {
+        BigInt::from(bits as i64)
+    } else {
+        BigInt::from(bits)
+    };
+    super::bigint::store(state, integer).unwrap_or_else(|| fail_dispatch(ctx))
+}
+
+/// `setBigInt64` / `setBigUint64`（SetViewValue，ES §25.3.4）：非 BigInt 输入按
+/// ToBigInt 抛 TypeError；写入前按 2^64 取模，二者字节表示一致。
+fn data_view_set_bigint(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [receiver, index, stored, ..] = args else {
+        return fail_dispatch(ctx);
+    };
+    let Some(view) = state
+        .data_views
+        .get(&value::decode_handle(*receiver))
+        .cloned()
+    else {
+        return fail_dispatch(ctx);
+    };
+    let Some(index) = to_number(state, *index).and_then(|number| number.to_usize()) else {
+        return fail_dispatch(ctx);
+    };
+    if index.saturating_add(8) > view.length {
+        return fail_dispatch(ctx);
+    }
+    let Some(integer) = super::bigint::read(state, *stored) else {
+        return type_error(ctx, state, "Cannot convert value to a BigInt");
+    };
+    let little_endian = args
+        .get(3)
+        .is_some_and(|encoded| value::is_bool(*encoded) && value::decode_bool(*encoded));
+    let start = view.offset + index;
+    let bits = bigint_bits(&integer).to_ne_bytes();
+    if let Some(shared) = &view.shared {
+        let mut bytes = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        write_bytes(&mut bytes[start..start + 8], bits, little_endian);
+    } else {
+        let Some(buffer) = state.array_buffers.get(&view.buffer) else {
+            return fail_dispatch(ctx);
+        };
+        let mut bytes = buffer.bytes.borrow_mut();
+        write_bytes(&mut bytes[start..start + 8], bits, little_endian);
+    }
+    value::encode_undefined()
+}
+
+/// BigInt → 2^64 取模后的位型（ToBigInt64 / ToBigUint64 写入的字节一致）。
+fn bigint_bits(value: &BigInt) -> u64 {
+    let modulus = BigInt::from(1u128 << 64);
+    let mut normalized = value % &modulus;
+    if normalized.sign() == Sign::Minus {
+        normalized += &modulus;
+    }
+    normalized.to_u64().unwrap_or(0)
 }
 
 fn decode(bytes: &[u8], kind: ViewType, little_endian: bool) -> f64 {

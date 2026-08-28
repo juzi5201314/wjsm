@@ -566,6 +566,7 @@ fn root_values(
     queue.extend(state.set_prototype);
     queue.extend(state.weak_map_prototype);
     queue.extend(state.weak_set_prototype);
+    queue.extend(state.view_prototypes.values().copied());
     queue.extend(state.console_object);
     queue.extend(state.intl.object);
     queue.extend(state.intl.locale_prototype);

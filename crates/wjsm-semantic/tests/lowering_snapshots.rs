@@ -1023,6 +1023,27 @@ fn module_mode_does_not_emit_global_env_builtins() {
     );
 }
 
+#[test]
+fn dataview_bigint_methods_lower_to_call_builtin() {
+    // 静态已知 DataView 绑定的 getBigInt64/getBigUint64/setBigInt64/setBigUint64
+    // 直连专用 CallBuiltin（与其余 get/set 族一致），不走通用属性调用。
+    let source = "const view = new DataView(new ArrayBuffer(16));\nview.setBigInt64(0, 1n);\nview.setBigUint64(8, 1n, true);\nconsole.log(view.getBigInt64(0), view.getBigUint64(8, true));\n";
+    let module = parse_module(source).expect("parse should succeed");
+    let program = lower_module(module, false).expect("lowering should succeed");
+    let text = program.dump_text();
+    for marker in [
+        "DataView.prototype.getBigInt64",
+        "DataView.prototype.getBigUint64",
+        "DataView.prototype.setBigInt64",
+        "DataView.prototype.setBigUint64",
+    ] {
+        assert!(
+            text.contains(marker),
+            "expected `{marker}` CallBuiltin in IR:\n{text}"
+        );
+    }
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

@@ -314,6 +314,81 @@ pub(super) fn dispatch_typed_array(
     })
 }
 
+/// %TypedArray%.prototype 的方法名 → Builtin 映射（不含 length / byteLength /
+/// byteOffset / buffer 访问器），实例取值（`typed_array_builtin`）与各构造器
+/// `prototype` 对象安装（`install_typed_array_prototype_methods`）共用。
+pub(crate) const TYPED_ARRAY_PROTO_METHODS: &[(&str, Builtin)] = &[
+    ("at", Builtin::TypedArrayProtoAt),
+    ("copyWithin", Builtin::TypedArrayProtoCopyWithin),
+    ("entries", Builtin::TypedArrayProtoEntries),
+    ("every", Builtin::TypedArrayProtoEvery),
+    ("fill", Builtin::TypedArrayProtoFill),
+    ("filter", Builtin::TypedArrayProtoFilter),
+    ("find", Builtin::TypedArrayProtoFind),
+    ("findIndex", Builtin::TypedArrayProtoFindIndex),
+    ("forEach", Builtin::TypedArrayProtoForEach),
+    ("includes", Builtin::TypedArrayProtoIncludes),
+    ("indexOf", Builtin::TypedArrayProtoIndexOf),
+    ("join", Builtin::TypedArrayProtoJoin),
+    ("keys", Builtin::TypedArrayProtoKeys),
+    ("lastIndexOf", Builtin::TypedArrayProtoLastIndexOf),
+    ("map", Builtin::TypedArrayProtoMap),
+    ("reduce", Builtin::TypedArrayProtoReduce),
+    ("reduceRight", Builtin::TypedArrayProtoReduceRight),
+    ("reverse", Builtin::TypedArrayProtoReverse),
+    ("set", Builtin::TypedArrayProtoSet),
+    ("slice", Builtin::TypedArrayProtoSlice),
+    ("some", Builtin::TypedArrayProtoSome),
+    ("sort", Builtin::TypedArrayProtoSort),
+    ("subarray", Builtin::TypedArrayProtoSubarray),
+    ("toString", Builtin::TypedArrayProtoToString),
+    ("values", Builtin::TypedArrayProtoValues),
+];
+
+/// 判定 builtin 是否为 TypedArray 构造器（11 种元素类型之一）。
+pub(crate) fn is_typed_array_constructor(builtin: Builtin) -> bool {
+    matches!(
+        builtin,
+        Builtin::Int8ArrayConstructor
+            | Builtin::Uint8ArrayConstructor
+            | Builtin::Uint8ClampedArrayConstructor
+            | Builtin::Int16ArrayConstructor
+            | Builtin::Uint16ArrayConstructor
+            | Builtin::Int32ArrayConstructor
+            | Builtin::Uint32ArrayConstructor
+            | Builtin::Float32ArrayConstructor
+            | Builtin::Float64ArrayConstructor
+            | Builtin::BigInt64ArrayConstructor
+            | Builtin::BigUint64ArrayConstructor
+    )
+}
+
+/// 把 %TypedArray%.prototype 方法作为不可枚举数据属性安装到原型对象上，使
+/// `Uint8Array.prototype.slice` 等可取值并经 `call`/`apply` 调用。
+pub(crate) fn install_typed_array_prototype_methods(
+    state: &mut NativeAgentState,
+    prototype: i64,
+) -> Result<(), ()> {
+    let prototype = value::decode_handle(prototype);
+    for &(name, builtin) in TYPED_ARRAY_PROTO_METHODS {
+        let key = state.intern_property_string(name.into()).ok_or(())?;
+        let callable = state
+            .native_callable(crate::NativeCallableKind::Builtin(builtin, true))
+            .ok_or(())?;
+        state
+            .gc
+            .heap()
+            .set_property(prototype, key, callable as u64)
+            .map_err(|_| ())?;
+        state
+            .gc
+            .heap()
+            .update_property_flags(prototype, key, crate::BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
+
 pub(crate) fn typed_array_builtin(
     state: &NativeAgentState,
     receiver: i64,
@@ -323,37 +398,15 @@ pub(crate) fn typed_array_builtin(
     if !state.typed_arrays.contains_key(&handle) {
         return None;
     }
-    Some(match key {
-        "at" => Builtin::TypedArrayProtoAt,
-        "byteLength" => Builtin::TypedArrayProtoByteLength,
-        "byteOffset" => Builtin::TypedArrayProtoByteOffset,
-        "copyWithin" => Builtin::TypedArrayProtoCopyWithin,
-        "entries" => Builtin::TypedArrayProtoEntries,
-        "every" => Builtin::TypedArrayProtoEvery,
-        "fill" => Builtin::TypedArrayProtoFill,
-        "filter" => Builtin::TypedArrayProtoFilter,
-        "find" => Builtin::TypedArrayProtoFind,
-        "findIndex" => Builtin::TypedArrayProtoFindIndex,
-        "forEach" => Builtin::TypedArrayProtoForEach,
-        "includes" => Builtin::TypedArrayProtoIncludes,
-        "indexOf" => Builtin::TypedArrayProtoIndexOf,
-        "join" => Builtin::TypedArrayProtoJoin,
-        "keys" => Builtin::TypedArrayProtoKeys,
-        "lastIndexOf" => Builtin::TypedArrayProtoLastIndexOf,
-        "length" => Builtin::TypedArrayProtoLength,
-        "map" => Builtin::TypedArrayProtoMap,
-        "reduce" => Builtin::TypedArrayProtoReduce,
-        "reduceRight" => Builtin::TypedArrayProtoReduceRight,
-        "reverse" => Builtin::TypedArrayProtoReverse,
-        "set" => Builtin::TypedArrayProtoSet,
-        "slice" => Builtin::TypedArrayProtoSlice,
-        "some" => Builtin::TypedArrayProtoSome,
-        "sort" => Builtin::TypedArrayProtoSort,
-        "subarray" => Builtin::TypedArrayProtoSubarray,
-        "values" => Builtin::TypedArrayProtoValues,
-        "toString" => Builtin::TypedArrayProtoToString,
-        _ => return None,
-    })
+    match key {
+        "length" => Some(Builtin::TypedArrayProtoLength),
+        "byteLength" => Some(Builtin::TypedArrayProtoByteLength),
+        "byteOffset" => Some(Builtin::TypedArrayProtoByteOffset),
+        _ => TYPED_ARRAY_PROTO_METHODS
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, builtin)| *builtin),
+    }
 }
 
 pub(crate) fn get_element(state: &NativeAgentState, object: i64, index: usize) -> Option<i64> {

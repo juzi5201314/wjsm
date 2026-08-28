@@ -8,36 +8,37 @@ wjsm run -e 'console.log(typeof [].map)'
 
 ## Builtin 方法拦截
 
-wjsm 在语义层拦截内置方法调用，生成专用的 `CallBuiltin` 指令。这些方法在 IR 中不存在属性形态——取值时得到 `undefined`：
+wjsm 在语义层拦截内置方法调用，生成专用的 `CallBuiltin` 指令；宿主同时在属性读取路径为这些方法合成可调用的函数值。大多数内建原型方法既可直接调用，也可取值后经 `call` / `apply` / `bind` 传递：
 
 ```js
-typeof [].map        // "undefined"，但 [].map(x => x) 正常工作
-typeof "abc".slice   // "undefined"，但 "abc".slice(1) 正常工作
+typeof [].map        // "function"
+typeof "abc".slice   // "function"
 typeof fetch         // "undefined"，但 fetch(url) 正常工作
 ```
 
-直接调用能跑通；传递方法引用、解构赋值或 `Reflect.get` 取值则不行。
-
-不同类型受影响范围不同，下文逐条说明。
+仍有少数名字只在调用点可用，取值得到 `undefined`，下文逐条说明。
 
 ## String 原型方法
 
-`slice`、`concat`、`includes`、`startsWith`、`indexOf` 以及 locale 相关的 `normalize` / `toLowerCase` / `toUpperCase` / `toLocaleLowerCase` / `toLocaleUpperCase` / `localeCompare` 可取值传递。其余方法（`replace`、`split`、`match`、`trim` 等）取值得到 `undefined`，只能在调用点使用：
+String 原型方法基本可取值传递（`replace`、`split`、`trim`、locale 相关方法等）。当前例外是 `match`，取值得到 `undefined`，只能在调用点使用：
 
 ```js
-"hello".replace("l", "L")      // 可用：直接调用
-const fn = "hello".replace     // undefined：取值失败
+"hello".match(/l/)           // 可用：直接调用
+const fn = "hello".match     // undefined：取值失败
 ```
 
-## TypedArray / DataView 原型方法
+## TypedArray / DataView
 
-TypedArray 原型方法和 DataView 访问器仅调用点可用，取值得到 `undefined`：
+TypedArray 与 DataView 的原型方法可取值并经 `call` / `apply` / `bind` 复用，`name` / `length` 元数据、`Reflect.get` 与解构取值一致；各构造器的 `prototype` 对象（`Uint8Array.prototype.slice`、`DataView.prototype.getUint8` 等）同样可用。DataView 的 get/set 家族包含 `getBigInt64` / `getBigUint64` / `setBigInt64` / `setBigUint64`。
 
 ```js
 const buf = new Uint8Array([1, 2, 3]);
-buf.set([4, 5])                 // 可用：直接调用
-const get = buf.subarray        // undefined：取值失败
+const sub = buf.subarray;                    // function
+sub.call(buf, 1).length;                     // 2
+Uint8Array.prototype.slice.call(buf, 0, 1);  // Uint8Array(1) [1]
 ```
+
+已知差异：实例的原型链未挂接到 `Constructor.prototype`——`Object.getPrototypeOf(new Uint8Array(0)) !== Uint8Array.prototype`；`length` / `byteLength` / `byteOffset` 是实例上的可读值，`Constructor.prototype` 上不暴露对应访问器。
 
 ## fetch 与 Streams 构造器
 
