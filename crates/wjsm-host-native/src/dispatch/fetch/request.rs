@@ -2,7 +2,7 @@ use url::Url;
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty, RequestMethod, headers};
+use super::{FetchObjectKind, RequestGetter, RequestMethod, headers};
 use crate::NativeAgentState;
 
 #[derive(Clone)]
@@ -253,40 +253,41 @@ fn create(state: &mut NativeAgentState, mut request: RequestState) -> Option<i64
     Some(object)
 }
 
-pub(super) fn property(
+/// `Request.prototype` 访问器的取值：品牌已在分派层解析为槽位句柄。
+pub(super) fn getter(
+    ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     handle: u32,
-    key: &str,
-) -> Option<FetchProperty> {
-    let request = state.fetch.requests.get(handle)?;
-    let text = match key {
-        "url" => Some(request.url.clone()),
-        "method" => Some(request.method.clone()),
-        "redirect" => Some(request.redirect.clone()),
-        "cache" => Some(request.cache.clone()),
-        "credentials" => Some(request.credentials.clone()),
-        "integrity" => Some(request.integrity.clone()),
+    getter: RequestGetter,
+) -> i64 {
+    let Some(request) = state.fetch.requests.get(handle) else {
+        return super::super::fail_dispatch(ctx);
+    };
+    let text = match getter {
+        RequestGetter::Url => Some(request.url.clone()),
+        RequestGetter::Method => Some(request.method.clone()),
+        RequestGetter::Redirect => Some(request.redirect.clone()),
+        RequestGetter::Cache => Some(request.cache.clone()),
+        RequestGetter::Credentials => Some(request.credentials.clone()),
+        RequestGetter::Integrity => Some(request.integrity.clone()),
         _ => None,
     };
     if let Some(text) = text {
         return state
             .intern_text(text, value::TAG_STRING)
-            .map(FetchProperty::Value);
+            .unwrap_or_else(|| super::super::fail_dispatch(ctx));
     }
-    match key {
-        "body" => Some(FetchProperty::Value(value::encode_null())),
-        "bodyUsed" => Some(FetchProperty::Value(value::encode_bool(request.used))),
-        "headers" => Some(FetchProperty::Value(request.headers)),
-        "keepalive" => Some(FetchProperty::Value(value::encode_bool(request.keepalive))),
-        "clone" => Some(FetchProperty::Callable(FetchCallable::Request(
-            handle,
-            RequestMethod::Clone,
-        ))),
-        "text" => Some(FetchProperty::Callable(FetchCallable::Request(
-            handle,
-            RequestMethod::Text,
-        ))),
-        _ => None,
+    match getter {
+        RequestGetter::Body => value::encode_null(),
+        RequestGetter::BodyUsed => value::encode_bool(request.used),
+        RequestGetter::Headers => request.headers,
+        RequestGetter::Keepalive => value::encode_bool(request.keepalive),
+        RequestGetter::Url
+        | RequestGetter::Method
+        | RequestGetter::Redirect
+        | RequestGetter::Cache
+        | RequestGetter::Credentials
+        | RequestGetter::Integrity => unreachable!("text getters resolved above"),
     }
 }
 

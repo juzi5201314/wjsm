@@ -30,6 +30,21 @@ pub(crate) enum RequestMethod {
     Text,
 }
 
+/// `Request.prototype` 的访问器（已实现子集，Web IDL readonly attribute）。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum RequestGetter {
+    Body,
+    BodyUsed,
+    Cache,
+    Credentials,
+    Headers,
+    Integrity,
+    Keepalive,
+    Method,
+    Redirect,
+    Url,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ResponseMethod {
     ArrayBuffer,
@@ -37,18 +52,30 @@ pub(crate) enum ResponseMethod {
     Text,
 }
 
+/// `Response.prototype` 的访问器（已实现子集，Web IDL readonly attribute）。
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum FetchCallable {
-    AbortControllerAbort(u32),
-    Headers(u32, HeadersMethod),
-    Request(u32, RequestMethod),
-    Response(u32, ResponseMethod),
+pub(crate) enum ResponseGetter {
+    Body,
+    BodyUsed,
+    Headers,
+    Ok,
+    Status,
+    StatusText,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum FetchProperty {
-    Callable(FetchCallable),
-    Value(i64),
+/// fetch 家族的方法/访问器可调用值。不携带实例句柄：方法安装在共享
+/// prototype 上，调用时按实际 `this` 经 `objects` 登记表解析品牌，
+/// 借用（`a.get.call(b)`）操作 `b`，品牌不符抛 TypeError（Web IDL
+/// brand check）。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum FetchCallable {
+    AbortControllerAbort,
+    AbortControllerSignalGetter,
+    Headers(HeadersMethod),
+    Request(RequestMethod),
+    RequestGetter(RequestGetter),
+    Response(ResponseMethod),
+    ResponseGetter(ResponseGetter),
 }
 
 #[derive(Clone, Copy)]
@@ -142,26 +169,6 @@ pub(crate) fn extend_gc_edges(fetch: &NativeFetchState, mut add: impl FnMut(i64,
     }
 }
 
-/// 提取为独立值的 fetch 方法（如 `headers.append`）以槽位下标编码；只要
-/// 方法值存活，就必须钉住对应包装对象，否则槽位被清扫复用后旧方法会
-/// 操作新 owner。返回该可调用值应指向的包装对象。
-pub(crate) fn callable_gc_target(fetch: &NativeFetchState, callable: FetchCallable) -> Option<i64> {
-    match callable {
-        FetchCallable::AbortControllerAbort(handle) => {
-            fetch.abort_signals.get(handle).map(|signal| signal.object)
-        }
-        FetchCallable::Headers(handle, _) => {
-            fetch.headers.get(handle).map(|headers| headers.object)
-        }
-        FetchCallable::Request(handle, _) => {
-            fetch.requests.get(handle).map(|request| request.object)
-        }
-        FetchCallable::Response(handle, _) => {
-            fetch.responses.get(handle).map(|response| response.object)
-        }
-    }
-}
-
 /// GC 完成后按 retired 句柄清扫 fetch 侧表：死 owner 的登记项与槽位一并
 /// 释放，防止句柄复用后新对象继承旧品牌。Response 槽位可能仍被存活的
 /// body 流（resource timing 完成路径）按下标引用，此时保留槽位、只摘登记。
@@ -235,32 +242,240 @@ pub(super) fn dispatch_fetch(
     })
 }
 
-pub(crate) fn property(
-    state: &mut NativeAgentState,
-    receiver: i64,
-    key: &str,
-) -> Option<FetchProperty> {
+/// 无共享 prototype 的接口（AbortSignal）仍经虚拟属性解析实例值；
+/// Headers/Request/Response/AbortController 的成员已全部安装到
+/// 对应 `prototype` 对象，不再走此路径。
+pub(crate) fn property(state: &NativeAgentState, receiver: i64, key: &str) -> Option<i64> {
     match *state.fetch.objects.get(&value::decode_handle(receiver))? {
-        FetchObjectKind::AbortController(handle) => abort::controller_property(state, handle, key),
         FetchObjectKind::AbortSignal(handle) => abort::signal_property(state, handle, key),
-        FetchObjectKind::Headers(handle) => headers::property(state, handle, key),
-        FetchObjectKind::Request(handle) => request::property(state, handle, key),
-        FetchObjectKind::Response(handle) => response::property(state, handle, key),
+        _ => None,
     }
+}
+
+/// 按实际 `this` 解析品牌：非对象或未登记为 fetch 包装对象时返回 None。
+fn this_object_kind(state: &NativeAgentState, this_value: i64) -> Option<FetchObjectKind> {
+    if !value::is_js_object(this_value) {
+        return None;
+    }
+    state
+        .fetch
+        .objects
+        .get(&value::decode_handle(this_value))
+        .copied()
+}
+
+/// undici 系（Headers/Request/Response）的品牌失败：同步抛
+/// `TypeError: Illegal invocation`（与 Node 逐字节一致）。
+fn illegal_invocation(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+    type_error(ctx, state, "Illegal invocation")
+}
+
+/// body 消费方法（返回 promise）的品牌失败：按 Web IDL 以 rejected
+/// promise 交付 TypeError，而非同步抛出（与 Node 一致）。
+fn illegal_invocation_rejection(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+    let Some(reason) =
+        modules::named_error_object(state, "TypeError", "Illegal invocation".into())
+    else {
+        return fail_dispatch(ctx);
+    };
+    promise::rejected_promise(ctx, state, reason)
+}
+
+/// AbortController 的品牌失败：`Value of "this" must be of type X` 形态
+///（Node 因私有字段实现抛 V8 artifact 消息，此处采用其 ERR_INVALID_THIS
+/// 惯用格式，name 同为 TypeError）。
+fn invalid_this(ctx: &mut NativeVmContext, state: &mut NativeAgentState, interface: &str) -> i64 {
+    type_error(
+        ctx,
+        state,
+        &format!("Value of \"this\" must be of type {interface}"),
+    )
 }
 
 pub(crate) fn call(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     callable: FetchCallable,
+    this_value: i64,
     args: &[i64],
 ) -> i64 {
+    let kind = this_object_kind(state, this_value);
     match callable {
-        FetchCallable::AbortControllerAbort(handle) => abort::abort(ctx, state, handle, args),
-        FetchCallable::Headers(handle, method) => headers::call(ctx, state, handle, method, args),
-        FetchCallable::Request(handle, method) => request::call(ctx, state, handle, method),
-        FetchCallable::Response(handle, method) => response::call(ctx, state, handle, method),
+        FetchCallable::AbortControllerAbort => match kind {
+            Some(FetchObjectKind::AbortController(handle)) => abort::abort(ctx, state, handle, args),
+            _ => invalid_this(ctx, state, "AbortController"),
+        },
+        FetchCallable::AbortControllerSignalGetter => match kind {
+            Some(FetchObjectKind::AbortController(handle)) => state
+                .fetch
+                .abort_signals
+                .get(handle)
+                .map(|signal| signal.object)
+                .unwrap_or_else(|| fail_dispatch(ctx)),
+            _ => invalid_this(ctx, state, "AbortController"),
+        },
+        FetchCallable::Headers(method) => match kind {
+            Some(FetchObjectKind::Headers(handle)) => headers::call(ctx, state, handle, method, args),
+            _ => illegal_invocation(ctx, state),
+        },
+        FetchCallable::Request(method) => match kind {
+            Some(FetchObjectKind::Request(handle)) => request::call(ctx, state, handle, method),
+            _ => match method {
+                RequestMethod::Clone => illegal_invocation(ctx, state),
+                RequestMethod::Text => illegal_invocation_rejection(ctx, state),
+            },
+        },
+        FetchCallable::RequestGetter(getter) => match kind {
+            Some(FetchObjectKind::Request(handle)) => request::getter(ctx, state, handle, getter),
+            _ => illegal_invocation(ctx, state),
+        },
+        FetchCallable::Response(method) => match kind {
+            Some(FetchObjectKind::Response(handle)) => response::call(ctx, state, handle, method),
+            _ => match method {
+                ResponseMethod::Clone => illegal_invocation(ctx, state),
+                ResponseMethod::ArrayBuffer | ResponseMethod::Text => {
+                    illegal_invocation_rejection(ctx, state)
+                }
+            },
+        },
+        FetchCallable::ResponseGetter(getter) => match kind {
+            Some(FetchObjectKind::Response(handle)) => response::getter(ctx, state, handle, getter),
+            _ => illegal_invocation(ctx, state),
+        },
     }
+}
+
+/// 把已实现的方法/访问器安装为对应 `prototype` 对象的自有属性（Web IDL
+/// 描述符：方法 {writable, enumerable, configurable}，访问器
+/// {enumerable, configurable}），次序与 Node 一致。
+pub(crate) fn install_prototype_members(
+    state: &mut NativeAgentState,
+    prototype: i64,
+    builtin: Builtin,
+) -> Option<()> {
+    match builtin {
+        Builtin::HeadersConstructor => {
+            for (name, method) in [
+                ("append", HeadersMethod::Append),
+                ("delete", HeadersMethod::Delete),
+                ("get", HeadersMethod::Get),
+                ("has", HeadersMethod::Has),
+                ("set", HeadersMethod::Set),
+            ] {
+                state.install_web_prototype_method(
+                    prototype,
+                    name,
+                    crate::NativeCallableKind::Fetch(FetchCallable::Headers(method)),
+                )?;
+            }
+        }
+        Builtin::RequestConstructor => {
+            for (name, getter) in [
+                ("method", RequestGetter::Method),
+                ("url", RequestGetter::Url),
+                ("headers", RequestGetter::Headers),
+                ("credentials", RequestGetter::Credentials),
+                ("cache", RequestGetter::Cache),
+                ("redirect", RequestGetter::Redirect),
+                ("integrity", RequestGetter::Integrity),
+                ("keepalive", RequestGetter::Keepalive),
+                ("body", RequestGetter::Body),
+                ("bodyUsed", RequestGetter::BodyUsed),
+            ] {
+                state.install_web_prototype_getter(
+                    prototype,
+                    name,
+                    crate::NativeCallableKind::Fetch(FetchCallable::RequestGetter(getter)),
+                )?;
+            }
+            for (name, method) in [
+                ("clone", RequestMethod::Clone),
+                ("text", RequestMethod::Text),
+            ] {
+                state.install_web_prototype_method(
+                    prototype,
+                    name,
+                    crate::NativeCallableKind::Fetch(FetchCallable::Request(method)),
+                )?;
+            }
+        }
+        Builtin::ResponseConstructor => {
+            for (name, getter) in [
+                ("status", ResponseGetter::Status),
+                ("ok", ResponseGetter::Ok),
+                ("statusText", ResponseGetter::StatusText),
+                ("headers", ResponseGetter::Headers),
+                ("body", ResponseGetter::Body),
+                ("bodyUsed", ResponseGetter::BodyUsed),
+            ] {
+                state.install_web_prototype_getter(
+                    prototype,
+                    name,
+                    crate::NativeCallableKind::Fetch(FetchCallable::ResponseGetter(getter)),
+                )?;
+            }
+            for (name, method) in [
+                ("clone", ResponseMethod::Clone),
+                ("arrayBuffer", ResponseMethod::ArrayBuffer),
+                ("text", ResponseMethod::Text),
+            ] {
+                state.install_web_prototype_method(
+                    prototype,
+                    name,
+                    crate::NativeCallableKind::Fetch(FetchCallable::Response(method)),
+                )?;
+            }
+        }
+        Builtin::AbortControllerConstructor => {
+            state.install_web_prototype_getter(
+                prototype,
+                "signal",
+                crate::NativeCallableKind::Fetch(FetchCallable::AbortControllerSignalGetter),
+            )?;
+            state.install_web_prototype_method(
+                prototype,
+                "abort",
+                crate::NativeCallableKind::Fetch(FetchCallable::AbortControllerAbort),
+            )?;
+        }
+        _ => {}
+    }
+    Some(())
+}
+
+/// fetch 家族可调用值的 JS 可见 `(name, length)`（与 Node 实测一致；
+/// 访问器 name 为 `get <attr>` 形态）。
+pub(crate) fn metadata(callable: FetchCallable) -> Option<(&'static str, u32)> {
+    Some(match callable {
+        FetchCallable::AbortControllerAbort => ("abort", 0),
+        FetchCallable::AbortControllerSignalGetter => ("get signal", 0),
+        FetchCallable::Headers(HeadersMethod::Append) => ("append", 2),
+        FetchCallable::Headers(HeadersMethod::Delete) => ("delete", 1),
+        FetchCallable::Headers(HeadersMethod::Get) => ("get", 1),
+        FetchCallable::Headers(HeadersMethod::Has) => ("has", 1),
+        FetchCallable::Headers(HeadersMethod::Set) => ("set", 2),
+        FetchCallable::Request(RequestMethod::Clone) => ("clone", 0),
+        FetchCallable::Request(RequestMethod::Text) => ("text", 0),
+        FetchCallable::RequestGetter(RequestGetter::Body) => ("get body", 0),
+        FetchCallable::RequestGetter(RequestGetter::BodyUsed) => ("get bodyUsed", 0),
+        FetchCallable::RequestGetter(RequestGetter::Cache) => ("get cache", 0),
+        FetchCallable::RequestGetter(RequestGetter::Credentials) => ("get credentials", 0),
+        FetchCallable::RequestGetter(RequestGetter::Headers) => ("get headers", 0),
+        FetchCallable::RequestGetter(RequestGetter::Integrity) => ("get integrity", 0),
+        FetchCallable::RequestGetter(RequestGetter::Keepalive) => ("get keepalive", 0),
+        FetchCallable::RequestGetter(RequestGetter::Method) => ("get method", 0),
+        FetchCallable::RequestGetter(RequestGetter::Redirect) => ("get redirect", 0),
+        FetchCallable::RequestGetter(RequestGetter::Url) => ("get url", 0),
+        FetchCallable::Response(ResponseMethod::ArrayBuffer) => ("arrayBuffer", 0),
+        FetchCallable::Response(ResponseMethod::Clone) => ("clone", 0),
+        FetchCallable::Response(ResponseMethod::Text) => ("text", 0),
+        FetchCallable::ResponseGetter(ResponseGetter::Body) => ("get body", 0),
+        FetchCallable::ResponseGetter(ResponseGetter::BodyUsed) => ("get bodyUsed", 0),
+        FetchCallable::ResponseGetter(ResponseGetter::Headers) => ("get headers", 0),
+        FetchCallable::ResponseGetter(ResponseGetter::Ok) => ("get ok", 0),
+        FetchCallable::ResponseGetter(ResponseGetter::Status) => ("get status", 0),
+        FetchCallable::ResponseGetter(ResponseGetter::StatusText) => ("get statusText", 0),
+    })
 }
 
 pub(crate) fn mark_response_used(state: &mut NativeAgentState, handle: u32) {

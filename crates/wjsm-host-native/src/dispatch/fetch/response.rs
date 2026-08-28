@@ -4,7 +4,7 @@ use std::rc::Rc;
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty, ResponseMethod, headers};
+use super::{FetchObjectKind, ResponseGetter, ResponseMethod, headers};
 use crate::NativeAgentState;
 
 #[derive(Clone)]
@@ -261,12 +261,14 @@ fn create(
     Ok(object)
 }
 
-pub(super) fn property(
+/// `Response.prototype` 访问器的取值：品牌已在分派层解析为槽位句柄。
+pub(super) fn getter(
+    ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     handle: u32,
-    key: &str,
-) -> Option<FetchProperty> {
-    let (body_object, headers, status, status_text, used) =
+    getter: ResponseGetter,
+) -> i64 {
+    let Some((body_object, headers, status, status_text, used)) =
         state.fetch.responses.get(handle).map(|response| {
             (
                 response.body_object,
@@ -275,31 +277,19 @@ pub(super) fn property(
                 response.status_text.clone(),
                 response.used,
             )
-        })?;
-    match key {
-        "body" => Some(FetchProperty::Value(body_object)),
-        "bodyUsed" => Some(FetchProperty::Value(value::encode_bool(used))),
-        "headers" => Some(FetchProperty::Value(headers)),
-        "ok" => Some(FetchProperty::Value(value::encode_bool(
-            (200..=299).contains(&status),
-        ))),
-        "status" => Some(FetchProperty::Value(value::encode_f64(f64::from(status)))),
-        "statusText" => state
+        })
+    else {
+        return super::super::fail_dispatch(ctx);
+    };
+    match getter {
+        ResponseGetter::Body => body_object,
+        ResponseGetter::BodyUsed => value::encode_bool(used),
+        ResponseGetter::Headers => headers,
+        ResponseGetter::Ok => value::encode_bool((200..=299).contains(&status)),
+        ResponseGetter::Status => value::encode_f64(f64::from(status)),
+        ResponseGetter::StatusText => state
             .intern_text(status_text, value::TAG_STRING)
-            .map(FetchProperty::Value),
-        "arrayBuffer" => Some(FetchProperty::Callable(FetchCallable::Response(
-            handle,
-            ResponseMethod::ArrayBuffer,
-        ))),
-        "clone" => Some(FetchProperty::Callable(FetchCallable::Response(
-            handle,
-            ResponseMethod::Clone,
-        ))),
-        "text" => Some(FetchProperty::Callable(FetchCallable::Response(
-            handle,
-            ResponseMethod::Text,
-        ))),
-        _ => None,
+            .unwrap_or_else(|| super::super::fail_dispatch(ctx)),
     }
 }
 
