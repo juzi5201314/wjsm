@@ -326,8 +326,10 @@ impl Lowerer {
                     "template string quasi has no cooked value".to_string(),
                 )
             })?;
-            let cooked_s = cooked_str.to_atom_lossy().to_string();
-            let const_id = self.module.add_constant(Constant::String(cooked_s));
+            // cooked 是 WTF-8：`\ud800` 类转义产生孤立代理项，须无损保留。
+            let const_id = self
+                .module
+                .add_constant(string_literal_constant(cooked_str));
             let val = self.alloc_value();
             self.current_function.append_instruction(
                 current,
@@ -447,8 +449,10 @@ impl Lowerer {
             },
         );
         for quasi in &tpl.quasis {
-            let s = if raw {
-                quasi.raw.as_str().to_string()
+            // raw 是源文本（UTF-8 必然良构）；cooked 是 WTF-8，孤立代理项须
+            // 无损保留（tag 函数可观察 cooked 的每个码元）。
+            let constant = if raw {
+                Constant::String(quasi.raw.as_str().to_string())
             } else {
                 let cooked = quasi.cooked.as_ref().ok_or_else(|| {
                     self.error(
@@ -456,9 +460,9 @@ impl Lowerer {
                         "template string quasi has no cooked value".to_string(),
                     )
                 })?;
-                cooked.to_atom_lossy().to_string()
+                string_literal_constant(cooked)
             };
-            let const_id = self.module.add_constant(Constant::String(s));
+            let const_id = self.module.add_constant(constant);
             let val = self.alloc_value();
             self.current_function.append_instruction(
                 block,

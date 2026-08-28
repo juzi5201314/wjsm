@@ -97,9 +97,9 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let constant = match lit {
             swc_ast::Lit::Num(num) => Constant::Number(num.value),
-            swc_ast::Lit::Str(string) => {
-                Constant::String(string.value.to_string_lossy().into_owned())
-            }
+            // WTF-8 → 常量：孤立代理项经 Utf16String 无损保留（String.raw 等
+            // 依赖字面量码元逐位与宿主一致）。
+            swc_ast::Lit::Str(string) => string_literal_constant(&string.value),
             swc_ast::Lit::Bool(b) => Constant::Bool(b.value),
             swc_ast::Lit::BigInt(b) => Constant::BigInt(b.value.to_str_radix(10)),
             swc_ast::Lit::Regex(regex) => {

@@ -29,7 +29,8 @@ pub fn is_host_shared_variable(name: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Module {
     constants: Vec<Constant>,
-    /// 与 `constants` 下标对齐的字符串烘焙元数据；仅 `Constant::String` 槽位有值。
+    /// 与 `constants` 下标对齐的字符串烘焙元数据；仅 `Constant::String` /
+    /// `Constant::Utf16String` 槽位有值。
     /// 编译期由 [`Module::add_constant`] 即时计算，制品解码则直接填充 wire 里的
     /// 烘焙值——运行时（install 期发布）因此零哈希、零表示转换。
     #[serde(default)]
@@ -59,7 +60,12 @@ pub struct StringConstantMeta {
 impl StringConstantMeta {
     /// 从 UTF-8 文本构造：全 Latin-1 即选单字节载荷；哈希跨表示同值。
     pub fn from_text(text: &str) -> Self {
-        let units: Vec<u16> = text.encode_utf16().collect();
+        Self::from_units(&text.encode_utf16().collect::<Vec<u16>>())
+    }
+
+    /// 从 UTF-16 码元序列构造：允许孤立代理项（`Constant::Utf16String` 用），
+    /// 表示选择与哈希规则同 [`Self::from_text`]。
+    pub fn from_units(units: &[u16]) -> Self {
         let latin1 = units.iter().all(|unit| *unit <= u8::MAX as u16);
         let payload = if latin1 {
             units.iter().map(|unit| *unit as u8).collect()
@@ -67,7 +73,7 @@ impl StringConstantMeta {
             units.iter().flat_map(|unit| unit.to_le_bytes()).collect()
         };
         Self {
-            hash: string_hash::content_hash_units(&units),
+            hash: string_hash::content_hash_units(units),
             latin1,
             payload,
         }
@@ -88,6 +94,7 @@ impl Module {
     pub fn add_constant(&mut self, constant: Constant) -> ConstantId {
         let meta = match &constant {
             Constant::String(text) => Some(StringConstantMeta::from_text(text)),
+            Constant::Utf16String(units) => Some(StringConstantMeta::from_units(units)),
             _ => None,
         };
         self.add_constant_with_meta(constant, meta)
@@ -362,6 +369,11 @@ pub enum Constant {
     },
     /// AOT 解析的模块 ID（用于动态 import）
     ModuleId(ModuleId),
+    /// 含孤立代理项的字符串字面量：UTF-8 `String` 无法无损承载，按 UTF-16
+    /// 码元序列直存（ECMAScript 字符串本就是任意 UTF-16 码元序列）。
+    /// 常规字符串仍走 `String` 变体；本变体不参与编译期字符串折叠。
+    /// 追加在枚举末尾以保持既有制品的 serde 变体序号不变。
+    Utf16String(Vec<u16>),
 }
 
 impl fmt::Display for Constant {
@@ -382,6 +394,16 @@ impl fmt::Display for Constant {
                 write!(formatter, "regex(/{pattern}/{flags})")
             }
             Self::ModuleId(id) => write!(formatter, "moduleid({id})"),
+            Self::Utf16String(units) => {
+                formatter.write_str("utf16_string([")?;
+                for (index, unit) in units.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "0x{unit:04x}")?;
+                }
+                formatter.write_str("])")
+            }
         }
     }
 }

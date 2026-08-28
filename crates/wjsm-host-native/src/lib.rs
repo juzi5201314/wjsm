@@ -1807,16 +1807,29 @@ impl NativeAgentState {
         let mut string_constants = Vec::with_capacity(program.constants().len());
         self.install_string_roots.clear();
         for constant in program.constants() {
+            let baked_meta = program.string_constant_meta(wjsm_ir::ConstantId(
+                u32::try_from(string_constants.len()).expect("常量下标在 u32 内"),
+            ));
             let encoded = match constant {
                 Constant::String(text) => {
                     let owned;
-                    let meta = match program.string_constant_meta(wjsm_ir::ConstantId(
-                        u32::try_from(string_constants.len()).expect("常量下标在 u32 内"),
-                    )) {
+                    let meta = match baked_meta {
                         Some(meta) => meta,
                         // 元数据缺失（serde 兼容回退）时从文本重算；种子固定，同值。
                         None => {
                             owned = wjsm_ir::StringConstantMeta::from_text(text);
+                            &owned
+                        }
+                    };
+                    self.publish_baked_string(ctx, meta)?
+                }
+                // 含孤立代理项的字符串常量：载荷本就是 UTF-16 码元，发布路径同上。
+                Constant::Utf16String(units) => {
+                    let owned;
+                    let meta = match baked_meta {
+                        Some(meta) => meta,
+                        None => {
+                            owned = wjsm_ir::StringConstantMeta::from_units(units);
                             &owned
                         }
                     };

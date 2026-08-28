@@ -165,7 +165,7 @@ pub(super) fn dispatch_runtime(
                     return fail_dispatch(ctx);
                 };
                 let encoded = match constant {
-                    Constant::String(_) => state
+                    Constant::String(_) | Constant::Utf16String(_) => state
                         .string_constants
                         .get(element.0 as usize)
                         .copied()

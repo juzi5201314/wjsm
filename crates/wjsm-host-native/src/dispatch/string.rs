@@ -5,7 +5,7 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
     PrimitiveHint, fail_dispatch, range_error, render_value, to_number, to_number_coerced,
-    to_primitive, to_string_coerced, to_uint32, type_error,
+    to_primitive, to_runtime_string_coerced, to_string_coerced, to_uint32, type_error,
 };
 use crate::NativeAgentState;
 
@@ -92,13 +92,16 @@ fn raw_get(
 /// `String.raw`（ES §22.1.2.4）：按 literals（template.raw）的
 /// LengthOfArrayLike 交替拼接原始文本段与替换值。
 /// args: [template, ...substitutions]。
+///
+/// 聚合必须走 [`RuntimeString`]（UTF-16 码元序列）：ECMAScript 字符串允许
+/// 孤立代理项，经 Rust `String`（UTF-8）中转会被替换成 U+FFFD。
 fn string_raw(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let template = args
         .first()
         .copied()
         .unwrap_or_else(value::encode_undefined);
     let substitutions = args.get(1..).unwrap_or(&[]);
-    let result = (|| -> Result<String, i64> {
+    let result = (|| -> Result<RuntimeString, i64> {
         let cooked = raw_to_object_coercible(ctx, state, template)?;
         let literals = raw_get(ctx, state, cooked, "raw")?;
         let literals = raw_to_object_coercible(ctx, state, literals)?;
@@ -108,23 +111,23 @@ fn string_raw(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i
             number if number.is_nan() => 0,
             number => number.clamp(0.0, 9_007_199_254_740_991.0).trunc() as u64,
         };
-        let mut rendered = String::new();
+        let mut parts = Vec::new();
         for next_index in 0..literal_count {
             let segment = raw_get(ctx, state, literals, &next_index.to_string())?;
-            rendered.push_str(&to_string_coerced(ctx, state, segment)?);
+            parts.push(to_runtime_string_coerced(ctx, state, segment)?);
             if next_index + 1 == literal_count {
                 break;
             }
             if let Ok(position) = usize::try_from(next_index)
                 && let Some(substitution) = substitutions.get(position).copied()
             {
-                rendered.push_str(&to_string_coerced(ctx, state, substitution)?);
+                parts.push(to_runtime_string_coerced(ctx, state, substitution)?);
             }
         }
-        Ok(rendered)
+        Ok(RuntimeString::concat_many(parts))
     })();
     match result {
-        Ok(rendered) => intern(ctx, state, RuntimeString::from(rendered)),
+        Ok(rendered) => intern(ctx, state, rendered),
         Err(exception) => exception,
     }
 }
