@@ -1,0 +1,38 @@
+exit_code: 0
+--- stdout ---
+TypeError | The "type" and "listener" arguments must be specified
+TypeError | The "type" and "listener" arguments must be specified
+TypeError | The "listener" argument must be an instance of EventListener. Received type number (42)
+TypeError | The "listener" argument must be an instance of EventListener. Received type string ('str')
+TypeError | The "options" argument must be of type object. Received type number (42)
+TypeError | The "options" argument must be of type object. Received type string ('str')
+TypeError | The argument 'value' is invalid. Received Symbol(s)
+TypeError | The "type" and "listener" arguments must be specified
+TypeError | The "listener" argument must be an instance of EventListener. Received type number (42)
+TypeError | The "event" argument must be specified
+TypeError | The "event" argument must be an instance of Event. Received undefined
+TypeError | The "event" argument must be an instance of Event. Received null
+TypeError | The "event" argument must be an instance of Event. Received type number (42)
+TypeError | The "event" argument must be an instance of Event. Received type string ('x')
+TypeError | The "event" argument must be an instance of Event. Received an instance of Object
+TypeError | The "event" argument must be an instance of Event. Received type bigint (42n)
+TypeError | The "event" argument must be an instance of Event. Received type boolean (true)
+TypeError | The "event" argument must be an instance of Event. Received type string ('xxxxxxxxxxxxxxxxxxxxxxxxx...')
+TypeError | The "event" argument must be an instance of Event. Received function foo
+TypeError | The "type" argument must be specified
+TypeError | Cannot convert a Symbol value to a string
+TypeError | The "options" argument must be of type object. Received type number (42)
+TypeError | The "options" argument must be of type object. Received type string ('str')
+TypeError | Value of "this" must be of type EventTarget
+TypeError | Value of "this" must be of type EventTarget
+TypeError | Value of "this" must be of type Event
+TypeError | Value of "this" must be of type Event
+TypeError | Value of "this" must be of type AbortSignal
+TypeError | Value of "this" must be of type AbortSignal
+TypeError | The "this" argument must be an instance of EventTarget. Received an instance of Object
+TypeError | The "this" argument must be an instance of EventTarget. Received an instance of Object
+TypeError | Value of "this" must be of type AbortSignal
+recursion: Error | ERR_EVENT_RECURSION | The event "r" is already being dispatched
+tia ok: undefined
+undefined | undefined
+--- stderr ---

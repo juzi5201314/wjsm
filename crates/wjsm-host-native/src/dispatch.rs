@@ -16,6 +16,7 @@ mod date_methods;
 pub(crate) mod enumerator;
 mod errors;
 mod eval;
+pub(crate) mod events;
 pub(crate) mod fetch;
 mod function;
 pub(crate) mod function_constructor;
@@ -494,6 +495,7 @@ pub(super) fn dispatch_builtin(
             generator::dispatch_generator => Builtin::GeneratorNext | Builtin::GeneratorReturn | Builtin::GeneratorStart | Builtin::GeneratorThrow,
             streams::dispatch_streams => Builtin::ByteLengthQueuingStrategyConstructor | Builtin::CountQueuingStrategyConstructor | Builtin::ReadableStreamConstructor | Builtin::TransformStreamConstructor | Builtin::WritableStreamConstructor,
             fetch::dispatch_fetch => Builtin::AbortControllerConstructor | Builtin::Fetch | Builtin::HeadersConstructor | Builtin::RequestConstructor | Builtin::ResponseConstructor,
+            events::dispatch_events => Builtin::AbortSignalConstructor | Builtin::EventConstructor | Builtin::EventTargetConstructor,
             buffers::dispatch_buffer => Builtin::ArrayBufferConstructor | Builtin::ArrayBufferProtoByteLength | Builtin::ArrayBufferProtoSlice | Builtin::DataViewConstructor | Builtin::DataViewProtoGetFloat32 | Builtin::DataViewProtoGetFloat64 | Builtin::DataViewProtoGetInt16 | Builtin::DataViewProtoGetInt32 | Builtin::DataViewProtoGetInt8 | Builtin::DataViewProtoGetUint16 | Builtin::DataViewProtoGetUint32 | Builtin::DataViewProtoGetUint8 | Builtin::DataViewProtoSetFloat32 | Builtin::DataViewProtoSetFloat64 | Builtin::DataViewProtoSetInt16 | Builtin::DataViewProtoSetInt32 | Builtin::DataViewProtoSetInt8 | Builtin::DataViewProtoSetUint16 | Builtin::DataViewProtoSetUint32 | Builtin::DataViewProtoSetUint8 | Builtin::DataViewProtoGetBigInt64 | Builtin::DataViewProtoGetBigUint64 | Builtin::DataViewProtoSetBigInt64 | Builtin::DataViewProtoSetBigUint64,
             sab::dispatch_sab => Builtin::SharedArrayBufferConstructor | Builtin::SharedArrayBufferProtoByteLength | Builtin::SharedArrayBufferProtoGrow | Builtin::SharedArrayBufferProtoGrowable | Builtin::SharedArrayBufferProtoMaxByteLength | Builtin::SharedArrayBufferProtoSlice | Builtin::SharedArrayBufferSpecies,
             atomics::dispatch_atomics => Builtin::AtomicsAdd | Builtin::AtomicsAnd | Builtin::AtomicsCompareExchange | Builtin::AtomicsExchange | Builtin::AtomicsIsLockFree | Builtin::AtomicsLoad | Builtin::AtomicsNotify | Builtin::AtomicsOr | Builtin::AtomicsPause | Builtin::AtomicsStore | Builtin::AtomicsSub | Builtin::AtomicsWait | Builtin::AtomicsWaitAsync | Builtin::AtomicsXor,
