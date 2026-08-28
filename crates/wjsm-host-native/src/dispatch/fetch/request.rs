@@ -2,11 +2,13 @@ use url::Url;
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty, RequestMethod, headers};
+use super::{FetchObjectKind, RequestGetter, RequestMethod, headers};
 use crate::NativeAgentState;
 
 #[derive(Clone)]
 pub(super) struct RequestState {
+    /// 包装对象；供 GC 边图钉住 headers 与提取的实例方法。由 `create` 写入。
+    pub(super) object: i64,
     pub(super) url: String,
     pub(super) method: String,
     pub(super) headers: i64,
@@ -25,10 +27,15 @@ pub(super) fn construct(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    match build(ctx, state, args) {
+    // build 期间 headers 包装对象仅由局部值持有，而 init 属性读取可再入
+    // JS（getter）触发 GC，必须经 temporary_roots 钉扎到构造完成。
+    let initial_temp_roots = state.temporary_roots.len();
+    let result = match build(ctx, state, args) {
         Ok(request) => request,
         Err(exception) => exception,
-    }
+    };
+    state.temporary_roots.truncate(initial_temp_roots);
+    result
 }
 
 fn build(
@@ -44,7 +51,7 @@ fn build(
         .objects
         .get(&value::decode_handle(input))
         .and_then(|kind| match kind {
-            FetchObjectKind::Request(handle) => state.fetch.requests.get(*handle as usize),
+            FetchObjectKind::Request(handle) => state.fetch.requests.get(*handle),
             _ => None,
         })
         .cloned();
@@ -89,6 +96,7 @@ fn build(
     } else {
         headers::from_value(ctx, state, None)?
     };
+    state.temporary_roots.push(headers);
 
     if let Some(init) = args
         .get(1)
@@ -107,6 +115,7 @@ fn build(
         }
         if let Some(stored) = super::read_optional_property(ctx, state, init, "headers")? {
             headers = headers::from_value(ctx, state, Some(stored))?;
+            state.temporary_roots.push(headers);
         }
         if let Some(stored) = super::read_optional_property(ctx, state, init, "body")? {
             body = (!value::is_null(stored)).then(|| super::to_string(state, stored));
@@ -179,6 +188,7 @@ fn build(
     create(
         state,
         RequestState {
+            object: value::encode_undefined(),
             url,
             method,
             headers,
@@ -232,51 +242,52 @@ fn normalize_method(
     }
 }
 
-fn create(state: &mut NativeAgentState, request: RequestState) -> Option<i64> {
+fn create(state: &mut NativeAgentState, mut request: RequestState) -> Option<i64> {
     let object = state.allocate_object(0, false).ok()?;
     state
         .set_web_instance_prototype(object, wjsm_ir::Builtin::RequestConstructor)
         .ok()?;
-    let handle = u32::try_from(state.fetch.requests.len()).ok()?;
-    state.fetch.requests.push(request);
+    request.object = object;
+    let handle = state.fetch.requests.insert(request)?;
     super::register_object(state, object, FetchObjectKind::Request(handle));
     Some(object)
 }
 
-pub(super) fn property(
+/// `Request.prototype` 访问器的取值：品牌已在分派层解析为槽位句柄。
+pub(super) fn getter(
+    ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     handle: u32,
-    key: &str,
-) -> Option<FetchProperty> {
-    let request = state.fetch.requests.get(handle as usize)?;
-    let text = match key {
-        "url" => Some(request.url.clone()),
-        "method" => Some(request.method.clone()),
-        "redirect" => Some(request.redirect.clone()),
-        "cache" => Some(request.cache.clone()),
-        "credentials" => Some(request.credentials.clone()),
-        "integrity" => Some(request.integrity.clone()),
+    getter: RequestGetter,
+) -> i64 {
+    let Some(request) = state.fetch.requests.get(handle) else {
+        return super::super::fail_dispatch(ctx);
+    };
+    let text = match getter {
+        RequestGetter::Url => Some(request.url.clone()),
+        RequestGetter::Method => Some(request.method.clone()),
+        RequestGetter::Redirect => Some(request.redirect.clone()),
+        RequestGetter::Cache => Some(request.cache.clone()),
+        RequestGetter::Credentials => Some(request.credentials.clone()),
+        RequestGetter::Integrity => Some(request.integrity.clone()),
         _ => None,
     };
     if let Some(text) = text {
         return state
             .intern_text(text, value::TAG_STRING)
-            .map(FetchProperty::Value);
+            .unwrap_or_else(|| super::super::fail_dispatch(ctx));
     }
-    match key {
-        "body" => Some(FetchProperty::Value(value::encode_null())),
-        "bodyUsed" => Some(FetchProperty::Value(value::encode_bool(request.used))),
-        "headers" => Some(FetchProperty::Value(request.headers)),
-        "keepalive" => Some(FetchProperty::Value(value::encode_bool(request.keepalive))),
-        "clone" => Some(FetchProperty::Callable(FetchCallable::Request(
-            handle,
-            RequestMethod::Clone,
-        ))),
-        "text" => Some(FetchProperty::Callable(FetchCallable::Request(
-            handle,
-            RequestMethod::Text,
-        ))),
-        _ => None,
+    match getter {
+        RequestGetter::Body => value::encode_null(),
+        RequestGetter::BodyUsed => value::encode_bool(request.used),
+        RequestGetter::Headers => request.headers,
+        RequestGetter::Keepalive => value::encode_bool(request.keepalive),
+        RequestGetter::Url
+        | RequestGetter::Method
+        | RequestGetter::Redirect
+        | RequestGetter::Cache
+        | RequestGetter::Credentials
+        | RequestGetter::Integrity => unreachable!("text getters resolved above"),
     }
 }
 
@@ -286,7 +297,7 @@ pub(super) fn call(
     handle: u32,
     method: RequestMethod,
 ) -> i64 {
-    let Some(request) = state.fetch.requests.get(handle as usize).cloned() else {
+    let Some(request) = state.fetch.requests.get(handle).cloned() else {
         return super::super::fail_dispatch(ctx);
     };
     if request.used {
@@ -304,7 +315,7 @@ pub(super) fn call(
                 .unwrap_or_else(|| super::super::fail_dispatch(ctx))
         }
         RequestMethod::Text => {
-            if let Some(request) = state.fetch.requests.get_mut(handle as usize) {
+            if let Some(request) = state.fetch.requests.get_mut(handle) {
                 request.used = true;
             }
             let Some(text) = state.intern_text(request.body.unwrap_or_default(), value::TAG_STRING)

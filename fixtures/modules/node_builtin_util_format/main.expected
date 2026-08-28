@@ -1,0 +1,20 @@
+exit_code: 0
+--- stdout ---
+a|undefined
+1 undefined
+a b c d e f g h
+x y
+m a 2 extra undefined null 9 tail
+a undefined b undefined
+only %s
+%x kept extra
+100% x
+< after
+-0|42|42
+undefined
+{ a: [Object] }
+[ 1, [Array] ]
+{ a: 1 } b 2
+1|undefined|3|4|5|6|7
+7:1,undefined,3,4,5,6,7
+--- stderr ---

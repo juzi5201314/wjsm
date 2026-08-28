@@ -514,6 +514,16 @@ pub enum Builtin {
     ArrayAllocate,
     /// 判断数组索引处是否存在非 hole 元素。
     ArrayHasElement,
+    /// 内联快路径守卫：值是否为裸真数组（不穿透 Proxy，区别于用户可见的
+    /// `Array.isArray`）。Proxy 包装数组的 length/元素读取须走 trap 完整
+    /// 协议，退回慢路径 builtin。
+    ArrayIsPlain,
+    /// 内联快路径守卫（map/filter）：裸真数组且 ArraySpeciesCreate
+    /// （§23.1.3.2）保证走缺省 ArrayCreate 且全程不可观察——实例无自有
+    /// constructor、[[Prototype]] 为当前 realm %Array.prototype% 且其
+    /// constructor 仍为固有 %Array% 数据属性、%Array% 的 @@species 仍为
+    /// 固有 getter。任一不满足退回慢路径 builtin 执行完整 species 协议。
+    ArraySpeciesDefault,
     /// JS truthiness → bool。
     ToBoolean,
     /// `Object.prototype.propertyIsEnumerable`
@@ -1193,6 +1203,8 @@ impl Builtin {
             Self::BigIntProtoValueOf => "BigInt.prototype.valueOf",
             Self::ArrayAllocate => "array.allocate",
             Self::ArrayHasElement => "array.has_element",
+            Self::ArrayIsPlain => "array.is_plain",
+            Self::ArraySpeciesDefault => "array.species_default",
             Self::ToBoolean => "to_boolean",
             Self::PropertyIsEnumerable => "property_is_enumerable",
             Self::StringBuilderAppend => "string.builder_append",

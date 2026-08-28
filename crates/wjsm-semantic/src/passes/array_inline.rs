@@ -3,7 +3,8 @@
 //! 背景：`arr.map(cb)` 在 lowering 时降为单条 `CallBuiltin(ArrayMap, arr, cb, thisArg)`，
 //! 运行时 `dispatch_array_callback` 逐元素经 `invoke_callable → prepare_call →
 //! call_indirect → finish_call` 全套动态调用。本 pass 在 `direct_call` 之后、
-//! `inline_for_ea` 之前运行：把这类调用展开为带 `ArrayIsArray` 守卫的显式循环 +
+//! `inline_for_ea` 之前运行：把这类调用展开为带守卫（`ArrayIsPlain`；map/filter
+//! 为 `ArraySpeciesDefault`，见各自文档）的显式循环 +
 //! 普通 `Call` 指令；展开后回调是 `Const(FunctionRef)` 时被 `inline_for_ea` 阶段 A
 //! 真正内联进循环（无捕获回调 → 每元素零调用成本），有捕获回调则省掉 host builtin
 //! dispatch 层。
@@ -12,6 +13,11 @@
 //! Some / Every，以及**有 initialValue** 的 Reduce / ReduceRight。FlatMap / sort /
 //! toSorted / TypedArray 版方法保持原 builtin。回调 def 必须是
 //! `Const(FunctionRef)` 或 `CallBuiltin(CreateClosure)`，否则保持原 builtin。
+//!
+//! 语义对齐：跳洞 kind 的存在性检查走 `ArrayHasElement`（完整 HasProperty，
+//! 原型链继承索引可观察、Proxy 原型 trap 异常经 IsException 分流传播）；
+//! find 族按 §23.1.3.12.1 FindViaPredicate 读穿洞，不做存在性检查，元素
+//! 一律经 `GetElem`（洞/字典 kind 落宿主完整 [[Get]]）。
 
 use std::collections::HashMap;
 
@@ -75,6 +81,15 @@ impl Kind {
         matches!(
             self,
             Kind::Find | Kind::FindIndex | Kind::FindLast | Kind::FindLastIndex | Kind::Some
+        )
+    }
+
+    /// 是否读穿洞（find 族按 §23.1.3.12.1 FindViaPredicate 逐索引 Get，
+    /// 不做 HasProperty 跳过；其余 kind 按各方法 HasProperty 步骤跳洞）。
+    fn reads_through_holes(self) -> bool {
+        matches!(
+            self,
+            Kind::Find | Kind::FindIndex | Kind::FindLast | Kind::FindLastIndex
         )
     }
 }
@@ -277,6 +292,12 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
     let fast = alloc_block();
     let header = alloc_block();
     let body = alloc_block();
+    // 跳洞 kind 的存在性检查拆两块：ArrayHasElement 是完整 HasProperty，
+    // 原型链上有 Proxy 时 has trap 可抛，body 先 IsException 分流到
+    // has_exc_blk，再在 has_check_blk 做存在性分支。find 族读穿洞，无此三块
+    // （含 skip_blk）。
+    let has_check_blk = (!cand.kind.reads_through_holes()).then(&mut alloc_block);
+    let has_exc_blk = (!cand.kind.reads_through_holes()).then(&mut alloc_block);
     let call_blk = alloc_block();
     let ok_blk = alloc_block();
     let push_blk = (cand.kind == Kind::Filter).then(&mut alloc_block);
@@ -293,7 +314,7 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
             | Kind::Every
     )
     .then(&mut alloc_block);
-    let skip_blk = alloc_block();
+    let skip_blk = (!cand.kind.reads_through_holes()).then(&mut alloc_block);
     let exc_blk = alloc_block();
     let next = alloc_block();
     let exit = alloc_block();
@@ -308,13 +329,21 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
 
     let mut blocks: Vec<BasicBlock> = Vec::new();
 
-    // ── guard：is_array 运行时守卫 ──
+    // ── guard：快路径运行时守卫 ──
+    // 裸真数组判定（ArrayIsPlain，不穿透 Proxy——trap 语义须走慢路径完整
+    // 协议）；map/filter 额外要求 ArraySpeciesCreate（§23.1.3.2）可静态归约
+    // 为缺省 ArrayCreate（ArraySpeciesDefault，自定义 constructor/@@species
+    // 退慢路径执行完整 species 协议）。
     {
         let mut b = BasicBlock::new(guard);
         let is_arr = vg.fresh();
+        let guard_builtin = match cand.kind {
+            Kind::Map | Kind::Filter => Builtin::ArraySpeciesDefault,
+            _ => Builtin::ArrayIsPlain,
+        };
         b.push_instruction(Instruction::CallBuiltin {
             dest: Some(is_arr),
-            builtin: Builtin::ArrayIsArray,
+            builtin: guard_builtin,
             args: vec![cand.arr],
         });
         b.set_terminator(Terminator::Branch {
@@ -495,20 +524,72 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
         blocks.push(b);
     }
 
-    // ── body：hole 检查 ──
+    // ── body：跳洞 kind 做 HasProperty 检查（异常先分流）；find 族读穿洞 ──
+    let has_value;
     {
         let mut b = BasicBlock::new(body);
-        let has = vg.fresh();
-        b.push_instruction(Instruction::CallBuiltin {
-            dest: Some(has),
-            builtin: Builtin::ArrayHasElement,
-            args: vec![cand.arr, loop_index],
-        });
+        match (has_check_blk, has_exc_blk) {
+            (Some(has_check_blk), Some(has_exc_blk)) => {
+                let has = vg.fresh();
+                b.push_instruction(Instruction::CallBuiltin {
+                    dest: Some(has),
+                    builtin: Builtin::ArrayHasElement,
+                    args: vec![cand.arr, loop_index],
+                });
+                let is_exc = vg.fresh();
+                b.push_instruction(Instruction::IsException {
+                    dest: is_exc,
+                    value: has,
+                });
+                b.set_terminator(Terminator::Branch {
+                    condition: is_exc,
+                    true_block: has_exc_blk,
+                    false_block: has_check_blk,
+                });
+                has_value = Some(has);
+            }
+            _ => {
+                b.set_terminator(Terminator::Jump { target: call_blk });
+                has_value = None;
+            }
+        }
+        blocks.push(b);
+    }
+
+    // ── has_check_blk：存在 → call_blk；洞 / 缺失索引 → skip_blk ──
+    if let Some(has_check_blk) = has_check_blk {
+        let mut b = BasicBlock::new(has_check_blk);
         b.set_terminator(Terminator::Branch {
-            condition: has,
+            condition: has_value.expect("跳洞 kind 有 has 值"),
             true_block: call_blk,
-            false_block: skip_blk,
+            false_block: skip_blk.expect("跳洞 kind 有 skip_blk"),
         });
+        blocks.push(b);
+    }
+
+    // ── has_exc_blk：HasProperty 异常（原型链 Proxy trap）传播 ──
+    if let Some(has_exc_blk) = has_exc_blk {
+        let mut b = BasicBlock::new(has_exc_blk);
+        let thrown = vg.fresh();
+        b.push_instruction(Instruction::CallBuiltin {
+            dest: Some(thrown),
+            builtin: Builtin::ExceptionValue,
+            args: vec![has_value.expect("跳洞 kind 有 has 值")],
+        });
+        match &cand.exc {
+            Some((tmp_name, catch_target)) => {
+                b.push_instruction(Instruction::StoreVar {
+                    name: tmp_name.clone(),
+                    value: thrown,
+                });
+                b.set_terminator(Terminator::Jump {
+                    target: *catch_target,
+                });
+            }
+            None => {
+                b.set_terminator(Terminator::Throw { value: thrown });
+            }
+        }
         blocks.push(b);
     }
 
@@ -639,8 +720,8 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
         blocks.push(b);
     }
 
-    // ── skip_blk：hole 跳过 ──
-    {
+    // ── skip_blk：hole / 缺失索引跳过（find 族无此块）──
+    if let Some(skip_blk) = skip_blk {
         let mut b = BasicBlock::new(skip_blk);
         b.set_terminator(Terminator::Jump { target: next });
         blocks.push(b);
@@ -684,7 +765,7 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
                         value: call_result,
                     },
                     PhiSource {
-                        predecessor: skip_blk,
+                        predecessor: skip_blk.expect("reduce 跳洞，有 skip_blk"),
                         value: loop_acc.expect("reduce 有 acc"),
                     },
                 ],

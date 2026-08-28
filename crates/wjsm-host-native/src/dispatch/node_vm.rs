@@ -88,6 +88,7 @@ fn create_array_intrinsics(state: &mut NativeAgentState, context: u32) -> Option
         (array_constructor, prototype_key),
         crate::FUNCTION_PROTOTYPE_FLAGS,
     );
+    state.install_species_accessor(array_constructor)?;
     Some((array_prototype, array_constructor))
 }
 impl NodeVmState {

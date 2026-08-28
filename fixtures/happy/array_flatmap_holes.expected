@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+inner-hole: [2]
+outer-hole: [1]
+inherited-inner: [7,2]
+inherited-outer: [7,7,1,1]
+inner-accessor: [5,2]
+non-array: [10,20]
+--- stderr ---

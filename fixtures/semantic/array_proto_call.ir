@@ -142,11 +142,11 @@ module {
       %45 = call builtin.exception_value(%43)
       throw %45
     bb13:
-      %48 = call builtin.array.is_array(%25)
+      %48 = call builtin.array.species_default(%25)
       branch %48, bb15, bb14
     bb14:
       %46 = call builtin.array.map(%25, %38)
-      jump bb24
+      jump bb26
     bb15:
       %49 = const c31
       %50 = get_prop %25, %49
@@ -156,41 +156,47 @@ module {
       %57 = call builtin.array.allocate(%50)
       jump bb16
     bb16:
-      %58 = phi [(bb15, %51), (bb22, %47)]
+      %58 = phi [(bb15, %51), (bb24, %47)]
       %59 = call builtin.abstract_compare(%58, %50, %56, %56)
-      branch %59, bb17, bb23
+      branch %59, bb17, bb25
     bb17:
       %60 = call builtin.array.has_element(%25, %58)
-      branch %60, bb18, bb20
+      %61 = is_exception %60
+      branch %61, bb19, bb18
     bb18:
-      %61 = get_elem %25, %58
-      %66 = const c0
-      jump bb27
+      branch %60, bb20, bb22
     bb19:
-      %64 = set_elem %57, %58, %69
-      jump bb22
+      %62 = call builtin.exception_value(%60)
+      throw %62
     bb20:
-      jump bb22
+      %63 = get_elem %25, %58
+      %68 = const c0
+      jump bb29
     bb21:
-      %65 = call builtin.exception_value(%69)
-      throw %65
+      %66 = set_elem %57, %58, %71
+      jump bb24
     bb22:
+      jump bb24
+    bb23:
+      %67 = call builtin.exception_value(%71)
+      throw %67
+    bb24:
       %47 = add %58, %52
       jump bb16
-    bb23:
-      jump bb24
-    bb24:
-      %39 = phi [(bb14, %46), (bb23, %57)]
-      jump bb25
     bb25:
+      jump bb26
+    bb26:
+      %39 = phi [(bb14, %46), (bb25, %57)]
+      jump bb27
+    bb27:
       %40 = is_exception %39
       branch %40, bb10, bb9
-    bb26:
-      %63 = is_exception %69
-      branch %63, bb21, bb19
-    bb27:
-      %68 = const c28
-      %69 = mul %61, %68
-      store var $1.x, %66
-      jump bb26
+    bb28:
+      %65 = is_exception %71
+      branch %65, bb23, bb21
+    bb29:
+      %70 = const c28
+      %71 = mul %63, %70
+      store var $1.x, %68
+      jump bb28
 }

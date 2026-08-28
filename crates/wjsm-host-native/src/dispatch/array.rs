@@ -38,7 +38,37 @@ pub(super) fn dispatch_array(
         Builtin::ArrayAt => array_at(ctx, state, args),
         Builtin::ArrayCopyWithin => array_copy_within(ctx, state, args),
         Builtin::ArrayIsArray => {
-            value::encode_bool(args.first().is_some_and(|value| value::is_array(*value)))
+            // IsArray（§7.2.2）：Proxy 穿透到 target 判定，revoked 抛 TypeError。
+            let receiver = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            match super::runtime::is_array_value(state, receiver) {
+                Some(is_array) => value::encode_bool(is_array),
+                None => type_error(
+                    ctx,
+                    state,
+                    "Cannot perform 'IsArray' on a proxy that has been revoked",
+                ),
+            }
+        }
+        Builtin::ArrayIsPlain => {
+            // array_inline 守卫：裸真数组判定（不穿透 Proxy——trap 语义须走
+            // 慢路径 builtin 的完整协议）。
+            let receiver = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            value::encode_bool(value::is_array(receiver))
+        }
+        Builtin::ArraySpeciesDefault => {
+            // array_inline map/filter 守卫：ArraySpeciesCreate 可静态归约为
+            // 缺省 ArrayCreate 时才允许内联快路径。
+            let receiver = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            value::encode_bool(super::array_callbacks::species_is_default(state, receiver))
         }
         Builtin::ArrayAllocate => array_allocate(ctx, state, args),
         Builtin::ArrayHasElement => array_has_element(ctx, state, args),
@@ -56,7 +86,63 @@ pub(crate) fn construct(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
+    new_target: i64,
 ) -> i64 {
+    // GetPrototypeFromConstructor(newTarget, "%Array.prototype%")（§23.1.1.1
+    // 步骤 4 / §10.1.13）先于 ArrayCreate：newTarget 非本构造器（类 extends
+    // Array 的 super()、Reflect.construct 显式 newTarget，由调用方归一，
+    // undefined 表示缺省）时读取其 `prototype`，对象值覆盖实例
+    // [[Prototype]]；非对象回退分配缺省（当前 realm 的 %Array.prototype%）。
+    let prototype = match instance_prototype_slot(ctx, state, new_target) {
+        Ok(prototype) => prototype,
+        Err(exception) => return exception,
+    };
+    let array = create(ctx, state, args);
+    if value::is_exception(array) {
+        return array;
+    }
+    if let Some(slot) = prototype
+        && state
+            .gc
+            .heap()
+            .set_prototype(value::decode_handle(array), slot)
+            .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    array
+}
+
+/// newTarget 的实例原型槽：undefined → None 沿用缺省；`prototype` 非对象或
+/// 与当前 realm 缺省相同 → None；prototype 读取（Proxy trap / 再入 getter）
+/// 的异常原样传播。
+fn instance_prototype_slot(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    new_target: i64,
+) -> Result<Option<u32>, i64> {
+    if value::is_undefined(new_target) {
+        return Ok(None);
+    }
+    let Some(key) = state.intern_text("prototype".into(), value::TAG_STRING) else {
+        return Err(fail_dispatch(ctx));
+    };
+    let prototype = get_property(ctx, state, new_target, key).map_err(|()| fail_dispatch(ctx))?;
+    if value::is_exception(prototype) {
+        return Err(prototype);
+    }
+    if !(value::is_js_object(prototype) || value::is_regexp(prototype)) {
+        return Ok(None);
+    }
+    if state.array_prototype == Some(prototype) {
+        return Ok(None);
+    }
+    Ok(super::runtime::encode_proto_slot(prototype))
+}
+
+/// Array(...) 的求值主体（§23.1.1.1 步骤 5–8）：单个数值实参按 length 建
+/// 全洞数组（越界抛 RangeError），其余按元素序列建数组。
+fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     if let [length] = args
         && value::is_f64(*length)
     {
@@ -317,22 +403,24 @@ fn array_allocate(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
     array
 }
 
-/// `array.has_element(array, index)`：数组索引处存在非 hole 元素 → bool。
-fn array_has_element(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
+/// `array.has_element(array, index)`：数组索引的 HasProperty（§7.3.11）。
+/// 自有非洞元素直判存在；洞、越界与字典 kind 经完整属性协议观察侧表
+/// accessor 与原型链继承索引（array_inline 展开循环的跳洞检查与 §23.1.3
+/// 各方法的 HasProperty 步骤对齐），Proxy 原型 trap 异常按编码值返回，
+/// 由展开循环的 IsException 分流传播。
+fn array_has_element(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [array, index] = args else {
         return fail_dispatch(ctx);
     };
     if !value::is_array(*array) {
         return fail_dispatch(ctx);
     }
-    let handle = value::decode_handle(*array);
     let Some(index) = array_index(state, *index) else {
         return value::encode_bool(false);
     };
-    match state.gc.heap().get_element(handle, index) {
-        Ok(Some(stored)) => value::encode_bool(!value::is_array_hole(stored as i64)),
-        Ok(None) => value::encode_bool(false),
-        Err(_) => fail_dispatch(ctx),
+    match super::array_like::element_has(ctx, state, *array, u64::from(index)) {
+        Ok(has) => value::encode_bool(has),
+        Err(exception) => exception,
     }
 }
 

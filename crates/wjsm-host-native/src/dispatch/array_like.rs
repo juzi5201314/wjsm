@@ -1,9 +1,11 @@
 //! Array.prototype 迭代方法族（map / forEach / filter / find* / some /
 //! every / flatMap / reduce / reduceRight / sort / toSorted）的接收者抽象：
-//! 真数组沿用堆元素直读快路径；其余 array-like（arguments 对象、
-//! `{length, 索引}` 普通对象、盒装原语、Proxy 等）按规范 generic 语义
-//! （ToObject → LengthOfArrayLike → HasProperty / Get / Set /
-//! DeletePropertyOrThrow）逐键访问，禁止落入 InternalInvariant。
+//! 真数组的自有非洞元素沿用堆槽直读快路径，洞、越界与字典 kind 退回完整
+//! HasProperty / Get 协议（原型链继承索引、索引 accessor 与迭代中原型变更
+//! 均可观察）；其余 array-like（arguments 对象、`{length, 索引}` 普通对象、
+//! 盒装原语、Proxy 等）按规范 generic 语义（ToObject → LengthOfArrayLike →
+//! HasProperty / Get / Set / DeletePropertyOrThrow）逐键访问，禁止落入
+//! InternalInvariant。
 
 use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, value};
@@ -108,7 +110,8 @@ impl ArrayLikeSource {
         }
     }
 
-    /// `HasProperty(O, ToString(index))`（§7.3.11）：快路径为元素存在且非洞。
+    /// `HasProperty(O, ToString(index))`（§7.3.11）：快路径自有非洞元素直判
+    /// 存在，其余退回完整协议（原型链继承索引可观察）。
     pub(super) fn has(
         &self,
         ctx: &mut NativeVmContext,
@@ -116,8 +119,7 @@ impl ArrayLikeSource {
         index: u64,
     ) -> Result<bool, i64> {
         match self {
-            Self::Fast { handle, .. } => Ok(raw(state, *handle, index as u32)
-                .is_some_and(|stored| !value::is_array_hole(stored))),
+            Self::Fast { encoded, .. } => element_has(ctx, state, *encoded, index),
             Self::Generic { object, .. } => {
                 let key = index_key(ctx, state, index)?;
                 has_property(ctx, state, *object, key)
@@ -125,8 +127,8 @@ impl ArrayLikeSource {
         }
     }
 
-    /// `Get(O, ToString(index))`（§7.3.2）：快路径把缺失/洞归约为 undefined；
-    /// generic 路径经完整属性协议（getter / Proxy trap 异常原样传播）。
+    /// `Get(O, ToString(index))`（§7.3.2）：快路径自有非洞元素直读，其余
+    /// 退回完整属性协议（原型链 getter / Proxy trap 异常原样传播）。
     pub(super) fn get(
         &self,
         ctx: &mut NativeVmContext,
@@ -134,7 +136,7 @@ impl ArrayLikeSource {
         index: u64,
     ) -> Result<i64, i64> {
         match self {
-            Self::Fast { handle, .. } => Ok(observable(raw(state, *handle, index as u32))),
+            Self::Fast { encoded, .. } => element_get(ctx, state, *encoded, index),
             Self::Generic { object, .. } => {
                 let key = index_key(ctx, state, index)?;
                 let result =
@@ -146,6 +148,62 @@ impl ArrayLikeSource {
             }
         }
     }
+}
+
+/// 真数组索引访问能否信任元素槽直读：PACKED / HOLEY 的非洞槽即自有数据
+/// 属性；DICTIONARY 表示索引位置存在 accessor 等异质属性（槽值可能陈旧、
+/// 被侧表遮蔽），必须走完整属性协议。逐次访问重读 kind，回调在迭代中把
+/// 数组升为字典（defineProperty 装 getter）时立即可观察。
+pub(super) fn element_slots_trusted(state: &NativeAgentState, handle: u32) -> bool {
+    state.gc.heap().array_kind(handle).ok() != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+}
+
+/// 真数组的 `HasProperty(O, ToString(index))`（§7.3.11）：可信槽内非洞元素
+/// 直判存在；洞、越界与字典 kind 退回 `has_property`（侧表 accessor 与
+/// 原型链上的继承索引可观察，Proxy 原型 trap 异常原样传播）。
+pub(super) fn element_has(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    array: i64,
+    index: u64,
+) -> Result<bool, i64> {
+    let handle = value::decode_handle(array);
+    if element_slots_trusted(state, handle)
+        && u32::try_from(index)
+            .ok()
+            .and_then(|index| raw(state, handle, index))
+            .is_some_and(|stored| !value::is_array_hole(stored))
+    {
+        return Ok(true);
+    }
+    let key = index_key(ctx, state, index)?;
+    has_property(ctx, state, array, key)
+}
+
+/// 真数组的 `Get(O, ToString(index))`（§7.3.2）：可信槽内非洞元素直读；
+/// 洞、越界与字典 kind 退回 `get_property`（原型链 getter 以接收者为 this
+/// 调用，异常原样传播）。
+pub(super) fn element_get(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    array: i64,
+    index: u64,
+) -> Result<i64, i64> {
+    let handle = value::decode_handle(array);
+    if element_slots_trusted(state, handle)
+        && let Some(stored) = u32::try_from(index)
+            .ok()
+            .and_then(|index| raw(state, handle, index))
+        && !value::is_array_hole(stored)
+    {
+        return Ok(stored);
+    }
+    let key = index_key(ctx, state, index)?;
+    let result = get_property(ctx, state, array, key).map_err(|()| fail_dispatch(ctx))?;
+    if value::is_exception(result) {
+        return Err(result);
+    }
+    Ok(result)
 }
 
 /// generic sort 写回的 `Set(O, ToString(index), value, true)`（§23.1.3.30
@@ -222,7 +280,7 @@ pub(super) fn delete_index_or_throw(
 }
 
 /// 真数组元素的裸读取：越界 / 访问失败为 None（含洞哨兵原样返回）。
-pub(super) fn raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i64> {
+fn raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i64> {
     state
         .gc
         .heap()
@@ -230,12 +288,6 @@ pub(super) fn raw(state: &NativeAgentState, handle: u32, index: u32) -> Option<i
         .ok()
         .flatten()
         .map(|stored| stored as i64)
-}
-
-/// 裸读取结果归约为可观察值：缺失与洞均为 undefined。
-pub(super) fn observable(raw: Option<i64>) -> i64 {
-    raw.filter(|stored| !value::is_array_hole(*stored))
-        .unwrap_or_else(value::encode_undefined)
 }
 
 /// ToLength（§7.1.20）：ToIntegerOrInfinity 后夹紧到 [0, 2^53 − 1]。
@@ -247,7 +299,7 @@ fn to_length(number: f64) -> u64 {
 }
 
 /// 十进制索引串的属性键驻留（与 arguments / 对象属性创建同一驻留形态）。
-fn index_key(
+pub(super) fn index_key(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     index: u64,

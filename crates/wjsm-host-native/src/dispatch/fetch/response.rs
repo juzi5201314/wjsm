@@ -4,15 +4,18 @@ use std::rc::Rc;
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty, ResponseMethod, headers};
+use super::{FetchObjectKind, ResponseGetter, ResponseMethod, headers};
 use crate::NativeAgentState;
 
 #[derive(Clone)]
 pub(super) struct ResponseState {
+    /// 包装对象；供 GC 边图钉住 headers/body 流与提取的实例方法。由
+    /// `create` 写入。
+    pub(super) object: i64,
     body: Option<String>,
     body_error: Option<String>,
-    body_object: i64,
-    headers: i64,
+    pub(super) body_object: i64,
+    pub(super) headers: i64,
     status: u16,
     status_text: String,
     timing: Option<Rc<RefCell<ResourceTiming>>>,
@@ -33,10 +36,15 @@ pub(super) fn construct(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    match build(ctx, state, args) {
+    // build 期间 headers 包装对象仅由局部值持有，而 init 属性读取可再入
+    // JS（getter）触发 GC，必须经 temporary_roots 钉扎到构造完成。
+    let initial_temp_roots = state.temporary_roots.len();
+    let result = match build(ctx, state, args) {
         Ok(response) => response,
         Err(exception) => exception,
-    }
+    };
+    state.temporary_roots.truncate(initial_temp_roots);
+    result
 }
 
 fn build(
@@ -52,6 +60,7 @@ fn build(
     let mut status = 200_u16;
     let mut status_text = String::new();
     let mut response_headers = headers::from_value(ctx, state, None)?;
+    state.temporary_roots.push(response_headers);
     if let Some(init) = args
         .get(1)
         .copied()
@@ -88,6 +97,7 @@ fn build(
         }
         if let Some(stored) = super::read_optional_property(ctx, state, init, "headers")? {
             response_headers = headers::from_value(ctx, state, Some(stored))?;
+            state.temporary_roots.push(response_headers);
         }
     }
     if body.is_some() && matches!(status, 101 | 204 | 205 | 304) {
@@ -101,6 +111,7 @@ fn build(
         ctx,
         state,
         ResponseState {
+            object: value::encode_undefined(),
             body,
             body_error: None,
             body_object: value::encode_null(),
@@ -137,6 +148,7 @@ pub(super) fn create_fetch_response(
         ctx,
         state,
         ResponseState {
+            object: value::encode_undefined(),
             body: Some(body),
             body_error: None,
             body_object: value::encode_null(),
@@ -181,6 +193,7 @@ pub(super) fn create_network_response(
         ctx,
         state,
         ResponseState {
+            object: value::encode_undefined(),
             body,
             body_error,
             body_object: value::encode_null(),
@@ -209,8 +222,6 @@ fn create(
     state: &mut NativeAgentState,
     mut response: ResponseState,
 ) -> Result<i64, i64> {
-    let handle =
-        u32::try_from(state.fetch.responses.len()).map_err(|_| super::super::fail_dispatch(ctx))?;
     let body_stream = if let Some(body) = &response.body {
         let Some((body_object, stream)) =
             super::super::streams::create_body_stream(ctx, state, body.as_bytes())
@@ -222,29 +233,43 @@ fn create(
     } else {
         None
     };
+    // 包装对象分配可触发 GC，此刻 headers 与 body 流仅由局部 ResponseState
+    // 持有，须钉扎到登记完成。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(response.headers);
+    state.temporary_roots.push(response.body_object);
     let object = state
         .allocate_object_with_gc_retry(ctx, 0, false)
-        .map_err(|_| super::super::fail_dispatch(ctx))?;
+        .map_err(|_| {
+            state.temporary_roots.truncate(initial_temp_roots);
+            super::super::fail_dispatch(ctx)
+        })?;
+    state.temporary_roots.truncate(initial_temp_roots);
     state
         .set_web_instance_prototype(object, wjsm_ir::Builtin::ResponseConstructor)
         .map_err(|()| super::super::fail_dispatch(ctx))?;
-    state.fetch.responses.push(response);
+    response.object = object;
+    let Some(handle) = state.fetch.responses.insert(response) else {
+        return Err(super::super::fail_dispatch(ctx));
+    };
     super::register_object(state, object, FetchObjectKind::Response(handle));
     if let Some(stream) = body_stream
-        && let Some(stream) = state.streams.readables.get_mut(stream as usize)
+        && let Some(stream) = state.streams.readables.get_mut(stream)
     {
         stream.response = Some(handle);
     }
     Ok(object)
 }
 
-pub(super) fn property(
+/// `Response.prototype` 访问器的取值：品牌已在分派层解析为槽位句柄。
+pub(super) fn getter(
+    ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     handle: u32,
-    key: &str,
-) -> Option<FetchProperty> {
-    let (body_object, headers, status, status_text, used) =
-        state.fetch.responses.get(handle as usize).map(|response| {
+    getter: ResponseGetter,
+) -> i64 {
+    let Some((body_object, headers, status, status_text, used)) =
+        state.fetch.responses.get(handle).map(|response| {
             (
                 response.body_object,
                 response.headers,
@@ -252,31 +277,19 @@ pub(super) fn property(
                 response.status_text.clone(),
                 response.used,
             )
-        })?;
-    match key {
-        "body" => Some(FetchProperty::Value(body_object)),
-        "bodyUsed" => Some(FetchProperty::Value(value::encode_bool(used))),
-        "headers" => Some(FetchProperty::Value(headers)),
-        "ok" => Some(FetchProperty::Value(value::encode_bool(
-            (200..=299).contains(&status),
-        ))),
-        "status" => Some(FetchProperty::Value(value::encode_f64(f64::from(status)))),
-        "statusText" => state
+        })
+    else {
+        return super::super::fail_dispatch(ctx);
+    };
+    match getter {
+        ResponseGetter::Body => body_object,
+        ResponseGetter::BodyUsed => value::encode_bool(used),
+        ResponseGetter::Headers => headers,
+        ResponseGetter::Ok => value::encode_bool((200..=299).contains(&status)),
+        ResponseGetter::Status => value::encode_f64(f64::from(status)),
+        ResponseGetter::StatusText => state
             .intern_text(status_text, value::TAG_STRING)
-            .map(FetchProperty::Value),
-        "arrayBuffer" => Some(FetchProperty::Callable(FetchCallable::Response(
-            handle,
-            ResponseMethod::ArrayBuffer,
-        ))),
-        "clone" => Some(FetchProperty::Callable(FetchCallable::Response(
-            handle,
-            ResponseMethod::Clone,
-        ))),
-        "text" => Some(FetchProperty::Callable(FetchCallable::Response(
-            handle,
-            ResponseMethod::Text,
-        ))),
-        _ => None,
+            .unwrap_or_else(|| super::super::fail_dispatch(ctx)),
     }
 }
 
@@ -286,7 +299,7 @@ pub(super) fn call(
     handle: u32,
     method: ResponseMethod,
 ) -> i64 {
-    let Some(response) = state.fetch.responses.get(handle as usize).cloned() else {
+    let Some(response) = state.fetch.responses.get(handle).cloned() else {
         return super::super::fail_dispatch(ctx);
     };
     if response.used {
@@ -304,6 +317,7 @@ pub(super) fn call(
                 ctx,
                 state,
                 ResponseState {
+                    object: value::encode_undefined(),
                     headers,
                     body_object: value::encode_null(),
                     ..response
@@ -324,7 +338,7 @@ fn consume_body(
     response: ResponseState,
     method: ResponseMethod,
 ) -> i64 {
-    if let Some(response) = state.fetch.responses.get_mut(handle as usize) {
+    if let Some(response) = state.fetch.responses.get_mut(handle) {
         response.used = true;
     }
     complete_timing(ctx, state, handle);
@@ -353,7 +367,7 @@ pub(super) fn complete_timing(
     let Some(timing) = state
         .fetch
         .responses
-        .get(handle as usize)
+        .get(handle)
         .and_then(|response| response.timing.clone())
     else {
         return;

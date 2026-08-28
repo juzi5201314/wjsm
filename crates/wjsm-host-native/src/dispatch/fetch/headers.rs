@@ -1,7 +1,7 @@
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty, HeadersMethod};
+use super::{FetchObjectKind, HeadersMethod};
 use crate::NativeAgentState;
 
 pub(super) struct HeadersState {
@@ -45,7 +45,7 @@ pub(super) fn clone_headers(
         .objects
         .get(&value::decode_handle(headers))
         .and_then(|kind| match kind {
-            FetchObjectKind::Headers(handle) => state.fetch.headers.get(*handle as usize),
+            FetchObjectKind::Headers(handle) => state.fetch.headers.get(*handle),
             _ => None,
         })
         .map(|headers| headers.entries.clone())
@@ -60,8 +60,7 @@ fn create(state: &mut NativeAgentState, entries: Vec<(String, Vec<String>)>) -> 
     state
         .set_web_instance_prototype(object, wjsm_ir::Builtin::HeadersConstructor)
         .ok()?;
-    let handle = u32::try_from(state.fetch.headers.len()).ok()?;
-    state.fetch.headers.push(HeadersState { entries });
+    let handle = state.fetch.headers.insert(HeadersState { entries })?;
     super::register_object(state, object, FetchObjectKind::Headers(handle));
     Some(object)
 }
@@ -102,7 +101,7 @@ fn collect_entries(
         .objects
         .get(&value::decode_handle(init))
         .and_then(|kind| match kind {
-            FetchObjectKind::Headers(handle) => state.fetch.headers.get(*handle as usize),
+            FetchObjectKind::Headers(handle) => state.fetch.headers.get(*handle),
             _ => None,
         })
         .map(|headers| headers.entries.clone())
@@ -186,21 +185,6 @@ fn collect_sequence(
     Ok(entries)
 }
 
-pub(super) fn property(state: &NativeAgentState, handle: u32, key: &str) -> Option<FetchProperty> {
-    state.fetch.headers.get(handle as usize)?;
-    let method = match key {
-        "append" => HeadersMethod::Append,
-        "delete" => HeadersMethod::Delete,
-        "get" => HeadersMethod::Get,
-        "has" => HeadersMethod::Has,
-        "set" => HeadersMethod::Set,
-        _ => return None,
-    };
-    Some(FetchProperty::Callable(FetchCallable::Headers(
-        handle, method,
-    )))
-}
-
 pub(super) fn call(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -218,14 +202,14 @@ pub(super) fn call(
     };
     match method {
         HeadersMethod::Delete => {
-            let Some(headers) = state.fetch.headers.get_mut(handle as usize) else {
+            let Some(headers) = state.fetch.headers.get_mut(handle) else {
                 return super::super::fail_dispatch(ctx);
             };
             headers.entries.retain(|(stored, _)| stored != &name);
             value::encode_undefined()
         }
         HeadersMethod::Get => {
-            let Some(headers) = state.fetch.headers.get(handle as usize) else {
+            let Some(headers) = state.fetch.headers.get(handle) else {
                 return super::super::fail_dispatch(ctx);
             };
             let Some((_, values)) = headers.entries.iter().find(|(stored, _)| stored == &name)
@@ -237,13 +221,13 @@ pub(super) fn call(
             };
             stored
         }
-        HeadersMethod::Has => value::encode_bool(
-            state
-                .fetch
-                .headers
-                .get(handle as usize)
-                .is_some_and(|headers| headers.entries.iter().any(|(stored, _)| stored == &name)),
-        ),
+        HeadersMethod::Has => {
+            value::encode_bool(
+                state.fetch.headers.get(handle).is_some_and(|headers| {
+                    headers.entries.iter().any(|(stored, _)| stored == &name)
+                }),
+            )
+        }
         HeadersMethod::Append | HeadersMethod::Set => {
             let raw = args
                 .get(1)
@@ -253,7 +237,7 @@ pub(super) fn call(
             let Some(stored) = normalize_value(&raw) else {
                 return super::type_error(ctx, state, "invalid header value");
             };
-            let Some(headers) = state.fetch.headers.get_mut(handle as usize) else {
+            let Some(headers) = state.fetch.headers.get_mut(handle) else {
                 return super::super::fail_dispatch(ctx);
             };
             if method == HeadersMethod::Set {

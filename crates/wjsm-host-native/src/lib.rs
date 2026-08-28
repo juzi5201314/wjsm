@@ -32,6 +32,7 @@ mod gc;
 mod inspector;
 mod native_exec;
 mod side_tables;
+mod slot_table;
 mod snapshot;
 mod specialization;
 
@@ -60,6 +61,10 @@ const DEFAULT_CALL_ARENA_SLOTS: usize = 64 * 1024;
 const FIRST_USER_SYMBOL_HANDLE: u32 = wjsm_ir::wk_symbol::UNSCOPABLES + 1;
 const LATIN1_CHAR_COUNT: usize = 256;
 const DEFAULT_MAX_HEAP_BYTES: u64 = 64 * 1024 * 1024;
+/// 字符串去重表（`string_ids`）的清扫水位基线。intern 路径只增不减，
+/// 表长触达水位即借 `poll_gc` 强制一次全量收集清扫，收集后按存活量
+/// 重算水位，保证长跑进程的表尺寸与堆内 interned 字符串有界（issue #365）。
+const STRING_TABLE_SWEEP_BASE_LEN: usize = 8 * 1024;
 const OUT_OF_MEMORY_MESSAGE: &str = "JavaScript heap out of memory";
 const MAX_JS_CALL_DEPTH: u32 = 1024;
 pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32
@@ -67,6 +72,15 @@ pub(crate) const ASSIGNED_PROPERTY_FLAGS: u32 = wjsm_ir::constants::FLAG_ENUMERA
     | wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const BUILTIN_PROTOTYPE_PROPERTY_FLAGS: u32 =
     wjsm_ir::constants::FLAG_CONFIGURABLE as u32 | wjsm_ir::constants::FLAG_WRITABLE as u32;
+/// Web IDL 常规操作（方法）在接口 prototype 上的属性描述符：
+/// { writable: true, enumerable: true, configurable: true }。
+pub(crate) const WEB_IDL_METHOD_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32
+    | wjsm_ir::constants::FLAG_ENUMERABLE as u32
+    | wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
+/// Web IDL attribute 访问器在接口 prototype 上的属性描述符：
+/// { enumerable: true, configurable: true }。
+pub(crate) const WEB_IDL_ACCESSOR_FLAGS: u32 =
+    wjsm_ir::constants::FLAG_ENUMERABLE as u32 | wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 pub(crate) const FUNCTION_PROTOTYPE_FLAGS: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
 pub(crate) const FUNCTION_METADATA_FLAGS: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
 
@@ -269,6 +283,8 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::TimerConstructor(true) => Some(("Immediate", 0)),
         NativeCallableKind::TimerConstructor(false) => Some(("Timeout", 0)),
         NativeCallableKind::Gc => Some(("gc", 0)),
+        // @@species 访问器 getter 的规范函数名（§23.1.2.5 步骤说明）。
+        NativeCallableKind::SpeciesGetter => Some(("get [Symbol.species]", 0)),
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
@@ -276,8 +292,26 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::ProcessCpuUsage => Some(("cpuUsage", 1)),
         NativeCallableKind::Intl(kind) => dispatch::intl::metadata(kind),
         NativeCallableKind::DateMethod(method) => dispatch::date::method_metadata(method),
+        NativeCallableKind::Fetch(callable) => dispatch::fetch::metadata(callable),
+        NativeCallableKind::Stream(callable) => dispatch::streams::metadata(callable),
         _ => None,
     }
+}
+
+/// Array 构造分派的 newTarget 归一：当前激活帧的 new.target 与被调构造器
+/// 相同（普通 `new Array(..)` / 无 new 调用）时归一为 undefined 走缺省原型，
+/// 仅类 extends Array 的 super() 与 Reflect.construct 显式 newTarget 需要
+/// 读取其 `prototype` 覆盖实例原型。
+fn array_construct_new_target(state: &NativeAgentState, callee: i64) -> i64 {
+    state
+        .activations
+        .last()
+        .map(|activation| activation.new_target)
+        .filter(|target| {
+            !value::is_undefined(*target)
+                && value::strip_gc_color(*target) != value::strip_gc_color(callee)
+        })
+        .unwrap_or_else(value::encode_undefined)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -634,6 +668,9 @@ enum NativeCallableKind {
     SetImmediate,
     TimerConstructor(bool),
     Gc,
+    /// 内建构造器的 `get [Symbol.species]` 访问器（§23.1.2.5 等）：返回 this，
+    /// 子类经静态原型链继承后取回子类自身。所有安装点共享同一实例。
+    SpeciesGetter,
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
@@ -1028,6 +1065,10 @@ struct NativeAgentState {
     /// 各 realm（全局对象句柄）的全局环境记录：脚本级词法绑定 + [[VarNames]]。
     global_env_records: HashMap<u32, dispatch::global_env::GlobalEnvRecord>,
     string_ids: HashMap<(u32, u32), u32>,
+    /// `string_ids` 的清扫水位：表长触达该值即在下一次 `poll_gc` 强制全量
+    /// 收集；全量清扫后按存活量重算为 `max(基线, 2×存活)`，避免存活集大的
+    /// 程序反复触发全量收集。
+    string_table_sweep_watermark: usize,
     /// 码元值是密集的 `0..=255`，JIT 按值直接索引；固定数组避免热路径哈希与分配。
     latin1_char_strings: Box<[i64; LATIN1_CHAR_COUNT]>,
     activations: Vec<NativeActivation>,
@@ -1273,6 +1314,7 @@ impl NativeAgentState {
             scope_records: HashMap::new(),
             global_env_records: HashMap::new(),
             string_ids: HashMap::new(),
+            string_table_sweep_watermark: STRING_TABLE_SWEEP_BASE_LEN,
             latin1_char_strings: Box::new([value::encode_undefined(); LATIN1_CHAR_COUNT]),
             activations: Vec::new(),
             maps: HashMap::new(),
@@ -1605,6 +1647,7 @@ impl NativeAgentState {
         self.array_properties.clear();
         self.array_property_order.clear();
         self.string_ids.clear();
+        self.string_table_sweep_watermark = STRING_TABLE_SWEEP_BASE_LEN;
         self.latin1_char_strings.fill(value::encode_undefined());
         self.array_accessors.clear();
         self.array_property_flags.clear();
@@ -2435,12 +2478,7 @@ impl NativeAgentState {
             };
         }
         if let Some(property) = dispatch::fetch::property(self, receiver, &key) {
-            return match property {
-                dispatch::fetch::FetchProperty::Callable(callable) => {
-                    self.native_callable(NativeCallableKind::Fetch(callable))
-                }
-                dispatch::fetch::FetchProperty::Value(value) => Some(value),
-            };
+            return Some(property);
         }
         if let Some(property) = dispatch::streams::property(self, receiver, &key) {
             return match property {
@@ -2842,6 +2880,8 @@ impl NativeAgentState {
                 .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
             self.install_prototype_constructor(prototype, constructor)
                 .ok_or(HeapAccessV2Error::AddressOverflow)?;
+            self.install_species_accessor(constructor)
+                .ok_or(HeapAccessV2Error::AddressOverflow)?;
             self.array_constructor = Some(constructor);
         }
         if self.regexp_prototype.is_none() {
@@ -3137,7 +3177,23 @@ impl NativeAgentState {
         self.array_prototype = Some(prototype);
         self.array_constructor = Some(constructor);
         self.install_prototype_constructor(prototype, constructor)?;
+        self.install_species_accessor(constructor)?;
         Some(constructor)
+    }
+
+    /// 在构造器上安装 @@species 访问器属性（§23.1.2.5 get Array
+    /// [ %Symbol.species% ] 等）：getter 为共享的 SpeciesGetter（返回 this，
+    /// 子类经静态原型链继承取回子类自身），无 setter，
+    /// { enumerable: false, configurable: true }。
+    fn install_species_accessor(&mut self, constructor: i64) -> Option<()> {
+        let getter = self.native_callable(NativeCallableKind::SpeciesGetter)?;
+        let key = PropertyKey::symbol(wjsm_ir::wk_symbol::SPECIES);
+        let constructor = value::strip_gc_color(constructor);
+        self.callable_accessors
+            .insert((constructor, key), (getter, value::encode_undefined()));
+        self.callable_property_flags
+            .insert((constructor, key), FUNCTION_METADATA_FLAGS);
+        Some(())
     }
 
     fn ensure_error_prototype(&mut self, name: &str) -> Option<i64> {
@@ -3530,6 +3586,7 @@ impl NativeAgentState {
             | NativeCallableKind::ProcessNextTick
             | NativeCallableKind::ProcessOn
             | NativeCallableKind::Gc
+            | NativeCallableKind::SpeciesGetter
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
@@ -4914,8 +4971,9 @@ impl NativeAgentState {
     }
 
     /// fetch / Streams / AbortController 构造器的 `prototype` 对象：懒创建并
-    /// 缓存，仅安装不可枚举 `constructor` 数据属性。实例方法仍经侧表虚拟属性
-    /// 解析，此对象的职责是承载 instanceof 的原型链身份。
+    /// 缓存，安装不可枚举 `constructor` 数据属性与已实现的方法/访问器
+    ///（Web IDL 描述符，按实际 this 分派），承载 instanceof 的原型链身份
+    /// 与实例方法的共享身份。
     fn ensure_web_prototype(&mut self, constructor: i64, builtin: wjsm_ir::Builtin) -> Option<i64> {
         if let Some(prototype) = self.web_prototypes.get(&builtin).copied() {
             return Some(prototype);
@@ -4932,8 +4990,66 @@ impl NativeAgentState {
                 BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
             )
             .ok()?;
+        // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会
+        // 回收尚未挂满成员的 prototype 对象。
         self.web_prototypes.insert(builtin, prototype);
+        dispatch::fetch::install_prototype_members(self, prototype, builtin)?;
+        dispatch::streams::install_prototype_members(self, prototype, builtin)?;
         Some(prototype)
+    }
+
+    /// 把方法可调用值安装为 prototype 的自有数据属性（Web IDL 方法描述符），
+    /// 并显式挂接 %Function.prototype% 使其原型链与普通内建函数一致。
+    pub(crate) fn install_web_prototype_method(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        kind: NativeCallableKind,
+    ) -> Option<()> {
+        let callable = self.native_callable(kind)?;
+        self.attach_function_prototype(callable);
+        let key = self.intern_property_string(name.to_owned().into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                key,
+                callable as u64,
+                WEB_IDL_METHOD_FLAGS,
+            )
+            .ok()
+    }
+
+    /// 把 getter 可调用值安装为 prototype 的自有访问器属性（Web IDL
+    /// readonly attribute 描述符，无 setter）。
+    pub(crate) fn install_web_prototype_getter(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        kind: NativeCallableKind,
+    ) -> Option<()> {
+        let getter = self.native_callable(kind)?;
+        self.attach_function_prototype(getter);
+        let key = self.intern_property_string(name.to_owned().into())?;
+        self.gc
+            .heap()
+            .define_accessor_property_with_flags(
+                value::decode_handle(prototype),
+                key,
+                getter as u64,
+                value::encode_undefined() as u64,
+                WEB_IDL_ACCESSOR_FLAGS,
+            )
+            .ok()
+    }
+
+    /// 给宿主合成的可调用值挂显式 [[Prototype]] = %Function.prototype%。
+    fn attach_function_prototype(&mut self, callable: i64) {
+        if let Some(prototype) = self.native_callable(NativeCallableKind::FunctionPrototype) {
+            self.callable_prototypes
+                .entry(callable)
+                .or_insert(prototype);
+        }
     }
 
     /// builtin 是否为 fetch / Streams / AbortController 家族的全局构造器
@@ -5117,6 +5233,7 @@ impl NativeAgentState {
             let length = self.gc.heap().string_length(handle)?;
             self.string_ids.insert((hash, length), handle);
         }
+        self.finish_string_table_sweep();
         Ok(())
     }
 
@@ -5216,6 +5333,15 @@ impl NativeAgentState {
         });
     }
 
+    /// 全量清扫后收尾：按存活量重算水位并收缩表容量。容量下界取水位，
+    /// 避免下一轮 intern 立即触发再散列；峰值后的多余容量随之归还，
+    /// 长跑进程的 RSS 不会停留在历史峰值。
+    pub(crate) fn finish_string_table_sweep(&mut self) {
+        self.string_table_sweep_watermark =
+            STRING_TABLE_SWEEP_BASE_LEN.max(self.string_ids.len().saturating_mul(2));
+        self.string_ids.shrink_to(self.string_table_sweep_watermark);
+    }
+
     fn encode_inline_ascii_units(units: &[u16]) -> Option<i64> {
         if units.len() > value::INLINE_STRING_MAX_LEN {
             return None;
@@ -5240,6 +5366,19 @@ impl NativeAgentState {
         }
         let units = text.encode_utf16().collect::<Vec<_>>();
         self.publish_string_units(&units, tag, true)
+    }
+
+    /// 短命结果文本（regex match 文本、捕获组值等）不进 `string_ids` 去重表：
+    /// 匹配文本通常一次性使用，入表只会推高清扫水位并把摘除成本转嫁给 GC。
+    /// 内容相同的字符串若后续用作属性键，会在 `intern_property_string` 合流到
+    /// 同一 interned 句柄，语义不受影响。
+    fn publish_transient_text(&mut self, text: &str) -> Option<i64> {
+        if let Some(encoded) = value::encode_inline_ascii(text.as_bytes()) {
+            self.gc.record_inline_string();
+            return Some(encoded);
+        }
+        let units = text.encode_utf16().collect::<Vec<_>>();
+        self.publish_string_units(&units, value::TAG_STRING, false)
     }
 
     /// 去重命中时复用既有句柄；键为（内容哈希, UTF-16 长度），同一内容无论
@@ -5838,6 +5977,18 @@ impl NativeAgentState {
 
     fn poll_gc(&mut self, ctx: &mut NativeVmContext) -> Result<bool, NativeRuntimeError> {
         let action = self.gc.safepoint_action();
+        // 字符串去重表触水位：pacing director 不承诺及时开启周期（intern 密集
+        // 的负载可能整轮只跑一个周期），这里直接同步全量收集，`finish_gc_cycle`
+        // 会清扫 `string_ids` 并按存活量重算水位，保证表与堆内 interned
+        // 字符串在长跑进程中有界。
+        if matches!(action, wjsm_gc::GcSafepointAction::Idle)
+            && self.string_ids.len() >= self.string_table_sweep_watermark
+        {
+            // 老年代并发周期可长期在飞（action 仍为 Idle），collect_full 自会
+            // 先驱动在飞周期收敛再做全量收集，无需等待其自然结束。
+            self.collect_garbage(ctx)?;
+            return Ok(true);
+        }
         let snapshot = if let wjsm_gc::GcSafepointAction::PublishRoots { epoch } = action {
             self.gc.flush_native_tlab(ctx)?;
             let frame_roots = native_root_values(ctx)?;
@@ -5902,6 +6053,11 @@ impl NativeAgentState {
             .retain(|handle, _| is_live(handle));
         self.promise_reactions.retain(|handle, _| is_live(handle));
         self.intl.slots.retain(|handle, _| is_live(handle));
+        // Web 宿主侧表：死包装对象的登记项与槽位一并释放，槽位复用不继承旧
+        // 品牌。先清 streams 再清 fetch——response 槽是否可释放取决于清扫后
+        // 是否仍有存活 body 流引用它。
+        dispatch::streams::sweep_retired(&mut self.streams, retired);
+        dispatch::fetch::sweep_retired(&mut self.fetch, &self.streams, retired);
     }
     fn drain_gc_cycle(&mut self, ctx: &mut NativeVmContext) -> Result<(), NativeRuntimeError> {
         let mut backoff = Backoff::new();
@@ -6123,7 +6279,7 @@ unsafe extern "C" fn native_callable_call(
             }
         }
         NativeCallableKind::Fetch(callable) => {
-            dispatch::fetch::call(ctx, state, callable, &arguments)
+            dispatch::fetch::call(ctx, state, callable, this_value, &arguments)
         }
         NativeCallableKind::WebEncoding(callable) => {
             dispatch::web_encoding::call(ctx, state, callable, this_value, &arguments)
@@ -6131,14 +6287,18 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::Intl(callable) => {
             dispatch::intl::call(ctx, state, callable, this_value, &arguments)
         }
-        NativeCallableKind::ArrayConstructor => dispatch::construct_array(ctx, state, &arguments),
+        NativeCallableKind::ArrayConstructor => {
+            let new_target = array_construct_new_target(state, callee);
+            dispatch::construct_array(ctx, state, &arguments, new_target)
+        }
         NativeCallableKind::ObjectConstructor => dispatch::construct_object(ctx, state, &arguments),
         NativeCallableKind::RealmArrayConstructor(context) => {
+            let new_target = array_construct_new_target(state, callee);
             let previous = state.array_prototype;
             if let Some(prototype) = dispatch::node_vm::array_prototype_for_handle(state, context) {
                 state.array_prototype = Some(prototype);
             }
-            let result = dispatch::construct_array(ctx, state, &arguments);
+            let result = dispatch::construct_array(ctx, state, &arguments, new_target);
             state.array_prototype = previous;
             result
         }
@@ -6350,7 +6510,7 @@ unsafe extern "C" fn native_callable_call(
                 .unwrap_or_else(|| dispatch::fail_dispatch(ctx))
         }
         NativeCallableKind::Stream(callable) => {
-            dispatch::streams::call(ctx, state, callable, &arguments)
+            dispatch::streams::call(ctx, state, callable, this_value, &arguments)
         }
         NativeCallableKind::ProcessOn => {
             dispatch::node_child_process::process_on(ctx, state, this_value, &arguments)
@@ -6371,6 +6531,8 @@ unsafe extern "C" fn native_callable_call(
             result.unwrap_or_else(value::encode_undefined)
         }
         NativeCallableKind::FunctionPrototype => value::encode_undefined(),
+        // `get [Symbol.species]` 恒返回 this（§23.1.2.5）。
+        NativeCallableKind::SpeciesGetter => this_value,
         NativeCallableKind::TimerConstructor(_) => this_value,
         NativeCallableKind::SetImmediate => {
             let Some(callback) = arguments
@@ -6919,6 +7081,10 @@ impl NativeRuntime {
             live_strings: self.state.string_ids.len(),
             string_ids: self.state.string_ids.len(),
             scope_records: self.state.scope_records.len(),
+            fetch_objects: self.state.fetch.live_object_count(),
+            fetch_slots: self.state.fetch.live_slot_count(),
+            stream_objects: self.state.streams.live_object_count(),
+            stream_slots: self.state.streams.live_slot_count(),
         }
     }
 

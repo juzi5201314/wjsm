@@ -519,11 +519,11 @@ module {
       %73 = call builtin.exception_value(%71)
       throw %73
     bb32:
-      %78 = call builtin.array.is_array(%51)
+      %78 = call builtin.array.species_default(%51)
       branch %78, bb34, bb33
     bb33:
       %76 = call builtin.array.map(%51, %62)
-      jump bb43
+      jump bb45
     bb34:
       %79 = const c296
       %80 = get_prop %51, %79
@@ -533,43 +533,49 @@ module {
       %87 = call builtin.array.allocate(%80)
       jump bb35
     bb35:
-      %88 = phi [(bb34, %81), (bb41, %77)]
+      %88 = phi [(bb34, %81), (bb43, %77)]
       %89 = call builtin.abstract_compare(%88, %80, %86, %86)
-      branch %89, bb36, bb42
+      branch %89, bb36, bb44
     bb36:
       %90 = call builtin.array.has_element(%51, %88)
-      branch %90, bb37, bb39
+      %91 = is_exception %90
+      branch %91, bb38, bb37
     bb37:
-      %91 = get_elem %51, %88
-      %96 = const c0
-      jump bb46
+      branch %90, bb39, bb41
     bb38:
-      %94 = set_elem %87, %88, %99
-      jump bb41
+      %92 = call builtin.exception_value(%90)
+      throw %92
     bb39:
-      jump bb41
+      %93 = get_elem %51, %88
+      %98 = const c0
+      jump bb48
     bb40:
-      %95 = call builtin.exception_value(%99)
-      throw %95
+      %96 = set_elem %87, %88, %101
+      jump bb43
     bb41:
+      jump bb43
+    bb42:
+      %97 = call builtin.exception_value(%101)
+      throw %97
+    bb43:
       %77 = add %88, %82
       jump bb35
-    bb42:
-      jump bb43
-    bb43:
-      %63 = phi [(bb33, %76), (bb42, %87)]
-      jump bb44
     bb44:
+      jump bb45
+    bb45:
+      %63 = phi [(bb33, %76), (bb44, %87)]
+      jump bb46
+    bb46:
       %64 = is_exception %63
       branch %64, bb27, bb26
-    bb45:
-      %93 = is_exception %99
-      branch %93, bb40, bb38
-    bb46:
-      %97 = const c146
-      %99 = call %91, this=%97
-      store var $16.read, %96
-      jump bb45
+    bb47:
+      %95 = is_exception %101
+      branch %95, bb42, bb40
+    bb48:
+      %99 = const c146
+      %101 = call %93, this=%99
+      store var $16.read, %98
+      jump bb47
 
   fn @arrow_9 [js_name ""] [js_length 0] [captures: $17.outer, $19.inner] [params: $21.$env, $21.$this] [entry=bb0]:
     bb0:
@@ -707,7 +713,7 @@ module {
       %30 = const c23
       %31 = set_prop %28, %30, %29
       store var $1.$iteration_env.0, %28
-      jump bb508
+      jump bb520
     bb1:
       %32 = load var $1.$iteration_env.0
       %33 = const c24
@@ -840,7 +846,7 @@ module {
       %100 = const c48
       branch %92, bb31, bb32
     bb31:
-      jump bb474
+      jump bb484
     bb32:
       %104 = call %99, this=%89, args=[%100]
       jump bb33
@@ -889,7 +895,7 @@ module {
       %124 = load var $0.j
       %125 = const c52
       %126 = set_prop %123, %125, %124
-      jump bb511
+      jump bb523
     bb45:
       %120 = call builtin.exception_value(%118)
       throw %120
@@ -1047,7 +1053,7 @@ module {
       %201 = const c78
       branch %193, bb84, bb85
     bb84:
-      jump bb461
+      jump bb469
     bb85:
       %205 = call %200, this=%190, args=[%201]
       jump bb86
@@ -1250,7 +1256,7 @@ module {
       %302 = load var $0.closureWrite
       %303 = const c106
       %304 = set_prop %301, %303, %302
-      jump bb510
+      jump bb522
     bb136:
       %299 = call builtin.exception_value(%297)
       throw %299
@@ -1262,7 +1268,7 @@ module {
       branch %308, bb140, bb141
     bb138:
       %324 = load var $0.$shared_env
-      jump bb500
+      jump bb512
     bb139:
       %329 = const c117
       %330 = const c118
@@ -1436,7 +1442,7 @@ module {
       %399 = const c161
       %400 = set_prop %397, %399, %398
       store var $17.$iteration_env.1, %397
-      jump bb512
+      jump bb524
     bb183:
       %392 = call builtin.exception_value(%390)
       throw %392
@@ -1460,7 +1466,7 @@ module {
       %416 = const c167
       %417 = set_prop %414, %416, %415
       store var $19.$iteration_env.2, %414
-      jump bb509
+      jump bb521
     bb186:
       %459 = load var $17.$iteration_env.1
       %460 = load var $0.$shared_env
@@ -1638,7 +1644,7 @@ module {
       %504 = const c198
       branch %496, bb227, bb228
     bb227:
-      jump bb448
+      jump bb454
     bb228:
       %508 = call %503, this=%493, args=[%504]
       jump bb229
@@ -1839,7 +1845,7 @@ module {
       %602 = load var $0.nonLoopValue
       %603 = const c225
       %604 = set_prop %601, %603, %602
-      jump bb507
+      jump bb519
     bb278:
       %597 = call builtin.exception_value(%595)
       throw %597
@@ -1944,7 +1950,7 @@ module {
       %656 = const c246
       branch %648, bb306, bb307
     bb306:
-      jump bb435
+      jump bb439
     bb307:
       %660 = call %655, this=%645, args=[%656]
       jump bb308
@@ -1991,7 +1997,7 @@ module {
       %679 = const c251
       %680 = init_object_literal(c249, values=[%678, %679])
       %681 = call builtin.enumerator.from(%680)
-      jump bb505
+      jump bb517
     bb320:
       %676 = call builtin.exception_value(%674)
       throw %676
@@ -2105,7 +2111,7 @@ module {
       %737 = const c270
       branch %729, bb346, bb347
     bb346:
-      jump bb422
+      jump bb424
     bb347:
       %741 = call %736, this=%726, args=[%737]
       jump bb348
@@ -2167,7 +2173,7 @@ module {
       %760 = call builtin.exception_value(%758)
       throw %760
     bb363:
-      jump bb506
+      jump bb518
     bb364:
       %767 = call builtin.exception_value(%765)
       throw %767
@@ -2340,11 +2346,11 @@ module {
       %848 = call builtin.exception_value(%846)
       throw %848
     bb409:
-      %851 = call builtin.array.is_array(%814)
+      %851 = call builtin.array.species_default(%814)
       branch %851, bb411, bb410
     bb410:
       %849 = call builtin.array.map(%814, %825)
-      jump bb420
+      jump bb422
     bb411:
       %852 = const c296
       %853 = get_prop %814, %852
@@ -2354,346 +2360,382 @@ module {
       %860 = call builtin.array.allocate(%853)
       jump bb412
     bb412:
-      %861 = phi [(bb411, %854), (bb418, %850)]
+      %861 = phi [(bb411, %854), (bb420, %850)]
       %862 = call builtin.abstract_compare(%861, %853, %859, %859)
-      branch %862, bb413, bb419
+      branch %862, bb413, bb421
     bb413:
       %863 = call builtin.array.has_element(%814, %861)
-      branch %863, bb414, bb416
+      %864 = is_exception %863
+      branch %864, bb415, bb414
     bb414:
-      %864 = get_elem %814, %861
-      %989 = const c0
-      jump bb498
+      branch %863, bb416, bb418
     bb415:
-      %867 = set_elem %860, %861, %992
-      jump bb418
+      %865 = call builtin.exception_value(%863)
+      throw %865
     bb416:
-      jump bb418
+      %866 = get_elem %814, %861
+      %1001 = const c0
+      jump bb510
     bb417:
-      %868 = call builtin.exception_value(%992)
-      throw %868
+      %869 = set_elem %860, %861, %1004
+      jump bb420
     bb418:
+      jump bb420
+    bb419:
+      %870 = call builtin.exception_value(%1004)
+      throw %870
+    bb420:
       %850 = add %861, %855
       jump bb412
-    bb419:
-      jump bb420
-    bb420:
-      %826 = phi [(bb410, %849), (bb419, %860)]
-      jump bb421
     bb421:
+      jump bb422
+    bb422:
+      %826 = phi [(bb410, %849), (bb421, %860)]
+      jump bb423
+    bb423:
       %827 = is_exception %826
       branch %827, bb396, bb395
-    bb422:
-      %871 = call builtin.array.is_array(%726)
-      branch %871, bb424, bb423
-    bb423:
-      %869 = call builtin.array.map(%726, %737)
-      jump bb433
     bb424:
-      %872 = const c296
-      %873 = get_prop %726, %872
-      %874 = const c21
-      %875 = const c34
-      %879 = const c26
-      %880 = call builtin.array.allocate(%873)
-      jump bb425
+      %873 = call builtin.array.species_default(%726)
+      branch %873, bb426, bb425
     bb425:
-      %881 = phi [(bb424, %874), (bb431, %870)]
-      %882 = call builtin.abstract_compare(%881, %873, %879, %879)
-      branch %882, bb426, bb432
+      %871 = call builtin.array.map(%726, %737)
+      jump bb437
     bb426:
-      %883 = call builtin.array.has_element(%726, %881)
-      branch %883, bb427, bb429
+      %874 = const c296
+      %875 = get_prop %726, %874
+      %876 = const c21
+      %877 = const c34
+      %881 = const c26
+      %882 = call builtin.array.allocate(%875)
+      jump bb427
     bb427:
-      %884 = get_elem %726, %881
-      %985 = const c0
-      jump bb496
+      %883 = phi [(bb426, %876), (bb435, %872)]
+      %884 = call builtin.abstract_compare(%883, %875, %881, %881)
+      branch %884, bb428, bb436
     bb428:
-      %887 = set_elem %880, %881, %988
-      jump bb431
+      %885 = call builtin.array.has_element(%726, %883)
+      %886 = is_exception %885
+      branch %886, bb430, bb429
     bb429:
-      jump bb431
+      branch %885, bb431, bb433
     bb430:
-      %888 = call builtin.exception_value(%988)
-      throw %888
+      %887 = call builtin.exception_value(%885)
+      throw %887
     bb431:
-      %870 = add %881, %875
-      jump bb425
+      %888 = get_elem %726, %883
+      %997 = const c0
+      jump bb508
     bb432:
-      jump bb433
+      %891 = set_elem %882, %883, %1000
+      jump bb435
     bb433:
-      %738 = phi [(bb423, %869), (bb432, %880)]
-      jump bb434
+      jump bb435
     bb434:
-      %739 = is_exception %738
-      branch %739, bb350, bb349
+      %892 = call builtin.exception_value(%1000)
+      throw %892
     bb435:
-      %891 = call builtin.array.is_array(%645)
-      branch %891, bb437, bb436
+      %872 = add %883, %877
+      jump bb427
     bb436:
-      %889 = call builtin.array.map(%645, %656)
-      jump bb446
+      jump bb437
     bb437:
-      %892 = const c296
-      %893 = get_prop %645, %892
-      %894 = const c21
-      %895 = const c34
-      %899 = const c26
-      %900 = call builtin.array.allocate(%893)
+      %738 = phi [(bb425, %871), (bb436, %882)]
       jump bb438
     bb438:
-      %901 = phi [(bb437, %894), (bb444, %890)]
-      %902 = call builtin.abstract_compare(%901, %893, %899, %899)
-      branch %902, bb439, bb445
+      %739 = is_exception %738
+      branch %739, bb350, bb349
     bb439:
-      %903 = call builtin.array.has_element(%645, %901)
-      branch %903, bb440, bb442
+      %895 = call builtin.array.species_default(%645)
+      branch %895, bb441, bb440
     bb440:
-      %904 = get_elem %645, %901
-      %981 = const c0
-      jump bb494
+      %893 = call builtin.array.map(%645, %656)
+      jump bb452
     bb441:
-      %907 = set_elem %900, %901, %984
-      jump bb444
+      %896 = const c296
+      %897 = get_prop %645, %896
+      %898 = const c21
+      %899 = const c34
+      %903 = const c26
+      %904 = call builtin.array.allocate(%897)
+      jump bb442
     bb442:
-      jump bb444
+      %905 = phi [(bb441, %898), (bb450, %894)]
+      %906 = call builtin.abstract_compare(%905, %897, %903, %903)
+      branch %906, bb443, bb451
     bb443:
-      %908 = call builtin.exception_value(%984)
-      throw %908
+      %907 = call builtin.array.has_element(%645, %905)
+      %908 = is_exception %907
+      branch %908, bb445, bb444
     bb444:
-      %890 = add %901, %895
-      jump bb438
+      branch %907, bb446, bb448
     bb445:
-      jump bb446
+      %909 = call builtin.exception_value(%907)
+      throw %909
     bb446:
-      %657 = phi [(bb436, %889), (bb445, %900)]
-      jump bb447
+      %910 = get_elem %645, %905
+      %993 = const c0
+      jump bb506
     bb447:
+      %913 = set_elem %904, %905, %996
+      jump bb450
+    bb448:
+      jump bb450
+    bb449:
+      %914 = call builtin.exception_value(%996)
+      throw %914
+    bb450:
+      %894 = add %905, %899
+      jump bb442
+    bb451:
+      jump bb452
+    bb452:
+      %657 = phi [(bb440, %893), (bb451, %904)]
+      jump bb453
+    bb453:
       %658 = is_exception %657
       branch %658, bb310, bb309
-    bb448:
-      %911 = call builtin.array.is_array(%493)
-      branch %911, bb450, bb449
-    bb449:
-      %909 = call builtin.array.map(%493, %504)
-      jump bb459
-    bb450:
-      %912 = const c296
-      %913 = get_prop %493, %912
-      %914 = const c21
-      %915 = const c34
-      %919 = const c26
-      %920 = call builtin.array.allocate(%913)
-      jump bb451
-    bb451:
-      %921 = phi [(bb450, %914), (bb457, %910)]
-      %922 = call builtin.abstract_compare(%921, %913, %919, %919)
-      branch %922, bb452, bb458
-    bb452:
-      %923 = call builtin.array.has_element(%493, %921)
-      branch %923, bb453, bb455
-    bb453:
-      %924 = get_elem %493, %921
-      %977 = const c0
-      jump bb492
     bb454:
-      %927 = set_elem %920, %921, %980
-      jump bb457
+      %917 = call builtin.array.species_default(%493)
+      branch %917, bb456, bb455
     bb455:
-      jump bb457
+      %915 = call builtin.array.map(%493, %504)
+      jump bb467
     bb456:
-      %928 = call builtin.exception_value(%980)
-      throw %928
+      %918 = const c296
+      %919 = get_prop %493, %918
+      %920 = const c21
+      %921 = const c34
+      %925 = const c26
+      %926 = call builtin.array.allocate(%919)
+      jump bb457
     bb457:
-      %910 = add %921, %915
-      jump bb451
+      %927 = phi [(bb456, %920), (bb465, %916)]
+      %928 = call builtin.abstract_compare(%927, %919, %925, %925)
+      branch %928, bb458, bb466
     bb458:
-      jump bb459
+      %929 = call builtin.array.has_element(%493, %927)
+      %930 = is_exception %929
+      branch %930, bb460, bb459
     bb459:
-      %505 = phi [(bb449, %909), (bb458, %920)]
-      jump bb460
+      branch %929, bb461, bb463
     bb460:
+      %931 = call builtin.exception_value(%929)
+      throw %931
+    bb461:
+      %932 = get_elem %493, %927
+      %989 = const c0
+      jump bb504
+    bb462:
+      %935 = set_elem %926, %927, %992
+      jump bb465
+    bb463:
+      jump bb465
+    bb464:
+      %936 = call builtin.exception_value(%992)
+      throw %936
+    bb465:
+      %916 = add %927, %921
+      jump bb457
+    bb466:
+      jump bb467
+    bb467:
+      %505 = phi [(bb455, %915), (bb466, %926)]
+      jump bb468
+    bb468:
       %506 = is_exception %505
       branch %506, bb231, bb230
-    bb461:
-      %931 = call builtin.array.is_array(%190)
-      branch %931, bb463, bb462
-    bb462:
-      %929 = call builtin.array.map(%190, %201)
-      jump bb472
-    bb463:
-      %932 = const c296
-      %933 = get_prop %190, %932
-      %934 = const c21
-      %935 = const c34
-      %939 = const c26
-      %940 = call builtin.array.allocate(%933)
-      jump bb464
-    bb464:
-      %941 = phi [(bb463, %934), (bb470, %930)]
-      %942 = call builtin.abstract_compare(%941, %933, %939, %939)
-      branch %942, bb465, bb471
-    bb465:
-      %943 = call builtin.array.has_element(%190, %941)
-      branch %943, bb466, bb468
-    bb466:
-      %944 = get_elem %190, %941
-      %973 = const c0
-      jump bb490
-    bb467:
-      %947 = set_elem %940, %941, %976
-      jump bb470
-    bb468:
-      jump bb470
     bb469:
-      %948 = call builtin.exception_value(%976)
-      throw %948
+      %939 = call builtin.array.species_default(%190)
+      branch %939, bb471, bb470
     bb470:
-      %930 = add %941, %935
-      jump bb464
+      %937 = call builtin.array.map(%190, %201)
+      jump bb482
     bb471:
+      %940 = const c296
+      %941 = get_prop %190, %940
+      %942 = const c21
+      %943 = const c34
+      %947 = const c26
+      %948 = call builtin.array.allocate(%941)
       jump bb472
     bb472:
-      %202 = phi [(bb462, %929), (bb471, %940)]
-      jump bb473
+      %949 = phi [(bb471, %942), (bb480, %938)]
+      %950 = call builtin.abstract_compare(%949, %941, %947, %947)
+      branch %950, bb473, bb481
     bb473:
+      %951 = call builtin.array.has_element(%190, %949)
+      %952 = is_exception %951
+      branch %952, bb475, bb474
+    bb474:
+      branch %951, bb476, bb478
+    bb475:
+      %953 = call builtin.exception_value(%951)
+      throw %953
+    bb476:
+      %954 = get_elem %190, %949
+      %985 = const c0
+      jump bb502
+    bb477:
+      %957 = set_elem %948, %949, %988
+      jump bb480
+    bb478:
+      jump bb480
+    bb479:
+      %958 = call builtin.exception_value(%988)
+      throw %958
+    bb480:
+      %938 = add %949, %943
+      jump bb472
+    bb481:
+      jump bb482
+    bb482:
+      %202 = phi [(bb470, %937), (bb481, %948)]
+      jump bb483
+    bb483:
       %203 = is_exception %202
       branch %203, bb88, bb87
-    bb474:
-      %951 = call builtin.array.is_array(%89)
-      branch %951, bb476, bb475
-    bb475:
-      %949 = call builtin.array.map(%89, %100)
-      jump bb485
-    bb476:
-      %952 = const c296
-      %953 = get_prop %89, %952
-      %954 = const c21
-      %955 = const c34
-      %959 = const c26
-      %960 = call builtin.array.allocate(%953)
-      jump bb477
-    bb477:
-      %961 = phi [(bb476, %954), (bb483, %950)]
-      %962 = call builtin.abstract_compare(%961, %953, %959, %959)
-      branch %962, bb478, bb484
-    bb478:
-      %963 = call builtin.array.has_element(%89, %961)
-      branch %963, bb479, bb481
-    bb479:
-      %964 = get_elem %89, %961
-      %969 = const c0
-      jump bb488
-    bb480:
-      %967 = set_elem %960, %961, %972
-      jump bb483
-    bb481:
-      jump bb483
-    bb482:
-      %968 = call builtin.exception_value(%972)
-      throw %968
-    bb483:
-      %950 = add %961, %955
-      jump bb477
     bb484:
-      jump bb485
+      %961 = call builtin.array.species_default(%89)
+      branch %961, bb486, bb485
     bb485:
-      %101 = phi [(bb475, %949), (bb484, %960)]
-      jump bb486
+      %959 = call builtin.array.map(%89, %100)
+      jump bb497
     bb486:
+      %962 = const c296
+      %963 = get_prop %89, %962
+      %964 = const c21
+      %965 = const c34
+      %969 = const c26
+      %970 = call builtin.array.allocate(%963)
+      jump bb487
+    bb487:
+      %971 = phi [(bb486, %964), (bb495, %960)]
+      %972 = call builtin.abstract_compare(%971, %963, %969, %969)
+      branch %972, bb488, bb496
+    bb488:
+      %973 = call builtin.array.has_element(%89, %971)
+      %974 = is_exception %973
+      branch %974, bb490, bb489
+    bb489:
+      branch %973, bb491, bb493
+    bb490:
+      %975 = call builtin.exception_value(%973)
+      throw %975
+    bb491:
+      %976 = get_elem %89, %971
+      %981 = const c0
+      jump bb500
+    bb492:
+      %979 = set_elem %970, %971, %984
+      jump bb495
+    bb493:
+      jump bb495
+    bb494:
+      %980 = call builtin.exception_value(%984)
+      throw %980
+    bb495:
+      %960 = add %971, %965
+      jump bb487
+    bb496:
+      jump bb497
+    bb497:
+      %101 = phi [(bb485, %959), (bb496, %970)]
+      jump bb498
+    bb498:
       %102 = is_exception %101
       branch %102, bb35, bb34
-    bb487:
-      %966 = is_exception %972
-      branch %966, bb482, bb480
-    bb488:
-      %970 = const c47
-      %972 = call %964, this=%970
-      store var $4.read, %969
-      jump bb487
-    bb489:
-      %946 = is_exception %976
-      branch %946, bb469, bb467
-    bb490:
-      %974 = const c77
-      %976 = call %944, this=%974
-      store var $7.read, %973
-      jump bb489
-    bb491:
-      %926 = is_exception %980
-      branch %926, bb456, bb454
-    bb492:
-      %978 = const c197
-      %980 = call %924, this=%978
-      store var $22.read, %977
-      jump bb491
-    bb493:
-      %906 = is_exception %984
-      branch %906, bb443, bb441
-    bb494:
-      %982 = const c245
-      %984 = call %904, this=%982
-      store var $28.read, %981
-      jump bb493
-    bb495:
-      %886 = is_exception %988
-      branch %886, bb430, bb428
-    bb496:
-      %986 = const c269
-      %988 = call %884, this=%986
-      store var $32.read, %985
-      jump bb495
-    bb497:
-      %866 = is_exception %992
-      branch %866, bb417, bb415
-    bb498:
-      %990 = const c292
-      %992 = call %864, this=%990
-      store var $36.read, %989
-      jump bb497
     bb499:
-      jump bb148
+      %978 = is_exception %984
+      branch %978, bb494, bb492
     bb500:
-      %995 = const c114
-      %996 = get_prop %324, %995
-      %997 = pos %996
-      %998 = is_exception %997
-      branch %998, bb502, bb501
-    bb501:
-      %1000 = const c115
-      %1001 = add %997, %1000
-      %1002 = set_prop %324, %995, %1001
-      %1003 = is_exception %1002
-      branch %1003, bb504, bb503
-    bb502:
-      %999 = call builtin.exception_value(%997)
-      throw %999
-    bb503:
+      %982 = const c47
+      %984 = call %976, this=%982
+      store var $4.read, %981
       jump bb499
+    bb501:
+      %956 = is_exception %988
+      branch %956, bb479, bb477
+    bb502:
+      %986 = const c77
+      %988 = call %954, this=%986
+      store var $7.read, %985
+      jump bb501
+    bb503:
+      %934 = is_exception %992
+      branch %934, bb464, bb462
     bb504:
-      %1004 = call builtin.exception_value(%1002)
-      throw %1004
+      %990 = const c197
+      %992 = call %932, this=%990
+      store var $22.read, %989
+      jump bb503
     bb505:
+      %912 = is_exception %996
+      branch %912, bb449, bb447
+    bb506:
+      %994 = const c245
+      %996 = call %910, this=%994
+      store var $28.read, %993
+      jump bb505
+    bb507:
+      %890 = is_exception %1000
+      branch %890, bb434, bb432
+    bb508:
+      %998 = const c269
+      %1000 = call %888, this=%998
+      store var $32.read, %997
+      jump bb507
+    bb509:
+      %868 = is_exception %1004
+      branch %868, bb419, bb417
+    bb510:
+      %1002 = const c292
+      %1004 = call %866, this=%1002
+      store var $36.read, %1001
+      jump bb509
+    bb511:
+      jump bb148
+    bb512:
+      %1007 = const c114
+      %1008 = get_prop %324, %1007
+      %1009 = pos %1008
+      %1010 = is_exception %1009
+      branch %1010, bb514, bb513
+    bb513:
+      %1012 = const c115
+      %1013 = add %1009, %1012
+      %1014 = set_prop %324, %1007, %1013
+      %1015 = is_exception %1014
+      branch %1015, bb516, bb515
+    bb514:
+      %1011 = call builtin.exception_value(%1009)
+      throw %1011
+    bb515:
+      jump bb511
+    bb516:
+      %1016 = call builtin.exception_value(%1014)
+      throw %1016
+    bb517:
       %691 = load var $0.keys
       jump bb321
-    bb506:
+    bb518:
       %779 = load var $0.values
       jump bb365
-    bb507:
+    bb519:
       %614 = load var $0.nonLoopReads
       jump bb279
-    bb508:
+    bb520:
       %43 = load var $0.letClosures
       jump bb1
-    bb509:
+    bb521:
       jump bb193
-    bb510:
+    bb522:
       %311 = load var $0.closureWrite
       jump bb137
-    bb511:
+    bb523:
       %143 = load var $0.varClosures
       jump bb46
-    bb512:
+    bb524:
       %429 = load var $0.nestedClosures
       jump bb184
 }

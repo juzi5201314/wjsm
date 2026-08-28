@@ -1,14 +1,15 @@
 //! AbortController / AbortSignal 的宿主实现（WHATWG DOM §3.2 的已实现子集）。
 //!
-//! 控制器与 signal 是普通堆对象，身份经 fetch 侧表登记；`signal` / `abort` /
-//! `aborted` / `reason` 经虚拟属性解析。abort 后 signal 进入 aborted 状态，
-//! reason 缺省合成 name 为 `AbortError` 的错误对象（对应 Node 的
-//! `AbortError` DOMException 可观察字段）。
+//! 控制器与 signal 是普通堆对象，身份经 fetch 侧表登记；`signal` / `abort`
+//! 是 `AbortController.prototype` 的自有属性（按实际 this 分派），signal 的
+//! `aborted` / `reason` 仍经虚拟属性解析（AbortSignal 无共享 prototype）。
+//! abort 后 signal 进入 aborted 状态，reason 缺省合成 name 为 `AbortError`
+//! 的错误对象（对应 Node 的 `AbortError` DOMException 可观察字段）。
 
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::{FetchCallable, FetchObjectKind, FetchProperty};
+use super::FetchObjectKind;
 use crate::NativeAgentState;
 
 pub(super) struct AbortSignalState {
@@ -31,46 +32,31 @@ pub(super) fn construct(
     {
         return super::super::fail_dispatch(ctx);
     }
-    let Ok(signal) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
+    // signal 分配可触发 GC，此刻 controller 仅由局部值持有，必须钉扎。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(controller);
+    let signal = state.allocate_object_with_gc_retry(ctx, 2, false);
+    state.temporary_roots.truncate(initial_temp_roots);
+    let Ok(signal) = signal else {
         return super::super::fail_dispatch(ctx);
     };
-    let Ok(handle) = u32::try_from(state.fetch.abort_signals.len()) else {
-        return super::super::fail_dispatch(ctx);
-    };
-    state.fetch.abort_signals.push(AbortSignalState {
+    let Some(handle) = state.fetch.abort_signals.insert(AbortSignalState {
         object: signal,
         aborted: false,
         reason: value::encode_undefined(),
-    });
+    }) else {
+        return super::super::fail_dispatch(ctx);
+    };
     super::register_object(state, controller, FetchObjectKind::AbortController(handle));
     super::register_object(state, signal, FetchObjectKind::AbortSignal(handle));
     controller
 }
 
-pub(super) fn controller_property(
-    state: &NativeAgentState,
-    handle: u32,
-    key: &str,
-) -> Option<FetchProperty> {
-    let signal = state.fetch.abort_signals.get(handle as usize)?;
+pub(super) fn signal_property(state: &NativeAgentState, handle: u32, key: &str) -> Option<i64> {
+    let signal = state.fetch.abort_signals.get(handle)?;
     match key {
-        "signal" => Some(FetchProperty::Value(signal.object)),
-        "abort" => Some(FetchProperty::Callable(
-            FetchCallable::AbortControllerAbort(handle),
-        )),
-        _ => None,
-    }
-}
-
-pub(super) fn signal_property(
-    state: &NativeAgentState,
-    handle: u32,
-    key: &str,
-) -> Option<FetchProperty> {
-    let signal = state.fetch.abort_signals.get(handle as usize)?;
-    match key {
-        "aborted" => Some(FetchProperty::Value(value::encode_bool(signal.aborted))),
-        "reason" => Some(FetchProperty::Value(signal.reason)),
+        "aborted" => Some(value::encode_bool(signal.aborted)),
+        "reason" => Some(signal.reason),
         _ => None,
     }
 }
@@ -87,7 +73,7 @@ pub(super) fn abort(
     if state
         .fetch
         .abort_signals
-        .get(handle as usize)
+        .get(handle)
         .is_none_or(|signal| signal.aborted)
     {
         return value::encode_undefined();
@@ -109,24 +95,10 @@ pub(super) fn abort(
             reason
         }
     };
-    let Some(signal) = state.fetch.abort_signals.get_mut(handle as usize) else {
+    let Some(signal) = state.fetch.abort_signals.get_mut(handle) else {
         return super::super::fail_dispatch(ctx);
     };
     signal.aborted = true;
     signal.reason = reason;
     value::encode_undefined()
-}
-
-/// 把 abort signal 侧表持有的 JS 值（signal 对象与 reason）并入 GC 根队列：
-/// 它们经虚拟属性暴露，堆对象图上没有对应 slot，不钉扎会被误回收。
-pub(crate) fn extend_gc_roots(
-    fetch: &super::NativeFetchState,
-    roots: &mut std::collections::VecDeque<i64>,
-) {
-    for signal in &fetch.abort_signals {
-        roots.push_back(signal.object);
-        if !value::is_undefined(signal.reason) {
-            roots.push_back(signal.reason);
-        }
-    }
 }

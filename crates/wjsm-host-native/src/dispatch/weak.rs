@@ -529,6 +529,7 @@ pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcRe
     state.prune_string_ids(retired);
     if report.stats.cycle_kind == CycleKind::Full {
         state.prune_unmarked_string_ids();
+        state.finish_string_table_sweep();
     }
     if report.cleans_host_tables {
         state.sweep_host_index_tables(retired, &live);
@@ -718,9 +719,11 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
             | NativeCallableKind::PromiseReject(handle) => {
                 add(owner, value::encode_object_handle(*handle));
             }
-            NativeCallableKind::ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
+            NativeCallableKind::            ProxyCall(handle) | NativeCallableKind::ProxyConstruct(handle) => {
                 add(owner, value::encode_proxy_handle(*handle));
             }
+            // fetch/stream 方法值不再携带实例句柄（按实际 this 分派），
+            // 无须为其建钉扎边。
             _ => {}
         }
     }
@@ -770,6 +773,7 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
         }
     }
     super::streams::extend_gc_edges(&state.streams, |owner, target| add(owner, target));
+    super::fetch::extend_gc_edges(&state.fetch, |owner, target| add(owner, target));
     (edges, ephemerons)
 }
 
@@ -823,10 +827,10 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         .chain(state.next_ticks.iter())
         .chain(state.immediates.iter())
     {
-        extend_microtask_roots(&scheduled.task, queue);
+        extend_microtask_roots(state, &scheduled.task, queue);
     }
     for timer in &state.timers {
-        extend_microtask_roots(&timer.scheduled.task, queue);
+        extend_microtask_roots(state, &timer.scheduled.task, queue);
     }
     for promise in state.promises.values() {
         match promise.state {
@@ -838,7 +842,7 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
     }
     for reactions in state.promise_reactions.values() {
         for scheduled in reactions {
-            extend_reaction_roots(&scheduled.reaction, queue);
+            extend_reaction_roots(state, &scheduled.reaction, queue);
         }
     }
     for combinator in &state.promise_combinators {
@@ -927,7 +931,11 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
     }
 }
 
-fn extend_microtask_roots(task: &NativeMicrotask, queue: &mut VecDeque<i64>) {
+fn extend_microtask_roots(
+    agent: &NativeAgentState,
+    task: &NativeMicrotask,
+    queue: &mut VecDeque<i64>,
+) {
     match task {
         NativeMicrotask::Callback {
             callback,
@@ -942,7 +950,7 @@ fn extend_microtask_roots(task: &NativeMicrotask, queue: &mut VecDeque<i64>) {
         NativeMicrotask::PromiseReaction {
             reaction, value, ..
         } => {
-            extend_reaction_roots(reaction, queue);
+            extend_reaction_roots(agent, reaction, queue);
             queue.push_back(*value);
         }
         NativeMicrotask::DynamicImport { .. } => {}
@@ -960,15 +968,19 @@ fn extend_microtask_roots(task: &NativeMicrotask, queue: &mut VecDeque<i64>) {
             queue.push_back(*thenable);
             queue.push_back(*then);
         }
+        // 队列中的 stream 任务按槽位下标持有 owner，须钉扎涉及的包装对象、
+        // chunk 与 promise，防止执行前被清扫。
         NativeMicrotask::Stream(stream) => {
-            if let super::streams::StreamTask::Write { chunk, .. } = stream {
-                queue.push_back(*chunk);
-            }
+            super::streams::extend_task_roots(&agent.streams, stream, queue);
         }
     }
 }
 
-fn extend_reaction_roots(reaction: &NativePromiseReaction, queue: &mut VecDeque<i64>) {
+fn extend_reaction_roots(
+    agent: &NativeAgentState,
+    reaction: &NativePromiseReaction,
+    queue: &mut VecDeque<i64>,
+) {
     match reaction {
         NativePromiseReaction::Handler {
             on_fulfilled,
@@ -992,7 +1004,9 @@ fn extend_reaction_roots(reaction: &NativePromiseReaction, queue: &mut VecDeque<
         NativePromiseReaction::FinallyResult { original, .. } => {
             queue.push_back(*original);
         }
-        NativePromiseReaction::Stream(_) => {}
+        NativePromiseReaction::Stream(reaction) => {
+            super::streams::extend_reaction_roots(&agent.streams, *reaction, queue);
+        }
     }
 }
 

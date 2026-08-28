@@ -19,6 +19,14 @@ pub(crate) struct HostSideTableStats {
     pub live_strings: usize,
     pub string_ids: usize,
     pub scope_records: usize,
+    /// fetch 侧包装对象登记数（Headers/Request/Response/AbortController/Signal）。
+    pub fetch_objects: usize,
+    /// fetch 侧内部槽位总活数。
+    pub fetch_slots: usize,
+    /// streams 侧包装对象登记数。
+    pub stream_objects: usize,
+    /// streams 侧内部槽位总活数。
+    pub stream_slots: usize,
 }
 
 fn artifact(source: &str) -> PortableArtifact {
@@ -69,6 +77,81 @@ fn explicit_gc_waits_for_an_inflight_concurrent_cycle() {
         String::from_utf8_lossy(&runtime.take_stderr())
     );
     assert_eq!(result.unwrap().stdout, b"42\n");
+}
+
+/// issue #365：intern 路径只增不减 → 水位清扫。不调用显式 `gc()` 的唯一
+/// 字符串 churn 循环里，`string_ids` 触水位即触发全量清扫；结束时表尺寸
+/// 有界（远低于插入总量），且清扫/搬迁多轮后存活字符串内容不变。
+#[test]
+fn string_table_watermark_bounds_interned_strings_without_explicit_gc() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const keep=['alive_'+123456789, 'bravo_'+987654321]; let n=0; \
+         for(let i=0;i<60000;i++){ const s='xx'+i+'yy'; n+=s.length; } \
+         console.log(n, keep.join('|'));",
+    );
+    assert_eq!(
+        execution.stdout,
+        b"528890 alive_123456789|bravo_987654321\n"
+    );
+    let stats = runtime.host_side_table_stats();
+    assert!(
+        stats.string_ids < 16384,
+        "水位清扫后 string_ids 应远低于 6 万插入量：{}",
+        stats.string_ids
+    );
+    runtime.collect_garbage_now().expect("GC should run");
+    let stats = runtime.host_side_table_stats();
+    assert!(
+        stats.string_ids < 4096,
+        "全量 GC 后 string_ids 应回落到存活集：{}",
+        stats.string_ids
+    );
+}
+
+/// issue #365：regex match 文本/捕获组值是短命结果，走免入表路径，
+/// `string_ids` 不随匹配数量增长（长 subject 字面量超过 64 码元去重上限，
+/// 本身也不入表）。
+#[test]
+fn regexp_match_texts_do_not_enter_string_table() {
+    let tokens = (0..40)
+        .map(|i| format!("AA{}BB", 9_000_000 + i))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let source = format!(
+        "const s='{tokens}'; const parts=s.match(/AA\\d+BB/g); \
+         const m=/AA(\\d+)BB/.exec('ccAA12345678BBcc'); \
+         console.log(parts.length, parts[0], parts[39], m[0], m[1], m.index);"
+    );
+    let mut runtime = small_heap_runtime();
+    let before = runtime.host_side_table_stats().string_ids;
+    let execution = execute_source_with_runtime(&mut runtime, &source);
+    assert_eq!(
+        execution.stdout,
+        b"40 AA9000000BB AA9000039BB AA12345678BB 12345678 2\n"
+    );
+    let after = runtime.host_side_table_stats().string_ids;
+    assert!(
+        after <= before + 8,
+        "40 个 match 文本 + exec 捕获组不应入表：before={before} after={after}"
+    );
+}
+
+/// 回归：动态加法 lowering 的兄弟块（string 快路径 / dispatcher 慢路径）曾共用
+/// `staged_dirty`，先 lower 的兄弟块清掉 dirty 后，慢路径带着陈旧 root frame 进
+/// 宿主。intern 安全点此刻开启的并发 Young 标记看不到仅存于 SSA、正在构造的
+/// 数组，随后的清扫把活数组误判为死（表现为 keep[0] 变成垃圾值或
+/// InternalInvariant）。小堆下 pacing 恰好在 `'alive_'+N` 的 intern 处开启
+/// Young 周期，确定性复现。
+#[test]
+fn array_under_construction_survives_mark_started_mid_expression() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const keep=['alive_'+123456789]; gc(); console.log(keep[0]);",
+    );
+    assert_eq!(execution.stdout, b"alive_123456789\n");
 }
 
 #[test]
@@ -153,4 +236,119 @@ fn reused_closure_slot_does_not_keep_old_environment() {
         "const live=(x)=>()=>x; const f=live(7); for(let i=0;i<20000;i++){ live(i)(); } console.log(f());",
     );
     assert_eq!(execution.stdout, b"7\n");
+}
+
+/// FIX-01 复现：fetch 侧表登记项曾从不清理，死 Headers/AbortController 的堆
+/// 句柄复用后新普通对象错误继承旧品牌（obj.append/obj.abort 变可调用）。
+/// 现死 owner 由 sweep 摘除登记并释放槽位。
+#[test]
+fn dead_fetch_wrappers_are_swept_and_reused_handles_lose_the_brand() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "function burst(){ const h=new Headers(); h.append('x','1'); \
+           const c=new AbortController(); c.abort('bye'); } \
+         burst(); gc(); \
+         let polluted=0; \
+         for(let i=0;i<64;i++){ const o={v:i}; \
+           if(o.append!==undefined||o.abort!==undefined||o.signal!==undefined) polluted++; } \
+         console.log('polluted', polluted);",
+    );
+    assert_eq!(execution.stdout, b"polluted 0\n");
+    runtime.collect_garbage_now().expect("GC should run");
+    let stats = runtime.host_side_table_stats();
+    assert_eq!(stats.fetch_objects, 0, "死 fetch 登记项应被清扫：{stats:?}");
+    assert_eq!(stats.fetch_slots, 0, "死 fetch 槽位应被释放：{stats:?}");
+}
+
+/// 活 fetch owner 的内部引用（headers 条目、signal reason 对象）须在 GC 后
+/// 保持可用：宿主边图按「owner 存活 ⇒ 内部引用存活」保活。
+#[test]
+fn live_fetch_wrappers_keep_internal_references_across_gc() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const h=new Headers(); h.set('content-type','text/'+'plain'); \
+         const c=new AbortController(); c.abort({code:40+2}); \
+         gc(); \
+         h.append('x-a','1'); \
+         console.log(h.get('content-type'), h.get('x-a'), c.signal.aborted, c.signal.reason.code);",
+    );
+    assert_eq!(execution.stdout, b"text/plain 1 true 42\n");
+    let stats = runtime.host_side_table_stats();
+    assert!(
+        stats.fetch_objects >= 3,
+        "存活 Headers/AbortController/signal 登记项不应被清扫：{stats:?}"
+    );
+}
+
+/// streams 侧表曾把全部包装对象永久根化（只增不减）。现死 wrapper 由
+/// sweep 释放槽位，复用句柄不继承 stream 品牌。
+#[test]
+fn dead_stream_wrappers_are_swept_and_reused_handles_lose_the_brand() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "function burst(){ \
+           for(let i=0;i<4;i++){ \
+             const rs=new ReadableStream({start(c){ c.enqueue('a'+i); c.close(); }}); \
+             const ws=new WritableStream({write(v){}}); \
+             const ts=new TransformStream(); \
+             void rs; void ws; void ts; } } \
+         burst(); gc(); \
+         let polluted=0; \
+         for(let i=0;i<64;i++){ const o={v:i}; \
+           if(o.getReader!==undefined||o.enqueue!==undefined||o.getWriter!==undefined) polluted++; } \
+         console.log('polluted', polluted);",
+    );
+    assert_eq!(execution.stdout, b"polluted 0\n");
+    runtime.collect_garbage_now().expect("GC should run");
+    let stats = runtime.host_side_table_stats();
+    assert_eq!(
+        stats.stream_objects, 0,
+        "死 stream 登记项应被清扫：{stats:?}"
+    );
+    assert_eq!(stats.stream_slots, 0, "死 stream 槽位应被释放：{stats:?}");
+}
+
+/// 活流在 GC 后仍可读出构造时入队的 chunk：解除全量根化后，controller、
+/// 队列 chunk 与 read promise 由宿主边图/任务根保活。
+#[test]
+fn live_stream_reads_queued_chunk_after_gc() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const rs=new ReadableStream({start(c){ c.enqueue('alive_'+123456789); c.close(); }}); \
+         gc(); \
+         rs.getReader().read().then(r=>{ console.log(r.done, r.value); });",
+    );
+    assert_eq!(execution.stdout, b"false alive_123456789\n");
+}
+
+/// 活跃 pipe 是宿主驱动的异步操作：GC 落在 pump 任务之间也必须完成搬运，
+/// 源流、目的流与 pipe promise 由显式根钉扎。
+#[test]
+fn active_pipe_survives_gc_between_pump_tasks() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "const chunks=[]; \
+         const rs=new ReadableStream({start(c){ c.enqueue('p1'); c.enqueue('p2'); c.close(); }}); \
+         const ws=new WritableStream({write(v){ chunks.push(v); }}); \
+         rs.pipeTo(ws).then(()=>{ console.log(chunks.join(','), 'ok'); }); \
+         gc();",
+    );
+    assert_eq!(execution.stdout, b"p1,p2 ok\n");
+}
+
+/// fetch(data:) 的响应经 body 流读取文本；GC 落在 promise 链中间时，响应
+/// 包装对象与 body 流由 promise 值根/边图保活。
+#[test]
+fn fetch_data_url_body_survives_gc_mid_chain() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "fetch('data:,hello').then(r=>r.text()).then(t=>{ console.log('body', t); }); gc();",
+    );
+    assert_eq!(execution.stdout, b"body hello\n");
 }
