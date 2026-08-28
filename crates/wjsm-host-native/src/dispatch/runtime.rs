@@ -1603,6 +1603,18 @@ pub(super) fn ordinary_set_key(
         .heap()
         .get_property_slot(target_handle, key)
         .map_err(|_| fail_dispatch(ctx))?;
+    // Module Namespace Exotic Object 的 [[Set]] 恒返回 false（§10.4.6.5）。
+    // 失败原因决定 strict TypeError 文案（与 V8 一致）：既有导出/@@toStringTag
+    // 按只读属性（"Cannot assign to read only property ... of object
+    // '[object Module]'"），新键按不可扩展。
+    if state.module_namespace_objects.contains(&target_handle) {
+        let failure = if own.is_some() {
+            SetFailure::ReadOnly
+        } else {
+            SetFailure::NotExtensible
+        };
+        return Ok(SetCompletion::Failed(failure));
+    }
     if own.is_none() {
         let prototype = state
             .gc
@@ -2192,6 +2204,22 @@ pub(super) fn assign_data_property_to_receiver(
         return Ok(SetCompletion::Failed(SetFailure::Receiver));
     }
     let receiver_handle = object_handle(receiver).ok_or_else(|| fail_dispatch(ctx))?;
+    // 命名空间 receiver（如 Reflect.set(target, k, v, ns)）：其
+    // [[DefineOwnProperty]] 不允许经 OrdinarySet 创建/改写数据属性，
+    // [[Set]] 结果恒 false（§10.4.6.5 / §10.4.6.6）。
+    if state.module_namespace_objects.contains(&receiver_handle) {
+        let own = state
+            .gc
+            .heap()
+            .get_property_slot(receiver_handle, key)
+            .map_err(|_| fail_dispatch(ctx))?;
+        let failure = if own.is_some() {
+            SetFailure::ReadOnly
+        } else {
+            SetFailure::NotExtensible
+        };
+        return Ok(SetCompletion::Failed(failure));
+    }
     if let Some(receiver_descriptor) = state
         .gc
         .heap()

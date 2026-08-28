@@ -117,13 +117,15 @@ fn render_receiver_owner(state: &NativeAgentState, receiver: i64) -> String {
 }
 
 /// GetterOnly / Receiver / strict delete 消息中的简短渲染：数组 →
-/// `[object Array]`，callable → 函数 toString 文本，其余对象（含 proxy）
-/// → `#<Object>`。
+/// `[object Array]`，callable → 函数 toString 文本，模块命名空间 →
+/// `[object Module]`（V8 同口径），其余对象（含 proxy）→ `#<Object>`。
 pub(super) fn render_receiver_brief(state: &NativeAgentState, receiver: i64) -> String {
     if value::is_array(receiver) {
         "[object Array]".into()
     } else if value::is_callable(receiver) {
         callable_source_text(state, receiver)
+    } else if super::modules::is_module_namespace(state, receiver) {
+        "[object Module]".into()
     } else {
         "#<Object>".into()
     }

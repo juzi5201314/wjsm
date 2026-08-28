@@ -380,6 +380,11 @@ fn object_handle(value: i64) -> Option<u32> {
     value::is_js_object(value).then(|| value::decode_handle(value))
 }
 
+/// 值是否为已收口的 Module Namespace Exotic Object（§10.4.6）。
+pub(crate) fn is_module_namespace(state: &NativeAgentState, encoded: i64) -> bool {
+    object_handle(encoded).is_some_and(|handle| state.module_namespace_objects.contains(&handle))
+}
+
 impl Default for NativeModuleState {
     fn default() -> Self {
         Self {
@@ -499,6 +504,7 @@ pub(super) fn dispatch_module(
 ) -> Option<i64> {
     Some(match builtin {
         Builtin::RegisterModuleNamespace => register_namespace(ctx, state, args),
+        Builtin::FinalizeModuleNamespace => finalize_namespace(ctx, state, args),
         Builtin::DynamicImport => static_dynamic_import(ctx, state, args),
         Builtin::DynamicImportRuntime => runtime_dynamic_import(ctx, state, args),
         Builtin::ImportMetaResolve => create_import_meta_resolve(ctx, state, args),
@@ -592,6 +598,34 @@ fn register_namespace(
         return fail_dispatch(ctx);
     };
     state.runtime_modules.namespaces.insert(key, *namespace);
+    value::encode_undefined()
+}
+
+/// FinalizeModuleNamespace：把命名空间对象收口为 Module Namespace Exotic
+/// Object（§10.4.6）——[[Prototype]] 置 null（§10.4.6.1 不可变原型）、
+/// [[IsExtensible]] 恒 false（§10.4.6.3），并登记 exotic 身份供
+/// [[Set]]/[[GetOwnProperty]]/[[DefineOwnProperty]] 等命名空间专属 MOP 分流。
+fn finalize_namespace(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [namespace] = args else {
+        return fail_dispatch(ctx);
+    };
+    let Some(handle) = object_handle(*namespace) else {
+        return fail_dispatch(ctx);
+    };
+    if state
+        .gc
+        .heap()
+        .set_prototype(handle, wjsm_gc::PROTO_NULL_SENTINEL)
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
+    state.non_extensible_objects.insert(handle);
+    state.module_namespace_objects.insert(handle);
     value::encode_undefined()
 }
 
