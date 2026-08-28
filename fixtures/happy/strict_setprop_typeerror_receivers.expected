@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+array-non-writable TypeError | Cannot assign to read only property 'nw' of object '[object Array]'
+array-nw-unchanged 1
+array-getter-only TypeError | Cannot set property ag of [object Array] which has only a getter
+array-elem-non-writable TypeError | Cannot assign to read only property '0' of object '[object Array]'
+array-elem-unchanged 10
+array-elem-getter-only TypeError | Cannot set property 5 of [object Array] which has only a getter
+proxy-falsish TypeError | 'set' on proxy: trap returned falsish for property 'x'
+proxy-no-trap-frozen TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+fn-name TypeError | true
+fn-name-unchanged fn
+reflect-frozen false
+reflect-proxy-falsish false
+object-assign TypeError | Cannot assign to read only property 'q' of object '#<Object>'
+ic-frozen 4 100 3
+--- stderr ---

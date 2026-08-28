@@ -3897,27 +3897,34 @@ impl NativeAgentState {
             function.image_id == self.current_image_id && function.function_index == function_index
         })
     }
+    /// callable 的展示名（函数 name 元数据）：用户函数取镜像函数表，
+    /// 原生 callable 取内建元数据。用于 `name` 属性与诊断消息渲染。
+    fn callable_display_name(&self, callable: i64) -> Option<String> {
+        let callable = value::strip_gc_color(callable);
+        if let Some(function) = self.callable_function(callable) {
+            let index = usize::try_from(function.function_index).ok()?;
+            let name = if function.image_id == self.current_image_id {
+                self.function_names.get(index)?
+            } else {
+                self.programs
+                    .get(&function.image_id)?
+                    .function_names
+                    .get(index)?
+            };
+            Some(name.clone())
+        } else {
+            native_function_metadata(self.native_callable_kind(callable)?)
+                .map(|(name, _)| name.to_owned())
+        }
+    }
+
     fn callable_property(&mut self, callable: i64, key: PropertyKey) -> Option<i64> {
         let callable = value::strip_gc_color(callable);
         if let Some(value) = self.callable_properties.get(&(callable, key)).copied() {
             return Some(value);
         }
         if self.text_matches(key.to_value(), "name") {
-            let name = if let Some(function) = self.callable_function(callable) {
-                let index = usize::try_from(function.function_index).ok()?;
-                (if function.image_id == self.current_image_id {
-                    self.function_names.get(index)?
-                } else {
-                    self.programs
-                        .get(&function.image_id)?
-                        .function_names
-                        .get(index)?
-                })
-                .clone()
-            } else {
-                native_function_metadata(self.native_callable_kind(callable)?)
-                    .map(|(name, _)| name.to_owned())?
-            };
+            let name = self.callable_display_name(callable)?;
             let stored = self.intern_text(name, value::TAG_STRING)?;
             self.callable_properties.insert((callable, key), stored);
             self.callable_property_flags

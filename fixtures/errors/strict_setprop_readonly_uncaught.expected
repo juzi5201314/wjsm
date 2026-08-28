@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+before
+--- stderr ---
+Runtime error: TypeError: Cannot assign to read only property 'x' of object '#<Object>'

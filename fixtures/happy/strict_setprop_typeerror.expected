@@ -1,0 +1,22 @@
+exit_code: 0
+--- stdout ---
+frozen-prop TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen-compound TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen-increment TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen-computed TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen-destructure TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen-arr-destructure TypeError | Cannot assign to read only property 'x' of object '#<Object>'
+frozen-unchanged 1
+getter-only TypeError | Cannot set property g of #<Object> which has only a getter
+non-writable TypeError | Cannot assign to read only property 'w' of object '#<Object>'
+non-writable-unchanged 1
+non-extensible TypeError | Cannot add property nu, object is not extensible
+non-extensible-has false
+inherited-non-writable TypeError | Cannot assign to read only property 'p' of object '#<Object>'
+inherited-getter-only TypeError | Cannot set property pg of #<Object> which has only a getter
+sealed-write NO-THROW
+sealed-value 2
+sealed-add TypeError | Cannot add property t, object is not extensible
+symbol-getter-only TypeError | Cannot set property Symbol(k) of #<Object> which has only a getter
+symbol-frozen TypeError | Cannot assign to read only property 'Symbol(k)' of object '#<Object>'
+--- stderr ---

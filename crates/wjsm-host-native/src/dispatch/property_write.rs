@@ -122,10 +122,13 @@ fn render_receiver_brief(state: &NativeAgentState, receiver: i64) -> String {
     }
 }
 
-/// 引擎对 callable 的统一 toString 表示（与 Function.prototype.toString
-/// 的 native-code 形态一致；不追踪源码文本）。
-fn callable_source_text(_state: &NativeAgentState, _receiver: i64) -> String {
-    "function() { [native code] }".into()
+/// 引擎对 callable 的统一 toString 表示：V8 native-code 形态（带函数名）。
+/// 不追踪源码文本，无法复现 V8 嵌入原始源码的消息，取次优的原生形态。
+fn callable_source_text(state: &NativeAgentState, receiver: i64) -> String {
+    match state.callable_display_name(receiver) {
+        Some(name) if !name.is_empty() => format!("function {name}() {{ [native code] }}"),
+        _ => "function () { [native code] }".into(),
+    }
 }
 
 /// 数组接收者的命名（非下标）属性 [[Set]]：自有访问器（含无 setter 拒绝）、
