@@ -1,27 +1,5 @@
 import typesObject from 'node:util/types';
 
-function callFunction(fn, receiver, args) {
-  if (args.length === 0) return fn.call(receiver);
-  if (args.length === 1) return fn.call(receiver, args[0]);
-  if (args.length === 2) return fn.call(receiver, args[0], args[1]);
-  if (args.length === 3) return fn.call(receiver, args[0], args[1], args[2]);
-  if (args.length === 4) return fn.call(receiver, args[0], args[1], args[2], args[3]);
-  if (args.length === 5) return fn.call(receiver, args[0], args[1], args[2], args[3], args[4]);
-  return fn.call(receiver, args[0], args[1], args[2], args[3], args[4], args[5]);
-}
-
-
-function collectDefinedArgs(a, b, c, d, e, f) {
-  const args = [];
-  if (a !== undefined) args.push(a);
-  if (b !== undefined) args.push(b);
-  if (c !== undefined) args.push(c);
-  if (d !== undefined) args.push(d);
-  if (e !== undefined) args.push(e);
-  if (f !== undefined) args.push(f);
-  return args;
-}
-
 export function inherits(constructor, superConstructor) {
   if (typeof constructor !== 'function' || typeof superConstructor !== 'function') {
     throw new TypeError('The "constructor" and "superConstructor" arguments must be functions');
@@ -38,6 +16,8 @@ export function inspect(obj, opts) {
   function inner(value, level) {
     if (value === null) return 'null';
     if (typeof value === 'string') return "'" + value + "'";
+    if (typeof value === 'number') return numberToString(value);
+    if (typeof value === 'bigint') return String(value) + 'n';
     if (typeof value !== 'object') return String(value);
     if (seen.indexOf(value) >= 0) return '[Circular]';
     if (level < 0) return Array.isArray(value) ? '[Array]' : '[Object]';
@@ -67,35 +47,78 @@ export function inspect(obj, opts) {
   return inner(obj, depth);
 }
 
-export function format(fmt, a, b, c, d, e, f) {
-  const args = collectDefinedArgs(a, b, c, d, e, f);
-  if (typeof fmt !== 'string') {
-    const values = [fmt].concat(args);
-    return values.map(v => inspect(v)).join(' ');
+// Node：-0 需渲染为 '-0'，String(-0) 会丢符号。
+function numberToString(value) {
+  if (value === 0 && 1 / value === -Infinity) return '-0';
+  return String(value);
+}
+
+// Node util.format 的 %s：数字/bigint 走数字渲染；原始值走 String；
+// 无自定义 toString 的对象走浅层 inspect（嵌套显示 [Object]/[Array]）。
+function formatStringArg(arg) {
+  if (typeof arg === 'number') return numberToString(arg);
+  if (typeof arg === 'bigint') return String(arg) + 'n';
+  if (typeof arg !== 'object' || arg === null) return String(arg);
+  const toStr = arg.toString;
+  if (typeof toStr === 'function' && toStr !== Object.prototype.toString && toStr !== Array.prototype.toString) {
+    return String(arg);
   }
-  let index = 0;
+  return inspect(arg, { depth: 0 });
+}
+
+// %d/%i：symbol 不可转数字，Node 渲染为 'NaN'；bigint 保留 'n' 后缀。
+function formatNumericArg(arg, parse) {
+  if (typeof arg === 'bigint') return String(arg) + 'n';
+  if (typeof arg === 'symbol') return 'NaN';
+  return numberToString(parse(arg));
+}
+
+function isFormatCode(code) {
+  return code === 's' || code === 'd' || code === 'i' || code === 'f'
+    || code === 'j' || code === 'o' || code === 'O' || code === 'c';
+}
+
+// Node formatWithOptionsInternal：保留全部实参（含 undefined），字符串首参做
+// 占位符替换，剩余实参以空格追加——字符串原样、其余走 inspect。
+export function format(...args) {
+  const first = args[0];
+  let index = 1;
   let out = '';
-  for (let i = 0; i < fmt.length; i = i + 1) {
-    if (fmt.charAt(i) !== '%' || i + 1 >= fmt.length) {
-      out = out + fmt.charAt(i);
-      continue;
+  let join = '';
+  if (typeof first === 'string') {
+    // Node：仅有格式串时原样返回，不做任何占位符处理。
+    if (args.length === 1) return first;
+    for (let i = 0; i < first.length; i = i + 1) {
+      const ch = first.charAt(i);
+      if (ch !== '%' || i + 1 >= first.length) {
+        out = out + ch;
+        continue;
+      }
+      const code = first.charAt(i + 1);
+      i = i + 1;
+      if (code === '%') { out = out + '%'; continue; }
+      // 未知指令不消耗实参；实参耗尽时占位符保留字面。
+      if (!isFormatCode(code) || index >= args.length) { out = out + '%' + code; continue; }
+      const arg = args[index];
+      index = index + 1;
+      if (code === 's') out = out + formatStringArg(arg);
+      else if (code === 'd') out = out + formatNumericArg(arg, Number);
+      else if (code === 'i') out = out + formatNumericArg(arg, parseInt);
+      else if (code === 'f') out = out + (typeof arg === 'symbol' ? 'NaN' : numberToString(parseFloat(arg)));
+      else if (code === 'j') {
+        try { out = out + JSON.stringify(arg); } catch (err) { out = out + '[Circular]'; }
+      } else if (code === 'o' || code === 'O') out = out + inspect(arg);
+      // %c：CSS 指令在非浏览器环境消耗实参但不输出。
     }
-    const code = fmt.charAt(i + 1);
-    i = i + 1;
-    if (code === '%') { out = out + '%'; continue; }
-    if (index >= args.length) { out = out + '%' + code; continue; }
-    const arg = args[index];
-    index = index + 1;
-    if (code === 's') out = out + String(arg);
-    else if (code === 'd' || code === 'i') out = out + Number(arg);
-    else if (code === 'f') out = out + Number(arg);
-    else if (code === 'j') {
-      try { out = out + JSON.stringify(arg); } catch (err) { out = out + '[Circular]'; }
-    } else if (code === 'o' || code === 'O') out = out + inspect(arg);
-    else out = out + '%' + code;
+    join = ' ';
+  } else {
+    index = 0;
   }
   while (index < args.length) {
-    out = out + ' ' + inspect(args[index]);
+    const value = args[index];
+    out = out + join;
+    out = out + (typeof value === 'string' ? value : inspect(value));
+    join = ' ';
     index = index + 1;
   }
   return out;
@@ -103,37 +126,35 @@ export function format(fmt, a, b, c, d, e, f) {
 
 export function deprecate(fn, msg) {
   let warned = false;
-  return function deprecatedWrapper(a, b, c, d, e, f) {
+  return function deprecatedWrapper(...args) {
     if (!warned) {
       warned = true;
       console.warn(msg);
     }
-    return callFunction(fn, this, collectDefinedArgs(a, b, c, d, e, f));
+    return fn.apply(this, args);
   };
 }
 
 export function promisify(fn) {
   if (typeof fn !== 'function') throw new TypeError('fn must be a function');
-  return function promisified(a, b, c, d, e, f) {
+  return function promisified(...args) {
     const self = this;
-    const args = collectDefinedArgs(a, b, c, d, e, f);
     return new Promise((resolve, reject) => {
       args.push(function callback(err, value) {
         if (err) reject(err);
         else resolve(value);
       });
-      callFunction(fn, self, args);
+      fn.apply(self, args);
     });
   };
 }
 
 export function callbackify(asyncFn) {
   if (typeof asyncFn !== 'function') throw new TypeError('asyncFn must be a function');
-  return function callbackified(a, b, c, d, e, f) {
-    const args = collectDefinedArgs(a, b, c, d, e, f);
+  return function callbackified(...args) {
     const cb = args.pop();
     if (typeof cb !== 'function') throw new TypeError('The last argument must be a function');
-    callFunction(asyncFn, this, args).then(
+    asyncFn.apply(this, args).then(
       value => cb(null, value),
       reason => cb(reason || new Error('Promise was rejected with a falsy value'))
     );

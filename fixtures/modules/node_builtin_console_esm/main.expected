@@ -6,5 +6,10 @@ named log fmt 7
 custom stdout line
 warn falls back to stdout
 true
+1 2 3 4 5 6 7 8
+m a 2 extra undefined null 9 tail
+i|undefined
 --- stderr ---
 custom stderr line
+w undefined 3 4 5 6 7 8
+e 1 2 3 4 5 6 7 8

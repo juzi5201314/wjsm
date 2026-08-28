@@ -6,14 +6,9 @@ function isWritableLike(stream) {
   return stream !== null && typeof stream === 'object' && typeof stream.write === 'function';
 }
 
+// Node：Console 方法把全部实参（含 undefined）交给 util.format，不截断。
 function formatArgs(args) {
-  if (args.length === 0) return '';
-  if (args.length === 1) return format(args[0]);
-  if (args.length === 2) return format(args[0], args[1]);
-  if (args.length === 3) return format(args[0], args[1], args[2]);
-  if (args.length === 4) return format(args[0], args[1], args[2], args[3]);
-  if (args.length === 5) return format(args[0], args[1], args[2], args[3], args[4]);
-  return format(args[0], args[1], args[2], args[3], args[4], args[5]);
+  return format(...args);
 }
 
 export function Console(stdoutOrOptions, stderrMaybe) {
