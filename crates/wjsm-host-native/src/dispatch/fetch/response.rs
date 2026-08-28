@@ -225,6 +225,9 @@ fn create(
     let object = state
         .allocate_object_with_gc_retry(ctx, 0, false)
         .map_err(|_| super::super::fail_dispatch(ctx))?;
+    state
+        .set_web_instance_prototype(object, wjsm_ir::Builtin::ResponseConstructor)
+        .map_err(|()| super::super::fail_dispatch(ctx))?;
     state.fetch.responses.push(response);
     super::register_object(state, object, FetchObjectKind::Response(handle));
     if let Some(stream) = body_stream

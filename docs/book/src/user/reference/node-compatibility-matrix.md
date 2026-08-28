@@ -70,7 +70,7 @@ wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 
 `Buffer`、`TextEncoder`、`TextDecoder`、`structuredClone`、`queueMicrotask`、`atob`、`btoa`、`performance`、`setImmediate`、`clearImmediate` 在全局名单中。
 
-`fetch` 与 Streams 构造器只能直接调用，取值得到 `undefined`，细节见[限制与已知差异](../runtime/limitations.md)。
+`fetch`、`Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController` 是真实全局函数值：可取值传递、`typeof` 为 `"function"`、实例可 `instanceof`，`name` / `length` 与 Node v22 一致。
 
 ## 解析优先级
 

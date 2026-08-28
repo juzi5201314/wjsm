@@ -9,9 +9,12 @@ use wjsm_native_abi::NativeVmContext;
 use super::{fail_dispatch, modules, promise, runtime};
 use crate::NativeAgentState;
 
+mod abort;
 mod headers;
 mod request;
 mod response;
+
+pub(crate) use abort::extend_gc_roots;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HeadersMethod {
@@ -37,6 +40,7 @@ pub(crate) enum ResponseMethod {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum FetchCallable {
+    AbortControllerAbort(u32),
     Headers(u32, HeadersMethod),
     Request(u32, RequestMethod),
     Response(u32, ResponseMethod),
@@ -50,6 +54,8 @@ pub(crate) enum FetchProperty {
 
 #[derive(Clone, Copy)]
 pub(super) enum FetchObjectKind {
+    AbortController(u32),
+    AbortSignal(u32),
     Headers(u32),
     Request(u32),
     Response(u32),
@@ -83,6 +89,7 @@ pub(crate) struct NativeFetchState {
     headers: Vec<headers::HeadersState>,
     requests: Vec<request::RequestState>,
     responses: Vec<response::ResponseState>,
+    abort_signals: Vec<abort::AbortSignalState>,
     pending: Vec<PendingFetch>,
 }
 
@@ -94,6 +101,7 @@ pub(super) fn dispatch_fetch(
 ) -> Option<i64> {
     Some(match builtin {
         Builtin::Fetch => fetch(ctx, state, args),
+        Builtin::AbortControllerConstructor => abort::construct(ctx, state, args),
         Builtin::HeadersConstructor => headers::construct(ctx, state, args),
         Builtin::RequestConstructor => request::construct(ctx, state, args),
         Builtin::ResponseConstructor => response::construct(ctx, state, args),
@@ -107,6 +115,8 @@ pub(crate) fn property(
     key: &str,
 ) -> Option<FetchProperty> {
     match *state.fetch.objects.get(&value::decode_handle(receiver))? {
+        FetchObjectKind::AbortController(handle) => abort::controller_property(state, handle, key),
+        FetchObjectKind::AbortSignal(handle) => abort::signal_property(state, handle, key),
         FetchObjectKind::Headers(handle) => headers::property(state, handle, key),
         FetchObjectKind::Request(handle) => request::property(state, handle, key),
         FetchObjectKind::Response(handle) => response::property(state, handle, key),
@@ -120,6 +130,7 @@ pub(crate) fn call(
     args: &[i64],
 ) -> i64 {
     match callable {
+        FetchCallable::AbortControllerAbort(handle) => abort::abort(ctx, state, handle, args),
         FetchCallable::Headers(handle, method) => headers::call(ctx, state, handle, method, args),
         FetchCallable::Request(handle, method) => request::call(ctx, state, handle, method),
         FetchCallable::Response(handle, method) => response::call(ctx, state, handle, method),

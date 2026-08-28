@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+object
+true
+false
+undefined
+true
+AbortError
+This operation was aborted
+true
+true stop it
+true
+AbortError
+--- stderr ---
