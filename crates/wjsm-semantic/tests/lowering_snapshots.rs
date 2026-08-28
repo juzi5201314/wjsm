@@ -967,6 +967,54 @@ fn with_dispatch_in_generator_loop_header_lowering_terminates() {
     }
 }
 
+// ── 脚本模式全局环境记录（ES §9.1.1.4 / §16.1.7 GDI）─────────────────────
+//
+// 脚本模式（`lower_module(_, true)`）顶层声明经 GlobalDeclarationInstantiation
+// 序幕进入全局环境记录：var/函数 → 对象记录（globalThis 属性），let/const/class
+// → 声明式记录（宿主 GlobalEnvRecord）。命中名字的读/写全部路由 GlobalEnv 系列
+// builtin，不再降级为 `$0.*` 槽。
+
+#[test]
+fn script_mode_gdi_prologue_routes_global_bindings() {
+    let source = "var v = 1;\nlet l = 2;\nconst c = 3;\nfunction f() { return l; }\nclass K {}\nl = v + c;\n";
+    let module = parse_module(source).expect("parse should succeed");
+    let program = lower_module(module, true).expect("script lowering should succeed");
+    let text = program.dump_text();
+
+    for marker in [
+        // 冲突预检 + 声明：词法名 DeclareLex、var 名 DeclareVar、函数名 DeclareFunc。
+        "global_env.check",
+        "global_env.declare_lex",
+        "global_env.declare_var",
+        "global_env.declare_func",
+        // 词法初始化（解除 TDZ）与读改写路由。
+        "global_env.init_lex",
+        "global_env.get",
+        "global_env.set",
+    ] {
+        assert!(text.contains(marker), "missing {marker} in script IR:\n{text}");
+    }
+    // 脚本全局绑定不再落 `$0.*` 槽（函数声明与 var 均由宿主记录承载）。
+    for absent in ["store_var $0.v", "store_var $0.l", "store_var $0.c", "store_var $0.f"] {
+        assert!(
+            !text.contains(absent),
+            "script global should not use IR slot {absent}:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn module_mode_does_not_emit_global_env_builtins() {
+    let source = "var v = 1;\nlet l = 2;\nconsole.log(v + l);\n";
+    let module = parse_module(source).expect("parse should succeed");
+    let program = lower_module(module, false).expect("module lowering should succeed");
+    let text = program.dump_text();
+    assert!(
+        !text.contains("global_env."),
+        "module mode must keep `$0.*` slot bindings:\n{text}"
+    );
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

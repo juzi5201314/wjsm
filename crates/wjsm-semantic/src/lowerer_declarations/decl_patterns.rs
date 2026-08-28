@@ -337,16 +337,28 @@ impl Lowerer {
                         self.scopes
                             .mark_initialised(&name)
                             .map_err(|msg| self.error(assign.key.span(), msg))?;
-                        let binding = CapturedBinding::new(name.clone(), scope_id);
-                        block = self.store_binding_value(
-                            block,
-                            &binding,
-                            resolved,
-                            assign.key.span(),
-                            true,
-                        )?;
-                        block =
-                            self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
+                        // 脚本全局词法声明初始化：与 Pat::Ident 分支同口径走
+                        // InitializeBinding（GlobalEnvInitLex）。
+                        if self.script_global_decl_init
+                            && scope_id == 0
+                            && matches!(
+                                self.script_global_names.get(&name),
+                                Some(ScriptGlobalKind::Lexical { .. })
+                            )
+                        {
+                            block = self.emit_script_global_init_lex(block, &name, resolved);
+                        } else {
+                            let binding = CapturedBinding::new(name.clone(), scope_id);
+                            block = self.store_binding_value(
+                                block,
+                                &binding,
+                                resolved,
+                                assign.key.span(),
+                                true,
+                            )?;
+                            block = self
+                                .append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
+                        }
                     } else {
                         block = self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),
