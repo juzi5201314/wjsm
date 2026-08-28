@@ -1,0 +1,47 @@
+exit_code: 0
+--- stdout ---
+Int8Array true true true 2 true true
+Uint8Array true true true 2 true true
+Uint8ClampedArray true true true 2 true true
+Int16Array true true true 2 true true
+Uint16Array true true true 2 true true
+Int32Array true true true 2 true true
+Uint32Array true true true 2 true true
+Float32Array true true true 2 true true
+Float64Array true true true 2 true true
+BigInt64Array true true true 2 true true
+BigUint64Array true true true 2 true true
+values true 5,6,7
+bufview true 2 4 true
+bufview alias 9
+sabview true 8
+sab subarray true 3 11
+fields true v 3
+field slice true v 2
+rc explicit true true 2
+rc self true
+rc back false true
+rc non-object proto true 2
+slice true true 2,3
+subarray true 2 1 true
+subarray alias 42
+two-level true true true
+bigint true true true
+slice args ["ctor:2"]
+subarray args ["ctor:buf|3|2"]
+back slice true
+back subarray true
+null species true
+undef ctor true
+cross kind Int32Array 1,44
+bad species TypeError object.constructor[Symbol.species] is not a constructor
+non-object ctor slice TypeError The .constructor property is not an object
+non-object ctor subarray TypeError The .constructor property is not an object
+non-ta result TypeError Method %TypedArray%.prototype.slice called on incompatible receiver #<Object>
+short result TypeError Derived TypedArray constructor created an array which was too small
+content type TypeError Cannot mix BigInt and other types, use explicit conversions
+ctor getter RangeError boom-ctor
+species getter SyntaxError boom-sp
+long result 9,8,0,0
+plain true true true 2,3
+--- stderr ---

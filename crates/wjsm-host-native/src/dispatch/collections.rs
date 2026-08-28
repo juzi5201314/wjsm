@@ -346,21 +346,21 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
     }
     let Some(result) = collection_object(ctx, state, Builtin::MapConstructor) else {
         let exception = fail_dispatch(ctx);
-        return iterator_close(ctx, state, &[iterator, exception]);
+        return iterator_close(ctx, state, &[iterator, exception], true);
     };
     state.maps.insert(value::decode_handle(result), Vec::new());
     let mut index = 0_u64;
     loop {
         let done = iterator_done(ctx, state, &[iterator]);
         if value::is_exception(done) {
-            return iterator_close(ctx, state, &[iterator, done]);
+            return iterator_close(ctx, state, &[iterator, done], true);
         }
         if super::runtime::is_truthy(state, done) {
             return result;
         }
         let stored = iterator_value(ctx, state, &[iterator], true);
         if value::is_exception(stored) {
-            return iterator_close(ctx, state, &[iterator, stored]);
+            return iterator_close(ctx, state, &[iterator, stored], true);
         }
         if index >= 9_007_199_254_740_991 {
             let exception = type_error(
@@ -368,7 +368,7 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
                 state,
                 "Map.groupBy index exceeds Number.MAX_SAFE_INTEGER",
             );
-            return iterator_close(ctx, state, &[iterator, exception]);
+            return iterator_close(ctx, state, &[iterator, exception], true);
         }
         let key = state
             .invoke_callable(
@@ -379,14 +379,14 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
             )
             .unwrap_or_else(|| fail_dispatch(ctx));
         if value::is_exception(key) {
-            return iterator_close(ctx, state, &[iterator, key]);
+            return iterator_close(ctx, state, &[iterator, key], true);
         }
         let key = canonicalize_keyed_collection_key(key);
         let group = map_get(ctx, state, &[result, key]);
         let group = if value::is_undefined(group) {
             let Ok(group) = state.allocate_array_values_with_gc_retry(ctx, &[]) else {
                 let exception = fail_dispatch(ctx);
-                return iterator_close(ctx, state, &[iterator, exception]);
+                return iterator_close(ctx, state, &[iterator, exception], true);
             };
             map_insert(state, result, key, group);
             group
@@ -400,7 +400,7 @@ fn map_group_by(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
             .is_err()
         {
             let exception = fail_dispatch(ctx);
-            return iterator_close(ctx, state, &[iterator, exception]);
+            return iterator_close(ctx, state, &[iterator, exception], true);
         }
         index += 1;
     }

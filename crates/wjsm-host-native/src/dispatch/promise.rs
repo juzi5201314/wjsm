@@ -415,14 +415,14 @@ pub(crate) fn construct_aggregate_error(
     loop {
         let done = iterator_done(ctx, state, &[iterator]);
         if value::is_exception(done) {
-            return iterator_close(ctx, state, &[iterator, done]);
+            return iterator_close(ctx, state, &[iterator, done], true);
         }
         if super::runtime::is_truthy(state, done) {
             break;
         }
         let error = iterator_value(ctx, state, &[iterator], true);
         if value::is_exception(error) {
-            return iterator_close(ctx, state, &[iterator, error]);
+            return iterator_close(ctx, state, &[iterator, error], true);
         }
         errors.push(error);
     }

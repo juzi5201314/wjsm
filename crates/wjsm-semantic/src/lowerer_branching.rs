@@ -192,8 +192,14 @@ impl Lowerer {
                             v
                         }
                     };
-                    current =
-                        self.emit_iterator_closes(current, std::slice::from_ref(&handle), comp)?;
+                    // break/continue/return 均非 throw completion：close 过程的
+                    // 错误按 §7.4.6 步骤 6/7 传播。
+                    current = self.emit_iterator_closes(
+                        current,
+                        std::slice::from_ref(&handle),
+                        comp,
+                        false,
+                    )?;
                 }
                 UnwindStep::Finalizer { fin_block, fi } => {
                     // finally 内部的 abrupt completion 只继续展开更外层 finalizer。
@@ -245,13 +251,22 @@ impl Lowerer {
         undef_val
     }
 
-    /// 按 ES §7.4.6 关闭迭代器；`completion` 为 abrupt 时的完成值（正常关闭传 undefined）。
+    /// 按 ES §7.4.6 关闭迭代器；`completion` 为 abrupt 时的完成值（正常关闭传
+    /// undefined）。`completion_is_throw`：completion 为 throw completion 时
+    /// （步骤 5）改用 IteratorCloseThrowCompletion——close 过程的 JS 层错误由
+    /// 宿主吞咽、原始异常胜出；异常分叉仍保留以传播宿主内部 invariant 失败。
     pub(crate) fn emit_iterator_closes(
         &mut self,
         block: BasicBlockId,
         iterators: &[ValueId],
         completion: ValueId,
+        completion_is_throw: bool,
     ) -> Result<BasicBlockId, LoweringError> {
+        let builtin = if completion_is_throw {
+            Builtin::IteratorCloseThrowCompletion
+        } else {
+            Builtin::IteratorClose
+        };
         let mut current = block;
         for iterator in iterators {
             current = self.resolve_store_block(current);
@@ -260,7 +275,7 @@ impl Lowerer {
                 current,
                 Instruction::CallBuiltin {
                     dest: Some(close_result),
-                    builtin: Builtin::IteratorClose,
+                    builtin,
                     args: vec![*iterator, completion],
                 },
             );
@@ -384,7 +399,7 @@ impl Lowerer {
     ) -> Result<BasicBlockId, LoweringError> {
         let block = self.resolve_store_block(block);
         let completion = self.alloc_undefined_value(block);
-        self.emit_iterator_closes(block, std::slice::from_ref(&handle), completion)
+        self.emit_iterator_closes(block, std::slice::from_ref(&handle), completion, false)
     }
 
     // ── labeled ─────────────────────────────────────────────────────────────
@@ -896,7 +911,8 @@ impl Lowerer {
                 );
                 let target_block = if close_iterators {
                     let iterator_cleanups = self.iterator_cleanups_from_depth(label_depth);
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value)?
+                    // throw completion 路由到本地 catch：close 错误吞咽，原始异常胜出。
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value, true)?
                 } else {
                     after_finally
                 };
@@ -931,8 +947,9 @@ impl Lowerer {
                     completion_slot.as_deref(),
                 );
                 let iterator_cleanups = self.active_iterator_cleanups();
+                // throw completion 向外传播：close 错误吞咽（§7.4.6 步骤 5）。
                 let after_close =
-                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value)?;
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups, value, true)?;
                 if self.is_async_generator_fn {
                     let gen_val = self.alloc_value();
                     self.current_function.append_instruction(

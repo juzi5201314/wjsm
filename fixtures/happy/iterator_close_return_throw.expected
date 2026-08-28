@@ -1,4 +1,5 @@
 exit_code: 0
 --- stdout ---
-close-fail
+throw-completion: body-fail
+break-completion: close-fail
 --- stderr ---

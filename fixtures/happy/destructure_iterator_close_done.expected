@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+next throw: next-boom
+next throw return calls: 0
+value throw: value-boom
+value throw return calls: 0
+done throw: done-boom
+done throw return calls: 0
+after done: default-after-done
+after done return calls: 0
+exhausted normal a: undefined return calls: 0 value reads: 0
+normal a: 7 return calls: 1
+rest r: 1/2/3 return calls: 0
+close throw swallowed: orig-wins
+non-object swallowed: orig-wins-2
+getter swallowed: orig-wins-3
+normal close throw: normal-close-throw
+normal close non-object: TypeError
+--- stderr ---

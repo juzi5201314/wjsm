@@ -3541,7 +3541,14 @@ impl NativeAgentState {
             "URIError" => wjsm_ir::Builtin::URIErrorConstructor,
             _ => return None,
         };
-        self.native_callable(NativeCallableKind::Builtin(builtin, false))
+        let constructor = self.native_callable(NativeCallableKind::Builtin(builtin, false))?;
+        // §23.2.2.4 get %TypedArray% [ @@species ]：FIX-10 引入 %TypedArray%
+        // 抽象构造器后改由 11 种构造器的静态原型链继承；当前直接安装在
+        // 构造器本体上（getter 返回 this，子类经静态链取回子类自身）。
+        if dispatch::typedarray::is_typed_array_constructor(builtin) {
+            self.install_species_accessor(constructor)?;
+        }
+        Some(constructor)
     }
 
     fn native_callable_builtin(&self, callee: i64) -> Option<(wjsm_ir::Builtin, bool)> {
@@ -4921,6 +4928,9 @@ impl NativeAgentState {
         if builtin == wjsm_ir::Builtin::DataViewConstructor {
             dispatch::buffers::install_data_view_prototype_methods(self, prototype).ok()?;
         } else {
+            // 经 `实例.constructor` 取回构造器的路径也要看到 @@species
+            // （§23.2.2.4）；与 global_constructor 的安装幂等。
+            self.install_species_accessor(constructor)?;
             let parent = self.ensure_typed_array_prototype()?;
             self.gc
                 .heap()
@@ -6670,6 +6680,18 @@ unsafe extern "C" fn native_callable_call(
                 .map(|activation| activation.new_target)
                 .unwrap_or_else(value::encode_undefined);
             dispatch::error_constructor(ctx, state, builtin, this_value, new_target, &arguments)
+        }
+        NativeCallableKind::Builtin(builtin, false)
+            if dispatch::typedarray::is_typed_array_constructor(builtin) =>
+        {
+            // TypedArray 构造器的可调用对象路径（类 extends 的 super()、
+            // Reflect.construct）：newTarget 归一后显式传入（§23.2.5.1
+            // AllocateTypedArray 经 newTarget.prototype 建实例原型）；缺省
+            // 形态（newTarget 为构造器本体 / 无 new 调用）走内在原型。
+            let new_target = array_construct_new_target(state, callee);
+            dispatch::typedarray::construct_with_new_target(
+                ctx, state, builtin, &arguments, new_target,
+            )
         }
         NativeCallableKind::Builtin(wjsm_ir::Builtin::PromiseCreate, _) => {
             dispatch::promise::construct(ctx, state, this_value, &arguments)

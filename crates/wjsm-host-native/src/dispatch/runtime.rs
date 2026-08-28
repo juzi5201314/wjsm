@@ -2872,11 +2872,17 @@ pub(super) fn iterator_value(
     let Some(iterator) = state.array_iterators.get(&handle).copied() else {
         return fail_dispatch(ctx);
     };
+    // [[Done]] 为 true 时步进语义（advance = IteratorStepValue，§7.4.8）直接
+    // 返回 DONE（映射为 undefined），不得读取迭代结果的 value 属性——done
+    // 结果对象的 value getter 不可观察。非步进的 IteratorValue 是对当前
+    // result 的普通 Get（§7.4.5）：yield* 委托在 done 后仍须读取最终
+    // result.value 作为委托表达式的值（§27.5.3.7 步骤 7.a.iii）。
     if iterator.done
-        && !matches!(
-            iterator.source,
-            super::super::NativeIteratorSource::Custom(_)
-        )
+        && (advance
+            || !matches!(
+                iterator.source,
+                super::super::NativeIteratorSource::Custom(_)
+            ))
     {
         return value::encode_undefined();
     }
@@ -2969,6 +2975,11 @@ pub(super) fn iterator_value(
             let Ok(value) = get_property(ctx, state, result, key) else {
                 return fail_dispatch(ctx);
             };
+            // value 读取抛出（getter）：§7.4.8 步骤 8.b 置 [[Done]] 为 true
+            // 再传播，后续 IteratorClose 不得再调用 return()。
+            if value::is_exception(value) {
+                return mark_custom_done(state, handle, value);
+            }
             (value, 1)
         }
     };
@@ -3061,6 +3072,17 @@ pub(crate) fn iterator_next_result(
     create_iterator_result(ctx, state, result, is_done)
 }
 
+/// 迭代步骤自身的 abrupt（next 抛出 / 结果非对象 / done 读取抛出）按
+/// §7.4.7 IteratorStep / §7.4.8 IteratorStepValue 置 [[Done]] 为 true 后再
+/// 传播：后续 IteratorClose（含语义层解构/for-of 的 abrupt 清理路径）据此
+/// 跳过 return() 调用。
+fn mark_custom_done(state: &mut NativeAgentState, iterator_handle: u32, exception: i64) -> i64 {
+    if let Some(iterator) = state.array_iterators.get_mut(&iterator_handle) {
+        iterator.done = true;
+    }
+    exception
+}
+
 fn ensure_custom_current(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -3079,22 +3101,31 @@ fn ensure_custom_current(
         return Err(fail_dispatch(ctx));
     };
     let next = get_property(ctx, state, object, next_key).map_err(|()| fail_dispatch(ctx))?;
+    // next 为访问器且 getter 抛出：传播 getter 的异常而非误报 TypeError。
+    if value::is_exception(next) {
+        return Err(mark_custom_done(state, iterator_handle, next));
+    }
     if !value::is_callable(next) {
-        return Err(type_error(ctx, state, "iterator.next is not callable"));
+        let exception = type_error(ctx, state, "iterator.next is not callable");
+        return Err(mark_custom_done(state, iterator_handle, exception));
     }
     let result = state
         .invoke_callable(ctx, next, object, &[])
         .ok_or_else(|| fail_dispatch(ctx))?;
     if value::is_exception(result) {
-        return Err(result);
+        return Err(mark_custom_done(state, iterator_handle, result));
     }
     if !value::is_js_object(result) {
-        return Err(type_error(ctx, state, "iterator result is not an object"));
+        let exception = type_error(ctx, state, "iterator result is not an object");
+        return Err(mark_custom_done(state, iterator_handle, exception));
     }
     let Some(done_key) = state.intern_text("done".into(), value::TAG_STRING) else {
         return Err(fail_dispatch(ctx));
     };
     let done = get_property(ctx, state, result, done_key).map_err(|()| fail_dispatch(ctx))?;
+    if value::is_exception(done) {
+        return Err(mark_custom_done(state, iterator_handle, done));
+    }
     let done = is_truthy(state, done);
     let iterator = state
         .array_iterators
@@ -3114,10 +3145,17 @@ fn array_like_length(state: &mut NativeAgentState, source: u32) -> Option<u32> {
     })
 }
 
+/// IteratorClose（ES §7.4.6）。规范所有调用点都以 iteratorRecord.[[Done]] 为
+/// false 为前提；语义层为覆盖运行期才可知的 [[Done]] 状态（迭代器耗尽后 /
+/// step 自身抛出后的 abrupt completion）无条件发射 close，此处以 `entry.done`
+/// 复原该门禁——done 时不得调用 return()（可观察偏离）。
+/// `completion_is_throw`：completion 为 throw completion 时（步骤 5）原始异常
+/// 胜出，return 方法查找抛出、非 callable、调用抛出、返回非对象全部吞咽。
 pub(super) fn iterator_close(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
+    completion_is_throw: bool,
 ) -> i64 {
     let [iterator, completion] = args else {
         return fail_dispatch(ctx);
@@ -3132,25 +3170,47 @@ pub(super) fn iterator_close(
     let super::super::NativeIteratorSource::Custom(object) = entry.source else {
         return *completion;
     };
+    if entry.done {
+        return *completion;
+    }
     let Some(return_key) = state.intern_text("return".into(), value::TAG_STRING) else {
         return fail_dispatch(ctx);
     };
     let Ok(method) = get_property(ctx, state, object, return_key) else {
         return fail_dispatch(ctx);
     };
+    // GetMethod 的 abrupt（return 为访问器且 getter 抛出）：非 throw 完成时
+    // 按步骤 6 传播，throw 完成时按步骤 5 吞咽。
+    if value::is_exception(method) {
+        return if completion_is_throw {
+            *completion
+        } else {
+            method
+        };
+    }
     if value::is_undefined(method) || value::is_null(method) {
         return *completion;
     }
     if !value::is_callable(method) {
+        if completion_is_throw {
+            return *completion;
+        }
         return type_error(ctx, state, "iterator.return is not callable");
     }
     let Some(result) = state.invoke_callable(ctx, method, object, &[]) else {
         return fail_dispatch(ctx);
     };
     if value::is_exception(result) {
-        return result;
+        return if completion_is_throw {
+            *completion
+        } else {
+            result
+        };
     }
     if !value::is_js_object(result) {
+        if completion_is_throw {
+            return *completion;
+        }
         return type_error(ctx, state, "iterator.return did not return an object");
     }
     *completion
