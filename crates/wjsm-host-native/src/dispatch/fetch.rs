@@ -202,11 +202,15 @@ pub(crate) fn sweep_retired(
         .responses
         .iter()
         .filter(|(slot, response)| {
-            fetch
+            // 登记须精确匹配「本槽位的 Response」：包装对象死后堆句柄可能被
+            // 新 fetch 对象复用，仅凭句柄存在会把死槽误判为活。
+            let registered = fetch
                 .objects
                 .get(&value::decode_handle(response.object))
-                .is_none()
-                && !streams.body_stream_references_response(*slot)
+                .is_some_and(
+                    |kind| matches!(kind, FetchObjectKind::Response(owner) if owner == slot),
+                );
+            !registered && !streams.body_stream_references_response(*slot)
         })
         .map(|(slot, _)| slot)
         .collect();
