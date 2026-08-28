@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+sync-null true object null is not iterable (cannot read property Symbol(Symbol.iterator))
+sync-undefined true undefined is not iterable (cannot read property Symbol(Symbol.iterator))
+sync-object true object is not iterable (cannot read property Symbol(Symbol.iterator))
+sync-number true number 1 is not iterable (cannot read property Symbol(Symbol.iterator))
+sync-boolean true boolean true is not iterable (cannot read property Symbol(Symbol.iterator))
+sync-noncallable true object is not iterable (cannot read property Symbol(Symbol.iterator))
+sync-nonobject true Result of the Symbol.iterator method is not an object
+sync-caught true true
+async-null true Cannot read properties of null (reading 'Symbol(Symbol.asyncIterator)')
+async-undefined true Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')
+async-noncallable true number 1 is not a function
+async-nonobject true Result of the Symbol.asyncIterator method is not an object
+async-sync-nonobject true Result of the Symbol.iterator method is not an object
+async-object true object is not async iterable
+async-number true number 1 is not async iterable
+async-caught true true
+--- stderr ---

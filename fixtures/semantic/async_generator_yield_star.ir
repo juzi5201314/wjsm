@@ -1,0 +1,2179 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(6)
+    c23 = number(2)
+    c24 = number(3)
+    c25 = number(4)
+    c26 = undefined
+    c27 = number(1)
+    c28 = number(1)
+    c29 = number(2)
+    c30 = number(2)
+    c31 = number(1)
+    c32 = number(2)
+    c33 = string("inner-done")
+    c34 = number(0)
+    c35 = number(1)
+    c36 = number(2)
+    c37 = number(0)
+    c38 = functionref(@0)
+    c39 = number(7)
+    c40 = undefined
+    c41 = number(2)
+    c42 = number(3)
+    c43 = number(4)
+    c44 = number(6)
+    c45 = functionref(@1)
+    c46 = number(0)
+    c47 = number(1)
+    c48 = number(6)
+    c49 = number(2)
+    c50 = number(3)
+    c51 = number(4)
+    c52 = undefined
+    c53 = undefined
+    c54 = string("$0.inner")
+    c55 = undefined
+    c56 = string("done")
+    c57 = string("value")
+    c58 = number(1)
+    c59 = number(2)
+    c60 = string("value")
+    c61 = number(1)
+    c62 = number(0)
+    c63 = number(1)
+    c64 = number(0)
+    c65 = number(1)
+    c66 = number(0)
+    c67 = undefined
+    c68 = string("received")
+    c69 = number(3)
+    c70 = number(4)
+    c71 = undefined
+    c72 = string("done")
+    c73 = string("value")
+    c74 = number(1)
+    c75 = number(2)
+    c76 = string("value")
+    c77 = string("ab")
+    c78 = undefined
+    c79 = string("done")
+    c80 = string("value")
+    c81 = number(1)
+    c82 = number(2)
+    c83 = string("value")
+    c84 = number(5)
+    c85 = undefined
+    c86 = string("done")
+    c87 = string("value")
+    c88 = number(1)
+    c89 = number(2)
+    c90 = string("value")
+    c91 = string("outer-done")
+    c92 = number(7)
+    c93 = number(7)
+    c94 = number(7)
+    c95 = number(7)
+    c96 = number(8)
+    c97 = number(8)
+    c98 = number(8)
+    c99 = number(8)
+    c100 = number(9)
+    c101 = number(9)
+    c102 = number(9)
+    c103 = number(9)
+    c104 = number(10)
+    c105 = number(10)
+    c106 = number(10)
+    c107 = number(10)
+    c108 = number(0)
+    c109 = number(1)
+    c110 = number(2)
+    c111 = number(3)
+    c112 = number(4)
+    c113 = number(5)
+    c114 = number(6)
+    c115 = number(7)
+    c116 = number(8)
+    c117 = number(0)
+    c118 = functionref(@2)
+    c119 = number(11)
+    c120 = undefined
+    c121 = number(2)
+    c122 = number(3)
+    c123 = number(4)
+    c124 = number(6)
+    c125 = functionref(@3)
+    c126 = undefined
+    c127 = string("$0.inner")
+    c128 = number(0)
+    c129 = number(1)
+    c130 = number(6)
+    c131 = number(2)
+    c132 = number(3)
+    c133 = number(4)
+    c134 = undefined
+    c135 = string("t1")
+    c136 = number(1)
+    c137 = number(2)
+    c138 = string("RangeError")
+    c139 = string("boom")
+    c140 = number(0)
+    c141 = number(1)
+    c142 = number(0)
+    c143 = functionref(@4)
+    c144 = number(7)
+    c145 = undefined
+    c146 = number(2)
+    c147 = number(3)
+    c148 = number(4)
+    c149 = number(6)
+    c150 = functionref(@5)
+    c151 = number(0)
+    c152 = number(1)
+    c153 = number(6)
+    c154 = number(2)
+    c155 = number(3)
+    c156 = number(4)
+    c157 = undefined
+    c158 = undefined
+    c159 = string("$0.throwing")
+    c160 = undefined
+    c161 = string("done")
+    c162 = string("value")
+    c163 = number(1)
+    c164 = number(2)
+    c165 = string("value")
+    c166 = number(1)
+    c167 = number(0)
+    c168 = number(1)
+    c169 = number(0)
+    c170 = number(1)
+    c171 = number(0)
+    c172 = undefined
+    c173 = string("caught")
+    c174 = string("constructor")
+    c175 = string("name")
+    c176 = string("message")
+    c177 = string("recovered")
+    c178 = number(1)
+    c179 = number(2)
+    c180 = undefined
+    c181 = number(7)
+    c182 = number(7)
+    c183 = number(7)
+    c184 = number(7)
+    c185 = number(0)
+    c186 = number(1)
+    c187 = number(2)
+    c188 = number(3)
+    c189 = number(0)
+    c190 = functionref(@6)
+    c191 = number(8)
+    c192 = undefined
+    c193 = number(2)
+    c194 = number(3)
+    c195 = number(4)
+    c196 = number(6)
+    c197 = functionref(@7)
+    c198 = string("$0.throwing")
+    c199 = undefined
+    c200 = number(0)
+    c201 = number(1)
+    c202 = number(2)
+    c203 = number(3)
+    c204 = undefined
+    c205 = undefined
+    c206 = string("$0.outer")
+    c207 = undefined
+    c208 = bool(true)
+    c209 = string("next")
+    c210 = undefined
+    c211 = number(1)
+    c212 = string("done")
+    c213 = number(1)
+    c214 = number(0)
+    c215 = number(1)
+    c216 = number(0)
+    c217 = number(1)
+    c218 = number(0)
+    c219 = undefined
+    c220 = string("value")
+    c221 = string("value")
+    c222 = number(1)
+    c223 = number(0)
+    c224 = number(1)
+    c225 = number(0)
+    c226 = number(1)
+    c227 = number(0)
+    c228 = undefined
+    c229 = string("final")
+    c230 = string("value")
+    c231 = undefined
+    c232 = string("$0.catching")
+    c233 = undefined
+    c234 = string("done")
+    c235 = string("value")
+    c236 = number(1)
+    c237 = number(0)
+    c238 = number(1)
+    c239 = number(0)
+    c240 = number(1)
+    c241 = number(0)
+    c242 = undefined
+    c243 = string("catching")
+    c244 = undefined
+    c245 = undefined
+    c246 = string("$0.outer")
+    c247 = number(1)
+    c248 = number(0)
+    c249 = number(1)
+    c250 = number(0)
+    c251 = number(1)
+    c252 = number(0)
+    c253 = undefined
+    c254 = string("first")
+    c255 = string("next")
+    c256 = undefined
+    c257 = number(1)
+    c258 = string("value")
+    c259 = string("return")
+    c260 = number(7)
+    c261 = undefined
+    c262 = number(1)
+    c263 = number(1)
+    c264 = number(0)
+    c265 = number(1)
+    c266 = number(0)
+    c267 = number(1)
+    c268 = number(0)
+    c269 = undefined
+    c270 = string("returned")
+    c271 = string("value")
+    c272 = string("done")
+    c273 = number(1)
+    c274 = number(0)
+    c275 = number(1)
+    c276 = number(0)
+    c277 = number(1)
+    c278 = number(0)
+    c279 = undefined
+    c280 = string("after-return")
+    c281 = string("next")
+    c282 = undefined
+    c283 = number(1)
+    c284 = string("done")
+    c285 = undefined
+    c286 = number(4)
+    c287 = number(4)
+    c288 = number(5)
+    c289 = number(5)
+    c290 = number(6)
+    c291 = number(7)
+    c292 = number(8)
+    c293 = number(9)
+    c294 = number(10)
+    c295 = number(6)
+    c296 = number(7)
+    c297 = number(8)
+    c298 = number(9)
+    c299 = number(10)
+    c300 = number(6)
+    c301 = number(6)
+    c302 = number(11)
+    c303 = number(12)
+    c304 = number(13)
+    c305 = number(14)
+    c306 = number(11)
+    c307 = number(12)
+    c308 = number(13)
+    c309 = number(14)
+    c310 = number(0)
+    c311 = number(1)
+    c312 = number(2)
+    c313 = number(3)
+    c314 = number(4)
+    c315 = number(5)
+    c316 = functionref(@8)
+    c317 = number(15)
+    c318 = number(0)
+    c319 = number(0)
+    c320 = number(1)
+    c321 = bool(false)
+    c322 = number(2)
+    c323 = number(3)
+    c324 = number(0)
+    c325 = undefined
+    c326 = bool(false)
+    c327 = functionref(@9)
+    c328 = string("$0.outer")
+    c329 = string("$0.catching")
+
+  fn @inner$asyncgen [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $1.$env
+      %1 = const c20
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $1.$state, %2
+      %3 = const c21
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $1.$is_rejected, %4
+      %5 = load var $1.$this
+      store var $1.$resume_val, %5
+      %6 = const c22
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $1.$this, %7
+      %8 = const c23
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $1.$generator, %9
+      %10 = const c24
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $1.$closure_env, %11
+      %12 = const c25
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $1.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c26
+      store var $1.$shared_env, %14
+      %41 = load var $1.$state
+      switch %41 [case c34 -> bb2, case c35 -> bb3, case c36 -> bb8], default bb13, exit bb14
+    bb2:
+      %15 = const c27
+      %16 = load var $1.$generator
+      %17 = call builtin.async_generator.next(%16, %15)
+      suspend %17, state=1
+      jump bb5
+    bb3:
+      %18 = load var $1.$resume_val
+      %19 = load var $1.$is_rejected
+      %20 = const c28
+      %21 = stricteq %19, %20
+      branch %21, bb4, bb7
+    bb4:
+      %24 = load var $1.$generator
+      call builtin.async_generator.throw(%24, %18)
+      return
+    bb5:
+      %27 = const c30
+      %28 = load var $1.$generator
+      %29 = call builtin.async_generator.next(%28, %27)
+      suspend %29, state=2
+      jump bb10
+    bb6:
+      %25 = load var $1.$generator
+      call builtin.async_generator.return(%25, %18)
+      return
+    bb7:
+      %22 = const c29
+      %23 = stricteq %19, %22
+      branch %23, bb6, bb5
+    bb8:
+      %30 = load var $1.$resume_val
+      %31 = load var $1.$is_rejected
+      %32 = const c31
+      %33 = stricteq %31, %32
+      branch %33, bb9, bb12
+    bb9:
+      %36 = load var $1.$generator
+      call builtin.async_generator.throw(%36, %30)
+      return
+    bb10:
+      %39 = const c33
+      %40 = load var $1.$generator
+      call builtin.async_generator.return(%40, %39)
+      return
+    bb11:
+      %37 = load var $1.$generator
+      call builtin.async_generator.return(%37, %30)
+      return
+    bb12:
+      %34 = const c32
+      %35 = stricteq %31, %34
+      branch %35, bb11, bb10
+    bb13:
+      return
+    bb14:
+      unreachable
+
+  fn @inner [needs_prototype] [js_name "inner"] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c37
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
+      store var $2.arguments, %2
+      %3 = const c38
+      %4 = const c39
+      %5 = const c40
+      %6 = call builtin.continuation.create(%3, %5, %4)
+      %7 = call builtin.async_generator.start(%6)
+      %8 = const c41
+      call builtin.continuation.save_var(%6, %8, %7)
+      %9 = const c42
+      call builtin.continuation.save_var(%6, %9, %5)
+      %10 = load var $2.arguments
+      %11 = const c43
+      call builtin.continuation.save_var(%6, %11, %10)
+      %12 = load var $2.$this
+      %13 = const c44
+      call builtin.continuation.save_var(%6, %13, %12)
+      return %7
+
+  fn @outer$asyncgen [captures: $0.inner] [params: $3.$env, $3.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $3.$env
+      %1 = const c46
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $3.$state, %2
+      %3 = const c47
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $3.$is_rejected, %4
+      %5 = load var $3.$this
+      store var $3.$resume_val, %5
+      %6 = const c48
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $3.$this, %7
+      %8 = const c49
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $3.$generator, %9
+      %10 = const c50
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $3.$closure_env, %11
+      %12 = const c51
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $3.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c52
+      store var $3.$shared_env, %14
+      %237 = load var $3.$state
+      switch %237 [case c108 -> bb2, case c109 -> bb10, case c110 -> bb13, case c111 -> bb35, case c112 -> bb38, case c113 -> bb48, case c114 -> bb51, case c115 -> bb63, case c116 -> bb66], default bb71, exit bb72
+    bb2:
+      %15 = const c53
+      %16 = load var $3.$closure_env
+      %17 = const c54
+      %18 = get_prop %16, %17
+      %19 = call %18, this=%15
+      %20 = is_exception %19
+      branch %20, bb4, bb3
+    bb3:
+      %23 = call builtin.async_iterator.from(%19)
+      %24 = is_exception %23
+      branch %24, bb6, bb5
+    bb4:
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $3.$generator
+      call builtin.async_generator.throw(%22, %21)
+      return
+    bb5:
+      store var $3.$yield_star_iter_0, %23
+      jump bb7
+    bb6:
+      %25 = call builtin.exception_value(%23)
+      %26 = load var $3.$generator
+      call builtin.async_generator.throw(%26, %25)
+      return
+    bb7:
+      %27 = load var $3.$yield_star_iter_0
+      %28 = call builtin.iterator.next(%27)
+      %29 = const c55
+      %30 = call builtin.promise.resolve_static(%29, %28)
+      %189 = load var $3.$env
+      %190 = const c92
+      %191 = load var $3.$yield_star_iter_0
+      call builtin.continuation.save_var(%189, %190, %191)
+      suspend %30, state=1
+      jump bb11
+    bb8:
+      %38 = load var $3.$resume_val
+      %39 = const c57
+      %40 = get_prop %38, %39
+      %41 = load var $3.$generator
+      %42 = call builtin.async_generator.next(%41, %40)
+      %195 = load var $3.$env
+      %196 = const c94
+      %197 = load var $3.$yield_star_iter_0
+      call builtin.continuation.save_var(%195, %196, %197)
+      suspend %42, state=2
+      jump bb15
+    bb9:
+      %52 = load var $3.$resume_val
+      %53 = const c60
+      %54 = get_prop %52, %53
+      store var $3.received, %54
+      %55 = const c61
+      %56 = const c62
+      %57 = call builtin.intrinsic_pristine(%55, %56)
+      branch %57, bb18, bb19
+    bb10:
+      %192 = load var $3.$env
+      %193 = const c93
+      %194 = call builtin.continuation.load_var(%192, %193)
+      store var $3.$yield_star_iter_0, %194
+      %31 = load var $3.$resume_val
+      %32 = load var $3.$is_rejected
+      branch %32, bb12, bb11
+    bb11:
+      %34 = load var $3.$resume_val
+      %35 = const c56
+      %36 = get_prop %34, %35
+      %37 = not %36
+      branch %37, bb8, bb9
+    bb12:
+      %33 = load var $3.$generator
+      call builtin.async_generator.throw(%33, %31)
+      return
+    bb13:
+      %198 = load var $3.$env
+      %199 = const c95
+      %200 = call builtin.continuation.load_var(%198, %199)
+      store var $3.$yield_star_iter_0, %200
+      %43 = load var $3.$resume_val
+      %44 = load var $3.$is_rejected
+      %45 = const c58
+      %46 = stricteq %44, %45
+      branch %46, bb14, bb17
+    bb14:
+      %49 = load var $3.$generator
+      call builtin.async_generator.throw(%49, %43)
+      return
+    bb15:
+      jump bb7
+    bb16:
+      %50 = load var $3.$generator
+      call builtin.async_generator.return(%50, %43)
+      return
+    bb17:
+      %47 = const c59
+      %48 = stricteq %44, %47
+      branch %48, bb16, bb15
+    bb18:
+      %70 = const c67
+      jump bb25
+    bb19:
+      %58 = const c63
+      %59 = const c64
+      %60 = call builtin.intrinsic_resolve(%58, %59)
+      %61 = is_exception %60
+      branch %61, bb21, bb20
+    bb20:
+      %64 = const c65
+      %65 = const c66
+      %66 = call builtin.intrinsic_resolve(%64, %65, %60)
+      %67 = is_exception %66
+      branch %67, bb23, bb22
+    bb21:
+      %62 = call builtin.exception_value(%60)
+      %63 = load var $3.$generator
+      call builtin.async_generator.throw(%63, %62)
+      return
+    bb22:
+      jump bb25
+    bb23:
+      %68 = call builtin.exception_value(%66)
+      %69 = load var $3.$generator
+      call builtin.async_generator.throw(%69, %68)
+      return
+    bb24:
+      %77 = phi [(bb26, %75), (bb27, %76)]
+      %78 = is_exception %77
+      branch %78, bb29, bb28
+    bb25:
+      %71 = phi [(bb18, %70), (bb22, %66)]
+      %72 = phi [(bb18, %70), (bb22, %60)]
+      %73 = const c68
+      %74 = load var $3.received
+      branch %57, bb26, bb27
+    bb26:
+      %75 = call builtin.console.log(%73, %74)
+      jump bb24
+    bb27:
+      %76 = call %71, this=%72, args=[%73, %74]
+      jump bb24
+    bb28:
+      %81 = new_array(capacity=4)
+      %82 = const c69
+      call builtin.array.push(%81, %82)
+      %83 = const c70
+      call builtin.array.push(%81, %83)
+      %84 = call builtin.async_iterator.from(%81)
+      %85 = is_exception %84
+      branch %85, bb31, bb30
+    bb29:
+      %79 = call builtin.exception_value(%77)
+      %80 = load var $3.$generator
+      call builtin.async_generator.throw(%80, %79)
+      return
+    bb30:
+      store var $3.$yield_star_iter_1, %84
+      jump bb32
+    bb31:
+      %86 = call builtin.exception_value(%84)
+      %87 = load var $3.$generator
+      call builtin.async_generator.throw(%87, %86)
+      return
+    bb32:
+      %88 = load var $3.$yield_star_iter_1
+      %89 = call builtin.iterator.next(%88)
+      %90 = const c71
+      %91 = call builtin.promise.resolve_static(%90, %89)
+      %201 = load var $3.$env
+      %202 = const c96
+      %203 = load var $3.$yield_star_iter_1
+      call builtin.continuation.save_var(%201, %202, %203)
+      suspend %91, state=3
+      jump bb36
+    bb33:
+      %99 = load var $3.$resume_val
+      %100 = const c73
+      %101 = get_prop %99, %100
+      %102 = load var $3.$generator
+      %103 = call builtin.async_generator.next(%102, %101)
+      %207 = load var $3.$env
+      %208 = const c98
+      %209 = load var $3.$yield_star_iter_1
+      call builtin.continuation.save_var(%207, %208, %209)
+      suspend %103, state=4
+      jump bb40
+    bb34:
+      %113 = load var $3.$resume_val
+      %114 = const c76
+      %115 = get_prop %113, %114
+      %116 = const c77
+      %117 = call builtin.async_iterator.from(%116)
+      %118 = is_exception %117
+      branch %118, bb44, bb43
+    bb35:
+      %204 = load var $3.$env
+      %205 = const c97
+      %206 = call builtin.continuation.load_var(%204, %205)
+      store var $3.$yield_star_iter_1, %206
+      %92 = load var $3.$resume_val
+      %93 = load var $3.$is_rejected
+      branch %93, bb37, bb36
+    bb36:
+      %95 = load var $3.$resume_val
+      %96 = const c72
+      %97 = get_prop %95, %96
+      %98 = not %97
+      branch %98, bb33, bb34
+    bb37:
+      %94 = load var $3.$generator
+      call builtin.async_generator.throw(%94, %92)
+      return
+    bb38:
+      %210 = load var $3.$env
+      %211 = const c99
+      %212 = call builtin.continuation.load_var(%210, %211)
+      store var $3.$yield_star_iter_1, %212
+      %104 = load var $3.$resume_val
+      %105 = load var $3.$is_rejected
+      %106 = const c74
+      %107 = stricteq %105, %106
+      branch %107, bb39, bb42
+    bb39:
+      %110 = load var $3.$generator
+      call builtin.async_generator.throw(%110, %104)
+      return
+    bb40:
+      jump bb32
+    bb41:
+      %111 = load var $3.$generator
+      call builtin.async_generator.return(%111, %104)
+      return
+    bb42:
+      %108 = const c75
+      %109 = stricteq %105, %108
+      branch %109, bb41, bb40
+    bb43:
+      store var $3.$yield_star_iter_2, %117
+      jump bb45
+    bb44:
+      %119 = call builtin.exception_value(%117)
+      %120 = load var $3.$generator
+      call builtin.async_generator.throw(%120, %119)
+      return
+    bb45:
+      %121 = load var $3.$yield_star_iter_2
+      %122 = call builtin.iterator.next(%121)
+      %123 = const c78
+      %124 = call builtin.promise.resolve_static(%123, %122)
+      %213 = load var $3.$env
+      %214 = const c100
+      %215 = load var $3.$yield_star_iter_2
+      call builtin.continuation.save_var(%213, %214, %215)
+      suspend %124, state=5
+      jump bb49
+    bb46:
+      %132 = load var $3.$resume_val
+      %133 = const c80
+      %134 = get_prop %132, %133
+      %135 = load var $3.$generator
+      %136 = call builtin.async_generator.next(%135, %134)
+      %219 = load var $3.$env
+      %220 = const c102
+      %221 = load var $3.$yield_star_iter_2
+      call builtin.continuation.save_var(%219, %220, %221)
+      suspend %136, state=6
+      jump bb53
+    bb47:
+      %146 = load var $3.$resume_val
+      %147 = const c83
+      %148 = get_prop %146, %147
+      %149 = new_array(capacity=4)
+      %150 = const c84
+      call builtin.array.push(%149, %150)
+      %151 = call builtin.Set(%149)
+      %152 = is_exception %151
+      branch %152, bb57, bb56
+    bb48:
+      %216 = load var $3.$env
+      %217 = const c101
+      %218 = call builtin.continuation.load_var(%216, %217)
+      store var $3.$yield_star_iter_2, %218
+      %125 = load var $3.$resume_val
+      %126 = load var $3.$is_rejected
+      branch %126, bb50, bb49
+    bb49:
+      %128 = load var $3.$resume_val
+      %129 = const c79
+      %130 = get_prop %128, %129
+      %131 = not %130
+      branch %131, bb46, bb47
+    bb50:
+      %127 = load var $3.$generator
+      call builtin.async_generator.throw(%127, %125)
+      return
+    bb51:
+      %222 = load var $3.$env
+      %223 = const c103
+      %224 = call builtin.continuation.load_var(%222, %223)
+      store var $3.$yield_star_iter_2, %224
+      %137 = load var $3.$resume_val
+      %138 = load var $3.$is_rejected
+      %139 = const c81
+      %140 = stricteq %138, %139
+      branch %140, bb52, bb55
+    bb52:
+      %143 = load var $3.$generator
+      call builtin.async_generator.throw(%143, %137)
+      return
+    bb53:
+      jump bb45
+    bb54:
+      %144 = load var $3.$generator
+      call builtin.async_generator.return(%144, %137)
+      return
+    bb55:
+      %141 = const c82
+      %142 = stricteq %138, %141
+      branch %142, bb54, bb53
+    bb56:
+      %155 = call builtin.async_iterator.from(%151)
+      %156 = is_exception %155
+      branch %156, bb59, bb58
+    bb57:
+      %153 = call builtin.exception_value(%151)
+      %154 = load var $3.$generator
+      call builtin.async_generator.throw(%154, %153)
+      return
+    bb58:
+      store var $3.$yield_star_iter_3, %155
+      jump bb60
+    bb59:
+      %157 = call builtin.exception_value(%155)
+      %158 = load var $3.$generator
+      call builtin.async_generator.throw(%158, %157)
+      return
+    bb60:
+      %159 = load var $3.$yield_star_iter_3
+      %160 = call builtin.iterator.next(%159)
+      %161 = const c85
+      %162 = call builtin.promise.resolve_static(%161, %160)
+      %225 = load var $3.$env
+      %226 = const c104
+      %227 = load var $3.$yield_star_iter_3
+      call builtin.continuation.save_var(%225, %226, %227)
+      suspend %162, state=7
+      jump bb64
+    bb61:
+      %170 = load var $3.$resume_val
+      %171 = const c87
+      %172 = get_prop %170, %171
+      %173 = load var $3.$generator
+      %174 = call builtin.async_generator.next(%173, %172)
+      %231 = load var $3.$env
+      %232 = const c106
+      %233 = load var $3.$yield_star_iter_3
+      call builtin.continuation.save_var(%231, %232, %233)
+      suspend %174, state=8
+      jump bb68
+    bb62:
+      %184 = load var $3.$resume_val
+      %185 = const c90
+      %186 = get_prop %184, %185
+      %187 = const c91
+      %188 = load var $3.$generator
+      call builtin.async_generator.return(%188, %187)
+      return
+    bb63:
+      %228 = load var $3.$env
+      %229 = const c105
+      %230 = call builtin.continuation.load_var(%228, %229)
+      store var $3.$yield_star_iter_3, %230
+      %163 = load var $3.$resume_val
+      %164 = load var $3.$is_rejected
+      branch %164, bb65, bb64
+    bb64:
+      %166 = load var $3.$resume_val
+      %167 = const c86
+      %168 = get_prop %166, %167
+      %169 = not %168
+      branch %169, bb61, bb62
+    bb65:
+      %165 = load var $3.$generator
+      call builtin.async_generator.throw(%165, %163)
+      return
+    bb66:
+      %234 = load var $3.$env
+      %235 = const c107
+      %236 = call builtin.continuation.load_var(%234, %235)
+      store var $3.$yield_star_iter_3, %236
+      %175 = load var $3.$resume_val
+      %176 = load var $3.$is_rejected
+      %177 = const c88
+      %178 = stricteq %176, %177
+      branch %178, bb67, bb70
+    bb67:
+      %181 = load var $3.$generator
+      call builtin.async_generator.throw(%181, %175)
+      return
+    bb68:
+      jump bb60
+    bb69:
+      %182 = load var $3.$generator
+      call builtin.async_generator.return(%182, %175)
+      return
+    bb70:
+      %179 = const c89
+      %180 = stricteq %176, %179
+      branch %180, bb69, bb68
+    bb71:
+      return
+    bb72:
+      unreachable
+
+  fn @outer [needs_prototype] [js_name "outer"] [js_length 0] [captures: $0.inner] [params: $4.$env, $4.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c117
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
+      store var $4.arguments, %2
+      %3 = const c118
+      %4 = load var $env
+      %5 = call builtin.create_closure(%3, %4)
+      %6 = const c119
+      %7 = const c120
+      %8 = call builtin.continuation.create(%5, %7, %6)
+      %9 = call builtin.async_generator.start(%8)
+      %10 = const c121
+      call builtin.continuation.save_var(%8, %10, %9)
+      %11 = const c122
+      call builtin.continuation.save_var(%8, %11, %4)
+      %12 = load var $4.arguments
+      %13 = const c123
+      call builtin.continuation.save_var(%8, %13, %12)
+      %14 = load var $4.$this
+      %15 = const c124
+      call builtin.continuation.save_var(%8, %15, %14)
+      return %9
+
+  fn @throwing$asyncgen [params: $5.$env, $5.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $5.$env
+      %1 = const c128
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $5.$state, %2
+      %3 = const c129
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $5.$is_rejected, %4
+      %5 = load var $5.$this
+      store var $5.$resume_val, %5
+      %6 = const c130
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $5.$this, %7
+      %8 = const c131
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $5.$generator, %9
+      %10 = const c132
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $5.$closure_env, %11
+      %12 = const c133
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $5.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c134
+      store var $5.$shared_env, %14
+      %44 = load var $5.$state
+      switch %44 [case c140 -> bb2, case c141 -> bb3], default bb17, exit bb18
+    bb2:
+      %15 = const c135
+      %16 = load var $5.$generator
+      %17 = call builtin.async_generator.next(%16, %15)
+      suspend %17, state=1
+      jump bb5
+    bb3:
+      %18 = load var $5.$resume_val
+      %19 = load var $5.$is_rejected
+      %20 = const c136
+      %21 = stricteq %19, %20
+      branch %21, bb4, bb7
+    bb4:
+      %24 = load var $5.$generator
+      call builtin.async_generator.throw(%24, %18)
+      return
+    bb5:
+      %27 = load var $0.$global
+      %28 = const c138
+      %29 = get_prop %27, %28
+      %30 = new_object(capacity=6)
+      %31 = call builtin.get_prototype_from_constructor(%29)
+      set_proto %30, %31
+      %32 = const c139
+      %33 = construct_call %29, this=%30, args=[%32]
+      %34 = is_exception %33
+      branch %34, bb8, bb9
+    bb6:
+      %25 = load var $5.$generator
+      call builtin.async_generator.return(%25, %18)
+      return
+    bb7:
+      %22 = const c137
+      %23 = stricteq %19, %22
+      branch %23, bb6, bb5
+    bb8:
+      jump bb12
+    bb9:
+      %35 = call builtin.is_js_object(%33)
+      branch %35, bb10, bb11
+    bb10:
+      jump bb12
+    bb11:
+      jump bb12
+    bb12:
+      %36 = phi [(bb8, %33), (bb10, %33), (bb11, %30)]
+      %37 = is_exception %36
+      branch %37, bb14, bb13
+    bb13:
+      %40 = is_exception %36
+      branch %40, bb16, bb15
+    bb14:
+      %38 = call builtin.exception_value(%36)
+      %39 = load var $5.$generator
+      call builtin.async_generator.throw(%39, %38)
+      return
+    bb15:
+      %43 = load var $5.$generator
+      call builtin.async_generator.throw(%43, %36)
+      return
+    bb16:
+      %41 = call builtin.exception_value(%36)
+      %42 = load var $5.$generator
+      call builtin.async_generator.throw(%42, %41)
+      return
+    bb17:
+      return
+    bb18:
+      unreachable
+
+  fn @throwing [needs_prototype] [js_name "throwing"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c142
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
+      store var $6.arguments, %2
+      %3 = const c143
+      %4 = const c144
+      %5 = const c145
+      %6 = call builtin.continuation.create(%3, %5, %4)
+      %7 = call builtin.async_generator.start(%6)
+      %8 = const c146
+      call builtin.continuation.save_var(%6, %8, %7)
+      %9 = const c147
+      call builtin.continuation.save_var(%6, %9, %5)
+      %10 = load var $6.arguments
+      %11 = const c148
+      call builtin.continuation.save_var(%6, %11, %10)
+      %12 = load var $6.$this
+      %13 = const c149
+      call builtin.continuation.save_var(%6, %13, %12)
+      return %7
+
+  fn @catching$asyncgen [captures: $0.throwing] [params: $7.$env, $7.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $7.$env
+      %1 = const c151
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $7.$state, %2
+      %3 = const c152
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $7.$is_rejected, %4
+      %5 = load var $7.$this
+      store var $7.$resume_val, %5
+      %6 = const c153
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $7.$this, %7
+      %8 = const c154
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $7.$generator, %9
+      %10 = const c155
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $7.$closure_env, %11
+      %12 = const c156
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $7.arguments, %13
+      jump bb1
+    bb1:
+      %14 = const c157
+      store var $7.$shared_env, %14
+      %117 = load var $7.$state
+      switch %117 [case c185 -> bb2, case c186 -> bb13, case c187 -> bb16, case c188 -> bb37], default bb42, exit bb43
+    bb2:
+      jump bb3
+    bb3:
+      %15 = const c158
+      %16 = load var $7.$closure_env
+      %17 = const c159
+      %18 = get_prop %16, %17
+      %19 = call %18, this=%15
+      %20 = is_exception %19
+      branch %20, bb7, bb6
+    bb4:
+      %103 = load var $7.$generator
+      %104 = const c180
+      call builtin.async_generator.return(%103, %104)
+      return
+    bb5:
+      %51 = load var $tmp.0
+      store var $10.error, %51
+      %52 = const c166
+      %53 = const c167
+      %54 = call builtin.intrinsic_pristine(%52, %53)
+      branch %54, bb21, bb22
+    bb6:
+      %22 = call builtin.async_iterator.from(%19)
+      %23 = is_exception %22
+      branch %23, bb9, bb8
+    bb7:
+      %21 = call builtin.exception_value(%19)
+      store var $tmp.0, %21
+      jump bb5
+    bb8:
+      store var $9.$yield_star_iter_1, %22
+      jump bb10
+    bb9:
+      %24 = call builtin.exception_value(%22)
+      store var $tmp.0, %24
+      jump bb5
+    bb10:
+      %25 = load var $9.$yield_star_iter_1
+      %26 = call builtin.iterator.next(%25)
+      %27 = const c160
+      %28 = call builtin.promise.resolve_static(%27, %26)
+      %105 = load var $7.$env
+      %106 = const c181
+      %107 = load var $9.$yield_star_iter_1
+      call builtin.continuation.save_var(%105, %106, %107)
+      suspend %28, state=1
+      jump bb14
+    bb11:
+      %35 = load var $7.$resume_val
+      %36 = const c162
+      %37 = get_prop %35, %36
+      %38 = load var $7.$generator
+      %39 = call builtin.async_generator.next(%38, %37)
+      %111 = load var $7.$env
+      %112 = const c183
+      %113 = load var $9.$yield_star_iter_1
+      call builtin.continuation.save_var(%111, %112, %113)
+      suspend %39, state=2
+      jump bb18
+    bb12:
+      %48 = load var $7.$resume_val
+      %49 = const c165
+      %50 = get_prop %48, %49
+      jump bb4
+    bb13:
+      %108 = load var $7.$env
+      %109 = const c182
+      %110 = call builtin.continuation.load_var(%108, %109)
+      store var $9.$yield_star_iter_1, %110
+      %29 = load var $7.$resume_val
+      %30 = load var $7.$is_rejected
+      branch %30, bb15, bb14
+    bb14:
+      %31 = load var $7.$resume_val
+      %32 = const c161
+      %33 = get_prop %31, %32
+      %34 = not %33
+      branch %34, bb11, bb12
+    bb15:
+      store var $tmp.0, %29
+      jump bb5
+    bb16:
+      %114 = load var $7.$env
+      %115 = const c184
+      %116 = call builtin.continuation.load_var(%114, %115)
+      store var $9.$yield_star_iter_1, %116
+      %40 = load var $7.$resume_val
+      %41 = load var $7.$is_rejected
+      %42 = const c163
+      %43 = stricteq %41, %42
+      branch %43, bb17, bb20
+    bb17:
+      store var $tmp.0, %40
+      jump bb5
+    bb18:
+      jump bb10
+    bb19:
+      %46 = load var $7.$generator
+      call builtin.async_generator.return(%46, %40)
+      return
+    bb20:
+      %44 = const c164
+      %45 = stricteq %41, %44
+      branch %45, bb19, bb18
+    bb21:
+      %67 = const c172
+      jump bb28
+    bb22:
+      %55 = const c168
+      %56 = const c169
+      %57 = call builtin.intrinsic_resolve(%55, %56)
+      %58 = is_exception %57
+      branch %58, bb24, bb23
+    bb23:
+      %61 = const c170
+      %62 = const c171
+      %63 = call builtin.intrinsic_resolve(%61, %62, %57)
+      %64 = is_exception %63
+      branch %64, bb26, bb25
+    bb24:
+      %59 = call builtin.exception_value(%57)
+      %60 = load var $7.$generator
+      call builtin.async_generator.throw(%60, %59)
+      return
+    bb25:
+      jump bb28
+    bb26:
+      %65 = call builtin.exception_value(%63)
+      %66 = load var $7.$generator
+      call builtin.async_generator.throw(%66, %65)
+      return
+    bb27:
+      %87 = phi [(bb33, %85), (bb34, %86)]
+      %88 = is_exception %87
+      branch %88, bb36, bb35
+    bb28:
+      %68 = phi [(bb21, %67), (bb25, %63)]
+      %69 = phi [(bb21, %67), (bb25, %57)]
+      %70 = const c173
+      %71 = load var $10.error
+      %72 = const c174
+      %73 = get_prop %71, %72
+      %74 = const c175
+      %75 = get_prop %73, %74
+      %76 = is_exception %75
+      branch %76, bb30, bb29
+    bb29:
+      %79 = load var $10.error
+      %80 = const c176
+      %81 = get_prop %79, %80
+      %82 = is_exception %81
+      branch %82, bb32, bb31
+    bb30:
+      %77 = call builtin.exception_value(%75)
+      %78 = load var $7.$generator
+      call builtin.async_generator.throw(%78, %77)
+      return
+    bb31:
+      branch %54, bb33, bb34
+    bb32:
+      %83 = call builtin.exception_value(%81)
+      %84 = load var $7.$generator
+      call builtin.async_generator.throw(%84, %83)
+      return
+    bb33:
+      %85 = call builtin.console.log(%70, %75, %81)
+      jump bb27
+    bb34:
+      %86 = call %68, this=%69, args=[%70, %75, %81]
+      jump bb27
+    bb35:
+      %91 = const c177
+      %92 = load var $7.$generator
+      %93 = call builtin.async_generator.next(%92, %91)
+      suspend %93, state=3
+      jump bb39
+    bb36:
+      %89 = call builtin.exception_value(%87)
+      %90 = load var $7.$generator
+      call builtin.async_generator.throw(%90, %89)
+      return
+    bb37:
+      %94 = load var $7.$resume_val
+      %95 = load var $7.$is_rejected
+      %96 = const c178
+      %97 = stricteq %95, %96
+      branch %97, bb38, bb41
+    bb38:
+      %100 = load var $7.$generator
+      call builtin.async_generator.throw(%100, %94)
+      return
+    bb39:
+      jump bb4
+    bb40:
+      %101 = load var $7.$generator
+      call builtin.async_generator.return(%101, %94)
+      return
+    bb41:
+      %98 = const c179
+      %99 = stricteq %95, %98
+      branch %99, bb40, bb39
+    bb42:
+      return
+    bb43:
+      unreachable
+
+  fn @catching [needs_prototype] [js_name "catching"] [js_length 0] [captures: $0.throwing] [params: $12.$env, $12.$this] [entry=bb0]:
+    bb0:
+      %0 = collect_rest_args skip=0
+      %1 = const c189
+      %2 = call builtin.create_mapped_arguments_object(%0, %1)
+      store var $12.arguments, %2
+      %3 = const c190
+      %4 = load var $env
+      %5 = call builtin.create_closure(%3, %4)
+      %6 = const c191
+      %7 = const c192
+      %8 = call builtin.continuation.create(%5, %7, %6)
+      %9 = call builtin.async_generator.start(%8)
+      %10 = const c193
+      call builtin.continuation.save_var(%8, %10, %9)
+      %11 = const c194
+      call builtin.continuation.save_var(%8, %11, %4)
+      %12 = load var $12.arguments
+      %13 = const c195
+      call builtin.continuation.save_var(%8, %13, %12)
+      %14 = load var $12.$this
+      %15 = const c196
+      call builtin.continuation.save_var(%8, %15, %14)
+      return %9
+
+  fn @arrow_8$async [captures: $0.outer, $0.catching] [params: $13.$env, $13.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $13.$env
+      %1 = const c200
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $13.$state, %2
+      %3 = const c201
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $13.$is_rejected, %4
+      %5 = load var $13.$this
+      store var $13.$resume_val, %5
+      %6 = const c202
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $13.$promise, %7
+      %8 = const c203
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $13.$closure_env, %9
+      jump bb1
+    bb1:
+      %10 = const c204
+      store var $13.$shared_env, %10
+      %404 = load var $13.$state
+      switch %404 [case c310 -> bb2, case c311 -> bb12, case c312 -> bb49, case c313 -> bb86, case c314 -> bb99, case c315 -> bb130], default bb139, exit bb140
+    bb2:
+      %11 = const c205
+      %12 = load var $13.$closure_env
+      %13 = const c206
+      %14 = get_prop %12, %13
+      %15 = call %14, this=%11
+      %16 = is_exception %15
+      branch %16, bb4, bb3
+    bb3:
+      store var $13.iterator, %15
+      %19 = const c207
+      store var $13.step, %19
+      jump bb5
+    bb4:
+      %17 = call builtin.exception_value(%15)
+      %18 = load var $13.$promise
+      promise_reject %18, %17
+      return
+    bb5:
+      %21 = load var $13.iterator
+      %22 = const c209
+      %23 = get_prop %21, %22
+      %24 = is_exception %23
+      branch %24, bb9, bb8
+    bb6:
+      %45 = const c213
+      %46 = const c214
+      %47 = call builtin.intrinsic_pristine(%45, %46)
+      branch %47, bb17, bb18
+    bb7:
+      %76 = const c222
+      %77 = const c223
+      %78 = call builtin.intrinsic_pristine(%76, %77)
+      branch %78, bb31, bb32
+    bb8:
+      %27 = call %23, this=%21
+      %28 = is_exception %27
+      branch %28, bb11, bb10
+    bb9:
+      %25 = call builtin.exception_value(%23)
+      %26 = load var $13.$promise
+      promise_reject %26, %25
+      return
+    bb10:
+      %32 = const c210
+      %31 = call builtin.promise.resolve_static(%32, %27)
+      %346 = load var $13.$env
+      %347 = const c286
+      %348 = load var $13.iterator
+      call builtin.continuation.save_var(%346, %347, %348)
+      suspend %31, state=1
+      jump bb14
+    bb11:
+      %29 = call builtin.exception_value(%27)
+      %30 = load var $13.$promise
+      promise_reject %30, %29
+      return
+    bb12:
+      %349 = load var $13.$env
+      %350 = const c287
+      %351 = call builtin.continuation.load_var(%349, %350)
+      store var $13.iterator, %351
+      %33 = load var $13.$resume_val
+      %34 = load var $13.$is_rejected
+      %35 = const c211
+      %36 = stricteq %34, %35
+      branch %36, bb13, bb14
+    bb13:
+      %37 = load var $13.$promise
+      promise_reject %37, %33
+      return
+    bb14:
+      %38 = load var $13.$resume_val
+      store var $13.step, %38
+      %39 = const c212
+      %40 = get_prop %38, %39
+      %41 = is_exception %40
+      branch %41, bb16, bb15
+    bb15:
+      %44 = not %40
+      branch %44, bb6, bb7
+    bb16:
+      %42 = call builtin.exception_value(%40)
+      %43 = load var $13.$promise
+      promise_reject %43, %42
+      return
+    bb17:
+      %60 = const c219
+      jump bb24
+    bb18:
+      %48 = const c215
+      %49 = const c216
+      %50 = call builtin.intrinsic_resolve(%48, %49)
+      %51 = is_exception %50
+      branch %51, bb20, bb19
+    bb19:
+      %54 = const c217
+      %55 = const c218
+      %56 = call builtin.intrinsic_resolve(%54, %55, %50)
+      %57 = is_exception %56
+      branch %57, bb22, bb21
+    bb20:
+      %52 = call builtin.exception_value(%50)
+      %53 = load var $13.$promise
+      promise_reject %53, %52
+      return
+    bb21:
+      jump bb24
+    bb22:
+      %58 = call builtin.exception_value(%56)
+      %59 = load var $13.$promise
+      promise_reject %59, %58
+      return
+    bb23:
+      %72 = phi [(bb27, %70), (bb28, %71)]
+      %73 = is_exception %72
+      branch %73, bb30, bb29
+    bb24:
+      %61 = phi [(bb17, %60), (bb21, %56)]
+      %62 = phi [(bb17, %60), (bb21, %50)]
+      %63 = const c220
+      %64 = load var $13.step
+      %65 = const c221
+      %66 = get_prop %64, %65
+      %67 = is_exception %66
+      branch %67, bb26, bb25
+    bb25:
+      branch %47, bb27, bb28
+    bb26:
+      %68 = call builtin.exception_value(%66)
+      %69 = load var $13.$promise
+      promise_reject %69, %68
+      return
+    bb27:
+      %70 = call builtin.console.log(%63, %66)
+      jump bb23
+    bb28:
+      %71 = call %61, this=%62, args=[%63, %66]
+      jump bb23
+    bb29:
+      jump bb5
+    bb30:
+      %74 = call builtin.exception_value(%72)
+      %75 = load var $13.$promise
+      promise_reject %75, %74
+      return
+    bb31:
+      %91 = const c228
+      jump bb38
+    bb32:
+      %79 = const c224
+      %80 = const c225
+      %81 = call builtin.intrinsic_resolve(%79, %80)
+      %82 = is_exception %81
+      branch %82, bb34, bb33
+    bb33:
+      %85 = const c226
+      %86 = const c227
+      %87 = call builtin.intrinsic_resolve(%85, %86, %81)
+      %88 = is_exception %87
+      branch %88, bb36, bb35
+    bb34:
+      %83 = call builtin.exception_value(%81)
+      %84 = load var $13.$promise
+      promise_reject %84, %83
+      return
+    bb35:
+      jump bb38
+    bb36:
+      %89 = call builtin.exception_value(%87)
+      %90 = load var $13.$promise
+      promise_reject %90, %89
+      return
+    bb37:
+      %103 = phi [(bb41, %101), (bb42, %102)]
+      %104 = is_exception %103
+      branch %104, bb44, bb43
+    bb38:
+      %92 = phi [(bb31, %91), (bb35, %87)]
+      %93 = phi [(bb31, %91), (bb35, %81)]
+      %94 = const c229
+      %95 = load var $13.step
+      %96 = const c230
+      %97 = get_prop %95, %96
+      %98 = is_exception %97
+      branch %98, bb40, bb39
+    bb39:
+      branch %78, bb41, bb42
+    bb40:
+      %99 = call builtin.exception_value(%97)
+      %100 = load var $13.$promise
+      promise_reject %100, %99
+      return
+    bb41:
+      %101 = call builtin.console.log(%94, %97)
+      jump bb37
+    bb42:
+      %102 = call %92, this=%93, args=[%94, %97]
+      jump bb37
+    bb43:
+      %107 = const c231
+      %108 = load var $13.$closure_env
+      %109 = const c232
+      %110 = get_prop %108, %109
+      %111 = call %110, this=%107
+      %112 = call builtin.async_iterator.from(%111)
+      store var $15.$for_await_iter.0, %112
+      jump bb45
+    bb44:
+      %105 = call builtin.exception_value(%103)
+      %106 = load var $13.$promise
+      promise_reject %106, %105
+      return
+    bb45:
+      %113 = load var $15.$for_await_iter.0
+      %114 = call builtin.iterator.next(%113)
+      %116 = const c233
+      %115 = call builtin.promise.resolve_static(%116, %114)
+      %352 = load var $13.$env
+      %353 = const c288
+      %354 = load var $15.$for_await_iter.0
+      call builtin.continuation.save_var(%352, %353, %354)
+      suspend %115, state=2
+      jump bb50
+    bb46:
+      %124 = load var $15.$for_await_iter.0
+      %125 = load var $13.$resume_val
+      %126 = const c235
+      %127 = get_prop %125, %126
+      store var $15.value, %127
+      %128 = const c236
+      %129 = const c237
+      %130 = call builtin.intrinsic_pristine(%128, %129)
+      branch %130, bb52, bb53
+    bb47:
+      unreachable
+    bb48:
+      %172 = const c245
+      %173 = load var $13.$closure_env
+      %174 = const c246
+      %175 = get_prop %173, %174
+      %176 = call %175, this=%172
+      %177 = is_exception %176
+      branch %177, bb73, bb72
+    bb49:
+      %355 = load var $13.$env
+      %356 = const c289
+      %357 = call builtin.continuation.load_var(%355, %356)
+      store var $15.$for_await_iter.0, %357
+      %117 = load var $13.$resume_val
+      %118 = load var $13.$is_rejected
+      branch %118, bb51, bb50
+    bb50:
+      %120 = load var $13.$resume_val
+      %121 = const c234
+      %122 = get_prop %120, %121
+      %123 = not %122
+      branch %123, bb46, bb48
+    bb51:
+      %119 = load var $13.$promise
+      promise_reject %119, %117
+      return
+    bb52:
+      %151 = const c242
+      jump bb63
+    bb53:
+      %131 = const c238
+      %132 = const c239
+      %133 = call builtin.intrinsic_resolve(%131, %132)
+      %134 = is_exception %133
+      branch %134, bb55, bb54
+    bb54:
+      %141 = const c240
+      %142 = const c241
+      %143 = call builtin.intrinsic_resolve(%141, %142, %133)
+      %144 = is_exception %143
+      branch %144, bb59, bb58
+    bb55:
+      %135 = call builtin.exception_value(%133)
+      %136 = call builtin.iterator.close_throw(%124, %135)
+      %137 = is_exception %136
+      branch %137, bb57, bb56
+    bb56:
+      %140 = load var $13.$promise
+      promise_reject %140, %135
+      return
+    bb57:
+      %138 = call builtin.exception_value(%136)
+      %139 = load var $13.$promise
+      promise_reject %139, %138
+      return
+    bb58:
+      jump bb63
+    bb59:
+      %145 = call builtin.exception_value(%143)
+      %146 = call builtin.iterator.close_throw(%124, %145)
+      %147 = is_exception %146
+      branch %147, bb61, bb60
+    bb60:
+      %150 = load var $13.$promise
+      promise_reject %150, %145
+      return
+    bb61:
+      %148 = call builtin.exception_value(%146)
+      %149 = load var $13.$promise
+      promise_reject %149, %148
+      return
+    bb62:
+      %158 = phi [(bb64, %156), (bb65, %157)]
+      %159 = is_exception %158
+      branch %159, bb67, bb66
+    bb63:
+      %152 = phi [(bb52, %151), (bb58, %143)]
+      %153 = phi [(bb52, %151), (bb58, %133)]
+      %154 = const c243
+      %155 = load var $15.value
+      branch %130, bb64, bb65
+    bb64:
+      %156 = call builtin.console.log(%154, %155)
+      jump bb62
+    bb65:
+      %157 = call %152, this=%153, args=[%154, %155]
+      jump bb62
+    bb66:
+      jump bb45
+    bb67:
+      %160 = call builtin.exception_value(%158)
+      %161 = call builtin.iterator.close_throw(%124, %160)
+      %162 = is_exception %161
+      branch %162, bb69, bb68
+    bb68:
+      %165 = load var $13.$promise
+      promise_reject %165, %160
+      return
+    bb69:
+      %163 = call builtin.exception_value(%161)
+      %164 = load var $13.$promise
+      promise_reject %164, %163
+      return
+    bb70:
+      unreachable
+    bb71:
+      unreachable
+    bb72:
+      store var $13.aborted, %176
+      %180 = const c247
+      %181 = const c248
+      %182 = call builtin.intrinsic_pristine(%180, %181)
+      store var $suspend_spill_13_0, %182
+      %334 = load var $suspend_spill_13_0
+      branch %334, bb74, bb75
+    bb73:
+      %178 = call builtin.exception_value(%176)
+      %179 = load var $13.$promise
+      promise_reject %179, %178
+      return
+    bb74:
+      %195 = const c253
+      jump bb81
+    bb75:
+      %183 = const c249
+      %184 = const c250
+      %185 = call builtin.intrinsic_resolve(%183, %184)
+      %186 = is_exception %185
+      branch %186, bb77, bb76
+    bb76:
+      %189 = const c251
+      %190 = const c252
+      %191 = call builtin.intrinsic_resolve(%189, %190, %185)
+      %192 = is_exception %191
+      branch %192, bb79, bb78
+    bb77:
+      %187 = call builtin.exception_value(%185)
+      %188 = load var $13.$promise
+      promise_reject %188, %187
+      return
+    bb78:
+      jump bb81
+    bb79:
+      %193 = call builtin.exception_value(%191)
+      %194 = load var $13.$promise
+      promise_reject %194, %193
+      return
+    bb80:
+      %224 = phi [(bb91, %222), (bb92, %223)]
+      %225 = is_exception %224
+      branch %225, bb94, bb93
+    bb81:
+      %196 = phi [(bb74, %195), (bb78, %191)]
+      store var $suspend_spill_13_1, %196
+      %197 = phi [(bb74, %195), (bb78, %185)]
+      store var $suspend_spill_13_2, %197
+      %198 = const c254
+      store var $suspend_spill_13_3, %198
+      %199 = load var $13.aborted
+      %200 = const c255
+      %201 = get_prop %199, %200
+      %202 = is_exception %201
+      branch %202, bb83, bb82
+    bb82:
+      %205 = call %201, this=%199
+      %206 = is_exception %205
+      branch %206, bb85, bb84
+    bb83:
+      %203 = call builtin.exception_value(%201)
+      %204 = load var $13.$promise
+      promise_reject %204, %203
+      return
+    bb84:
+      %210 = const c256
+      %209 = call builtin.promise.resolve_static(%210, %205)
+      %358 = load var $13.$env
+      %359 = const c290
+      %360 = load var $13.aborted
+      call builtin.continuation.save_var(%358, %359, %360)
+      %361 = const c291
+      %362 = load var $suspend_spill_13_0
+      call builtin.continuation.save_var(%358, %361, %362)
+      %363 = const c292
+      %364 = load var $suspend_spill_13_1
+      call builtin.continuation.save_var(%358, %363, %364)
+      %365 = const c293
+      %366 = load var $suspend_spill_13_2
+      call builtin.continuation.save_var(%358, %365, %366)
+      %367 = const c294
+      %368 = load var $suspend_spill_13_3
+      call builtin.continuation.save_var(%358, %367, %368)
+      suspend %209, state=3
+      jump bb88
+    bb85:
+      %207 = call builtin.exception_value(%205)
+      %208 = load var $13.$promise
+      promise_reject %208, %207
+      return
+    bb86:
+      %369 = load var $13.$env
+      %370 = const c295
+      %371 = call builtin.continuation.load_var(%369, %370)
+      store var $13.aborted, %371
+      %372 = const c296
+      %373 = call builtin.continuation.load_var(%369, %372)
+      store var $suspend_spill_13_0, %373
+      %374 = const c297
+      %375 = call builtin.continuation.load_var(%369, %374)
+      store var $suspend_spill_13_1, %375
+      %376 = const c298
+      %377 = call builtin.continuation.load_var(%369, %376)
+      store var $suspend_spill_13_2, %377
+      %378 = const c299
+      %379 = call builtin.continuation.load_var(%369, %378)
+      store var $suspend_spill_13_3, %379
+      %211 = load var $13.$resume_val
+      %212 = load var $13.$is_rejected
+      %213 = const c257
+      %214 = stricteq %212, %213
+      branch %214, bb87, bb88
+    bb87:
+      %215 = load var $13.$promise
+      promise_reject %215, %211
+      return
+    bb88:
+      %216 = load var $13.$resume_val
+      %217 = const c258
+      %218 = get_prop %216, %217
+      %219 = is_exception %218
+      branch %219, bb90, bb89
+    bb89:
+      %335 = load var $suspend_spill_13_0
+      branch %335, bb91, bb92
+    bb90:
+      %220 = call builtin.exception_value(%218)
+      %221 = load var $13.$promise
+      promise_reject %221, %220
+      return
+    bb91:
+      %338 = load var $suspend_spill_13_3
+      %222 = call builtin.console.log(%338, %218)
+      jump bb80
+    bb92:
+      %336 = load var $suspend_spill_13_1
+      %337 = load var $suspend_spill_13_2
+      %339 = load var $suspend_spill_13_3
+      %223 = call %336, this=%337, args=[%339, %218]
+      jump bb80
+    bb93:
+      %228 = load var $13.aborted
+      %229 = const c259
+      %230 = get_prop %228, %229
+      %231 = is_exception %230
+      branch %231, bb96, bb95
+    bb94:
+      %226 = call builtin.exception_value(%224)
+      %227 = load var $13.$promise
+      promise_reject %227, %226
+      return
+    bb95:
+      %234 = const c260
+      %235 = call %230, this=%228, args=[%234]
+      %236 = is_exception %235
+      branch %236, bb98, bb97
+    bb96:
+      %232 = call builtin.exception_value(%230)
+      %233 = load var $13.$promise
+      promise_reject %233, %232
+      return
+    bb97:
+      %240 = const c261
+      %239 = call builtin.promise.resolve_static(%240, %235)
+      %380 = load var $13.$env
+      %381 = const c300
+      %382 = load var $13.aborted
+      call builtin.continuation.save_var(%380, %381, %382)
+      suspend %239, state=4
+      jump bb101
+    bb98:
+      %237 = call builtin.exception_value(%235)
+      %238 = load var $13.$promise
+      promise_reject %238, %237
+      return
+    bb99:
+      %383 = load var $13.$env
+      %384 = const c301
+      %385 = call builtin.continuation.load_var(%383, %384)
+      store var $13.aborted, %385
+      %241 = load var $13.$resume_val
+      %242 = load var $13.$is_rejected
+      %243 = const c262
+      %244 = stricteq %242, %243
+      branch %244, bb100, bb101
+    bb100:
+      %245 = load var $13.$promise
+      promise_reject %245, %241
+      return
+    bb101:
+      %246 = load var $13.$resume_val
+      store var $13.returned, %246
+      %247 = const c263
+      %248 = const c264
+      %249 = call builtin.intrinsic_pristine(%247, %248)
+      branch %249, bb102, bb103
+    bb102:
+      %262 = const c269
+      jump bb109
+    bb103:
+      %250 = const c265
+      %251 = const c266
+      %252 = call builtin.intrinsic_resolve(%250, %251)
+      %253 = is_exception %252
+      branch %253, bb105, bb104
+    bb104:
+      %256 = const c267
+      %257 = const c268
+      %258 = call builtin.intrinsic_resolve(%256, %257, %252)
+      %259 = is_exception %258
+      branch %259, bb107, bb106
+    bb105:
+      %254 = call builtin.exception_value(%252)
+      %255 = load var $13.$promise
+      promise_reject %255, %254
+      return
+    bb106:
+      jump bb109
+    bb107:
+      %260 = call builtin.exception_value(%258)
+      %261 = load var $13.$promise
+      promise_reject %261, %260
+      return
+    bb108:
+      %280 = phi [(bb114, %278), (bb115, %279)]
+      %281 = is_exception %280
+      branch %281, bb117, bb116
+    bb109:
+      %263 = phi [(bb102, %262), (bb106, %258)]
+      %264 = phi [(bb102, %262), (bb106, %252)]
+      %265 = const c270
+      %266 = load var $13.returned
+      %267 = const c271
+      %268 = get_prop %266, %267
+      %269 = is_exception %268
+      branch %269, bb111, bb110
+    bb110:
+      %272 = load var $13.returned
+      %273 = const c272
+      %274 = get_prop %272, %273
+      %275 = is_exception %274
+      branch %275, bb113, bb112
+    bb111:
+      %270 = call builtin.exception_value(%268)
+      %271 = load var $13.$promise
+      promise_reject %271, %270
+      return
+    bb112:
+      branch %249, bb114, bb115
+    bb113:
+      %276 = call builtin.exception_value(%274)
+      %277 = load var $13.$promise
+      promise_reject %277, %276
+      return
+    bb114:
+      %278 = call builtin.console.log(%265, %268, %274)
+      jump bb108
+    bb115:
+      %279 = call %263, this=%264, args=[%265, %268, %274]
+      jump bb108
+    bb116:
+      %284 = const c273
+      %285 = const c274
+      %286 = call builtin.intrinsic_pristine(%284, %285)
+      store var $suspend_spill_13_4, %286
+      %340 = load var $suspend_spill_13_4
+      branch %340, bb118, bb119
+    bb117:
+      %282 = call builtin.exception_value(%280)
+      %283 = load var $13.$promise
+      promise_reject %283, %282
+      return
+    bb118:
+      %299 = const c279
+      jump bb125
+    bb119:
+      %287 = const c275
+      %288 = const c276
+      %289 = call builtin.intrinsic_resolve(%287, %288)
+      %290 = is_exception %289
+      branch %290, bb121, bb120
+    bb120:
+      %293 = const c277
+      %294 = const c278
+      %295 = call builtin.intrinsic_resolve(%293, %294, %289)
+      %296 = is_exception %295
+      branch %296, bb123, bb122
+    bb121:
+      %291 = call builtin.exception_value(%289)
+      %292 = load var $13.$promise
+      promise_reject %292, %291
+      return
+    bb122:
+      jump bb125
+    bb123:
+      %297 = call builtin.exception_value(%295)
+      %298 = load var $13.$promise
+      promise_reject %298, %297
+      return
+    bb124:
+      %328 = phi [(bb135, %326), (bb136, %327)]
+      %329 = is_exception %328
+      branch %329, bb138, bb137
+    bb125:
+      %300 = phi [(bb118, %299), (bb122, %295)]
+      store var $suspend_spill_13_5, %300
+      %301 = phi [(bb118, %299), (bb122, %289)]
+      store var $suspend_spill_13_6, %301
+      %302 = const c280
+      store var $suspend_spill_13_7, %302
+      %303 = load var $13.aborted
+      %304 = const c281
+      %305 = get_prop %303, %304
+      %306 = is_exception %305
+      branch %306, bb127, bb126
+    bb126:
+      %309 = call %305, this=%303
+      %310 = is_exception %309
+      branch %310, bb129, bb128
+    bb127:
+      %307 = call builtin.exception_value(%305)
+      %308 = load var $13.$promise
+      promise_reject %308, %307
+      return
+    bb128:
+      %314 = const c282
+      %313 = call builtin.promise.resolve_static(%314, %309)
+      %386 = load var $13.$env
+      %387 = const c302
+      %388 = load var $suspend_spill_13_4
+      call builtin.continuation.save_var(%386, %387, %388)
+      %389 = const c303
+      %390 = load var $suspend_spill_13_5
+      call builtin.continuation.save_var(%386, %389, %390)
+      %391 = const c304
+      %392 = load var $suspend_spill_13_6
+      call builtin.continuation.save_var(%386, %391, %392)
+      %393 = const c305
+      %394 = load var $suspend_spill_13_7
+      call builtin.continuation.save_var(%386, %393, %394)
+      suspend %313, state=5
+      jump bb132
+    bb129:
+      %311 = call builtin.exception_value(%309)
+      %312 = load var $13.$promise
+      promise_reject %312, %311
+      return
+    bb130:
+      %395 = load var $13.$env
+      %396 = const c306
+      %397 = call builtin.continuation.load_var(%395, %396)
+      store var $suspend_spill_13_4, %397
+      %398 = const c307
+      %399 = call builtin.continuation.load_var(%395, %398)
+      store var $suspend_spill_13_5, %399
+      %400 = const c308
+      %401 = call builtin.continuation.load_var(%395, %400)
+      store var $suspend_spill_13_6, %401
+      %402 = const c309
+      %403 = call builtin.continuation.load_var(%395, %402)
+      store var $suspend_spill_13_7, %403
+      %315 = load var $13.$resume_val
+      %316 = load var $13.$is_rejected
+      %317 = const c283
+      %318 = stricteq %316, %317
+      branch %318, bb131, bb132
+    bb131:
+      %319 = load var $13.$promise
+      promise_reject %319, %315
+      return
+    bb132:
+      %320 = load var $13.$resume_val
+      %321 = const c284
+      %322 = get_prop %320, %321
+      %323 = is_exception %322
+      branch %323, bb134, bb133
+    bb133:
+      %341 = load var $suspend_spill_13_4
+      branch %341, bb135, bb136
+    bb134:
+      %324 = call builtin.exception_value(%322)
+      %325 = load var $13.$promise
+      promise_reject %325, %324
+      return
+    bb135:
+      %344 = load var $suspend_spill_13_7
+      %326 = call builtin.console.log(%344, %322)
+      jump bb124
+    bb136:
+      %342 = load var $suspend_spill_13_5
+      %343 = load var $suspend_spill_13_6
+      %345 = load var $suspend_spill_13_7
+      %327 = call %342, this=%343, args=[%345, %322]
+      jump bb124
+    bb137:
+      %332 = const c285
+      %333 = load var $13.$promise
+      promise_resolve %333, %332
+      return
+    bb138:
+      %330 = call builtin.exception_value(%328)
+      %331 = load var $13.$promise
+      promise_reject %331, %330
+      return
+    bb139:
+      return
+    bb140:
+      unreachable
+
+  fn @arrow_8 [js_name ""] [js_length 0] [captures: $0.outer, $0.catching] [params: $17.$env, $17.$this] [entry=bb0]:
+    bb0:
+      %0 = new_promise
+      %1 = const c316
+      %2 = load var $env
+      %3 = call builtin.create_closure(%1, %2)
+      %4 = const c317
+      %5 = call builtin.continuation.create(%3, %0, %4)
+      %6 = const c318
+      %7 = const c319
+      call builtin.continuation.save_var(%5, %6, %7)
+      %8 = const c320
+      %9 = const c321
+      call builtin.continuation.save_var(%5, %8, %9)
+      %10 = const c322
+      call builtin.continuation.save_var(%5, %10, %0)
+      %11 = const c323
+      call builtin.continuation.save_var(%5, %11, %2)
+      %12 = const c324
+      %13 = const c325
+      %14 = const c326
+      call builtin.async_function.resume(%3, %5, %12, %13, %14)
+      return %0
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = const c45
+      store var $0.inner, %21
+      %22 = const c125
+      %23 = const c126
+      store var $0.$shared_env, %23
+      %24 = new_object(capacity=1)
+      %25 = load var $env
+      set_proto %24, %25
+      store var $0.$shared_env, %24
+      %26 = load var $0.inner
+      %27 = const c127
+      %28 = set_prop %24, %27, %26
+      %29 = call builtin.create_closure(%22, %24)
+      store var $0.outer, %29
+      %30 = const c150
+      store var $0.throwing, %30
+      %31 = const c197
+      %32 = load var $0.throwing
+      %33 = const c198
+      %34 = set_prop %24, %33, %32
+      %35 = call builtin.create_closure(%31, %24)
+      store var $0.catching, %35
+      %36 = const c199
+      %37 = const c327
+      %38 = load var $0.outer
+      %39 = const c328
+      %40 = set_prop %24, %39, %38
+      %41 = load var $0.catching
+      %42 = const c329
+      %43 = set_prop %24, %42, %41
+      %44 = call builtin.create_closure(%37, %24)
+      %45 = call %44, this=%36
+      %46 = is_exception %45
+      branch %46, bb2, bb1
+    bb1:
+      return
+    bb2:
+      %47 = call builtin.exception_value(%45)
+      throw %47
+}

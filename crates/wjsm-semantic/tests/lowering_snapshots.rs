@@ -809,6 +809,16 @@ fn sync_generator_basic_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn sync_generator_yield_star_fixture_matches_ir_snapshot() {
+    assert_snapshot("sync_generator_yield_star");
+}
+
+#[test]
+fn async_generator_yield_star_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_generator_yield_star");
+}
+
+#[test]
 fn method_closure_live_bindings_fixture_matches_ir_snapshot() {
     assert_snapshot("method_closure_live_bindings");
 }
