@@ -301,7 +301,6 @@ impl Lowerer {
     pub(crate) fn emit_field_init(
         &mut self,
         block: BasicBlockId,
-        this_scope_id: usize,
         field_name: &str,
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
@@ -317,7 +316,7 @@ impl Lowerer {
                 constant: key_const,
             },
         );
-        self.emit_field_init_common(block, this_scope_id, key_dest, init_value, is_private)
+        self.emit_field_init_common(block, key_dest, init_value, is_private)
     }
 
     /// 公有实例字段（静态属性名）。计算键不走此路径：其键在类定义期求值一次
@@ -326,12 +325,11 @@ impl Lowerer {
     pub(crate) fn emit_field_init_with_key(
         &mut self,
         block: BasicBlockId,
-        this_scope_id: usize,
         key: &swc_ast::PropName,
         init_value: Option<&swc_ast::Expr>,
     ) -> Result<BasicBlockId, LoweringError> {
         let key_dest = self.lower_prop_name(key, block)?;
-        self.emit_field_init_common(block, this_scope_id, key_dest, init_value, false)
+        self.emit_field_init_common(block, key_dest, init_value, false)
     }
 
     /// DefineField（ES §7.3.33）：初始化器求值异常先传播，随后
@@ -340,21 +338,14 @@ impl Lowerer {
     pub(crate) fn emit_field_init_common(
         &mut self,
         block: BasicBlockId,
-        this_scope_id: usize,
         key_dest: ValueId,
         init_value: Option<&swc_ast::Expr>,
         is_private: bool,
     ) -> Result<BasicBlockId, LoweringError> {
         let mut block = block;
         let init_val = self.lower_field_init_value(&mut block, init_value)?;
-        let this_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::LoadVar {
-                dest: this_val,
-                name: format!("${this_scope_id}.$this"),
-            },
-        );
+        // 字段定义目标是当前绑定的 this：super() 返回对象重绑后即该对象。
+        let this_val = self.emit_read_ctor_this(block);
         if is_private {
             self.current_function.append_instruction(
                 block,
@@ -398,31 +389,34 @@ impl Lowerer {
 
     /// TypeScript 参数属性 `constructor(private x)`：把形参值写入 `this.<name>`。
     ///
-    /// `fields` 的每项为 `(形参 IR 名, 字段名)`。调用点必须保证 `this` 已可用
-    /// （派生类需在 `super()` 之后），且按 TS 语义排在实例字段初始化器之前。
+    /// `fields` 的每项为 `(构造器形参绑定, 字段名)`。调用点必须保证 `this` 已
+    /// 可用（派生类需在 `super()` 之后），且按 TS 语义排在实例字段初始化器
+    /// 之前。形参读取与标识符读取同判定：属于本帧且未进共享 env 时直接
+    /// LoadVar，否则（箭头 super() 站点、形参被闭包捕获）走捕获链读取。
     pub(crate) fn emit_param_prop_fields(
         &mut self,
         mut block: BasicBlockId,
-        this_scope_id: usize,
-        fields: &[(String, String)],
-    ) -> BasicBlockId {
-        for (ir_name, field_name) in fields {
-            let value = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::LoadVar {
-                    dest: value,
-                    name: ir_name.clone(),
-                },
-            );
-            let this_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::LoadVar {
-                    dest: this_val,
-                    name: format!("${this_scope_id}.$this"),
-                },
-            );
+        fields: &[(CapturedBinding, String)],
+    ) -> Result<BasicBlockId, LoweringError> {
+        for (binding, field_name) in fields {
+            let value = if !self.binding_belongs_to_current_function(binding)
+                || self.is_shared_binding(binding)
+            {
+                let value = self.load_captured_binding(block, binding)?;
+                block = self.resolve_store_block(block);
+                value
+            } else {
+                let value = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: value,
+                        name: binding.var_ir_name(),
+                    },
+                );
+                value
+            };
+            let this_val = self.emit_read_ctor_this(block);
             let key_const = self
                 .module
                 .add_constant(Constant::String(field_name.clone()));
@@ -437,7 +431,7 @@ impl Lowerer {
             self.emit_set_prop(block, this_val, key_dest, value);
             block = self.resolve_store_block(block);
         }
-        block
+        Ok(block)
     }
 
     pub(crate) fn emit_private_method_bind(

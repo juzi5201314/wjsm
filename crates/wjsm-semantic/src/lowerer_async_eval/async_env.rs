@@ -466,6 +466,12 @@ impl Lowerer {
             {
                 continue;
             }
+            // 箭头帧不持有词法 this 的自有副本：owner 是最近的非箭头函数，
+            // 其值沿 env 原型链可达；写自有副本会遮蔽 owner，使后续
+            // BindThisValue 重绑（super() 返回对象）无法被内层闭包看到。
+            if binding.is_lexical_this() && self.is_arrow {
+                continue;
+            }
             let current_val = self.load_value_for_shared_env_binding(block, binding);
             let key_val = self.append_env_key_const(block, binding);
             self.emit_set_prop(block, env_val, key_val, current_val);
@@ -509,6 +515,37 @@ impl Lowerer {
                     dest: Some(current_val),
                     builtin: Builtin::NewTarget,
                     args: vec![dummy_val],
+                },
+            );
+            return current_val;
+        }
+        if binding.is_lexical_this() {
+            if self.is_arrow {
+                // 箭头帧的词法 this 本身来自外层：沿 env 原型链读取并继续
+                // 向外登记捕获，保证最近的非箭头 owner 把 this 写入其 env。
+                self.record_capture(binding.clone());
+                let env_val = self.load_env_object(block);
+                let key_val = self.append_env_key_const(block, binding);
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: current_val,
+                        object: env_val,
+                        key: key_val,
+                    },
+                );
+                return current_val;
+            }
+            // 非箭头帧：this 存于本函数声明的 scoped 槽（`$N.$this`）。
+            // 此前误用无前缀 `$this`，与函数体内 `$N.$this` 读取指向不同槽，
+            // 触发后端 canonical-this 改名后直接 this 访问读到未初始化值。
+            let current_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: current_val,
+                    name: self.this_var_ir_name(),
                 },
             );
             return current_val;
@@ -720,12 +757,19 @@ impl Lowerer {
     }
 
     pub(crate) fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
-        // 箭头函数的 this 是词法捕获的，通过 env 对象读取
-        let is_arrow = self.is_arrow_fn_stack.last().copied().unwrap_or(false);
-        if is_arrow {
+        Ok(self.emit_read_ctor_this(block))
+    }
+
+    /// 读取当前帧可见的 this 绑定，三条路径都不引入控制流：
+    /// - 箭头帧：this 是词法捕获，沿 env 原型链读取并向外登记捕获；
+    /// - 派生构造器体内存在箭头 super() 时（`ctor_this_via_env`），this 的
+    ///   规范存储是共享 env——箭头帧的 BindThisValue 重绑写 env，本帧必须
+    ///   同样经 env 读取才能观察到重绑后的 this；
+    /// - 其余非箭头帧：读本地 scoped `$this` 槽。
+    pub(crate) fn emit_read_ctor_this(&mut self, block: BasicBlockId) -> ValueId {
+        if self.is_arrow {
             let binding = CapturedBinding::lexical_this();
             self.record_capture(binding.clone());
-            // 通过 env 对象读取 this
             let env_val = self.load_env_object(block);
             let key_val = self.append_env_key_const(block, &binding);
             let dest = self.alloc_value();
@@ -737,16 +781,42 @@ impl Lowerer {
                     key: key_val,
                 },
             );
-            Ok(dest)
-        } else {
-            let name = match self.scopes.lookup("$this") {
-                Ok((scope_id, _)) => format!("${scope_id}.$this"),
-                Err(_) => "$this".to_string(),
-            };
+            return dest;
+        }
+        if self.ctor_this_via_env {
+            let env_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: env_val,
+                    name: self.shared_env_ir_name(),
+                },
+            );
+            let key_val = self.append_env_key_const(block, &CapturedBinding::lexical_this());
             let dest = self.alloc_value();
-            self.current_function
-                .append_instruction(block, Instruction::LoadVar { dest, name });
-            Ok(dest)
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetProp {
+                    dest,
+                    object: env_val,
+                    key: key_val,
+                },
+            );
+            return dest;
+        }
+        let name = self.this_var_ir_name();
+        let dest = self.alloc_value();
+        self.current_function
+            .append_instruction(block, Instruction::LoadVar { dest, name });
+        dest
+    }
+
+    /// 当前帧 this 的本地变量 IR 名：函数上下文声明过 `$this` 时为
+    /// `${scope}.$this`，否则（模块/脚本主函数）为无前缀 `$this`。
+    pub(crate) fn this_var_ir_name(&self) -> String {
+        match self.scopes.lookup("$this") {
+            Ok((scope_id, _)) => format!("${scope_id}.$this"),
+            Err(_) => "$this".to_string(),
         }
     }
 }

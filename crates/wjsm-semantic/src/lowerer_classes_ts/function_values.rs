@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(Clone)]
 pub(super) struct LoweredClassFunction {
     pub(super) function_id: FunctionId,
     pub(super) captured: Vec<CapturedBinding>,

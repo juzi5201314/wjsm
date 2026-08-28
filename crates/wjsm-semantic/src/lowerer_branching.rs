@@ -623,8 +623,15 @@ impl Lowerer {
         if let StmtFlow::Open(after_close) =
             self.emit_unwind_for_abrupt(return_block, -1, value, false, None)?
         {
-            self.current_function
-                .set_terminator(after_close, Terminator::Return { value });
+            // 派生构造器帧（箭头内 return 属于箭头自身，不走此协议）：
+            // [[Construct]] 步骤 13 在函数体完结（finally 已展开）后裁决
+            // 返回值，故发射在 unwind 之后。
+            if self.super_call_allowed && !self.is_arrow {
+                self.emit_derived_ctor_return(after_close, value);
+            } else {
+                self.current_function
+                    .set_terminator(after_close, Terminator::Return { value });
+            }
         }
         Ok(StmtFlow::Terminated)
     }
