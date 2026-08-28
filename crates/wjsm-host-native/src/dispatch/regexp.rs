@@ -215,7 +215,8 @@ fn build_named_groups(
         let key = state.intern_property_string(name.clone().into())?;
         let stored = match capture {
             Some(range) if indices => build_index_pair(state, input, range.clone())?,
-            Some(range) => state.intern_text(input[range.clone()].to_owned(), value::TAG_STRING)?,
+            // 捕获组值是短命 match 文本，走免入表路径（issue #365）。
+            Some(range) => state.publish_transient_text(&input[range.clone()])?,
             None => value::encode_undefined(),
         };
         state
@@ -269,8 +270,9 @@ fn build_match_result(
     let mut captures = Vec::with_capacity(info.captures.len());
     for capture in &info.captures {
         let encoded = match capture {
+            // match 文本与捕获组是短命结果，走免入表路径（issue #365）。
             Some(range) => state
-                .intern_text(input[range.clone()].to_owned(), value::TAG_STRING)
+                .publish_transient_text(&input[range.clone()])
                 .unwrap_or_else(|| fail_dispatch(ctx)),
             None => value::encode_undefined(),
         };
@@ -660,9 +662,8 @@ fn string_match_impl(
     }
     let mut matches = Vec::new();
     while let Some(info) = execute_match(state, regexp, &input) {
-        let Some(encoded) =
-            state.intern_text(input[info.start..info.end].to_owned(), value::TAG_STRING)
-        else {
+        // 全局 match 的结果数组元素是短命 match 文本，免入表（issue #365）。
+        let Some(encoded) = state.publish_transient_text(&input[info.start..info.end]) else {
             return fail_dispatch(ctx);
         };
         matches.push(encoded);
@@ -989,8 +990,9 @@ fn string_replace_impl(
             let mut callback_args = Vec::with_capacity(info.captures.len() + 3);
             for capture in &info.captures {
                 let encoded = match capture {
+                    // replace 回调实参同为短命 match 文本，免入表（issue #365）。
                     Some(range) => state
-                        .intern_text(input[range.clone()].to_owned(), value::TAG_STRING)
+                        .publish_transient_text(&input[range.clone()])
                         .unwrap_or_else(|| fail_dispatch(ctx)),
                     None => value::encode_undefined(),
                 };

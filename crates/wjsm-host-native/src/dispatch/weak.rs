@@ -529,6 +529,7 @@ pub(crate) fn finish_gc_cycle(state: &mut NativeAgentState, report: &RuntimeGcRe
     state.prune_string_ids(retired);
     if report.stats.cycle_kind == CycleKind::Full {
         state.prune_unmarked_string_ids();
+        state.finish_string_table_sweep();
     }
     if report.cleans_host_tables {
         state.sweep_host_index_tables(retired, &live);
