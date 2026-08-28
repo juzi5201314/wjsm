@@ -72,7 +72,8 @@ impl Lowerer {
             && let Ok((scope_id, _)) = self.scopes.lookup(&name)
         {
             let binding = CapturedBinding::new(name.clone(), scope_id);
-            if self.binding_belongs_to_current_function(&binding) && !self.is_shared_binding(&binding)
+            if self.binding_belongs_to_current_function(&binding)
+                && !self.is_shared_binding(&binding)
             {
                 return Ok(ns_obj);
             }

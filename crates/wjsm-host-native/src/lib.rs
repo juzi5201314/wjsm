@@ -2692,7 +2692,9 @@ impl NativeAgentState {
             {
                 return;
             }
-            if let Some(text) = self.string_owned(encoded_key).and_then(|text| text.to_utf8())
+            if let Some(text) = self
+                .string_owned(encoded_key)
+                .and_then(|text| text.to_utf8())
                 && intrinsic_builtin(receiver, &text).is_some()
             {
                 return;
@@ -5032,7 +5034,10 @@ impl NativeAgentState {
             )?;
             self.gc
                 .heap()
-                .set_prototype(value::decode_handle(prototype), value::decode_handle(parent))
+                .set_prototype(
+                    value::decode_handle(prototype),
+                    value::decode_handle(parent),
+                )
                 .ok()?;
         }
         dispatch::fetch::install_prototype_members(self, prototype, builtin)?;

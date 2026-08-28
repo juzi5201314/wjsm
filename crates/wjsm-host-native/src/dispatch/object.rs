@@ -2265,7 +2265,10 @@ fn seal_or_freeze(
         let Ok(properties) = state.gc.heap().own_property_slots(handle) else {
             return fail_dispatch(ctx);
         };
-        let first_export = properties.iter().map(|(key, _)| *key).find(|key| !key.is_symbol());
+        let first_export = properties
+            .iter()
+            .map(|(key, _)| *key)
+            .find(|key| !key.is_symbol());
         if freeze && let Some(key) = first_export {
             return namespace_redefine_error(ctx, state, key);
         }

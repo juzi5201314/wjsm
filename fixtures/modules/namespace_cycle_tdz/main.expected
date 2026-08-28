@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+inB ReferenceError Cannot access 'fromA' before initialization
+descInB ReferenceError fromA is not defined
+keysInB ReferenceError Cannot access 'fromA' before initialization
+namesInB fromA
+protoInB null false [object Module]
+reflectSetInB false false
+inA b
+--- stderr ---

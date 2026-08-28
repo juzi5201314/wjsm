@@ -306,7 +306,9 @@ fn setup_multi_module_lowerer(
     for bindings in linking.import_map.values() {
         for binding in bindings {
             if binding.names.iter().any(|(_, imported)| imported == "*") {
-                lowerer.namespace_object_modules.insert(binding.source_module);
+                lowerer
+                    .namespace_object_modules
+                    .insert(binding.source_module);
             }
         }
     }
@@ -933,8 +935,13 @@ fn lower_export_default_expr(
         // 经 store_binding_value 收口：default 绑定已被命名空间 getter 捕获
         // 进共享 env（序幕安装快照 TDZ 哨兵）时，此处必须同步 env 值。
         let binding = parse_ir_name_to_binding(&ir_name);
-        outer_block =
-            lowerer.store_binding_value(outer_block, &binding, value_val, default_expr.span, true)?;
+        outer_block = lowerer.store_binding_value(
+            outer_block,
+            &binding,
+            value_val,
+            default_expr.span,
+            true,
+        )?;
     }
     Ok(StmtFlow::Open(outer_block))
 }
@@ -1203,8 +1210,7 @@ fn install_all_namespace_getters(
     lowerer: &mut Lowerer,
     mut flow: StmtFlow,
 ) -> Result<StmtFlow, LoweringError> {
-    let mut source_module_ids: Vec<ModuleId> =
-        lowerer.namespace_objects.keys().copied().collect();
+    let mut source_module_ids: Vec<ModuleId> = lowerer.namespace_objects.keys().copied().collect();
     source_module_ids.sort_by_key(|id| id.0);
     for module_id in source_module_ids {
         // 进入来源模块作用域：resolve_export_ir 的作用域回退解析须命中该
