@@ -46,8 +46,12 @@ impl Lowerer {
                 // 须经 GlobalEnvInitLex 解除 TDZ（区别于赋值的 SetMutableBinding）。
                 let saved_decl_init = self.script_global_decl_init;
                 self.script_global_decl_init = !matches!(kind, VarKind::Var);
+                // 对象模式的 coercible 检查文案引用初始化器的调用点文本。
+                let source = DestructureSource::TopLevel(DestructureCallsite::Text(
+                    render_destructure_callsite(init),
+                ));
                 let destructured =
-                    self.lower_destructure_pattern(&declarator.name, value, block, kind);
+                    self.lower_destructure_pattern(&declarator.name, value, block, kind, &source);
                 self.script_global_decl_init = saved_decl_init;
                 block = destructured?;
                 // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型。
@@ -139,8 +143,15 @@ impl Lowerer {
                 );
                 let saved_decl_init = self.script_global_decl_init;
                 self.script_global_decl_init = true;
-                let destructured =
-                    self.lower_destructure_pattern(&declarator.name, undef_val, block, kind);
+                // 无初始化器的声明目标只能是标识符（解构声明语法上必须有
+                // 初始化器），来源上下文不会被消费。
+                let destructured = self.lower_destructure_pattern(
+                    &declarator.name,
+                    undef_val,
+                    block,
+                    kind,
+                    &DestructureSource::TopLevel(DestructureCallsite::Text("undefined".into())),
+                );
                 self.script_global_decl_init = saved_decl_init;
                 block = destructured?;
             }

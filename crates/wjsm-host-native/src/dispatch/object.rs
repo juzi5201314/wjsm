@@ -186,11 +186,53 @@ fn create_global_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState)
         match state.allocate_object_with_gc_retry(ctx, 0, false) {
             Ok(global) => {
                 state.global_object = Some(global);
+                if install_web_global_properties(ctx, state, global).is_none() {
+                    return fail_dispatch(ctx);
+                }
                 global
             }
             Err(_) => fail_dispatch(ctx),
         }
     }
+}
+
+/// Web 平台全局（fetch / Headers / Streams / Abort / Events）在 Node 与浏览
+/// 器中都是全局对象上真实的自有数据属性。realm 全局创建时按共享槽位表
+/// 急切物化，使 own descriptor / 枚举 / 删除 / 重定义全部走普通对象属性
+/// 协议。启动快照恢复路径（`restore_startup_snapshot`）另行安装。
+fn install_web_global_properties(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    global: i64,
+) -> Option<()> {
+    let handle = value::decode_handle(global);
+    for (key, stored, flags) in state.web_global_property_slots()? {
+        match state
+            .gc
+            .heap()
+            .define_data_property(handle, key, stored, flags)
+        {
+            Ok(()) => {}
+            Err(wjsm_gc::HeapAccessV2Error::NativeTlabNeedsMaterialization { .. }) => {
+                state.gc.flush_native_tlab(ctx).ok()?;
+                state
+                    .gc
+                    .heap()
+                    .define_data_property(handle, key, stored, flags)
+                    .ok()?;
+            }
+            Err(wjsm_gc::HeapAccessV2Error::HeapExhausted { .. }) => {
+                state.collect_garbage(ctx).ok()?;
+                state
+                    .gc
+                    .heap()
+                    .define_data_property(handle, key, stored, flags)
+                    .ok()?;
+            }
+            Err(_) => return None,
+        }
+    }
+    Some(())
 }
 
 pub(crate) fn construct_object(

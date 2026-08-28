@@ -101,7 +101,7 @@ WJSM_CHILD_PROCESS_ALLOW='*' wjsm run app.ts
 
 `process.versions` 同时报告 `node: 22.0.0` 和 `wjsm: 0.1.0`，`process.platform` 和 `process.arch` 报告当前宿主信息。
 
-`fetch` 和 Streams 构造器（`Headers`、`Request`、`Response`、`ReadableStream` 等）在全局名单中，但只能直接调用——取值得到 `undefined`，详见[限制与已知差异](limitations.md)。
+`fetch` 和 Streams / Fetch / Abort / Events 构造器（`Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController`、`AbortSignal`、`EventTarget`、`Event`）是全局对象上真实的自有数据属性：可取值传递，own descriptor、赋值、`delete` 与 `defineProperty` 重定义全按普通属性语义生效，与浏览器 / WebIDL 形态一致。
 
 ## 深入了解
 

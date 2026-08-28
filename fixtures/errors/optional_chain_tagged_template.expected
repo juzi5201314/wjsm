@@ -1,0 +1,8 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: error: Invalid tagged template on optional chain
+ --> errors/optional_chain_tagged_template.js:4:13
+4 | console.log(target?.tag`hello`);
+  |             ^^^^^^^^^^^^^^^^^^
+

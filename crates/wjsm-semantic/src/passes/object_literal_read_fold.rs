@@ -90,7 +90,6 @@ fn instruction_may_mutate_tracked_object(
             is_tracked_object(*object, aliases, sites).is_some()
         }
         Instruction::Call { this_val, args, .. }
-        | Instruction::OptionalCall { this_val, args, .. }
         | Instruction::SuperCall { this_val, args, .. }
         | Instruction::ConstructCall { this_val, args, .. } => {
             is_tracked_object(*this_val, aliases, sites).is_some()
@@ -131,7 +130,6 @@ fn fold_function(function: &mut wjsm_ir::Function, constants: &[Constant]) -> bo
                         invalidate_object(*object, &aliases, &mut sites, &mut var_bindings);
                     }
                     Instruction::Call { this_val, args, .. }
-                    | Instruction::OptionalCall { this_val, args, .. }
                     | Instruction::SuperCall { this_val, args, .. }
                     | Instruction::ConstructCall { this_val, args, .. } => {
                         if let Some(canonical) = is_tracked_object(*this_val, &aliases, &sites) {

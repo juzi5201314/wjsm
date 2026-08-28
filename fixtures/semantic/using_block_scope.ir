@@ -44,18 +44,17 @@ module {
     c41 = number(0)
     c42 = undefined
     c43 = string("using")
-    c44 = undefined
-    c45 = number(6)
-    c46 = number(1)
-    c47 = number(0)
-    c48 = number(1)
-    c49 = number(0)
-    c50 = number(1)
-    c51 = number(0)
-    c52 = undefined
-    c53 = string("after")
-    c54 = bool(true)
-    c55 = bool(false)
+    c44 = number(6)
+    c45 = number(1)
+    c46 = number(0)
+    c47 = number(1)
+    c48 = number(0)
+    c49 = number(1)
+    c50 = number(0)
+    c51 = undefined
+    c52 = string("after")
+    c53 = bool(true)
+    c54 = bool(false)
 
   fn @anon_0 [needs_prototype] [direct_callable] [js_name ""] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
@@ -183,7 +182,7 @@ module {
       %21 = const c33
       store var $0.makeDisposable, %21
       %24 = const c35
-      %76 = const c0
+      %75 = const c0
       jump bb29
     bb1:
       %39 = const c42
@@ -225,8 +224,7 @@ module {
       jump bb7
     bb11:
       %48 = load var $3.a
-      %50 = const c44
-      %49 = stricteq %48, %50
+      %49 = is_nullish %48
       branch %49, bb13, bb14
     bb12:
       %47 = call builtin.exception_value(%45)
@@ -234,92 +232,92 @@ module {
     bb13:
       jump bb15
     bb14:
-      %51 = const c45
-      %52 = call builtin.symbol.well_known(%51)
-      %53 = get_prop %48, %52
-      call %53, this=%48
+      %50 = const c44
+      %51 = call builtin.symbol.well_known(%50)
+      %52 = get_prop %48, %51
+      call %52, this=%48
       jump bb15
     bb15:
+      %53 = const c45
       %54 = const c46
-      %55 = const c47
-      %56 = call builtin.intrinsic_pristine(%54, %55)
-      branch %56, bb16, bb17
+      %55 = call builtin.intrinsic_pristine(%53, %54)
+      branch %55, bb16, bb17
     bb16:
-      %67 = const c52
+      %66 = const c51
       jump bb23
     bb17:
+      %56 = const c47
       %57 = const c48
-      %58 = const c49
-      %59 = call builtin.intrinsic_resolve(%57, %58)
-      %60 = is_exception %59
-      branch %60, bb19, bb18
+      %58 = call builtin.intrinsic_resolve(%56, %57)
+      %59 = is_exception %58
+      branch %59, bb19, bb18
     bb18:
+      %61 = const c49
       %62 = const c50
-      %63 = const c51
-      %64 = call builtin.intrinsic_resolve(%62, %63, %59)
-      %65 = is_exception %64
-      branch %65, bb21, bb20
+      %63 = call builtin.intrinsic_resolve(%61, %62, %58)
+      %64 = is_exception %63
+      branch %64, bb21, bb20
     bb19:
-      %61 = call builtin.exception_value(%59)
-      throw %61
+      %60 = call builtin.exception_value(%58)
+      throw %60
     bb20:
       jump bb23
     bb21:
-      %66 = call builtin.exception_value(%64)
-      throw %66
+      %65 = call builtin.exception_value(%63)
+      throw %65
     bb22:
-      %73 = phi [(bb24, %71), (bb25, %72)]
-      %74 = is_exception %73
-      branch %74, bb27, bb26
+      %72 = phi [(bb24, %70), (bb25, %71)]
+      %73 = is_exception %72
+      branch %73, bb27, bb26
     bb23:
-      %68 = phi [(bb16, %67), (bb20, %64)]
-      %69 = phi [(bb16, %67), (bb20, %59)]
-      %70 = const c53
-      branch %56, bb24, bb25
+      %67 = phi [(bb16, %66), (bb20, %63)]
+      %68 = phi [(bb16, %66), (bb20, %58)]
+      %69 = const c52
+      branch %55, bb24, bb25
     bb24:
-      %71 = call builtin.console.log(%70)
+      %70 = call builtin.console.log(%69)
       jump bb22
     bb25:
-      %72 = call %68, this=%69, args=[%70]
+      %71 = call %67, this=%68, args=[%69]
       jump bb22
     bb26:
       return
     bb27:
-      %75 = call builtin.exception_value(%73)
-      throw %75
+      %74 = call builtin.exception_value(%72)
+      throw %74
     bb28:
-      store var $3.a, %77
+      store var $3.a, %76
       %26 = const c36
       %27 = const c37
       %28 = call builtin.intrinsic_pristine(%26, %27)
       branch %28, bb1, bb2
     bb29:
-      %77 = new_object(capacity=4)
-      %78 = const c20
-      %80 = create_data_property %77, %78, %24
-      %81 = const c21
-      %82 = call builtin.symbol.well_known(%81)
-      %83 = is_exception %82
-      branch %83, bb31, bb30
+      %76 = new_object(capacity=4)
+      %77 = const c20
+      %79 = create_data_property %76, %77, %24
+      %80 = const c21
+      %81 = call builtin.symbol.well_known(%80)
+      %82 = is_exception %81
+      branch %82, bb31, bb30
     bb30:
-      %85 = call builtin.to_property_key(%82)
-      %86 = is_exception %85
-      branch %86, bb33, bb32
+      %84 = call builtin.to_property_key(%81)
+      %85 = is_exception %84
+      branch %85, bb33, bb32
     bb31:
-      %84 = call builtin.exception_value(%82)
-      store var $1.name, %76
-      throw %84
+      %83 = call builtin.exception_value(%81)
+      store var $1.name, %75
+      throw %83
     bb32:
-      %88 = const c30
-      %89 = const c31
-      %90 = call builtin.create_closure(%88, %89)
-      %91 = const c32
-      call builtin.function.set_name(%90, %85, %91)
-      %92 = create_data_property %77, %85, %90
-      store var $1.name, %76
+      %87 = const c30
+      %88 = const c31
+      %89 = call builtin.create_closure(%87, %88)
+      %90 = const c32
+      call builtin.function.set_name(%89, %84, %90)
+      %91 = create_data_property %76, %84, %89
+      store var $1.name, %75
       jump bb28
     bb33:
-      %87 = call builtin.exception_value(%85)
-      store var $1.name, %76
-      throw %87
+      %86 = call builtin.exception_value(%84)
+      store var $1.name, %75
+      throw %86
 }

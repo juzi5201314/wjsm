@@ -1,0 +1,45 @@
+exit_code: 0
+--- stdout ---
+fetch function true true true
+Headers function true false true
+Request function true false true
+Response function true false true
+ReadableStream function true false true
+WritableStream function true false true
+TransformStream function true false true
+AbortController function true false true
+AbortSignal function true false true
+EventTarget function true false true
+Event function true false true
+true
+true
+fetch
+fetch
+fetch
+true true
+true false
+true
+42 true false true
+42 42 number
+TypeError
+true 1
+true
+patched Patched
+from-getter from-getter
+7 true false true
+custom
+true
+undefined
+false false
+undefined undefined
+ReferenceError WritableStream is not defined
+ReferenceError WritableStream is not defined
+true undefined
+ReferenceError EventTarget is not defined
+true undefined
+true undefined false
+true undefined
+ReferenceError fetch is not defined
+function true
+true
+--- stderr ---

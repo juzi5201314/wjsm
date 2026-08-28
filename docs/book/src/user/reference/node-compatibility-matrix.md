@@ -68,7 +68,7 @@ wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 
 `Buffer`、`TextEncoder`、`TextDecoder`、`structuredClone`、`queueMicrotask`、`atob`、`btoa`、`performance`、`setImmediate`、`clearImmediate` 在全局名单中。
 
-`fetch`、`Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController` 是真实全局函数值：可取值传递、`typeof` 为 `"function"`、实例可 `instanceof`，`name` / `length` 与 Node v22 一致。
+`fetch`、`Headers`、`Request`、`Response`、`ReadableStream`、`WritableStream`、`TransformStream`、`AbortController`（以及 `AbortSignal`、`EventTarget`、`Event`）是全局对象上真实的自有数据属性：own descriptor 与浏览器 / WebIDL 一致（`{writable, enumerable: false, configurable}`，`fetch` 方法额外 enumerable），可取值传递、赋值 / `delete` / `defineProperty` 重定义全按普通属性语义生效，删除后裸标识符读取抛 `ReferenceError`；`typeof` 为 `"function"`、实例可 `instanceof`，`name` / `length` 与 Node v22 一致。
 
 ## 解析优先级
 

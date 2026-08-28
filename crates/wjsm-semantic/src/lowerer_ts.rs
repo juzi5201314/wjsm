@@ -373,28 +373,18 @@ impl Lowerer {
             let dispose_block = self.current_function.new_block();
             let merge_block = self.current_function.new_block();
 
-            // 检查是否为 null 或 undefined
+            // AddDisposableResource（§9.13）步骤 1.a：资源为 null / undefined 时
+            // 跳过 dispose 方法查找——GetProp 对 nullish 基座抛 TypeError，漏掉
+            // null 检查会让 `using x = null` 误抛。
             let is_nullish = self.alloc_value();
-            let undef_const = self.module.add_constant(Constant::Undefined);
-            let undef_val = self.alloc_value();
             self.current_function.append_instruction(
                 current_block,
-                Instruction::Const {
-                    dest: undef_val,
-                    constant: undef_const,
-                },
-            );
-            // Compare with undefined first
-            self.current_function.append_instruction(
-                current_block,
-                Instruction::Compare {
+                Instruction::Unary {
                     dest: is_nullish,
-                    op: CompareOp::StrictEq,
-                    lhs: val,
-                    rhs: undef_val,
+                    op: UnaryOp::IsNullish,
+                    value: val,
                 },
             );
-            // Branch: if is_nullish → skip, else check null
             self.current_function.set_terminator(
                 current_block,
                 Terminator::Branch {

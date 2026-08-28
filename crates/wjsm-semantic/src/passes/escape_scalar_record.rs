@@ -508,7 +508,6 @@ fn is_js_call(instruction: &Instruction) -> bool {
     matches!(
         instruction,
         Instruction::Call { .. }
-            | Instruction::OptionalCall { .. }
             | Instruction::ConstructCall { .. }
             | Instruction::SuperCall { .. }
     )

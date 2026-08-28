@@ -60,7 +60,14 @@ impl Lowerer {
             swc_ast::Expr::Unary(unary) => match unary.op {
                 swc_ast::UnaryOp::Minus | swc_ast::UnaryOp::Plus | swc_ast::UnaryOp::Tilde => true,
                 swc_ast::UnaryOp::Delete => {
-                    matches!(unary.arg.as_ref(), swc_ast::Expr::Member(_))
+                    // 括号透传 Reference：`delete (o.x)` 与 `delete o.x` 同为
+                    // DeleteProp（strict 不可配置属性可抛）；可选链 delete 的
+                    // 异常已在链内分叉，结果不携带哨兵。
+                    let mut target = unary.arg.as_ref();
+                    while let swc_ast::Expr::Paren(paren) = target {
+                        target = paren.expr.as_ref();
+                    }
+                    matches!(target, swc_ast::Expr::Member(_))
                 }
                 _ => false,
             },
@@ -546,7 +553,11 @@ impl Lowerer {
 
     // ── Unary operators ─────────────────────────────────────────────────────
 
-    fn publish_expr_continuation(&mut self, entry_block: BasicBlockId, continuation: BasicBlockId) {
+    pub(crate) fn publish_expr_continuation(
+        &mut self,
+        entry_block: BasicBlockId,
+        continuation: BasicBlockId,
+    ) {
         if continuation != entry_block {
             self.expr_merge_block = Some(continuation);
         }
@@ -674,6 +685,28 @@ impl Lowerer {
                         self.publish_expr_continuation(block, current_block);
                         return Ok(dest);
                     }
+                    // Web 平台全局是可配置的真实全局属性：typeof 经容忍读
+                    //（被 delete 后返回 "undefined" 而非 ReferenceError；
+                    // 被改写后按新值分类）。
+                    if !has_module_alias
+                        && wjsm_ir::intrinsic_sites::web_global_property(&name).is_some()
+                        && self.scopes.lookup(&name).is_err()
+                    {
+                        let value = self.lower_script_global_read(block, &name, true)?;
+                        let mut current_block = block;
+                        self.resolve_expr_continuations(&mut current_block);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            current_block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::TypeOf,
+                                args: vec![value],
+                            },
+                        );
+                        self.publish_expr_continuation(block, current_block);
+                        return Ok(dest);
+                    }
                     if !has_module_alias
                         && !self.eval_scope_bridge_active()
                         && name != "eval"
@@ -729,8 +762,13 @@ impl Lowerer {
                 Ok(dest)
             }
             Delete => {
-                // delete 操作符
-                match unary.arg.as_ref() {
+                // delete 操作符。括号求值透传 Reference（§13.2.6.5），
+                // `delete (o.x)` / `delete (o?.x)` 穿透 Paren 层匹配目标。
+                let mut target = unary.arg.as_ref();
+                while let swc_ast::Expr::Paren(paren) = target {
+                    target = paren.expr.as_ref();
+                }
+                match target {
                     // delete obj.prop → DeleteProp 指令
                     swc_ast::Expr::Member(member) => {
                         let mut current_block = block;
@@ -778,7 +816,12 @@ impl Lowerer {
                         self.publish_expr_continuation(block, current_block);
                         Ok(dest)
                     }
+                    // delete 可选链（§13.5.1.2）：链短路产出 true，最外环
+                    // 成员访问发 DeleteProp，调用环求值后恒 true。
+                    swc_ast::Expr::OptChain(oc) => self.lower_optchain_delete(oc, block),
                     // delete x：绑定不可删除时返回 false，其余沿用既有恒 true。
+                    // 严格代码中 delete 标识符是 early error（§13.5.1.1），
+                    // 已在降级前由 strict_check 拒绝，此处只剩 sloppy 路径。
                     swc_ast::Expr::Ident(ident) => {
                         // 命中 with 对象环境记录时执行 [[Delete]]（§9.1.1.2.7）。
                         let crossed = self.with_scopes_for_ident(ident.sym.as_ref());

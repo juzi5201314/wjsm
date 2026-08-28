@@ -3374,6 +3374,25 @@ impl NativeAgentState {
             )
             .ok()
     }
+    /// Web 平台全局真实自有属性的物化槽位：(键, 规范值, 属性特性)。
+    /// 值与惰性合成路径同源（`native_callable` 按 kind 记忆化，身份稳定），
+    /// 特性与 Node / WebIDL 一致——{writable, configurable}，`fetch` 方法
+    /// 额外 enumerable。启动快照恢复与 CreateGlobalObject 两条全局对象
+    /// 创建路径共用本表急切物化。
+    fn web_global_property_slots(&mut self) -> Option<Vec<(PropertyKey, u64, u32)>> {
+        const WRITABLE: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
+        const ENUMERABLE: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32;
+        const CONFIGURABLE: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
+        let mut slots = Vec::with_capacity(wjsm_ir::intrinsic_sites::WEB_GLOBAL_PROPERTIES.len());
+        for (name, builtin, enumerable) in wjsm_ir::intrinsic_sites::WEB_GLOBAL_PROPERTIES {
+            let key = self.intern_property_string((*name).into())?;
+            let stored = self.native_callable(NativeCallableKind::Builtin(*builtin, false))?;
+            let flags = WRITABLE | CONFIGURABLE | if *enumerable { ENUMERABLE } else { 0 };
+            slots.push((key, stored as u64, flags));
+        }
+        Some(slots)
+    }
+
     fn global_property(&mut self, receiver: i64, key: i64) -> Option<i64> {
         let is_realm_global =
             self.global_object == Some(receiver) || dispatch::node_vm::is_context(self, receiver);
