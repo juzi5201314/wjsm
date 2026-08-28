@@ -305,7 +305,12 @@ mod tests {
 
     #[test]
     fn builtin_lookup_resolves_subpath_modules_with_and_without_prefix() {
-        for canonical in ["timers/promises", "assert/strict", "util/types", "path/posix"] {
+        for canonical in [
+            "timers/promises",
+            "assert/strict",
+            "util/types",
+            "path/posix",
+        ] {
             let bare = match lookup(canonical) {
                 BuiltinLookup::Found(module) => module,
                 other => panic!("bare lookup should find {canonical}, got {other:?}"),
