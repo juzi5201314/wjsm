@@ -1,0 +1,37 @@
+exit_code: 0
+--- stdout ---
+fetch function fetch 1
+Headers function Headers 0
+Request function Request 1
+Response function Response 0
+ReadableStream function ReadableStream 0
+WritableStream function WritableStream 0
+TransformStream function TransformStream 0
+AbortController function AbortController 0
+true
+true
+true
+true
+1
+function
+true
+true
+true
+true
+true
+true
+true
+false
+object
+true
+true
+true
+object
+true
+false
+true
+true
+true
+true
+hello
+--- stderr ---

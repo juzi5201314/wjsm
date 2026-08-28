@@ -234,6 +234,9 @@ fn normalize_method(
 
 fn create(state: &mut NativeAgentState, request: RequestState) -> Option<i64> {
     let object = state.allocate_object(0, false).ok()?;
+    state
+        .set_web_instance_prototype(object, wjsm_ir::Builtin::RequestConstructor)
+        .ok()?;
     let handle = u32::try_from(state.fetch.requests.len()).ok()?;
     state.fetch.requests.push(request);
     super::register_object(state, object, FetchObjectKind::Request(handle));

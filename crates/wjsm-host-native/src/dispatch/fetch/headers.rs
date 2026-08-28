@@ -57,6 +57,9 @@ pub(super) fn clone_headers(
 
 fn create(state: &mut NativeAgentState, entries: Vec<(String, Vec<String>)>) -> Option<i64> {
     let object = state.allocate_object(0, false).ok()?;
+    state
+        .set_web_instance_prototype(object, wjsm_ir::Builtin::HeadersConstructor)
+        .ok()?;
     let handle = u32::try_from(state.fetch.headers.len()).ok()?;
     state.fetch.headers.push(HeadersState { entries });
     super::register_object(state, object, FetchObjectKind::Headers(handle));

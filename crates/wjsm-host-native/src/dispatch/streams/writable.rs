@@ -109,6 +109,12 @@ pub(super) fn construct_transform(
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 3, false) else {
         return super::super::fail_dispatch(ctx);
     };
+    if state
+        .set_web_instance_prototype(object, wjsm_ir::Builtin::TransformStreamConstructor)
+        .is_err()
+    {
+        return super::super::fail_dispatch(ctx);
+    }
     state.streams.transforms.push(TransformState {
         readable: readable_handle,
         writable: writable_handle,
@@ -140,6 +146,9 @@ fn create_writable(
     transform: Option<u32>,
 ) -> Option<(i64, i64)> {
     let object = state.allocate_object(5, false).ok()?;
+    state
+        .set_web_instance_prototype(object, wjsm_ir::Builtin::WritableStreamConstructor)
+        .ok()?;
     let controller_object = state.allocate_object(3, false).ok()?;
     let signal = state.allocate_object(1, false).ok()?;
     super::super::modules::set_named_property(state, signal, "aborted", value::encode_bool(false))
