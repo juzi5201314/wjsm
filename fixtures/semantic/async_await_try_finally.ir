@@ -152,8 +152,8 @@ module {
     bb1:
       %14 = const c26
       store var $1.$shared_env, %14
-      %234 = load var $1.$state
-      switch %234 [case c95 -> bb2, case c96 -> bb19], default bb106, exit bb107
+      %237 = load var $1.$state
+      switch %237 [case c95 -> bb2, case c96 -> bb19], default bb106, exit bb107
     bb2:
       jump bb3
     bb3:
@@ -162,14 +162,14 @@ module {
       %17 = call builtin.intrinsic_pristine(%15, %16)
       branch %17, bb7, bb8
     bb4:
-      %207 = const c86
-      %208 = const c87
-      %209 = call builtin.intrinsic_pristine(%207, %208)
-      branch %209, bb94, bb95
+      %210 = const c86
+      %211 = const c87
+      %212 = call builtin.intrinsic_pristine(%210, %211)
+      branch %212, bb94, bb95
     bb5:
-      %232 = const c94
-      %233 = load var $1.$promise
-      promise_resolve %233, %232
+      %235 = const c94
+      %236 = load var $1.$promise
+      promise_resolve %236, %235
       return
     bb6:
       %74 = load var $tmp.0
@@ -303,7 +303,7 @@ module {
       store var $tmp.0, %73
       jump bb6
     bb34:
-      %142 = const c68
+      %144 = const c68
       jump bb65
     bb35:
       %78 = const c48
@@ -312,11 +312,11 @@ module {
       %81 = is_exception %80
       branch %81, bb37, bb36
     bb36:
-      %110 = const c58
-      %111 = const c59
-      %112 = call builtin.intrinsic_resolve(%110, %111, %80)
-      %113 = is_exception %112
-      branch %113, bb51, bb50
+      %111 = const c58
+      %112 = const c59
+      %113 = call builtin.intrinsic_resolve(%111, %112, %80)
+      %114 = is_exception %113
+      branch %114, bb51, bb50
     bb37:
       %82 = call builtin.exception_value(%80)
       store var $5.$abrupt_completion_8, %82
@@ -367,9 +367,9 @@ module {
       %103 = call %99, this=%100, args=[%101]
       jump bb44
     bb48:
-      %108 = load var $5.$abrupt_completion_8
-      %109 = load var $1.$promise
-      promise_reject %109, %108
+      %109 = load var $5.$abrupt_completion_8
+      %110 = load var $1.$promise
+      promise_reject %110, %109
       return
     bb49:
       %106 = call builtin.exception_value(%104)
@@ -379,245 +379,245 @@ module {
     bb50:
       jump bb65
     bb51:
-      %114 = call builtin.exception_value(%112)
-      store var $5.$abrupt_completion_9, %114
-      %115 = const c60
-      %116 = const c61
-      %117 = call builtin.intrinsic_pristine(%115, %116)
-      branch %117, bb52, bb53
+      %115 = call builtin.exception_value(%113)
+      store var $5.$abrupt_completion_9, %115
+      %116 = const c60
+      %117 = const c61
+      %118 = call builtin.intrinsic_pristine(%116, %117)
+      branch %118, bb52, bb53
     bb52:
-      %130 = const c66
+      %131 = const c66
       jump bb59
     bb53:
-      %118 = const c62
-      %119 = const c63
-      %120 = call builtin.intrinsic_resolve(%118, %119)
-      %121 = is_exception %120
-      branch %121, bb55, bb54
+      %119 = const c62
+      %120 = const c63
+      %121 = call builtin.intrinsic_resolve(%119, %120)
+      %122 = is_exception %121
+      branch %122, bb55, bb54
     bb54:
-      %124 = const c64
-      %125 = const c65
-      %126 = call builtin.intrinsic_resolve(%124, %125, %120)
-      %127 = is_exception %126
-      branch %127, bb57, bb56
+      %125 = const c64
+      %126 = const c65
+      %127 = call builtin.intrinsic_resolve(%125, %126, %121)
+      %128 = is_exception %127
+      branch %128, bb57, bb56
     bb55:
-      %122 = call builtin.exception_value(%120)
-      %123 = load var $1.$promise
-      promise_reject %123, %122
+      %123 = call builtin.exception_value(%121)
+      %124 = load var $1.$promise
+      promise_reject %124, %123
       return
     bb56:
       jump bb59
     bb57:
-      %128 = call builtin.exception_value(%126)
-      %129 = load var $1.$promise
-      promise_reject %129, %128
+      %129 = call builtin.exception_value(%127)
+      %130 = load var $1.$promise
+      promise_reject %130, %129
       return
     bb58:
-      %136 = phi [(bb60, %134), (bb61, %135)]
-      %137 = is_exception %136
-      branch %137, bb63, bb62
+      %137 = phi [(bb60, %135), (bb61, %136)]
+      %138 = is_exception %137
+      branch %138, bb63, bb62
     bb59:
-      %131 = phi [(bb52, %130), (bb56, %126)]
-      %132 = phi [(bb52, %130), (bb56, %120)]
-      %133 = const c67
-      branch %117, bb60, bb61
+      %132 = phi [(bb52, %131), (bb56, %127)]
+      %133 = phi [(bb52, %131), (bb56, %121)]
+      %134 = const c67
+      branch %118, bb60, bb61
     bb60:
-      %134 = call builtin.console.log(%133)
+      %135 = call builtin.console.log(%134)
       jump bb58
     bb61:
-      %135 = call %131, this=%132, args=[%133]
+      %136 = call %132, this=%133, args=[%134]
       jump bb58
     bb62:
-      %140 = load var $5.$abrupt_completion_9
-      %141 = load var $1.$promise
-      promise_reject %141, %140
+      %142 = load var $5.$abrupt_completion_9
+      %143 = load var $1.$promise
+      promise_reject %143, %142
       return
     bb63:
-      %138 = call builtin.exception_value(%136)
-      %139 = load var $1.$promise
-      promise_reject %139, %138
+      %139 = call builtin.exception_value(%137)
+      %140 = load var $1.$promise
+      promise_reject %140, %139
       return
     bb64:
-      %148 = phi [(bb66, %146), (bb67, %147)]
-      %149 = is_exception %148
-      branch %149, bb69, bb68
+      %150 = phi [(bb66, %148), (bb67, %149)]
+      %151 = is_exception %150
+      branch %151, bb69, bb68
     bb65:
-      %143 = phi [(bb34, %142), (bb50, %112)]
-      %144 = phi [(bb34, %142), (bb50, %80)]
-      %145 = load var $4.e
+      %145 = phi [(bb34, %144), (bb50, %113)]
+      %146 = phi [(bb34, %144), (bb50, %80)]
+      %147 = load var $4.e
       branch %77, bb66, bb67
     bb66:
-      %146 = call builtin.console.log(%145)
+      %148 = call builtin.console.log(%147)
       jump bb64
     bb67:
-      %147 = call %143, this=%144, args=[%145]
+      %149 = call %145, this=%146, args=[%147]
       jump bb64
     bb68:
-      %178 = const c77
-      store var $5.$abrupt_completion_11, %178
-      %179 = const c78
-      %180 = const c79
-      %181 = call builtin.intrinsic_pristine(%179, %180)
-      branch %181, bb82, bb83
+      %181 = const c77
+      store var $5.$abrupt_completion_11, %181
+      %182 = const c78
+      %183 = const c79
+      %184 = call builtin.intrinsic_pristine(%182, %183)
+      branch %184, bb82, bb83
     bb69:
-      %150 = call builtin.exception_value(%148)
-      store var $5.$abrupt_completion_10, %150
-      %151 = const c69
-      %152 = const c70
-      %153 = call builtin.intrinsic_pristine(%151, %152)
-      branch %153, bb70, bb71
+      %152 = call builtin.exception_value(%150)
+      store var $5.$abrupt_completion_10, %152
+      %153 = const c69
+      %154 = const c70
+      %155 = call builtin.intrinsic_pristine(%153, %154)
+      branch %155, bb70, bb71
     bb70:
-      %166 = const c75
+      %168 = const c75
       jump bb77
     bb71:
-      %154 = const c71
-      %155 = const c72
-      %156 = call builtin.intrinsic_resolve(%154, %155)
-      %157 = is_exception %156
-      branch %157, bb73, bb72
+      %156 = const c71
+      %157 = const c72
+      %158 = call builtin.intrinsic_resolve(%156, %157)
+      %159 = is_exception %158
+      branch %159, bb73, bb72
     bb72:
-      %160 = const c73
-      %161 = const c74
-      %162 = call builtin.intrinsic_resolve(%160, %161, %156)
-      %163 = is_exception %162
-      branch %163, bb75, bb74
+      %162 = const c73
+      %163 = const c74
+      %164 = call builtin.intrinsic_resolve(%162, %163, %158)
+      %165 = is_exception %164
+      branch %165, bb75, bb74
     bb73:
-      %158 = call builtin.exception_value(%156)
-      %159 = load var $1.$promise
-      promise_reject %159, %158
+      %160 = call builtin.exception_value(%158)
+      %161 = load var $1.$promise
+      promise_reject %161, %160
       return
     bb74:
       jump bb77
     bb75:
-      %164 = call builtin.exception_value(%162)
-      %165 = load var $1.$promise
-      promise_reject %165, %164
+      %166 = call builtin.exception_value(%164)
+      %167 = load var $1.$promise
+      promise_reject %167, %166
       return
     bb76:
-      %172 = phi [(bb78, %170), (bb79, %171)]
-      %173 = is_exception %172
-      branch %173, bb81, bb80
+      %174 = phi [(bb78, %172), (bb79, %173)]
+      %175 = is_exception %174
+      branch %175, bb81, bb80
     bb77:
-      %167 = phi [(bb70, %166), (bb74, %162)]
-      %168 = phi [(bb70, %166), (bb74, %156)]
-      %169 = const c76
-      branch %153, bb78, bb79
+      %169 = phi [(bb70, %168), (bb74, %164)]
+      %170 = phi [(bb70, %168), (bb74, %158)]
+      %171 = const c76
+      branch %155, bb78, bb79
     bb78:
-      %170 = call builtin.console.log(%169)
+      %172 = call builtin.console.log(%171)
       jump bb76
     bb79:
-      %171 = call %167, this=%168, args=[%169]
+      %173 = call %169, this=%170, args=[%171]
       jump bb76
     bb80:
-      %176 = load var $5.$abrupt_completion_10
+      %179 = load var $5.$abrupt_completion_10
+      %180 = load var $1.$promise
+      promise_reject %180, %179
+      return
+    bb81:
+      %176 = call builtin.exception_value(%174)
       %177 = load var $1.$promise
       promise_reject %177, %176
       return
-    bb81:
-      %174 = call builtin.exception_value(%172)
-      %175 = load var $1.$promise
-      promise_reject %175, %174
-      return
     bb82:
-      %194 = const c84
+      %197 = const c84
       jump bb89
     bb83:
-      %182 = const c80
-      %183 = const c81
-      %184 = call builtin.intrinsic_resolve(%182, %183)
-      %185 = is_exception %184
-      branch %185, bb85, bb84
+      %185 = const c80
+      %186 = const c81
+      %187 = call builtin.intrinsic_resolve(%185, %186)
+      %188 = is_exception %187
+      branch %188, bb85, bb84
     bb84:
-      %188 = const c82
-      %189 = const c83
-      %190 = call builtin.intrinsic_resolve(%188, %189, %184)
-      %191 = is_exception %190
-      branch %191, bb87, bb86
+      %191 = const c82
+      %192 = const c83
+      %193 = call builtin.intrinsic_resolve(%191, %192, %187)
+      %194 = is_exception %193
+      branch %194, bb87, bb86
     bb85:
-      %186 = call builtin.exception_value(%184)
-      %187 = load var $1.$promise
-      promise_reject %187, %186
+      %189 = call builtin.exception_value(%187)
+      %190 = load var $1.$promise
+      promise_reject %190, %189
       return
     bb86:
       jump bb89
     bb87:
-      %192 = call builtin.exception_value(%190)
-      %193 = load var $1.$promise
-      promise_reject %193, %192
+      %195 = call builtin.exception_value(%193)
+      %196 = load var $1.$promise
+      promise_reject %196, %195
       return
     bb88:
-      %200 = phi [(bb90, %198), (bb91, %199)]
-      %201 = is_exception %200
-      branch %201, bb93, bb92
+      %203 = phi [(bb90, %201), (bb91, %202)]
+      %204 = is_exception %203
+      branch %204, bb93, bb92
     bb89:
-      %195 = phi [(bb82, %194), (bb86, %190)]
-      %196 = phi [(bb82, %194), (bb86, %184)]
-      %197 = const c85
-      branch %181, bb90, bb91
+      %198 = phi [(bb82, %197), (bb86, %193)]
+      %199 = phi [(bb82, %197), (bb86, %187)]
+      %200 = const c85
+      branch %184, bb90, bb91
     bb90:
-      %198 = call builtin.console.log(%197)
+      %201 = call builtin.console.log(%200)
       jump bb88
     bb91:
-      %199 = call %195, this=%196, args=[%197]
+      %202 = call %198, this=%199, args=[%200]
       jump bb88
     bb92:
-      %205 = load var $5.$abrupt_completion_11
-      %206 = load var $1.$promise
-      promise_resolve %206, %205
+      %208 = load var $5.$abrupt_completion_11
+      %209 = load var $1.$promise
+      promise_resolve %209, %208
       return
     bb93:
-      %202 = call builtin.exception_value(%200)
-      %203 = load var $1.$promise
-      promise_reject %203, %202
+      %205 = call builtin.exception_value(%203)
+      %206 = load var $1.$promise
+      promise_reject %206, %205
       return
     bb94:
-      %222 = const c92
+      %225 = const c92
       jump bb101
     bb95:
-      %210 = const c88
-      %211 = const c89
-      %212 = call builtin.intrinsic_resolve(%210, %211)
-      %213 = is_exception %212
-      branch %213, bb97, bb96
+      %213 = const c88
+      %214 = const c89
+      %215 = call builtin.intrinsic_resolve(%213, %214)
+      %216 = is_exception %215
+      branch %216, bb97, bb96
     bb96:
-      %216 = const c90
-      %217 = const c91
-      %218 = call builtin.intrinsic_resolve(%216, %217, %212)
-      %219 = is_exception %218
-      branch %219, bb99, bb98
+      %219 = const c90
+      %220 = const c91
+      %221 = call builtin.intrinsic_resolve(%219, %220, %215)
+      %222 = is_exception %221
+      branch %222, bb99, bb98
     bb97:
-      %214 = call builtin.exception_value(%212)
-      %215 = load var $1.$promise
-      promise_reject %215, %214
+      %217 = call builtin.exception_value(%215)
+      %218 = load var $1.$promise
+      promise_reject %218, %217
       return
     bb98:
       jump bb101
     bb99:
-      %220 = call builtin.exception_value(%218)
-      %221 = load var $1.$promise
-      promise_reject %221, %220
+      %223 = call builtin.exception_value(%221)
+      %224 = load var $1.$promise
+      promise_reject %224, %223
       return
     bb100:
-      %228 = phi [(bb102, %226), (bb103, %227)]
-      %229 = is_exception %228
-      branch %229, bb105, bb104
+      %231 = phi [(bb102, %229), (bb103, %230)]
+      %232 = is_exception %231
+      branch %232, bb105, bb104
     bb101:
-      %223 = phi [(bb94, %222), (bb98, %218)]
-      %224 = phi [(bb94, %222), (bb98, %212)]
-      %225 = const c93
-      branch %209, bb102, bb103
+      %226 = phi [(bb94, %225), (bb98, %221)]
+      %227 = phi [(bb94, %225), (bb98, %215)]
+      %228 = const c93
+      branch %212, bb102, bb103
     bb102:
-      %226 = call builtin.console.log(%225)
+      %229 = call builtin.console.log(%228)
       jump bb100
     bb103:
-      %227 = call %223, this=%224, args=[%225]
+      %230 = call %226, this=%227, args=[%228]
       jump bb100
     bb104:
       jump bb5
     bb105:
-      %230 = call builtin.exception_value(%228)
-      %231 = load var $1.$promise
-      promise_reject %231, %230
+      %233 = call builtin.exception_value(%231)
+      %234 = load var $1.$promise
+      promise_reject %234, %233
       return
     bb106:
       return
