@@ -748,7 +748,7 @@ pub(super) fn binary_add(
 /// 普通对象（实例 `this`）、callable（静态字段的类构造器）、array
 /// （`class C extends Array` 实例）、Proxy（基类构造器返回 Proxy 时走
 /// [[DefineOwnProperty]] trap）。`key_value` 已完成 ToPropertyKey。
-fn create_data_property_impl(
+pub(super) fn create_data_property_impl(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,
@@ -1568,6 +1568,21 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
             crate::NativeCallableKind::TypedArrayFrom
             | crate::NativeCallableKind::TypedArrayOf
             | crate::NativeCallableKind::TypedArrayToStringTag,
+        ) => false,
+        // %Iterator% 本体是构造器（抽象性在调用期抛错），其余 Iterator
+        // Helper 家族函数（from / 原型方法 / 访问器 / next / return）皆非。
+        Some(
+            crate::NativeCallableKind::IteratorStaticFrom
+            | crate::NativeCallableKind::IteratorProto(_)
+            | crate::NativeCallableKind::IteratorProtoIterator
+            | crate::NativeCallableKind::IteratorConstructorGetter
+            | crate::NativeCallableKind::IteratorConstructorSetter
+            | crate::NativeCallableKind::IteratorToStringTagGetter
+            | crate::NativeCallableKind::IteratorToStringTagSetter
+            | crate::NativeCallableKind::IteratorHelperNext
+            | crate::NativeCallableKind::IteratorHelperReturn
+            | crate::NativeCallableKind::IteratorWrapNext
+            | crate::NativeCallableKind::IteratorWrapReturn,
         ) => false,
         Some(_) => true,
         None => state

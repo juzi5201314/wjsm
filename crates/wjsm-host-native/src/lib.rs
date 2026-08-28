@@ -290,6 +290,20 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::TypedArrayOf => Some(("of", 0)),
         // @@toStringTag 访问器 getter 的规范函数名（§23.2.3.38 步骤说明）。
         NativeCallableKind::TypedArrayToStringTag => Some(("get [Symbol.toStringTag]", 0)),
+        NativeCallableKind::IteratorConstructor => Some(("Iterator", 0)),
+        NativeCallableKind::IteratorStaticFrom => Some(("from", 1)),
+        NativeCallableKind::IteratorProto(method) => Some((method.name(), method.length())),
+        NativeCallableKind::IteratorProtoIterator => Some(("[Symbol.iterator]", 0)),
+        NativeCallableKind::IteratorConstructorGetter => Some(("get constructor", 0)),
+        NativeCallableKind::IteratorConstructorSetter => Some(("set constructor", 1)),
+        NativeCallableKind::IteratorToStringTagGetter => Some(("get [Symbol.toStringTag]", 0)),
+        NativeCallableKind::IteratorToStringTagSetter => Some(("set [Symbol.toStringTag]", 1)),
+        NativeCallableKind::IteratorHelperNext | NativeCallableKind::IteratorWrapNext => {
+            Some(("next", 0))
+        }
+        NativeCallableKind::IteratorHelperReturn | NativeCallableKind::IteratorWrapReturn => {
+            Some(("return", 0))
+        }
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
@@ -688,6 +702,32 @@ enum NativeCallableKind {
     /// get %TypedArray%.prototype [ %Symbol.toStringTag% ]（§23.2.3.38）：
     /// this 有 [[TypedArrayName]] 槽时返回元素类型名，否则 undefined。
     TypedArrayToStringTag,
+    /// %Iterator% 抽象构造器（§27.1.3.1）：无 new 调用与直接 new 抛
+    /// TypeError，子类 super()（newTarget 非自身）按 newTarget.prototype
+    /// 建实例。
+    IteratorConstructor,
+    /// Iterator.from（§27.1.3.2.1）。
+    IteratorStaticFrom,
+    /// %Iterator.prototype% 的 11 个 helper 方法（§27.1.4.2–27.1.4.12）。
+    IteratorProto(dispatch::iterator_helpers::IteratorProtoMethod),
+    /// %Iterator.prototype%[@@iterator]（§27.1.4.13）：返回 this。
+    IteratorProtoIterator,
+    /// get Iterator.prototype.constructor（§27.1.4.1.1）。
+    IteratorConstructorGetter,
+    /// set Iterator.prototype.constructor（§27.1.4.1.2）。
+    IteratorConstructorSetter,
+    /// get Iterator.prototype[@@toStringTag]（§27.1.4.14.1）。
+    IteratorToStringTagGetter,
+    /// set Iterator.prototype[@@toStringTag]（§27.1.4.14.2）。
+    IteratorToStringTagSetter,
+    /// %IteratorHelperPrototype%.next（§27.1.2.1.1）。
+    IteratorHelperNext,
+    /// %IteratorHelperPrototype%.return（§27.1.2.1.2）。
+    IteratorHelperReturn,
+    /// %WrapForValidIteratorPrototype%.next（§27.1.3.2.2.1）。
+    IteratorWrapNext,
+    /// %WrapForValidIteratorPrototype%.return（§27.1.3.2.2.2）。
+    IteratorWrapReturn,
     ProcessNextTick,
     Stream(dispatch::streams::StreamCallable),
     WebEncoding(dispatch::web_encoding::WebEncodingCallable),
@@ -1100,6 +1140,7 @@ struct NativeAgentState {
     weak: dispatch::weak::NativeWeakState,
     collection_iterators: Vec<dispatch::collections::CollectionIterator>,
     array_iterators: HashMap<u32, NativeArrayIterator>,
+    iterator_helpers: dispatch::iterator_helpers::IteratorHelpersState,
     enumerators: HashMap<u32, dispatch::enumerator::NativeEnumerator>,
     regexp_iterators: Vec<dispatch::regexp::RegExpIterator>,
     array_buffers: HashMap<u32, dispatch::buffers::NativeArrayBuffer>,
@@ -1351,6 +1392,7 @@ impl NativeAgentState {
             array_property_flags: HashMap::new(),
             collection_iterators: Vec::new(),
             array_iterators: HashMap::new(),
+            iterator_helpers: dispatch::iterator_helpers::IteratorHelpersState::default(),
             enumerators: HashMap::new(),
             buffers: HashMap::new(),
             text_decoders: HashMap::new(),
@@ -1716,6 +1758,7 @@ impl NativeAgentState {
         self.collection_iterators.clear();
         self.promise_combinators.clear();
         self.array_iterators.clear();
+        self.iterator_helpers.clear();
         self.regexp_iterators.clear();
         self.array_buffers.clear();
         self.shared_array_buffers.clear();
@@ -2566,6 +2609,11 @@ impl NativeAgentState {
         {
             return self.native_callable(NativeCallableKind::IteratorNext(iterator));
         }
+        // 内部迭代器实例的 Iterator Helper 方法（§27.1.4）：语义原型链穿过
+        // %Iterator.prototype%，读取原型对象当前同名自有属性。
+        if let Some(method) = dispatch::iterator_helpers::instance_method(self, receiver, &key) {
+            return Some(method);
+        }
         if let Some(method) = dispatch::date::method(self, receiver, &key) {
             return self.native_callable(NativeCallableKind::DateMethod(method));
         }
@@ -3391,6 +3439,9 @@ impl NativeAgentState {
         if name == "Intl" {
             return dispatch::intl::ensure_intl_object(self);
         }
+        if name == "Iterator" {
+            return dispatch::iterator_helpers::ensure_constructor(self);
+        }
         if name == "process" {
             return self.ensure_process_object();
         }
@@ -3664,6 +3715,18 @@ impl NativeAgentState {
             | NativeCallableKind::TypedArrayFrom
             | NativeCallableKind::TypedArrayOf
             | NativeCallableKind::TypedArrayToStringTag
+            | NativeCallableKind::IteratorConstructor
+            | NativeCallableKind::IteratorStaticFrom
+            | NativeCallableKind::IteratorProto(_)
+            | NativeCallableKind::IteratorProtoIterator
+            | NativeCallableKind::IteratorConstructorGetter
+            | NativeCallableKind::IteratorConstructorSetter
+            | NativeCallableKind::IteratorToStringTagGetter
+            | NativeCallableKind::IteratorToStringTagSetter
+            | NativeCallableKind::IteratorHelperNext
+            | NativeCallableKind::IteratorHelperReturn
+            | NativeCallableKind::IteratorWrapNext
+            | NativeCallableKind::IteratorWrapReturn
             | NativeCallableKind::SetImmediate
             | NativeCallableKind::TimerConstructor(_)
             | NativeCallableKind::Bound(_)
@@ -6246,6 +6309,12 @@ impl NativeAgentState {
         self.generators.retain(|handle, _| is_live(handle));
         self.async_generators.retain(|handle, _| is_live(handle));
         self.array_iterators.retain(|handle, _| is_live(handle));
+        self.iterator_helpers
+            .helpers
+            .retain(|handle, _| is_live(handle));
+        self.iterator_helpers
+            .wraps
+            .retain(|handle, _| is_live(handle));
         self.enumerators.retain(|handle, _| is_live(handle));
         self.iterator_next.retain(|handle, _| is_live(handle));
         self.array_property_order
@@ -6763,6 +6832,43 @@ unsafe extern "C" fn native_callable_call(
         }
         NativeCallableKind::TypedArrayOf => {
             dispatch::typedarray_static_of(ctx, state, this_value, &arguments)
+        }
+        // %Iterator% 本体 Call / Construct（§27.1.3.1）：无 new 与直接 new
+        // 抛 TypeError，子类 super() 按 newTarget.prototype 建实例。
+        NativeCallableKind::IteratorConstructor => {
+            dispatch::iterator_helpers::constructor_call(ctx, state, callee)
+        }
+        NativeCallableKind::IteratorStaticFrom => {
+            dispatch::iterator_helpers::static_from(ctx, state, &arguments)
+        }
+        NativeCallableKind::IteratorProto(method) => {
+            dispatch::iterator_helpers::proto_method(ctx, state, method, this_value, &arguments)
+        }
+        // %Iterator.prototype%[@@iterator] 恒返回 this（§27.1.4.13）。
+        NativeCallableKind::IteratorProtoIterator => this_value,
+        NativeCallableKind::IteratorConstructorGetter => {
+            dispatch::iterator_helpers::constructor_getter(ctx, state)
+        }
+        NativeCallableKind::IteratorConstructorSetter => {
+            dispatch::iterator_helpers::constructor_setter(ctx, state, this_value, &arguments)
+        }
+        NativeCallableKind::IteratorToStringTagGetter => {
+            dispatch::iterator_helpers::to_string_tag_getter(ctx, state)
+        }
+        NativeCallableKind::IteratorToStringTagSetter => {
+            dispatch::iterator_helpers::to_string_tag_setter(ctx, state, this_value, &arguments)
+        }
+        NativeCallableKind::IteratorHelperNext => {
+            dispatch::iterator_helpers::helper_next(ctx, state, this_value)
+        }
+        NativeCallableKind::IteratorHelperReturn => {
+            dispatch::iterator_helpers::helper_return(ctx, state, this_value)
+        }
+        NativeCallableKind::IteratorWrapNext => {
+            dispatch::iterator_helpers::wrap_next(ctx, state, this_value)
+        }
+        NativeCallableKind::IteratorWrapReturn => {
+            dispatch::iterator_helpers::wrap_return(ctx, state, this_value)
         }
         NativeCallableKind::TypedArrayToStringTag => {
             dispatch::typedarray_to_string_tag(ctx, state, this_value)

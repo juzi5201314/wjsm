@@ -594,6 +594,9 @@ fn root_values(
     queue.extend(state.agent_bridge);
     queue.extend(state.async_generator_prototype);
     queue.extend(state.async_iterator_prototype);
+    queue.extend(state.iterator_helpers.prototype);
+    queue.extend(state.iterator_helpers.helper_prototype);
+    queue.extend(state.iterator_helpers.wrap_prototype);
     queue.extend(state.error_prototypes.values().copied());
     queue.extend(state.out_of_memory_error);
     queue.extend(state.out_of_memory_exception);
@@ -688,6 +691,31 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
     }
     for (handle, primitive) in &state.boxed_primitives {
         add(owner(*handle), *primitive);
+    }
+    // Iterator Helper / wrapper 实例的内部槽（底层迭代器 record、回调、
+    // flatMap 内层 record）是宿主侧持有的 JS 值，随实例对象存活。
+    for (handle, helper) in &state.iterator_helpers.helpers {
+        let helper_owner = owner(*handle);
+        add(helper_owner, helper.underlying.iterator);
+        add(helper_owner, helper.underlying.next);
+        match helper.kind {
+            crate::dispatch::iterator_helpers::HelperKind::Map(callback)
+            | crate::dispatch::iterator_helpers::HelperKind::Filter(callback)
+            | crate::dispatch::iterator_helpers::HelperKind::FlatMap(callback) => {
+                add(helper_owner, callback);
+            }
+            crate::dispatch::iterator_helpers::HelperKind::Take(_)
+            | crate::dispatch::iterator_helpers::HelperKind::Drop(_) => {}
+        }
+        if let Some(inner) = helper.inner {
+            add(helper_owner, inner.iterator);
+            add(helper_owner, inner.next);
+        }
+    }
+    for (handle, record) in &state.iterator_helpers.wraps {
+        let wrap_owner = owner(*handle);
+        add(wrap_owner, record.iterator);
+        add(wrap_owner, record.next);
     }
     for ((owner, _), value) in &state.callable_properties {
         add(*owner, *value);

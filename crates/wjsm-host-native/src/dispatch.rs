@@ -26,6 +26,7 @@ pub(crate) mod idna;
 pub(crate) mod intl;
 mod intrinsics;
 mod iterator;
+pub(crate) mod iterator_helpers;
 mod json;
 mod jsx;
 mod math;
