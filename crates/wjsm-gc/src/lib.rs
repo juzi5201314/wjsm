@@ -48,7 +48,10 @@ pub use heap_access::{
 };
 pub use mutator::MutatorContext;
 pub use property_key::PropertyKey;
-pub use shape::{PROTO_NULL_SENTINEL, ShapeProp, ShapeTable, ShapeTableSnapshot, ShapeTransition};
+pub use shape::{
+    PROTO_NULL_SENTINEL, PROTO_PROXY_FLAG, PROTO_REGEXP_FLAG, ShapeProp, ShapeTable,
+    ShapeTableSnapshot, ShapeTransition, proto_slot_is_exotic,
+};
 pub use string_view::StrView;
 pub use telemetry::{
     GC_TELEMETRY_SCHEMA_VERSION, GcTelemetry, GcTelemetrySnapshot, HistogramSnapshot,

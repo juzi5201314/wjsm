@@ -412,6 +412,19 @@ impl ShapeTable {
 /// `+0` 处 proto 字段的 null 哨兵，与 `heap_access` / `object_walker` 共用。
 pub const PROTO_NULL_SENTINEL: u32 = 0xFFFF_FFFF;
 
+/// proto 槽的 Proxy 标记位：置位时低 31 位是宿主 proxy 句柄，不能按
+/// V2 heap handle 解析，链行走须逃逸回宿主走 [[GetPrototypeOf]] trap。
+pub const PROTO_PROXY_FLAG: u32 = 0x8000_0000;
+
+/// proto 槽的 RegExp 标记位：置位时低 30 位是宿主 regexp 句柄（RegExp
+/// 是宿主侧表管理的 exotic 对象，自有层只有 lastIndex）。
+pub const PROTO_REGEXP_FLAG: u32 = 0x4000_0000;
+
+/// proto 槽是否携带宿主侧 exotic 标记（Proxy / RegExp），须逃逸回宿主。
+pub fn proto_slot_is_exotic(prototype: u32) -> bool {
+    prototype != PROTO_NULL_SENTINEL && prototype & (PROTO_PROXY_FLAG | PROTO_REGEXP_FLAG) != 0
+}
+
 impl ShapeTableInner {
     fn transition(&mut self, shape_id: u32, name_id: PropertyKey, flags: u32) -> ShapeTransition {
         let Some(shape) = self.shapes.get(shape_id as usize) else {

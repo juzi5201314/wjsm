@@ -4,7 +4,6 @@ use wjsm_ir::{Builtin, value, wk_symbol};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{self, fail_dispatch, type_error};
-use super::{intl, proxy};
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_with(
@@ -63,18 +62,10 @@ fn with_to_object(ctx: &mut NativeVmContext, state: &mut NativeAgentState, input
     if is_object_like(input) {
         return input;
     }
-    let prototype = if value::is_f64(input) {
-        intl::ensure_number_prototype(state)
-    } else if value::is_string(input) {
-        intl::ensure_string_prototype(state)
-    } else if value::is_bigint(input) {
-        intl::ensure_bigint_prototype(state)
-    } else if value::is_symbol(input) {
-        state.symbol_prototype.or(state.object_prototype)
-    } else {
-        state.object_prototype
-    };
-    let Some(prototype) = prototype.map(value::decode_handle) else {
+    let Some(prototype) = state
+        .primitive_wrapper_prototype(input)
+        .map(value::decode_handle)
+    else {
         return fail_dispatch(ctx);
     };
     let Ok(object) = state.allocate_object_with_prototype(0, false, prototype) else {
@@ -93,14 +84,7 @@ fn has_property_abrupt(
     object: i64,
     key: i64,
 ) -> Result<bool, i64> {
-    if value::is_proxy(object) {
-        let result = proxy::has(ctx, state, &[object, key]);
-        if value::is_exception(result) {
-            return Err(result);
-        }
-        return Ok(runtime::is_truthy(state, result));
-    }
-    Ok(runtime::has_property(state, object, key))
+    runtime::has_property(ctx, state, object, key)
 }
 
 /// [[Get]]：getter / proxy get trap 异常以 `Err` 传播。

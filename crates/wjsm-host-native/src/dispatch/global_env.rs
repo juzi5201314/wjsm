@@ -390,7 +390,12 @@ fn get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     let Ok(result) = runtime::get_property(ctx, state, *global, *name) else {
         return fail_dispatch(ctx);
     };
-    if !value::is_undefined(result) || runtime::has_property(state, *global, *name) {
+    let present = !value::is_undefined(result)
+        || match runtime::has_property(ctx, state, *global, *name) {
+            Ok(present) => present,
+            Err(exception) => return exception,
+        };
+    if present {
         return result;
     }
     let typeof_tolerant = value::decode_f64(*flags) as i64 & 1 != 0;
@@ -426,7 +431,10 @@ fn set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     let is_strict = value::is_bool(*strict) && value::decode_bool(*strict);
     if is_strict {
         let exists = global_has_own_or_lazy(state, *global, *name, key)
-            || runtime::has_property(state, *global, *name);
+            || match runtime::has_property(ctx, state, *global, *name) {
+                Ok(present) => present,
+                Err(exception) => return exception,
+            };
         if !exists {
             return not_defined_error(ctx, state, *name);
         }

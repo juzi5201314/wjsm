@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+A true
+B true
+C true
+D true
+E 0 true function
+F TypeError RegExp.prototype.source getter called on non-RegExp object
+G TypeError RegExp.prototype.hasIndices getter called on non-RegExp object
+H 5 0 true
+I undefined true
+J cd i ab g
+K true true false
+--- stderr ---

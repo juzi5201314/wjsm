@@ -277,7 +277,10 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         // 时按 [[Set]]（strict）写入；确实缺失才抛 ReferenceError（§9.1.1.1.5）。
         let exists = runtime::property_key(state, *key).is_some_and(|env_key| {
             global_env::global_has_own_or_lazy(state, outer_env, *key, env_key)
-        }) || runtime::has_property(state, outer_env, *key);
+        }) || match runtime::has_property(ctx, state, outer_env, *key) {
+            Ok(present) => present,
+            Err(exception) => return exception,
+        };
         if !exists {
             return javascript_error(
                 ctx,
@@ -328,11 +331,11 @@ fn eval_binding_exists(
     {
         return Ok(true);
     }
-    Ok(
-        runtime::get_property(ctx, state, outer, key).is_ok_and(|property| {
-            !value::is_undefined(property) || runtime::has_property(state, outer, key)
-        }),
-    )
+    match runtime::get_property(ctx, state, outer, key) {
+        Ok(property) if !value::is_undefined(property) => Ok(true),
+        Ok(_) => runtime::has_property(ctx, state, outer, key),
+        Err(()) => Ok(false),
+    }
 }
 
 fn eval_binding_name(state: &NativeAgentState, key: i64) -> String {

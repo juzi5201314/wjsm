@@ -782,9 +782,13 @@ fn array_concat(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &
                 continue;
             }
             let key = value::encode_f64(f64::from(index));
-            if !has_property(state, *item, key) {
-                values.push(value::encode_array_hole());
-                continue;
+            match has_property(ctx, state, *item, key) {
+                Ok(true) => {}
+                Ok(false) => {
+                    values.push(value::encode_array_hole());
+                    continue;
+                }
+                Err(exception) => return exception,
             }
             match get_property(ctx, state, *item, key) {
                 Ok(stored) => values.push(stored),
@@ -860,7 +864,7 @@ fn slice_values(
         let key = state
             .intern_text(index.to_string(), value::TAG_STRING)
             .ok_or_else(|| fail_dispatch(ctx))?;
-        if value::is_string(receiver) || has_property(state, receiver, key) {
+        if value::is_string(receiver) || has_property(ctx, state, receiver, key)? {
             let stored = get_property(ctx, state, receiver, key).map_err(|_| fail_dispatch(ctx))?;
             if value::is_exception(stored) {
                 return Err(stored);

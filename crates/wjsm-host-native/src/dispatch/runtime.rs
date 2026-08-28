@@ -401,6 +401,7 @@ pub(super) fn dispatch_runtime(
                 || value::is_array(*proto)
                 || value::is_callable(*proto)
                 || value::is_proxy(*proto)
+                || value::is_regexp(*proto)
             {
                 let result = super::object::dispatch_object(
                     ctx,
@@ -1451,14 +1452,43 @@ pub(super) fn object_handle(encoded: i64) -> Option<u32> {
     (value::is_object(encoded) || value::is_array(encoded)).then(|| value::decode_handle(encoded))
 }
 
-fn heap_prototype_value(state: &NativeAgentState, object: i64) -> Result<Option<i64>, ()> {
-    let handle = object_handle(object).ok_or(())?;
-    let prototype = state.gc.heap().prototype(handle).map_err(|_| ())?;
-    if prototype == wjsm_gc::PROTO_NULL_SENTINEL {
-        return Ok(None);
+/// %RegExp.prototype% 访问器族（§22.2.6）的键名：命中返回 brand 检查错误
+/// 消息所用的 getter 名（generic 的 flags getter 首个内部读是 hasIndices，
+/// 与 V8 报错口径一致）。
+fn regexp_accessor_name(state: &mut NativeAgentState, key: i64) -> Option<&'static str> {
+    for name in [
+        "source",
+        "global",
+        "ignoreCase",
+        "multiline",
+        "sticky",
+        "unicode",
+        "unicodeSets",
+        "dotAll",
+        "hasIndices",
+    ] {
+        if state.text_matches(key, name) {
+            return Some(name);
+        }
     }
-    if prototype & 0x8000_0000 != 0 {
-        return Ok(Some(value::encode_proxy_handle(prototype & 0x7fff_ffff)));
+    state.text_matches(key, "flags").then_some("hasIndices")
+}
+
+/// proto 槽 u32 → 编码值：null 哨兵为 None；Proxy / RegExp 标记位还原为
+/// 对应宿主 tag；其余按堆对象类型编码 object / array。
+pub(crate) fn decode_proto_slot(state: &NativeAgentState, prototype: u32) -> Option<i64> {
+    if prototype == wjsm_gc::PROTO_NULL_SENTINEL {
+        return None;
+    }
+    if prototype & wjsm_gc::PROTO_PROXY_FLAG != 0 {
+        return Some(value::encode_proxy_handle(
+            prototype & !wjsm_gc::PROTO_PROXY_FLAG,
+        ));
+    }
+    if prototype & wjsm_gc::PROTO_REGEXP_FLAG != 0 {
+        return Some(value::encode_regexp_handle(
+            prototype & !wjsm_gc::PROTO_REGEXP_FLAG,
+        ));
     }
     let encoded = if state.gc.heap().object_type(prototype).ok()
         == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
@@ -1467,7 +1497,28 @@ fn heap_prototype_value(state: &NativeAgentState, object: i64) -> Result<Option<
     } else {
         value::encode_object_handle(prototype)
     };
-    Ok(Some(encoded))
+    Some(encoded)
+}
+
+/// 编码值 → proto 槽 u32：null 写哨兵，Proxy / RegExp 置对应标记位，普通
+/// 堆对象 / 数组取句柄；callable 等无法进 proto 槽的值返回 None。
+pub(super) fn encode_proto_slot(prototype: i64) -> Option<u32> {
+    if value::is_null(prototype) {
+        return Some(wjsm_gc::PROTO_NULL_SENTINEL);
+    }
+    if value::is_proxy(prototype) {
+        return Some(value::decode_proxy_handle(prototype) | wjsm_gc::PROTO_PROXY_FLAG);
+    }
+    if value::is_regexp(prototype) {
+        return Some(value::decode_regexp_handle(prototype) | wjsm_gc::PROTO_REGEXP_FLAG);
+    }
+    object_handle(prototype)
+}
+
+fn heap_prototype_value(state: &NativeAgentState, object: i64) -> Result<Option<i64>, ()> {
+    let handle = object_handle(object).ok_or(())?;
+    let prototype = state.gc.heap().prototype(handle).map_err(|_| ())?;
+    Ok(decode_proto_slot(state, prototype))
 }
 
 pub(super) fn ordinary_set(
@@ -1508,25 +1559,30 @@ pub(super) fn ordinary_set_key(
             .heap()
             .prototype(target_handle)
             .map_err(|_| fail_dispatch(ctx))?;
-        if prototype != wjsm_gc::PROTO_NULL_SENTINEL {
-            if prototype & 0x8000_0000 != 0 {
+        if let Some(prototype) = decode_proto_slot(state, prototype) {
+            if value::is_proxy(prototype) {
                 return super::proxy::set(
                     ctx,
                     state,
-                    value::encode_proxy_handle(prototype & 0x7fff_ffff),
+                    prototype,
                     encoded_property_key(key),
                     stored,
                     receiver,
                 );
             }
-            return ordinary_set_key(
-                ctx,
-                state,
-                value::encode_object_handle(prototype),
-                key,
-                stored,
-                receiver,
-            );
+            if value::is_regexp(prototype) {
+                // 链上 RegExp 层：自有 lastIndex 是可写数据属性，合成方法皆非
+                // 访问器——两者对 OrdinarySet 都归结为「在 receiver 上创建数据
+                // 属性」；其余键继续沿 %RegExp.prototype% 堆链找访问器。
+                if state.text_matches(encoded_property_key(key), "lastIndex") {
+                    return assign_data_property_to_receiver(ctx, state, receiver, key, stored);
+                }
+                if let Some(regexp_prototype) = state.regexp_prototype {
+                    return ordinary_set_key(ctx, state, regexp_prototype, key, stored, receiver);
+                }
+                return assign_data_property_to_receiver(ctx, state, receiver, key, stored);
+            }
+            return ordinary_set_key(ctx, state, prototype, key, stored, receiver);
         }
     }
     if let Some(descriptor) = own {
@@ -1830,6 +1886,24 @@ pub(super) fn get_property_with_receiver(
         return Ok(super::proxy::get(ctx, state, object, key, receiver));
     }
     if value::is_regexp(object) {
+        // 链上 holder 为 RegExp 且 receiver 非 RegExp（对象以 RegExp 为原型）
+        // 时，访问器族（source / flags / 各标志位，§22.2.6）以 receiver 为
+        // this 作 brand 检查：receiver 无 [[OriginalSource]]/[[OriginalFlags]]
+        // 内部槽即抛 TypeError（自有数据属性 lastIndex 与 exec 等方法不受
+        // 影响）。receiver 为 RegExp 时按 this=receiver 求值。
+        if let Some(name) = regexp_accessor_name(state, key) {
+            if value::is_regexp(receiver) {
+                if let Some(property) = super::regexp::get_property(ctx, state, receiver, key) {
+                    return Ok(property);
+                }
+            } else {
+                return Ok(type_error(
+                    ctx,
+                    state,
+                    &format!("RegExp.prototype.{name} getter called on non-RegExp object"),
+                ));
+            }
+        }
         if let Some(property) = super::regexp::get_property(ctx, state, object, key) {
             return Ok(property);
         }
@@ -1906,9 +1980,16 @@ pub(super) fn get_property_with_receiver(
         || value::is_bigint(object)
         || value::is_symbol(object)
     {
-        return Ok(state
-            .primitive_property(object, key)
-            .unwrap_or_else(value::encode_undefined));
+        if let Some(property) = state.primitive_property(object, key) {
+            return Ok(property);
+        }
+        // OrdinaryGet 经 ToObject（§7.1.18）：合成方法未命中后沿基元包装对象
+        // 的真实 [[Prototype]] 堆链上行，%Object.prototype% 的自有属性
+        // （hasOwnProperty / __proto__ 访问器等）对基元可见，receiver 保持基元。
+        let Some(prototype) = state.primitive_wrapper_prototype(object) else {
+            return Ok(value::encode_undefined());
+        };
+        return get_property_with_receiver(ctx, state, prototype, key, receiver);
     }
     let encoded_key = key;
     let key = property_key(state, key).ok_or(())?;
@@ -1986,13 +2067,24 @@ pub(super) fn get_property_with_receiver(
             }
             Ok(value::encode_undefined())
         }
-        Err(wjsm_gc::HeapAccessV2Error::ProxyPrototype { handle }) => Ok(super::proxy::get(
-            ctx,
-            state,
-            value::encode_proxy_handle(handle & 0x7fff_ffff),
-            encoded_key,
-            receiver,
-        )),
+        Err(wjsm_gc::HeapAccessV2Error::ExoticPrototype { slot }) => {
+            // 链上出现宿主 exotic 原型（Proxy / RegExp）：解码标记位后继续
+            // [[Get]]——Proxy 走 get trap，RegExp 递归自身分支（自有
+            // lastIndex / 合成方法 / %RegExp.prototype% 上行）。
+            let Some(prototype) = decode_proto_slot(state, slot) else {
+                return Err(());
+            };
+            if value::is_proxy(prototype) {
+                return Ok(super::proxy::get(
+                    ctx,
+                    state,
+                    prototype,
+                    encoded_key,
+                    receiver,
+                ));
+            }
+            get_property_with_receiver(ctx, state, prototype, encoded_key, receiver)
+        }
         Err(_) => Err(()),
     }
 }
@@ -2189,68 +2281,108 @@ pub(super) fn delete_property(
     }
     Ok(removed)
 }
-pub(super) fn has_property(state: &mut NativeAgentState, object: i64, encoded_key: i64) -> bool {
+/// HasProperty（§7.3.11，含原型链）：Proxy（顶层或链中）走 has trap，
+/// trap 异常以 `Err` 携带宿主异常值上抛；RegExp 归约自有 lastIndex 与
+/// 合成方法后沿 %RegExp.prototype% 上行。
+pub(super) fn has_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    object: i64,
+    encoded_key: i64,
+) -> Result<bool, i64> {
+    if value::is_proxy(object) {
+        let result = super::proxy::has(ctx, state, &[object, encoded_key]);
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        return Ok(is_truthy(state, result));
+    }
+    if value::is_regexp(object) {
+        if state.text_matches(encoded_key, "lastIndex")
+            || super::regexp::get_property(ctx, state, object, encoded_key).is_some()
+        {
+            return Ok(true);
+        }
+        let Some(prototype) = state.regexp_prototype else {
+            return Ok(false);
+        };
+        return has_property(ctx, state, prototype, encoded_key);
+    }
     if value::is_array(object) && state.text_matches(encoded_key, "length") {
-        return true;
+        return Ok(true);
     }
     if value::is_array(object) {
         let handle = value::decode_handle(object);
         if let Some(index) = array_index(state, encoded_key) {
             match state.gc.heap().get_element(handle, index) {
-                Ok(Some(element)) if !value::is_array_hole(element as i64) => return true,
+                Ok(Some(element)) if !value::is_array_hole(element as i64) => return Ok(true),
                 Ok(_) => {}
-                Err(_) => return false,
+                Err(_) => return Ok(false),
             }
         }
         let Some(key) = property_key(state, encoded_key) else {
-            return false;
+            return Ok(false);
         };
         if state.array_properties.contains_key(&(handle, key))
             || state.array_accessors.contains_key(&(handle, key))
             || state.primitive_property(object, encoded_key).is_some()
         {
-            return true;
+            return Ok(true);
         }
         // 数组合成方法未命中：沿堆原型链上行（%Array.prototype% →
         // %Object.prototype%），使 hasOwnProperty 等继承成员对 in 可见。
-        return heap_prototype_value(state, object)
-            .ok()
-            .flatten()
-            .is_some_and(|prototype| has_property(state, prototype, encoded_key));
+        let Ok(Some(prototype)) = heap_prototype_value(state, object) else {
+            return Ok(false);
+        };
+        return has_property(ctx, state, prototype, encoded_key);
     }
     let Some(key) = property_key(state, encoded_key) else {
-        return false;
+        return Ok(false);
     };
     if value::is_callable(object) {
         // HasProperty 与 [[Get]] 同链：逐层自有属性 → 非 callable 原型递归
         // 对象路径 → 显式 null 缺失 → 链尾隐式 Function.prototype 内建，
         // 再沿 %Object.prototype% 上行（§20.2.3）。
         return match callable_chain::resolve(state, object, key) {
-            CallableChainHit::Accessor { .. } | CallableChainHit::Data { .. } => true,
-            CallableChainHit::Object { prototype } => has_property(state, prototype, encoded_key),
-            CallableChainHit::Null => false,
+            CallableChainHit::Accessor { .. } | CallableChainHit::Data { .. } => Ok(true),
+            CallableChainHit::Object { prototype } => {
+                has_property(ctx, state, prototype, encoded_key)
+            }
+            CallableChainHit::Null => Ok(false),
             CallableChainHit::Implicit { tail } => {
-                state.primitive_property(tail, encoded_key).is_some()
+                if state.primitive_property(tail, encoded_key).is_some()
                     || state.text_matches(encoded_key, "constructor")
-                    || state
-                        .object_prototype
-                        .is_some_and(|prototype| has_property(state, prototype, encoded_key))
+                {
+                    return Ok(true);
+                }
+                let Some(prototype) = state.object_prototype else {
+                    return Ok(false);
+                };
+                has_property(ctx, state, prototype, encoded_key)
             }
         };
     }
     let Some(handle) = object_handle(object) else {
-        return false;
+        return Ok(false);
     };
-    state
+    match state
         .gc
         .heap()
         .get_property_slot_on_proto_chain(handle, key)
-        .ok()
-        .flatten()
-        .is_some()
-        || state.primitive_property(object, encoded_key).is_some()
-        || boxed_primitive_value(state, object)
-            .is_some_and(|primitive| boxed_primitive_has(state, primitive, encoded_key))
+    {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(state.primitive_property(object, encoded_key).is_some()
+            || boxed_primitive_value(state, object)
+                .is_some_and(|primitive| boxed_primitive_has(state, primitive, encoded_key))),
+        // 链上出现宿主 exotic 原型（Proxy / RegExp）：解码标记位后递归继续。
+        Err(wjsm_gc::HeapAccessV2Error::ExoticPrototype { slot }) => {
+            let Some(prototype) = decode_proto_slot(state, slot) else {
+                return Ok(false);
+            };
+            has_property(ctx, state, prototype, encoded_key)
+        }
+        Err(_) => Ok(false),
+    }
 }
 
 /// 包装对象（boxed primitive）承载的原语值；非包装对象为 None。

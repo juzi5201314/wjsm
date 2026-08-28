@@ -738,16 +738,16 @@ fn intrinsic_builtin(receiver: i64, key: &str) -> Option<wjsm_ir::Builtin> {
             _ => return None,
         }
     } else if value::is_callable(receiver) {
+        // 只合成 %Function.prototype% 的自有成员；hasOwnProperty / valueOf /
+        // propertyIsEnumerable 等继承成员由链尾上行到 %Object.prototype% 的
+        // 真实自有属性命中（删除后自然缺失，与 Node 一致）。
         match key {
             "bind" => Builtin::FuncBind,
             "apply" => Builtin::FuncApply,
             "call" => Builtin::FuncCall,
-            "hasOwnProperty" => Builtin::HasOwnProperty,
-            "propertyIsEnumerable" => Builtin::PropertyIsEnumerable,
             // Function.prototype.toString 遮蔽 Object.prototype.toString
             // （ES §20.2.3.5：源文本 / NativeFunction 形态）。
             "toString" => Builtin::FunctionToString,
-            "valueOf" => Builtin::ObjectProtoValueOf,
             _ => return None,
         }
     } else {
@@ -1145,6 +1145,9 @@ struct NativeAgentState {
     array_unscopables: Option<i64>,
     regexp_prototype: Option<i64>,
     symbol_prototype: Option<i64>,
+    /// %Boolean.prototype%（§20.3.3）：constructor / toString / valueOf 为
+    /// 真实自有属性，是布尔基元 ToObject 语义下的 [[Prototype]]。
+    boolean_prototype: Option<i64>,
     map_prototype: Option<i64>,
     set_prototype: Option<i64>,
     weak_map_prototype: Option<i64>,
@@ -1344,6 +1347,7 @@ impl NativeAgentState {
             array_unscopables: None,
             regexp_prototype: None,
             symbol_prototype: None,
+            boolean_prototype: None,
             map_prototype: None,
             set_prototype: None,
             weak_map_prototype: None,
@@ -2282,18 +2286,10 @@ impl NativeAgentState {
             let Ok(parent) = self.gc.heap().prototype(handle) else {
                 return false;
             };
-            if parent == PROTO_NULL_SENTINEL {
+            let Some(parent) = dispatch::runtime::decode_proto_slot(self, parent) else {
                 return false;
-            }
-            if parent & 0x8000_0000 != 0 {
-                current = value::encode_proxy_handle(parent & 0x7fff_ffff);
-            } else if self.gc.heap().object_type(parent).ok()
-                == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY))
-            {
-                current = value::encode_handle(value::TAG_ARRAY, parent);
-            } else {
-                current = value::encode_object_handle(parent);
-            }
+            };
+            current = parent;
         }
         false
     }
@@ -2787,6 +2783,123 @@ impl NativeAgentState {
             self.regexp_prototype = Some(prototype);
         }
         Ok(())
+    }
+
+    /// %Boolean.prototype%（§20.3.3）懒创建：constructor / toString / valueOf
+    /// 为真实不可枚举自有属性，[[Prototype]] 为 %Object.prototype%。
+    fn ensure_boolean_prototype(&mut self) -> Option<i64> {
+        if let Some(prototype) = self.boolean_prototype {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let prototype = self.allocate_object(3, false).ok()?;
+        let handle = value::decode_handle(prototype);
+        let constructor = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::BooleanConstructor,
+            false,
+        ))?;
+        for (name, stored) in [
+            ("constructor", constructor),
+            (
+                "toString",
+                self.native_callable(NativeCallableKind::Builtin(
+                    wjsm_ir::Builtin::BooleanProtoToString,
+                    true,
+                ))?,
+            ),
+            (
+                "valueOf",
+                self.native_callable(NativeCallableKind::Builtin(
+                    wjsm_ir::Builtin::BooleanProtoValueOf,
+                    true,
+                ))?,
+            ),
+        ] {
+            let key = self.intern_property_string(name.into())?;
+            self.gc
+                .heap()
+                .define_data_property(handle, key, stored as u64, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+                .ok()?;
+        }
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), prototype);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
+        self.boolean_prototype = Some(prototype);
+        Some(prototype)
+    }
+
+    /// %Symbol.prototype%（§20.4.3）懒创建：constructor 指回 %Symbol%，
+    /// description / toString / valueOf 仍由 `primitive_property` 按需合成。
+    fn ensure_symbol_prototype(&mut self) -> Option<i64> {
+        if let Some(prototype) = self.symbol_prototype {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let constructor = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::SymbolCreate,
+            false,
+        ))?;
+        let prototype = self.allocate_object(1, false).ok()?;
+        let constructor_key = self.intern_property_string("constructor".into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                constructor_key,
+                constructor as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()?;
+        let prototype_key = self.intern_property_string("prototype".into())?;
+        self.callable_properties
+            .insert((constructor, prototype_key), prototype);
+        self.callable_property_flags
+            .insert((constructor, prototype_key), FUNCTION_PROTOTYPE_FLAGS);
+        self.symbol_prototype = Some(prototype);
+        Some(prototype)
+    }
+
+    /// IsCallable（§7.2.3）对 Proxy 的扩展：Proxy 具备 [[Call]] 当且仅当其
+    /// target（嵌套 proxy 逐层解包）可调用；撤销不改变可调用形态（撤销后
+    /// 宿主保留 target 槽，[[Call]] 在调用点抛 TypeError）。
+    fn value_is_callable(&self, encoded: i64) -> bool {
+        let mut current = encoded;
+        loop {
+            if value::is_callable(current) {
+                return true;
+            }
+            if !value::is_proxy(current) {
+                return false;
+            }
+            let Some(entry) = self
+                .proxies
+                .get(usize::try_from(value::decode_proxy_handle(current)).unwrap_or(usize::MAX))
+                .and_then(|entry| entry.as_ref())
+            else {
+                return false;
+            };
+            current = entry.target;
+        }
+    }
+
+    /// ToObject（§7.1.18）语义下基元包装对象的 [[Prototype]]：基元读取在
+    /// 合成方法未命中后由此进入真实堆原型链（链尾为 %Object.prototype%）。
+    fn primitive_wrapper_prototype(&mut self, primitive: i64) -> Option<i64> {
+        if value::is_f64(primitive) {
+            dispatch::intl::ensure_number_prototype(self)
+        } else if value::is_string(primitive) {
+            dispatch::intl::ensure_string_prototype(self)
+        } else if value::is_bigint(primitive) {
+            dispatch::intl::ensure_bigint_prototype(self)
+        } else if value::is_bool(primitive) {
+            self.ensure_boolean_prototype()
+        } else if value::is_symbol(primitive) {
+            self.ensure_symbol_prototype()
+        } else {
+            None
+        }
     }
 
     /// %Array.prototype% 的 `@@unscopables` 对象（§23.1.3.41）：null 原型，
@@ -4326,26 +4439,16 @@ impl NativeAgentState {
                     && self.text_matches(key.to_value(), "prototype")
             })
         {
-            let prototype = if let Some(prototype) = self.symbol_prototype {
-                prototype
-            } else {
-                let prototype = self.allocate_object(1, false).ok()?;
-                let constructor_key = self.intern_property_string("constructor".into())?;
-                self.gc
-                    .heap()
-                    .set_property(
-                        value::decode_handle(prototype),
-                        constructor_key,
-                        callable as u64,
-                    )
-                    .ok()?;
-                self.symbol_prototype = Some(prototype);
-                prototype
-            };
-            self.callable_properties.insert((callable, key), prototype);
-            self.callable_property_flags
-                .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
-            return Some(prototype);
+            return self.ensure_symbol_prototype();
+        }
+        if self
+            .native_callable_builtin(callable)
+            .is_some_and(|(builtin, _)| {
+                builtin == wjsm_ir::Builtin::BooleanConstructor
+                    && self.text_matches(key.to_value(), "prototype")
+            })
+        {
+            return self.ensure_boolean_prototype();
         }
         if let Some((builtin, false)) = self.native_callable_builtin(callable)
             && matches!(

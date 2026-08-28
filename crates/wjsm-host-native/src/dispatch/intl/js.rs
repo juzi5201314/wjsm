@@ -227,14 +227,7 @@ fn has_property_js(
     object: i64,
     key: i64,
 ) -> Result<bool, i64> {
-    if value::is_proxy(object) {
-        let result = crate::dispatch::proxy::has(ctx, state, &[object, key]);
-        if value::is_exception(result) {
-            return Err(result);
-        }
-        return Ok(crate::dispatch::runtime::is_truthy(state, result));
-    }
-    Ok(has_property(state, object, key))
+    has_property(ctx, state, object, key)
 }
 
 pub(super) fn to_object(

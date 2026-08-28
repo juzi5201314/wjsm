@@ -69,8 +69,6 @@ pub(super) fn dispatch_object(
         Builtin::ObjectIsFrozen => is_sealed_or_frozen(ctx, state, args, true),
         Builtin::ObjectProtoToString => object_proto_to_string(ctx, state, args),
         Builtin::ObjectProtoValueOf => object_proto_value_of(ctx, state, args),
-        Builtin::ObjectHasOwn | Builtin::HasOwnProperty => has_own(ctx, state, args),
-        Builtin::PropertyIsEnumerable => property_is_enumerable(ctx, state, args),
         Builtin::CreateGlobalObject => create_global_object(ctx, state),
         _ => return None,
     })
@@ -176,103 +174,6 @@ fn object_proto_value_of(
     let _ = state;
     let _ = ctx;
     args.first().copied().unwrap_or_else(|| fail_dispatch(ctx))
-}
-
-/// `Object.hasOwn` / `hasOwnProperty`：区分可调用对象的属性表与普通堆对象。
-fn has_own(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let [object, encoded_key] = args else {
-        return fail_dispatch(ctx);
-    };
-    let Some(key) = property_key(state, *encoded_key) else {
-        return fail_dispatch(ctx);
-    };
-    if value::is_callable(*object) {
-        let object = value::strip_gc_color(*object);
-        return value::encode_bool(
-            state.callable_properties.contains_key(&(object, key))
-                || state.callable_accessors.contains_key(&(object, key)),
-        );
-    }
-    if value::is_array(*object) {
-        let handle = value::decode_handle(*object);
-        if let Some(index) = super::runtime::array_index(state, *encoded_key) {
-            return match state.gc.heap().get_element(handle, index) {
-                Ok(Some(element)) => value::encode_bool(!value::is_array_hole(element as i64)),
-                Ok(None) => value::encode_bool(false),
-                Err(_) => fail_dispatch(ctx),
-            };
-        }
-        if state.text_matches(*encoded_key, "length") {
-            return value::encode_bool(true);
-        }
-        return value::encode_bool(
-            state.array_properties.contains_key(&(handle, key))
-                || state.array_accessors.contains_key(&(handle, key)),
-        );
-    }
-    let Some(object) = object_handle(*object) else {
-        return fail_dispatch(ctx);
-    };
-    state
-        .gc
-        .heap()
-        .get_property(object, key)
-        .map(|property| value::encode_bool(property.is_some()))
-        .unwrap_or_else(|_| fail_dispatch(ctx))
-}
-
-/// `Object.prototype.propertyIsEnumerable`：自有且 [[Enumerable]] 的属性才为 true。
-fn property_is_enumerable(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    args: &[i64],
-) -> i64 {
-    let [object, encoded_key] = args else {
-        return fail_dispatch(ctx);
-    };
-    let Some(key) = property_key(state, *encoded_key) else {
-        return fail_dispatch(ctx);
-    };
-    if value::is_callable(*object) {
-        let object = value::strip_gc_color(*object);
-        let own = state.callable_properties.contains_key(&(object, key))
-            || state.callable_accessors.contains_key(&(object, key));
-        return value::encode_bool(
-            own && state
-                .callable_property_flags
-                .get(&(object, key))
-                .is_some_and(|flags| flags & ENUMERABLE != 0),
-        );
-    }
-    if value::is_array(*object) {
-        let handle = value::decode_handle(*object);
-        if let Some(index) = super::runtime::array_index(state, *encoded_key) {
-            let enumerable = match state.gc.heap().get_element(handle, index) {
-                Ok(Some(element)) => !value::is_array_hole(element as i64),
-                Ok(None) => false,
-                Err(_) => return fail_dispatch(ctx),
-            };
-            return value::encode_bool(enumerable);
-        }
-        if state.text_matches(*encoded_key, "length") {
-            return value::encode_bool(false);
-        }
-        if let Some(flags) = state.array_property_flags.get(&(handle, key)) {
-            return value::encode_bool(flags & ENUMERABLE != 0);
-        }
-        return value::encode_bool(
-            state.array_properties.contains_key(&(handle, key))
-                || state.array_accessors.contains_key(&(handle, key)),
-        );
-    }
-    let Some(handle) = object_handle(*object) else {
-        return fail_dispatch(ctx);
-    };
-    match state.gc.heap().get_property_slot(handle, key) {
-        Ok(Some(property)) => value::encode_bool(property.flags & ENUMERABLE != 0),
-        Ok(None) => value::encode_bool(false),
-        Err(_) => fail_dispatch(ctx),
-    }
 }
 
 /// 创建（或复用缓存的）全局对象，惰性初始化内置原型。
@@ -910,11 +811,9 @@ fn create(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64])
     let Some(prototype) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let prototype = if value::is_null(prototype) {
-        PROTO_NULL_SENTINEL
-    } else if let Some(handle) = object_handle(prototype) {
-        handle
-    } else {
+    // OrdinaryObjectCreate（§10.1.12）：proto 槽可承载普通对象 / 数组 /
+    // Proxy / RegExp（标记位编码）。
+    let Some(prototype) = super::runtime::encode_proto_slot(prototype) else {
         return type_error(ctx, state, "Object prototype may only be an Object or null");
     };
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 4, false) else {
@@ -976,17 +875,9 @@ pub(super) fn get_prototype(
         return fail_dispatch(ctx);
     };
     match state.gc.heap().prototype(handle) {
-        Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
-        Ok(prototype) if prototype & 0x8000_0000 != 0 => {
-            value::encode_proxy_handle(prototype & 0x7FFF_FFFF)
+        Ok(prototype) => {
+            super::runtime::decode_proto_slot(state, prototype).unwrap_or_else(value::encode_null)
         }
-        Ok(prototype)
-            if state.gc.heap().object_type(prototype).ok()
-                == Some(u32::from(wjsm_ir::HEAP_TYPE_ARRAY)) =>
-        {
-            value::encode_handle(value::TAG_ARRAY, prototype)
-        }
-        Ok(prototype) => value::encode_object_handle(prototype),
         Err(_) => fail_dispatch(ctx),
     }
 }
@@ -1003,7 +894,8 @@ pub(super) fn set_prototype(
         || value::is_object(*prototype)
         || value::is_array(*prototype)
         || value::is_callable(*prototype)
-        || value::is_proxy(*prototype))
+        || value::is_proxy(*prototype)
+        || value::is_regexp(*prototype))
     {
         return type_error(ctx, state, "Object prototype may only be an Object or null");
     }
@@ -1035,8 +927,8 @@ pub(super) fn set_prototype(
     let handle = object_handle(*object);
     let current = if let Some(handle) = handle {
         match state.gc.heap().prototype(handle) {
-            Ok(PROTO_NULL_SENTINEL) => value::encode_null(),
-            Ok(prototype) => value::encode_object_handle(prototype),
+            Ok(prototype) => super::runtime::decode_proto_slot(state, prototype)
+                .unwrap_or_else(value::encode_null),
             Err(_) => return fail_dispatch(ctx),
         }
     } else {
@@ -1055,13 +947,10 @@ pub(super) fn set_prototype(
     if !value::is_null(*prototype) && state.prototype_chain_contains_value(*prototype, *object) {
         return type_error(ctx, state, "Cyclic __proto__ value");
     }
-    let prototype = if value::is_null(*prototype) {
-        PROTO_NULL_SENTINEL
-    } else if value::is_proxy(*prototype) {
-        value::decode_proxy_handle(*prototype) | 0x8000_0000
-    } else {
-        value::decode_handle(*prototype)
-    };
+    // callable 原型无法进 proto 槽（closure / 侧表值），保持既有句柄写入
+    // 路径（类继承经 callable_prototypes 不走此处）。
+    let prototype = super::runtime::encode_proto_slot(*prototype)
+        .unwrap_or_else(|| value::decode_handle(*prototype));
     state
         .gc
         .heap()

@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+A boom
+B TypeError 'getPrototypeOf' on proxy: trap returned neither object nor null
+C true
+D true
+E function
+F via-proxy
+G true true
+H chain!
+I true false
+J has!
+--- stderr ---

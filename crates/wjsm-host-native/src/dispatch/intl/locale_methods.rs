@@ -253,9 +253,13 @@ fn array_to_locale(
             }
             continue;
         }
-        if !has_property(state, receiver, key) {
-            parts.push(String::new());
-            continue;
+        match has_property(ctx, state, receiver, key) {
+            Ok(true) => {}
+            Ok(false) => {
+                parts.push(String::new());
+                continue;
+            }
+            Err(exception) => return exception,
         }
         let item = match get_property(ctx, state, receiver, key) {
             Ok(item) if !value::is_exception(item) => item,

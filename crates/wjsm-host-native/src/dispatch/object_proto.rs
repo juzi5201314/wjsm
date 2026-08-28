@@ -1,12 +1,14 @@
-//! `%Object.prototype%` 上按需求值的原型方法：isPrototypeOf / toLocaleString
-//! 与 Annex B 的 `__proto__` 访问器对、`__defineGetter__` / `__defineSetter__` /
-//! `__lookupGetter__` / `__lookupSetter__`（ES §20.1.3、§B.2.2）。
+//! `%Object.prototype%` 按需求值方法的宿主适配层：算法本体在
+//! `wjsm_builtins::object_proto`（后端无关），本模块只实现统一对象协议
+//! [`ObjectProtocol`]——把 ToObject 分类、[[GetPrototypeOf]] /
+//! [[SetPrototypeOf]]（含 Proxy trap）、单层 [[GetOwnProperty]] 归约
+//! （普通对象 / callable / 数组 / Proxy / RegExp / 基元包装的 exotic 自有
+//! 属性）与 Call / Get / TypeError 映射到宿主内部结构。
 //!
 //! 这些函数对象在 `ensure_intrinsic_prototypes` 中一次性安装为
-//! `%Object.prototype%` 的真实自有属性；本模块只负责调用期算法。
+//! `%Object.prototype%` 的真实自有属性；本模块只负责调用期分发。
 
-use std::collections::HashSet;
-
+use wjsm_builtins::object_proto::{self, ObjectProtocol, OwnProperty};
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
@@ -22,28 +24,49 @@ pub(super) fn dispatch_object_proto(
     builtin: Builtin,
     args: &[i64],
 ) -> Option<i64> {
-    Some(match builtin {
-        Builtin::ObjectProtoIsPrototypeOf => is_prototype_of(ctx, state, args),
-        Builtin::ObjectProtoToLocaleString => to_locale_string(ctx, state, args),
-        Builtin::ObjectProtoGetProto => proto_getter(ctx, state, args),
-        Builtin::ObjectProtoSetProto => proto_setter(ctx, state, args),
-        Builtin::ObjectProtoDefineGetter => define_accessor_member(ctx, state, args, true),
-        Builtin::ObjectProtoDefineSetter => define_accessor_member(ctx, state, args, false),
-        Builtin::ObjectProtoLookupGetter => lookup_accessor_member(ctx, state, args, true),
-        Builtin::ObjectProtoLookupSetter => lookup_accessor_member(ctx, state, args, false),
+    let this = nth_arg(args, 0);
+    let mut protocol = HostObjectProtocol { ctx, state };
+    let result = match builtin {
+        Builtin::ObjectProtoIsPrototypeOf => {
+            object_proto::is_prototype_of(&mut protocol, this, nth_arg(args, 1))
+        }
+        Builtin::HasOwnProperty => {
+            object_proto::has_own_property(&mut protocol, this, nth_arg(args, 1))
+        }
+        Builtin::ObjectHasOwn => {
+            object_proto::object_has_own(&mut protocol, this, nth_arg(args, 1))
+        }
+        Builtin::PropertyIsEnumerable => {
+            object_proto::property_is_enumerable(&mut protocol, this, nth_arg(args, 1))
+        }
+        Builtin::ObjectProtoToLocaleString => object_proto::to_locale_string(&mut protocol, this),
+        Builtin::ObjectProtoGetProto => object_proto::proto_getter(&mut protocol, this),
+        Builtin::ObjectProtoSetProto => {
+            object_proto::proto_setter(&mut protocol, this, nth_arg(args, 1))
+        }
+        Builtin::ObjectProtoDefineGetter => object_proto::define_accessor_member(
+            &mut protocol,
+            this,
+            nth_arg(args, 1),
+            nth_arg(args, 2),
+            true,
+        ),
+        Builtin::ObjectProtoDefineSetter => object_proto::define_accessor_member(
+            &mut protocol,
+            this,
+            nth_arg(args, 1),
+            nth_arg(args, 2),
+            false,
+        ),
+        Builtin::ObjectProtoLookupGetter => {
+            object_proto::lookup_accessor_member(&mut protocol, this, nth_arg(args, 1), true)
+        }
+        Builtin::ObjectProtoLookupSetter => {
+            object_proto::lookup_accessor_member(&mut protocol, this, nth_arg(args, 1), false)
+        }
         _ => return None,
-    })
-}
-
-/// 规范意义上的 Object 值（本引擎里 TAG_REGEXP 独立于 is_js_object 之外）。
-fn is_object_value(encoded: i64) -> bool {
-    value::is_js_object(encoded) || value::is_regexp(encoded)
-}
-
-fn this_arg(args: &[i64]) -> i64 {
-    args.first()
-        .copied()
-        .unwrap_or_else(value::encode_undefined)
+    };
+    Some(result.unwrap_or_else(|exception| exception))
 }
 
 fn nth_arg(args: &[i64], index: usize) -> i64 {
@@ -52,60 +75,112 @@ fn nth_arg(args: &[i64], index: usize) -> i64 {
         .unwrap_or_else(value::encode_undefined)
 }
 
-/// `Object.prototype.isPrototypeOf`（§20.1.3.3）：步骤 1 的非对象 V 先于
-/// ToObject(this) 短路；基元 this 的临时包装对象不可能出现在任何原型链上。
-fn is_prototype_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let this = this_arg(args);
-    let target = nth_arg(args, 1);
-    if !is_object_value(target) {
-        return value::encode_bool(false);
-    }
-    if value::is_null(this) || value::is_undefined(this) {
-        return type_error(ctx, state, "Cannot convert undefined or null to object");
-    }
-    if !is_object_value(this) {
-        return value::encode_bool(false);
-    }
-    // 步骤 3 从 V.[[GetPrototypeOf]]() 起查：自身不算自身的原型。
-    let first = object::get_prototype(ctx, state, &[target]);
-    if value::is_exception(first) {
-        return first;
-    }
-    if value::is_null(first) {
-        return value::encode_bool(false);
-    }
-    value::encode_bool(state.prototype_chain_contains_value(first, this))
+/// 统一对象协议的宿主实现：全部对象类别（普通堆对象 / callable / 数组 /
+/// Proxy / RegExp / 基元包装）走同一组内部方法，Proxy trap 与异常语义
+/// 由底层 `object::*` / `proxy::*` 分发保证。
+struct HostObjectProtocol<'a, 'b> {
+    ctx: &'a mut NativeVmContext,
+    state: &'b mut NativeAgentState,
 }
 
-/// `Object.prototype.toLocaleString`（§20.1.3.5）：Invoke(this, "toString")。
-fn to_locale_string(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let this = this_arg(args);
-    if value::is_null(this) || value::is_undefined(this) {
-        return type_error(
-            ctx,
-            state,
-            "Object.prototype.toLocaleString called on null or undefined",
-        );
+impl ObjectProtocol for HostObjectProtocol<'_, '_> {
+    fn is_object(&mut self, encoded: i64) -> bool {
+        is_ecma_object(encoded)
     }
-    let Some(key) = state.intern_property_string("toString".into()) else {
-        return fail_dispatch(ctx);
-    };
-    let Ok(method) = get_property(ctx, state, this, key.to_value()) else {
-        return fail_dispatch(ctx);
-    };
-    if value::is_exception(method) {
-        return method;
+
+    fn is_callable(&mut self, encoded: i64) -> bool {
+        self.state.value_is_callable(encoded)
     }
-    if !value::is_callable(method) {
-        let message = format!(
-            "{} is not a function",
-            non_callable_description(state, method)
-        );
-        return type_error(ctx, state, &message);
+
+    fn same_object(&mut self, left: i64, right: i64) -> bool {
+        value::strip_gc_color(left) == value::strip_gc_color(right)
     }
-    state
-        .invoke_callable(ctx, method, this, &[])
-        .unwrap_or_else(|| fail_dispatch(ctx))
+
+    fn prototype_of(&mut self, object: i64) -> Result<i64, i64> {
+        let result = object::get_prototype(self.ctx, self.state, &[object]);
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        Ok(result)
+    }
+
+    fn primitive_prototype(&mut self, primitive: i64) -> Result<i64, i64> {
+        self.state
+            .primitive_wrapper_prototype(primitive)
+            .ok_or_else(|| fail_dispatch(self.ctx))
+    }
+
+    fn set_prototype_of(&mut self, object: i64, prototype: i64) -> Result<bool, i64> {
+        // [[SetPrototypeOf]] 的拒绝路径（环 / 不可扩展 / proxy trap falsish）
+        // 在 `object::set_prototype` 内已折算为 TypeError 异常值。
+        let result = object::set_prototype(self.ctx, self.state, &[object, prototype]);
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        Ok(true)
+    }
+
+    fn own_property(&mut self, holder: i64, key: i64) -> Result<OwnProperty, i64> {
+        own_property(self.ctx, self.state, holder, key)
+    }
+
+    fn to_property_key(&mut self, encoded: i64) -> Result<i64, i64> {
+        to_property_key_value(self.ctx, self.state, encoded)
+    }
+
+    fn define_accessor(
+        &mut self,
+        object: i64,
+        key: i64,
+        accessor: i64,
+        is_getter: bool,
+    ) -> Result<(), i64> {
+        let descriptor = accessor_descriptor(self.ctx, self.state, accessor, is_getter)
+            .ok_or_else(|| fail_dispatch(self.ctx))?;
+        let result = object::define_property(self.ctx, self.state, &[object, key, descriptor]);
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        Ok(())
+    }
+
+    fn get_named(&mut self, object: i64, name: &str) -> Result<i64, i64> {
+        let key = self
+            .state
+            .intern_property_string(name.into())
+            .ok_or_else(|| fail_dispatch(self.ctx))?;
+        let result = get_property(self.ctx, self.state, object, key.to_value())
+            .map_err(|()| fail_dispatch(self.ctx))?;
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        Ok(result)
+    }
+
+    fn call(&mut self, callable: i64, this_value: i64, arguments: &[i64]) -> Result<i64, i64> {
+        let result = self
+            .state
+            .invoke_callable(self.ctx, callable, this_value, arguments)
+            .ok_or_else(|| fail_dispatch(self.ctx))?;
+        if value::is_exception(result) {
+            return Err(result);
+        }
+        Ok(result)
+    }
+
+    fn type_error(&mut self, message: &str) -> i64 {
+        type_error(self.ctx, self.state, message)
+    }
+
+    fn describe_non_callable(&mut self, encoded: i64) -> String {
+        non_callable_description(self.state, encoded)
+    }
+}
+
+/// 规范意义上的 Object 值：本引擎 TAG_REGEXP 独立于 `is_js_object`
+/// （后者已含数组 / callable / Proxy）。
+pub(super) fn is_ecma_object(encoded: i64) -> bool {
+    value::is_js_object(encoded) || value::is_regexp(encoded)
 }
 
 /// V8 对 Invoke 命中非 callable 值的措辞（`number 1 is not a function` 等）。
@@ -141,86 +216,6 @@ fn non_callable_description(state: &mut NativeAgentState, encoded: i64) -> Strin
     "object".to_owned()
 }
 
-/// `get Object.prototype.__proto__`（§B.2.2.1.1）：ToObject(this) 后取
-/// [[GetPrototypeOf]]；本引擎基元 ToObject 的包装对象以 %Object.prototype%
-/// 为 [[Prototype]]，故非对象 this 直接返回该固有原型。
-fn proto_getter(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let this = this_arg(args);
-    if value::is_null(this) || value::is_undefined(this) {
-        return type_error(ctx, state, "Cannot convert undefined or null to object");
-    }
-    if is_object_value(this) {
-        return object::get_prototype(ctx, state, &[this]);
-    }
-    state.object_prototype.unwrap_or_else(value::encode_null)
-}
-
-/// `set Object.prototype.__proto__`（§B.2.2.1.2）：proto 非对象/null 或 this
-/// 为基元时静默返回 undefined；[[SetPrototypeOf]] 失败抛 TypeError。
-fn proto_setter(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let this = this_arg(args);
-    let proto = nth_arg(args, 1);
-    if value::is_null(this) || value::is_undefined(this) {
-        return type_error(
-            ctx,
-            state,
-            "set Object.prototype.__proto__ called on null or undefined",
-        );
-    }
-    if !is_object_value(proto) && !value::is_null(proto) {
-        return value::encode_undefined();
-    }
-    if !is_object_value(this) {
-        return value::encode_undefined();
-    }
-    let result = object::set_prototype(ctx, state, &[this, proto]);
-    if value::is_exception(result) {
-        return result;
-    }
-    value::encode_undefined()
-}
-
-/// `__defineGetter__` / `__defineSetter__`（§B.2.2.2 / §B.2.2.3）：构造
-/// {get|set, enumerable: true, configurable: true} 描述符并复用
-/// DefinePropertyOrThrow（含不可扩展/不可配置的拒绝路径）。
-fn define_accessor_member(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    args: &[i64],
-    is_getter: bool,
-) -> i64 {
-    let this = this_arg(args);
-    let key = nth_arg(args, 1);
-    let accessor = nth_arg(args, 2);
-    if value::is_null(this) || value::is_undefined(this) {
-        return type_error(ctx, state, "Cannot convert undefined or null to object");
-    }
-    if !value::is_callable(accessor) {
-        let message = if is_getter {
-            "Object.prototype.__defineGetter__: Expecting function"
-        } else {
-            "Object.prototype.__defineSetter__: Expecting function"
-        };
-        return type_error(ctx, state, message);
-    }
-    let key = match to_property_key_value(ctx, state, key) {
-        Ok(key) => key,
-        Err(exception) => return exception,
-    };
-    // 基元 this 的 ToObject 包装对象即弃：副作用（ToPropertyKey）已发生。
-    if !is_object_value(this) {
-        return value::encode_undefined();
-    }
-    let Some(descriptor) = accessor_descriptor(ctx, state, accessor, is_getter) else {
-        return fail_dispatch(ctx);
-    };
-    let result = object::define_property(ctx, state, &[this, key, descriptor]);
-    if value::is_exception(result) {
-        return result;
-    }
-    value::encode_undefined()
-}
-
 /// {get|set, enumerable: true, configurable: true} 描述符对象。
 fn accessor_descriptor(
     ctx: &mut NativeVmContext,
@@ -246,161 +241,196 @@ fn accessor_descriptor(
     Some(descriptor)
 }
 
-/// `__lookupGetter__` / `__lookupSetter__`（§B.2.2.4 / §B.2.2.5）：沿原型链
-/// 找首个自有属性；访问器返回对应侧（可能是 undefined），数据属性终止查找。
-fn lookup_accessor_member(
+/// 单层 [[GetOwnProperty]] 的统一归约：按对象类别分派——Proxy 走
+/// getOwnPropertyDescriptor trap，callable / 数组走宿主旁挂表，RegExp 的
+/// exotic 自有层只有 lastIndex（flags / source 等是 %RegExp.prototype% 的
+/// 继承成员），字符串基元与其包装对象归约索引 / length exotic 自有属性，
+/// 普通堆对象读属性槽。
+pub(super) fn own_property(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
-    args: &[i64],
-    want_getter: bool,
-) -> i64 {
-    let this = this_arg(args);
-    let key = nth_arg(args, 1);
-    if value::is_null(this) || value::is_undefined(this) {
-        return type_error(ctx, state, "Cannot convert undefined or null to object");
-    }
-    let encoded_key = match to_property_key_value(ctx, state, key) {
-        Ok(key) => key,
-        Err(exception) => return exception,
-    };
-    let Some(key) = property_key(state, encoded_key) else {
-        return fail_dispatch(ctx);
-    };
-    // 基元 this 的包装对象无自有属性，直接从 %Object.prototype% 起查。
-    let mut current = if is_object_value(this) {
-        this
-    } else if let Some(prototype) = state.object_prototype {
-        prototype
-    } else {
-        return value::encode_undefined();
-    };
-    let mut visited = HashSet::new();
-    while visited.insert(current) {
-        match own_property_kind(ctx, state, current, key, encoded_key) {
-            OwnPropertyKind::Accessor { getter, setter } => {
-                return if want_getter { getter } else { setter };
-            }
-            OwnPropertyKind::Data => return value::encode_undefined(),
-            OwnPropertyKind::Exception(exception) => return exception,
-            OwnPropertyKind::Missing => {}
-        }
-        let next = object::get_prototype(ctx, state, &[current]);
-        if value::is_exception(next) {
-            return next;
-        }
-        if !is_object_value(next) {
-            return value::encode_undefined();
-        }
-        current = next;
-    }
-    value::encode_undefined()
-}
-
-enum OwnPropertyKind {
-    Accessor { getter: i64, setter: i64 },
-    Data,
-    Missing,
-    Exception(i64),
-}
-
-/// 单层 [[GetOwnProperty]] 的访问器判定：callable / 数组走旁挂表，proxy 走
-/// trap 产出的描述符对象，普通堆对象读属性槽；regexp 的旁挂标志位（flags /
-/// lastIndex 等）在本引擎不是可枚举的属性槽，按缺失处理沿链上行。
-fn own_property_kind(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-    object: i64,
-    key: PropertyKey,
+    holder: i64,
     encoded_key: i64,
-) -> OwnPropertyKind {
-    if value::is_proxy(object) {
-        return proxy_own_property_kind(ctx, state, object, encoded_key);
+) -> Result<OwnProperty, i64> {
+    if value::is_proxy(holder) {
+        return proxy_own_property(ctx, state, holder, encoded_key);
     }
-    if value::is_callable(object) {
-        let callable = value::strip_gc_color(object);
+    if value::is_regexp(holder) {
+        if state.text_matches(encoded_key, "lastIndex") {
+            return Ok(OwnProperty::Data { enumerable: false });
+        }
+        return Ok(OwnProperty::Missing);
+    }
+    if value::is_string(holder) {
+        return Ok(string_exotic_own_property(state, holder, encoded_key));
+    }
+    let Some(key) = property_key(state, encoded_key) else {
+        return Err(fail_dispatch(ctx));
+    };
+    if value::is_callable(holder) {
+        let callable = value::strip_gc_color(holder);
+        // 先触发 name / length / prototype 的惰性物化，再查旁挂表。
         let _ = state.callable_property(callable, key);
+        let enumerable = state
+            .callable_property_flags
+            .get(&(callable, key))
+            .is_some_and(|flags| flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32 != 0);
         if let Some((getter, setter)) = state.callable_accessors.get(&(callable, key)).copied() {
-            return OwnPropertyKind::Accessor { getter, setter };
+            return Ok(OwnProperty::Accessor {
+                getter,
+                setter,
+                enumerable,
+            });
         }
         if state.callable_properties.contains_key(&(callable, key)) {
-            return OwnPropertyKind::Data;
+            return Ok(OwnProperty::Data { enumerable });
         }
-        return OwnPropertyKind::Missing;
+        return Ok(OwnProperty::Missing);
     }
-    if value::is_array(object) {
-        let handle = value::decode_handle(object);
-        if let Some((getter, setter, _)) = state.array_accessors.get(&(handle, key)).copied() {
-            return OwnPropertyKind::Accessor { getter, setter };
-        }
-        if state.array_properties.contains_key(&(handle, key))
-            || state.text_matches(encoded_key, "length")
-        {
-            return OwnPropertyKind::Data;
-        }
-        if let Some(index) = super::runtime::array_index(state, encoded_key)
-            && state
-                .gc
-                .heap()
-                .get_element(handle, index)
-                .ok()
-                .flatten()
-                .is_some_and(|element| !value::is_array_hole(element as i64))
-        {
-            return OwnPropertyKind::Data;
-        }
-        return OwnPropertyKind::Missing;
+    if value::is_array(holder) {
+        return array_own_property(state, holder, key, encoded_key);
     }
-    let Some(handle) = object_handle(object) else {
-        return OwnPropertyKind::Missing;
+    let Some(handle) = object_handle(holder) else {
+        return Ok(OwnProperty::Missing);
     };
+    // 基元包装对象（boxed primitive）的 exotic 自有层：字符串索引 / length。
+    if let Some(primitive) = state
+        .boxed_primitives
+        .get(&value::decode_handle(holder))
+        .copied()
+        && value::is_string(primitive)
+    {
+        match string_exotic_own_property(state, primitive, encoded_key) {
+            OwnProperty::Missing => {}
+            own => return Ok(own),
+        }
+    }
     match state.gc.heap().get_property_slot(handle, key) {
         Ok(Some(property)) => {
+            let enumerable = property.flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32 != 0;
             if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 != 0 {
-                OwnPropertyKind::Accessor {
+                Ok(OwnProperty::Accessor {
                     getter: property.getter as i64,
                     setter: property.setter as i64,
-                }
+                    enumerable,
+                })
             } else {
-                OwnPropertyKind::Data
+                Ok(OwnProperty::Data { enumerable })
             }
         }
-        Ok(None) => OwnPropertyKind::Missing,
-        Err(_) => OwnPropertyKind::Exception(fail_dispatch(ctx)),
+        Ok(None) => Ok(OwnProperty::Missing),
+        Err(_) => Err(fail_dispatch(ctx)),
     }
 }
 
-/// proxy 层：经 [[GetOwnProperty]] trap 产出的描述符对象读取 get / set。
-fn proxy_own_property_kind(
+/// 字符串 exotic 自有属性（§10.4.3.5）：有效索引与 length。
+fn string_exotic_own_property(
+    state: &mut NativeAgentState,
+    text: i64,
+    encoded_key: i64,
+) -> OwnProperty {
+    if state.text_matches(encoded_key, "length") {
+        return OwnProperty::Data { enumerable: false };
+    }
+    if let Some(index) = super::runtime::array_index(state, encoded_key)
+        && state
+            .string_len(text)
+            .is_some_and(|length| (index as usize) < length)
+    {
+        return OwnProperty::Data { enumerable: true };
+    }
+    OwnProperty::Missing
+}
+
+/// 数组自有层：length、旁挂命名属性 / 访问器、元素槽。
+fn array_own_property(
+    state: &mut NativeAgentState,
+    holder: i64,
+    key: PropertyKey,
+    encoded_key: i64,
+) -> Result<OwnProperty, i64> {
+    let handle = value::decode_handle(holder);
+    if let Some((getter, setter, flags)) = state.array_accessors.get(&(handle, key)).copied() {
+        return Ok(OwnProperty::Accessor {
+            getter,
+            setter,
+            enumerable: flags & wjsm_ir::constants::FLAG_ENUMERABLE as u32 != 0,
+        });
+    }
+    if state.text_matches(encoded_key, "length") {
+        return Ok(OwnProperty::Data { enumerable: false });
+    }
+    if state.array_properties.contains_key(&(handle, key)) {
+        let enumerable = state
+            .array_property_flags
+            .get(&(handle, key))
+            .copied()
+            .unwrap_or(
+                wjsm_ir::constants::FLAG_WRITABLE as u32
+                    | wjsm_ir::constants::FLAG_ENUMERABLE as u32
+                    | wjsm_ir::constants::FLAG_CONFIGURABLE as u32,
+            )
+            & wjsm_ir::constants::FLAG_ENUMERABLE as u32
+            != 0;
+        return Ok(OwnProperty::Data { enumerable });
+    }
+    if let Some(index) = super::runtime::array_index(state, encoded_key)
+        && state
+            .gc
+            .heap()
+            .get_element(handle, index)
+            .ok()
+            .flatten()
+            .is_some_and(|element| !value::is_array_hole(element as i64))
+    {
+        return Ok(OwnProperty::Data { enumerable: true });
+    }
+    Ok(OwnProperty::Missing)
+}
+
+/// Proxy 层：经 [[GetOwnProperty]] trap 产出的描述符对象读取 get / set /
+/// enumerable（trap 异常原样传播）。
+fn proxy_own_property(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
-    object: i64,
+    holder: i64,
     encoded_key: i64,
-) -> OwnPropertyKind {
-    let descriptor = object::get_own_property_descriptor(ctx, state, &[object, encoded_key]);
+) -> Result<OwnProperty, i64> {
+    let descriptor = object::get_own_property_descriptor(ctx, state, &[holder, encoded_key]);
     if value::is_exception(descriptor) {
-        return OwnPropertyKind::Exception(descriptor);
+        return Err(descriptor);
     }
     if value::is_undefined(descriptor) {
-        return OwnPropertyKind::Missing;
+        return Ok(OwnProperty::Missing);
     }
     let handle = value::decode_handle(descriptor);
     let mut sides = [value::encode_undefined(), value::encode_undefined()];
     let mut is_accessor = false;
     for (index, name) in ["get", "set"].into_iter().enumerate() {
         let Some(key) = state.intern_property_string(name.into()) else {
-            return OwnPropertyKind::Exception(fail_dispatch(ctx));
+            return Err(fail_dispatch(ctx));
         };
         if let Ok(Some(property)) = state.gc.heap().get_property_slot(handle, key) {
             sides[index] = property.value as i64;
             is_accessor = true;
         }
     }
+    let Some(enumerable_key) = state.intern_property_string("enumerable".into()) else {
+        return Err(fail_dispatch(ctx));
+    };
+    let enumerable = state
+        .gc
+        .heap()
+        .get_property(handle, enumerable_key)
+        .ok()
+        .flatten()
+        .is_some_and(|stored| super::runtime::is_truthy(state, stored as i64));
     if is_accessor {
-        OwnPropertyKind::Accessor {
+        return Ok(OwnProperty::Accessor {
             getter: sides[0],
             setter: sides[1],
-        }
-    } else {
-        OwnPropertyKind::Data
+            enumerable,
+        });
     }
+    Ok(OwnProperty::Data { enumerable })
 }

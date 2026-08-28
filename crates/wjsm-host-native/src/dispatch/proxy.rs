@@ -4,7 +4,7 @@ use wjsm_native_abi::NativeVmContext;
 use super::property_write::{SetCompletion, SetFailure, SetResult};
 use super::runtime::{
     delete_property, fail_dispatch, get_property, get_property_with_receiver, has_property,
-    is_constructor_value, object_handle, ordinary_set, property_key,
+    is_constructor_value, object_handle, ordinary_set, property_key, type_error,
 };
 use crate::{NativeAgentState, NativeCallableKind, NativeProxy};
 
@@ -604,15 +604,26 @@ pub(crate) fn get_prototype(
             let result = state
                 .invoke_callable(ctx, trap, entry.handler, &[entry.target])
                 .unwrap_or_else(|| fail_dispatch(ctx));
+            // trap 抛出的异常原样上抛（§10.5.1 步骤 7 的 ? Call）。
+            if value::is_exception(result) {
+                return result;
+            }
+            // 步骤 8：返回值既非 Object 也非 null 抛 TypeError（callable /
+            // Proxy / RegExp 都是 Object）。
             if value::is_null(result)
                 || value::is_object(result)
                 || value::is_array(result)
-                || value::is_function(result)
+                || value::is_callable(result)
                 || value::is_proxy(result)
+                || value::is_regexp(result)
             {
                 result
             } else {
-                fail_dispatch(ctx)
+                type_error(
+                    ctx,
+                    state,
+                    "'getPrototypeOf' on proxy: trap returned neither object nor null",
+                )
             }
         }
         Ok(None) => super::object::dispatch_object(
@@ -686,9 +697,10 @@ pub(super) fn get(
         Ok(Some(trap)) => state
             .invoke_callable(ctx, trap, entry.handler, &[entry.target, key, receiver])
             .unwrap_or_else(|| fail_dispatch(ctx)),
-        Ok(None) => {
-            get_property(ctx, state, entry.target, key).unwrap_or_else(|()| fail_dispatch(ctx))
-        }
+        // §10.5.8 步骤 6：无 trap 时委托 target.[[Get]](P, Receiver)，
+        // Receiver 保持原值（链上 getter / __proto__ 访问器的 this 是 proxy）。
+        Ok(None) => get_property_with_receiver(ctx, state, entry.target, key, receiver)
+            .unwrap_or_else(|()| fail_dispatch(ctx)),
         Err(exception) => exception,
     }
 }
@@ -862,7 +874,10 @@ pub(crate) fn has(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
         return fail_dispatch(ctx);
     };
     if !value::is_proxy(*target) {
-        return value::encode_bool(has_property(state, *target, *key));
+        return match has_property(ctx, state, *target, *key) {
+            Ok(present) => value::encode_bool(present),
+            Err(exception) => exception,
+        };
     }
     let entry = match require_entry(ctx, state, *target) {
         Ok(entry) => entry,
