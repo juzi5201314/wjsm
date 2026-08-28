@@ -275,7 +275,11 @@ fn run(
                 .get(&value::decode_handle(global))
                 .is_some_and(|options| options.after_evaluate)
         {
-            let drained = super::promise::drain_microtasks(ctx, state);
+            let drained = super::promise::drain_microtasks(
+                ctx,
+                state,
+                super::promise::RejectionCheckpoint::Defer,
+            );
             if value::is_exception(drained) {
                 return drained;
             }

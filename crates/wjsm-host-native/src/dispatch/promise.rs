@@ -23,9 +23,21 @@ pub(crate) struct NativePromise {
     pub(crate) state: PromiseState,
     pub(crate) async_id: u64,
     handled: bool,
-    report_unhandled: bool,
-    unhandled_reported: bool,
 }
+
+/// 微任务队列排空后是否执行 unhandled rejection 检查点。
+/// 事件循环驱动处 `Check`（Node 语义：每轮微任务排空后处理未处理 rejection）；
+/// 嵌套 drain（运行时模块加载、node:vm）必须 `Defer`，把报告留给外层事件循环，
+/// 避免在宿主中途误判 handler 挂载时机。
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum RejectionCheckpoint {
+    Check,
+    Defer,
+}
+
+/// unhandled rejection 致命报告的退出码，与 CLI 的 EXIT_RUNTIME_ERROR 对齐：
+/// 未处理 rejection 就是未捕获的运行时错误（Node 以非零码退出，wjsm 运行时错误约定为 2）。
+const UNHANDLED_REJECTION_EXIT_CODE: i32 = 2;
 
 #[derive(Clone, Copy)]
 pub(crate) enum NativePromiseReaction {
@@ -154,7 +166,7 @@ pub(crate) fn enqueue_stream_task(state: &mut NativeAgentState, task: super::str
     enqueue_microtask(state, NativeMicrotask::Stream(task));
 }
 
-fn mark_promise_handled(state: &mut NativeAgentState, promise: u32) {
+pub(crate) fn mark_promise_handled(state: &mut NativeAgentState, promise: u32) {
     if let Some(p) = state.promises.get_mut(&promise) {
         p.handled = true;
     }
@@ -247,7 +259,7 @@ pub(super) fn dispatch_promise(
             }))
         }
         Builtin::QueueMicrotask => queue_microtask(ctx, state, args),
-        Builtin::DrainMicrotasks => drain_microtasks(ctx, state),
+        Builtin::DrainMicrotasks => drain_microtasks(ctx, state, RejectionCheckpoint::Defer),
         Builtin::ContinuationCreate => continuation_create(ctx, state, args),
         Builtin::ContinuationSaveVar => continuation_save_var(ctx, state, args),
         Builtin::ContinuationLoadVar => continuation_load_var(ctx, state, args),
@@ -556,8 +568,6 @@ fn initialize_promise(
             state: PromiseState::Pending,
             async_id,
             handled: false,
-            report_unhandled: true,
-            unhandled_reported: false,
         },
     );
     true
@@ -616,9 +626,9 @@ pub(crate) fn settle_promise(
         None,
         Some(value),
     );
-    // 如果 promise rejected 且应报告 unhandled rejection，立即格式化 reason 并记录到待报告列表
+    // 如果 promise rejected 且尚无 handler，立即格式化 reason 并记录到待报告列表
     // 必须立即格式化，因为后续 GC 可能回收 reason 对应的对象（如 Error）
-    if rejected && promise.report_unhandled && !promise.handled {
+    if rejected && !promise.handled {
         let reason_text = super::modules::exception_text(state, value);
         state
             .pending_unhandled_rejections
@@ -941,7 +951,11 @@ pub(crate) fn enqueue_immediate(
     resource
 }
 
-pub(crate) fn drain_microtasks(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+pub(crate) fn drain_microtasks(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    checkpoint: RejectionCheckpoint,
+) -> i64 {
     let mut macrotask_ran = false;
     loop {
         if state.requested_exit_code.is_some() {
@@ -949,6 +963,16 @@ pub(crate) fn drain_microtasks(ctx: &mut NativeVmContext, state: &mut NativeAgen
         }
         if let Some(exception) = super::node_async_hooks::drain_hook_events(ctx, state) {
             return exception;
+        }
+        // 微任务队列排空检查点：在返回或执行下一个宏任务（timer/immediate）之前
+        // 处理未处理 rejection，对齐 Node 的 processTicksAndRejections 时机——
+        // 同一轮微任务级联内挂上的 handler 不误报，之后的宏任务无机会再挂。
+        if checkpoint == RejectionCheckpoint::Check
+            && state.next_ticks.is_empty()
+            && state.microtasks.is_empty()
+            && report_unhandled_rejection(state)
+        {
+            return value::encode_undefined();
         }
         if macrotask_ran && state.next_ticks.is_empty() && state.microtasks.is_empty() {
             return value::encode_undefined();
@@ -1101,8 +1125,8 @@ pub(crate) fn drain_microtasks(ctx: &mut NativeVmContext, state: &mut NativeAgen
         if value::is_exception(result) {
             if was_timer {
                 let text = super::modules::exception_text(state, result);
-                let mut output = state.output.borrow_mut();
-                output.extend_from_slice(format!("Uncaught exception: {text}\n").as_bytes());
+                // 经 emit_output 写 stderr：CLI（OutputMode::Inherit）下才对用户可见
+                state.emit_output(format!("Uncaught exception: {text}\n").as_bytes(), true);
                 continue;
             }
             return result;
@@ -1110,43 +1134,25 @@ pub(crate) fn drain_microtasks(ctx: &mut NativeVmContext, state: &mut NativeAgen
     }
 }
 
-fn report_unhandled_rejections(state: &mut NativeAgentState) {
-    // 从待报告列表中收集所有 reason
-    // 已被 handle 的 promise 在 mark_promise_handled 时已从列表移除
-    let reasons: Vec<_> = state
-        .pending_unhandled_rejections
-        .iter()
-        .filter_map(|&(handle, ref reason_text)| {
-            // 如果 promise 仍存在，标记为已报告
-            if let Some(promise) = state.promises.get_mut(&handle)
-                && !promise.unhandled_reported
-            {
-                promise.unhandled_reported = true;
-                Some(reason_text.clone())
-            } else if state.promises.contains_key(&handle) {
-                None
-            } else {
-                // promise 已被 GC，仍需报告
-                Some(reason_text.clone())
-            }
-        })
-        .collect();
-
-    for text in reasons {
-        state
-            .stderr
-            .borrow_mut()
-            .extend_from_slice(format!("UnhandledPromiseRejectionWarning: {text}\n").as_bytes());
-    }
-
-    // 报告完成后清空列表
+/// Node 默认 `--unhandled-rejections=throw` 对齐：微任务队列排空后仍无 handler
+/// 的 rejection 视为致命错误——报告第一个 reason 并以运行时错误退出码终止事件循环。
+/// 已被 handle 的 promise 在 mark_promise_handled 时已从列表移除，
+/// 因此列表中的条目即「排空后仍未处理」；进程在第一个报告处终止（与 Node 一致）。
+fn report_unhandled_rejection(state: &mut NativeAgentState) -> bool {
+    let Some((_, reason_text)) = state.pending_unhandled_rejections.first() else {
+        return false;
+    };
+    let message = format!("UnhandledPromiseRejection: {reason_text}\n");
+    state.emit_output(message.as_bytes(), true);
     state.pending_unhandled_rejections.clear();
+    state.requested_exit_code = Some(UNHANDLED_REJECTION_EXIT_CODE);
+    true
 }
 
 pub(crate) fn drain_event_loop(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
     loop {
         refresh_timer_clock(state);
-        let result = drain_microtasks(ctx, state);
+        let result = drain_microtasks(ctx, state, RejectionCheckpoint::Check);
         if state.requested_exit_code.is_some() {
             return value::encode_undefined();
         }
@@ -1161,9 +1167,6 @@ pub(crate) fn drain_event_loop(ctx: &mut NativeVmContext, state: &mut NativeAgen
             {
                 sleep_until_next_timer(state);
                 continue;
-            }
-            if state.requested_exit_code.is_none() {
-                report_unhandled_rejections(state);
             }
             return result;
         }
@@ -1490,9 +1493,6 @@ fn continuation_create(
     let Some(count) = value::decode_f64(count).to_usize() else {
         return fail_dispatch(ctx);
     };
-    if let Some(promise) = state.promises.get_mut(&value::decode_handle(outer_promise)) {
-        promise.report_unhandled = false;
-    }
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
         return fail_dispatch(ctx);
     };

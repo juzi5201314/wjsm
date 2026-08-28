@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+after-call
+--- stderr ---
+UnhandledPromiseRejection: Error: async boom
