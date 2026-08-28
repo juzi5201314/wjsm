@@ -40,6 +40,10 @@ pub(crate) struct VarInfo {
     /// CreateImmutableBinding(name, false)）：写入按运行时语义分流——
     /// 非严格代码静默忽略、严格代码 TypeError，而非 const 的编译期拒绝。
     pub(crate) fn_expr_name: bool,
+    /// `true` 仅用于类自身名字绑定（ClassDefinitionEvaluation 步骤 3
+    /// CreateImmutableBinding(classBinding, true)）：写入按运行时语义分流——
+    /// TDZ 内 ReferenceError、初始化后 TypeError，而非 const 的编译期拒绝。
+    pub(crate) class_self_name: bool,
 }
 
 pub(crate) struct Scope {
@@ -174,6 +178,7 @@ impl ScopeTree {
                 initialised,
                 implicit_arguments: false,
                 fn_expr_name: false,
+                class_self_name: false,
             },
         );
         Ok(scope.id)
@@ -390,6 +395,30 @@ impl ScopeTree {
             .get(scope_id)
             .and_then(|scope| scope.variables.get(name))
             .is_some_and(|info| info.fn_expr_name)
+    }
+
+    /// 将 `(scope_id, name)` 处的绑定标记为类自身名字绑定（classEnv 的
+    /// CreateImmutableBinding(classBinding, true)）。
+    pub(crate) fn set_class_self_name(
+        &mut self,
+        scope_id: usize,
+        name: &str,
+    ) -> Result<(), String> {
+        let info = self
+            .arenas
+            .get_mut(scope_id)
+            .and_then(|scope| scope.variables.get_mut(name))
+            .ok_or_else(|| format!("undeclared identifier `{name}`"))?;
+        info.class_self_name = true;
+        Ok(())
+    }
+
+    /// `(scope_id, name)` 处的绑定是否为类自身名字绑定。
+    pub(crate) fn is_class_self_name(&self, scope_id: usize, name: &str) -> bool {
+        self.arenas
+            .get(scope_id)
+            .and_then(|scope| scope.variables.get(name))
+            .is_some_and(|info| info.class_self_name)
     }
 
     /// Mark an existing variable as implicit `arguments`.

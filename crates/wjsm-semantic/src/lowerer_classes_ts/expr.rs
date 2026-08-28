@@ -25,23 +25,26 @@ impl Lowerer {
             .or(named_eval)
             .unwrap_or_default();
 
-        // 命名类表达式：仅在类体内绑定名称（块作用域）。
+        // 命名类表达式：仅在类体内绑定名称（classEnv 帧按每次求值新建，
+        // 循环内每轮得到独立绑定实例）；InitializeBinding 由 lower_class_body
+        // 在静态元素求值前完成（§15.7.14 步骤 29）。
+        let entry_block = block;
+        let mut block = block;
         let class_body_name_scope =
             if let Some(name) = class_expr.ident.as_ref().map(|id| id.sym.to_string()) {
-                self.scopes.push_scope(ScopeKind::Block);
-                let scope_id = self
-                    .scopes
-                    .declare(&name, VarKind::Const, false)
-                    .map_err(|msg| self.error(class_expr.span(), msg))?;
-                Some((name, scope_id))
+                Some(self.begin_class_self_name_scope(
+                    &name,
+                    &class_expr.class,
+                    &mut block,
+                    class_expr.span(),
+                )?)
             } else {
                 None
             };
 
         let decorator_name = class_expr.ident.as_ref().map(|id| id.sym.as_ref());
 
-        let entry_block = block;
-        let (mut block, ctor_dest, ctor_function_id) = self.lower_class_body(
+        let (block, ctor_dest, _ctor_function_id) = self.lower_class_body(
             &class_name,
             &class_expr.class,
             class_expr.span(),
@@ -50,26 +53,11 @@ impl Lowerer {
             block,
         )?;
 
-        // 命名类表达式：初始化类体绑定并弹出作用域。
-        if let Some((name, scope_id)) = &class_body_name_scope {
-            self.scopes
-                .mark_initialised(name)
-                .map_err(|msg| self.error(class_expr.span(), msg))?;
-            // 收尾存储须同步进共享 env：方法闭包在类求值期间 materialize（此时类名尚未存储），
-            // 运行时方法体读到的是 env 中的类名值。
-            let class_binding = CapturedBinding::new(name, *scope_id);
-            if let Some(function_id) = ctor_function_id {
-                self.current_function
-                    .record_known_callee(class_binding.var_ir_name(), function_id);
-            }
-            block = self.store_binding_value(
-                block,
-                &class_binding,
-                ctor_dest,
-                class_expr.span(),
-                true,
-            )?;
-            self.scopes.pop_scope();
+        // 命名类表达式：弹出 classEnv 帧与名字作用域（绑定已由 lower_class_body
+        // 初始化）。类绑定不进 known_callee_vars：direct_call 的读取折叠契约是
+        // 「绑定值 ≡ FunctionRef 常量」，而类对象按每次求值 CreateClosure 物化。
+        if let Some(scope) = &class_body_name_scope {
+            self.finish_class_self_name_scope(scope);
         }
 
         // 类求值（计算键异常分叉、装饰器等）可能推进 block：把延续块发布给

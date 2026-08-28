@@ -1205,4 +1205,5 @@ mod class_body;
 mod decl;
 mod expr;
 mod function_values;
+mod self_name;
 mod static_field;

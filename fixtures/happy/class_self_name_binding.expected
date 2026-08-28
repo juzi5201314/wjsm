@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+ReferenceError Cannot access 'G' before initialization
+true function
+true
+undefined true
+TypeError Assignment to constant variable.
+TypeError Assignment to constant variable.
+TypeError Assignment to constant variable.
+TypeError Assignment to constant variable.
+TypeError Assignment to constant variable.
+5 true
+--- stderr ---
