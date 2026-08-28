@@ -253,6 +253,21 @@ console.log(eval("vv"));
 }
 
 #[test]
+fn strict_direct_eval_assigns_existing_script_globals() {
+    // 严格 eval 体内写脚本全局 var：绑定经全局对象记录解析后按 [[Set]] 写入；
+    // 确实未声明的名字才抛 ReferenceError（Node 口径 "x is not defined"）。
+    assert_stdout(
+        r#"
+var x = 1;
+eval('"use strict"; x = 5');
+console.log(x, globalThis.x);
+try { eval('"use strict"; zz = 9') } catch (e) { console.log(e.constructor.name, e.message) }
+"#,
+        "5 5\nReferenceError zz is not defined\n",
+    );
+}
+
+#[test]
 fn direct_eval_var_creates_configurable_global_property() {
     // EvalDeclarationInstantiation：直接 eval 引入的 var 是可删除全局属性
     // （CreateGlobalVarBinding(N, true)）；显式 var 保持不可配置。

@@ -177,7 +177,7 @@ fn check(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
 
 /// 全局对象是否已持有该名（自有槽位或惰性内建）；用于 CreateGlobalVarBinding
 /// 的 HasOwnProperty 判定——惰性内建视为既有属性，避免被 undefined 遮蔽。
-fn global_has_own_or_lazy(
+pub(crate) fn global_has_own_or_lazy(
     state: &mut NativeAgentState,
     global: i64,
     name: i64,

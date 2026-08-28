@@ -273,14 +273,25 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
         }
     }
     if modules::scope_record_is_strict(state, *environment) {
-        return javascript_error(
+        // 严格 eval 写未入快照的名字：全局对象记录持有该属性（含惰性内建）
+        // 时按 [[Set]]（strict）写入；确实缺失才抛 ReferenceError（§9.1.1.1.5）。
+        let exists = runtime::property_key(state, *key).is_some_and(|env_key| {
+            global_env::global_has_own_or_lazy(state, outer_env, *key, env_key)
+        }) || runtime::has_property(state, outer_env, *key);
+        if !exists {
+            return javascript_error(
+                ctx,
+                state,
+                "ReferenceError",
+                format!("{} is not defined", eval_binding_name(state, *key)),
+            );
+        }
+        return runtime::dispatch_runtime(
             ctx,
             state,
-            "ReferenceError",
-            format!(
-                "assignment to undeclared variable `{}`",
-                eval_binding_name(state, *key)
-            ),
+            NativeRuntimeOp::SetPropStrict,
+            &[outer_env, *key, *stored],
+            None,
         );
     }
     runtime::dispatch_runtime(
