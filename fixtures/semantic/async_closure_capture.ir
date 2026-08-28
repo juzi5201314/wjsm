@@ -100,46 +100,62 @@ module {
     bb1:
       %14 = const c29
       store var $2.$shared_env, %14
-      %40 = load var $2.$state
-      switch %40 [case c38 -> bb2, case c39 -> bb3], default bb6, exit bb7
+      %46 = load var $2.$state
+      switch %46 [case c38 -> bb2, case c39 -> bb5], default bb10, exit bb11
     bb2:
       %15 = const c30
       %16 = load var $2.$closure_env
       %17 = const c31
       %18 = get_prop %16, %17
       %19 = call builtin.promise.resolve_static(%15, %18)
-      %21 = const c32
-      %20 = call builtin.promise.resolve_static(%21, %19)
-      suspend %20, state=1
-      jump bb5
+      %20 = is_exception %19
+      branch %20, bb4, bb3
     bb3:
-      %22 = load var $2.$resume_val
-      %23 = load var $2.$is_rejected
-      %24 = const c33
-      %25 = stricteq %23, %24
-      branch %25, bb4, bb5
+      %24 = const c32
+      %23 = call builtin.promise.resolve_static(%24, %19)
+      suspend %23, state=1
+      jump bb7
     bb4:
-      %26 = load var $2.$promise
-      promise_reject %26, %22
+      %21 = call builtin.exception_value(%19)
+      %22 = load var $2.$promise
+      promise_reject %22, %21
       return
     bb5:
-      %28 = load var $2.$closure_env
-      %29 = const c34
-      %30 = load var $2.$closure_env
-      %31 = const c35
-      %32 = get_prop %30, %31
-      %33 = const c36
-      %34 = add %32, %33
-      %35 = set_prop %28, %29, %34
-      %36 = load var $2.$closure_env
-      %37 = const c37
-      %38 = get_prop %36, %37
-      %39 = load var $2.$promise
-      promise_resolve %39, %38
-      return
+      %25 = load var $2.$resume_val
+      %26 = load var $2.$is_rejected
+      %27 = const c33
+      %28 = stricteq %26, %27
+      branch %28, bb6, bb7
     bb6:
+      %29 = load var $2.$promise
+      promise_reject %29, %25
       return
     bb7:
+      %31 = load var $2.$closure_env
+      %32 = const c34
+      %33 = load var $2.$closure_env
+      %34 = const c35
+      %35 = get_prop %33, %34
+      %36 = const c36
+      %37 = add %35, %36
+      %38 = set_prop %31, %32, %37
+      %39 = is_exception %38
+      branch %39, bb9, bb8
+    bb8:
+      %42 = load var $2.$closure_env
+      %43 = const c37
+      %44 = get_prop %42, %43
+      %45 = load var $2.$promise
+      promise_resolve %45, %44
+      return
+    bb9:
+      %40 = call builtin.exception_value(%38)
+      %41 = load var $2.$promise
+      promise_reject %41, %40
+      return
+    bb10:
+      return
+    bb11:
       unreachable
 
   fn @anon_0 [needs_prototype] [captures: $0.undefined, $1.count] [params: $3.$env, $3.$this] [entry=bb0]:

@@ -40,7 +40,13 @@ pub(super) fn create(
     let Ok(length) = state.gc.heap().array_length(source_handle) else {
         return fail_dispatch(ctx);
     };
-    let Ok(arguments) = state.allocate_object_with_gc_retry(ctx, length.saturating_add(3), false)
+    // 固定布局一次分配到位：索引属性 length 个 + "length" + @@iterator +
+    // callee（mapped 为数据属性占 1 槽；unmapped 为 accessor 占 getter/setter
+    // 2 槽）。容量不足会触发 shape 扩容 relocate，而本对象可能仍在 native
+    // TLAB 中未物化，扩容将以 NativeTlabNeedsMaterialization 失败。
+    let extra_slots = if mapped { 3 } else { 4 };
+    let Ok(arguments) =
+        state.allocate_object_with_gc_retry(ctx, length.saturating_add(extra_slots), false)
     else {
         return fail_dispatch(ctx);
     };

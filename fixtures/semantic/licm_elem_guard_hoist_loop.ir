@@ -101,7 +101,7 @@ module {
       store var $0.sum, %31
       %32 = const c30
       store var $1.i, %32
-      jump bb19
+      jump bb21
     bb1:
       %33 = load var $1.i
       %35 = const c31
@@ -109,24 +109,24 @@ module {
       %37 = is_exception %36
       branch %37, bb6, bb5
     bb2:
-      %44 = load var $0.sum
-      %46 = load var $1.i
-      %47 = get_elem_guarded %45, %46, guard=%71
-      %48 = const c34
-      %49 = get_prop_guarded %47, %48, guard=%71, template=c20
-      %50 = add %44, %49
-      store var $0.sum, %50
-      %51 = is_exception %50
-      branch %51, bb10, bb9
+      %46 = load var $0.sum
+      %48 = load var $1.i
+      %49 = get_elem_guarded %47, %48, guard=%73
+      %50 = const c34
+      %51 = get_prop_guarded %49, %50, guard=%73, template=c20
+      %52 = add %46, %51
+      store var $0.sum, %52
+      %53 = is_exception %52
+      branch %53, bb12, bb11
     bb3:
-      %53 = load var $1.i
-      %54 = pos %53
-      jump bb11
+      %55 = load var $1.i
+      %56 = pos %55
+      jump bb13
     bb4:
-      %59 = load var $0.sum
-      %60 = call builtin.console.log(%59)
-      %61 = is_exception %60
-      branch %61, bb14, bb13
+      %61 = load var $0.sum
+      %62 = call builtin.console.log(%61)
+      %63 = is_exception %62
+      branch %63, bb16, bb15
     bb5:
       %40 = const c32
       %41 = const c33
@@ -137,48 +137,54 @@ module {
       %38 = call builtin.exception_value(%36)
       throw %38
     bb7:
-      branch %39, bb2, bb4
+      %44 = is_exception %39
+      branch %44, bb10, bb9
     bb8:
       %43 = call builtin.exception_value(%39)
       throw %43
     bb9:
-      jump bb3
+      branch %39, bb2, bb4
     bb10:
-      %52 = call builtin.exception_value(%50)
-      throw %52
+      %45 = call builtin.exception_value(%39)
+      throw %45
     bb11:
-      %57 = const c35
-      %58 = add %54, %57
-      store var $1.i, %58
-      jump bb1
+      jump bb3
     bb12:
-      unreachable
+      %54 = call builtin.exception_value(%52)
+      throw %54
     bb13:
-      %63 = load var $0.POINTS
-      %64 = const c36
-      %65 = get_prop %63, %64
-      %66 = is_exception %65
-      branch %66, bb16, bb15
+      %59 = const c35
+      %60 = add %56, %59
+      store var $1.i, %60
+      jump bb1
     bb14:
-      %62 = call builtin.exception_value(%60)
-      throw %62
+      unreachable
     bb15:
-      %68 = call builtin.console.log(%65)
-      %69 = is_exception %68
-      branch %69, bb18, bb17
+      %65 = load var $0.POINTS
+      %66 = const c36
+      %67 = get_prop %65, %66
+      %68 = is_exception %67
+      branch %68, bb18, bb17
     bb16:
-      %67 = call builtin.exception_value(%65)
-      throw %67
+      %64 = call builtin.exception_value(%62)
+      throw %64
     bb17:
-      return
+      %70 = call builtin.console.log(%67)
+      %71 = is_exception %70
+      branch %71, bb20, bb19
     bb18:
-      %70 = call builtin.exception_value(%68)
-      throw %70
+      %69 = call builtin.exception_value(%67)
+      throw %69
     bb19:
-      %34 = load var $0.POINTS
-      %45 = load var $0.POINTS
-      jump bb20
+      return
     bb20:
-      %71 = elem_shape_guard %45, c20
+      %72 = call builtin.exception_value(%70)
+      throw %72
+    bb21:
+      %34 = load var $0.POINTS
+      %47 = load var $0.POINTS
+      jump bb22
+    bb22:
+      %73 = elem_shape_guard %47, c20
       jump bb1
 }

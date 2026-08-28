@@ -153,36 +153,42 @@ module {
       %54 = load var $0.obj
       %55 = const c25
       %56 = get_prop %54, %55
-      %57 = const c26
-      %58 = call %56, this=%54, args=[%57]
-      %59 = is_exception %58
-      branch %59, bb16, bb15
+      %57 = is_exception %56
+      branch %57, bb16, bb15
     bb14:
       %53 = call builtin.exception_value(%51)
       throw %53
     bb15:
-      %61 = load var $0.obj
-      %62 = const c27
-      %63 = get_prop %61, %62
-      %64 = is_exception %63
-      branch %64, bb18, bb17
+      %59 = const c26
+      %60 = call %56, this=%54, args=[%59]
+      %61 = is_exception %60
+      branch %61, bb18, bb17
     bb16:
-      %60 = call builtin.exception_value(%58)
-      throw %60
+      %58 = call builtin.exception_value(%56)
+      throw %58
     bb17:
-      %66 = const c28
-      %67 = const c29
-      %68 = call builtin.create_closure(%66, %67)
-      %69 = const c30
-      %70 = call builtin.promise.then(%63, %68, %69)
-      %71 = is_exception %70
-      branch %71, bb20, bb19
+      %63 = load var $0.obj
+      %64 = const c27
+      %65 = get_prop %63, %64
+      %66 = is_exception %65
+      branch %66, bb20, bb19
     bb18:
-      %65 = call builtin.exception_value(%63)
-      throw %65
+      %62 = call builtin.exception_value(%60)
+      throw %62
     bb19:
-      return
+      %68 = const c28
+      %69 = const c29
+      %70 = call builtin.create_closure(%68, %69)
+      %71 = const c30
+      %72 = call builtin.promise.then(%65, %70, %71)
+      %73 = is_exception %72
+      branch %73, bb22, bb21
     bb20:
-      %72 = call builtin.exception_value(%70)
-      throw %72
+      %67 = call builtin.exception_value(%65)
+      throw %67
+    bb21:
+      return
+    bb22:
+      %74 = call builtin.exception_value(%72)
+      throw %74
 }

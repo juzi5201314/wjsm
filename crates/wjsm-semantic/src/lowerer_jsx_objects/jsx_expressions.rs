@@ -384,11 +384,12 @@ impl Lowerer {
                 args: vec![cooked_arr, define_prop_key, desc_obj_val],
             },
         );
-        // 4. 解析 callee + this_val（复用 lower_call_expr 的逻辑）
-        let (callee_val, this_val) = self.lower_tag_expr(&tagged_tpl.tag, block)?;
+        // 4. 解析 callee + this_val（复用 lower_call_expr 的逻辑）。tag 查找
+        //    （getter）抛出会在 lower_tag_expr 内分叉，延续块就地推进。
+        let mut current = block;
+        let (callee_val, this_val) = self.lower_tag_expr(&tagged_tpl.tag, &mut current)?;
         // 5. 收集参数: [cooked_arr, ...exprs]。插值表达式即 tag 函数实参：
         //    求值引入控制流/异常分叉时必须推进延续块，抛出即中止调用并传播。
-        let mut current = block;
         let mut args = Vec::with_capacity(1 + tpl.exprs.len());
         args.push(cooked_arr);
         for expr in &tpl.exprs {
@@ -464,25 +465,30 @@ impl Lowerer {
     pub(crate) fn lower_tag_expr(
         &mut self,
         expr: &swc_ast::Expr,
-        block: BasicBlockId,
+        block: &mut BasicBlockId,
     ) -> Result<(ValueId, ValueId), LoweringError> {
         match expr {
             swc_ast::Expr::Member(member_expr) => {
-                let this_val = self.lower_expr(&member_expr.obj, block)?;
-                let callee_val = self.lower_member_expr(member_expr, block, false)?;
+                // receiver 求值一次并复用为 this；tag 查找（getter / Proxy get
+                // 陷阱）抛出必须先于调用分叉传播，哨兵不得作为 callee 流入 Call。
+                let this_val = self.lower_call_operand_then_continue(&member_expr.obj, block)?;
+                let callee_val =
+                    self.lower_member_expr_from_object(member_expr, this_val, block, false)?;
+                *block = self.lower_value_exception_branch(*block, callee_val)?;
                 Ok((callee_val, this_val))
             }
             _ => {
                 let undef_const = self.module.add_constant(Constant::Undefined);
                 let this_val = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    *block,
                     Instruction::Const {
                         dest: this_val,
                         constant: undef_const,
                     },
                 );
-                let callee_val = self.lower_expr(expr, block)?;
+                // tag 表达式（`(f())` 等）抛出必须在调用前分叉传播。
+                let callee_val = self.lower_call_operand_then_continue(expr, block)?;
                 Ok((callee_val, this_val))
             }
         }

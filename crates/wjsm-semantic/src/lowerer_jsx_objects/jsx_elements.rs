@@ -294,7 +294,7 @@ impl Lowerer {
                     let source = self.lower_expr_then_continue(&spread.expr, block)?;
                     // 与对象字面量 spread 一致：源求值与 CopyDataProperties
                     // 的异常都必须传播，不得静默产生残缺 props。
-                    if self.expr_exception_fork_allowed() && self.expr_can_throw(&spread.expr) {
+                    if self.expr_can_throw(&spread.expr) {
                         *block = self.lower_value_exception_branch(*block, source)?;
                     }
                     *block = self.emit_object_spread_checked(*block, obj_dest, source)?;

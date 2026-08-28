@@ -38,7 +38,7 @@ impl Lowerer {
             let val = self.lower_expr_then_continue(&elem.expr, &mut current)?;
             // ArrayAccumulation：元素求值抛异常必须传播——既不能把 TAG_EXCEPTION
             // 存入数组，也不能继续求值后续元素或让 spread 静默展开为空。
-            if self.expr_exception_fork_allowed() && self.expr_can_throw(&elem.expr) {
+            if self.expr_can_throw(&elem.expr) {
                 current = self.lower_value_exception_branch(current, val)?;
             }
             if elem.spread.is_some() {

@@ -388,12 +388,8 @@ impl Lowerer {
                 },
             );
         }
-        if self.expr_exception_fork_allowed() {
-            let continue_block = self.lower_value_exception_branch(call_block, dest)?;
-            self.expr_merge_block = Some(continue_block);
-        } else if call_block != block {
-            self.expr_merge_block = Some(call_block);
-        }
+        let continue_block = self.lower_value_exception_branch(call_block, dest)?;
+        self.expr_merge_block = Some(continue_block);
         Ok(dest)
     }
 
@@ -439,6 +435,9 @@ impl Lowerer {
                     this_val = self.lower_this_checked(&mut super_block)?;
                     callee_val =
                         self.lower_super_prop_with_this(super_prop, this_val, &mut super_block)?;
+                    // 方法查找（原型链 getter）抛出必须先于调用分叉传播，
+                    // 哨兵不得作为 callee 流入 Call。
+                    super_block = self.lower_value_exception_branch(super_block, callee_val)?;
                     callee_block = super_block;
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 } else if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
@@ -857,6 +856,10 @@ impl Lowerer {
                         &mut member_block,
                         false,
                     )?;
+                    // 方法查找（getter / Proxy get 陷阱）抛出必须先于调用分叉
+                    // 传播，哨兵不得作为 callee 流入 Call（否则误报
+                    // "... is not a function" 且丢失原始异常）。
+                    member_block = self.lower_value_exception_branch(member_block, callee_val)?;
                     callee_block = member_block;
                 } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
                     && self.eval_scope_record
@@ -1039,17 +1042,41 @@ impl Lowerer {
 
         let callee_val: ValueId;
         let this_val: ValueId;
-        let mut callee_block = block;
+        let callee_block: BasicBlockId;
+
+        // 成员形态的 callee（含 `a?.b()` / `a?.b.c()` 的 OptChain 包装）：
+        // receiver 求值一次并复用为 this（EvaluateCall 的 thisValue 取自
+        // Reference base，`f().m?.()` 不得二次求值）；`?.` 短路点按包装节点的
+        // optional 发 OptionalGetProp，短路产出 undefined 后 OptionalCall 再次
+        // 短路，与规范链式短路一致。
+        let callee_member = match &call.callee {
+            swc_ast::Callee::Expr(expr) => match expr.as_ref() {
+                swc_ast::Expr::Member(member_expr) => Some((member_expr, false)),
+                swc_ast::Expr::OptChain(oc) => match oc.base.as_ref() {
+                    swc_ast::OptChainBase::Member(member_expr) => Some((member_expr, oc.optional)),
+                    swc_ast::OptChainBase::Call(_) => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
 
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
-                if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
-                    let obj = self.lower_expr(&member_expr.obj, block)?;
-                    this_val = obj;
-                    callee_val = self.lower_member_expr(member_expr, block, false)?;
-                    if let Some(mb) = self.expr_merge_block.take() {
-                        callee_block = mb;
-                    }
+                if let Some((member_expr, member_optional)) = callee_member {
+                    // 方法查找（getter）抛出必须先于调用分叉传播，哨兵不得作为
+                    // callee 流入 OptionalCall。
+                    let mut member_block = block;
+                    this_val =
+                        self.lower_call_operand_then_continue(&member_expr.obj, &mut member_block)?;
+                    callee_val = self.lower_member_expr_from_object(
+                        member_expr,
+                        this_val,
+                        &mut member_block,
+                        member_optional,
+                    )?;
+                    member_block = self.lower_value_exception_branch(member_block, callee_val)?;
+                    callee_block = member_block;
                 } else if let swc_ast::Expr::Ident(ident) = expr.as_ref()
                     && !self.with_scopes_for_ident(ident.sym.as_ref()).is_empty()
                 {
@@ -1071,10 +1098,11 @@ impl Lowerer {
                             constant: undef,
                         },
                     );
-                    callee_val = self.lower_expr(expr, block)?;
-                    if let Some(mb) = self.expr_merge_block.take() {
-                        callee_block = mb;
-                    }
+                    // callee 表达式（`o?.m` 等可选链）抛出必须在调用前分叉传播。
+                    let mut callee_eval_block = block;
+                    callee_val =
+                        self.lower_call_operand_then_continue(expr, &mut callee_eval_block)?;
+                    callee_block = callee_eval_block;
                 }
             }
             other => {
