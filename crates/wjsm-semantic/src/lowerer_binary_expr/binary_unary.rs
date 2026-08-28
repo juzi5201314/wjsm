@@ -821,11 +821,12 @@ impl Lowerer {
                         // "arguments", false) 创建（§10.2.11 步骤 27/34），
                         // deletable=false：DeleteBinding 返回 false（§9.1.1.1.8）。
                         // 显式 var/形参名 arguments 同为不可删除的声明式绑定。
-                        // 具名函数表达式自身名字按 CreateImmutableBinding 创建，
-                        // 同样不可删除（§9.1.1.1.8 步骤 3）。
+                        // 具名函数表达式自身名字与类自身名字按
+                        // CreateImmutableBinding 创建，同样不可删除（§9.1.1.1.8 步骤 3）。
                         let deletable = !((name == "arguments"
                             && self.scopes.lookup(&name).is_ok())
-                            || self.fn_expr_name_binding(&name).is_some());
+                            || self.fn_expr_name_binding(&name).is_some()
+                            || self.class_self_name_binding(&name).is_some());
                         let bool_const = self.module.add_constant(Constant::Bool(deletable));
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
@@ -890,6 +891,11 @@ impl Lowerer {
                 // （非严格静默忽略、严格 TypeError），先于 const 编译期拒绝。
                 if let Some(binding) = self.fn_expr_name_binding(&name) {
                     return self.lower_update_fn_expr_name(update, block, &binding);
+                }
+                // 类自身名字绑定：受检读旧值（TDZ 内 ReferenceError）后在写点
+                // 抛 TypeError，先于 const 编译期拒绝。
+                if let Some(binding) = self.class_self_name_binding(&name) {
+                    return self.lower_update_class_self_name(update, block, &binding);
                 }
                 let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
                     Ok(found) => found,

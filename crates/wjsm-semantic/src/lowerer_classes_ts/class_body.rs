@@ -3,7 +3,9 @@ use super::*;
 impl Lowerer {
     /// 共享类体降级：构造器函数、原型对象、超类链、方法/访问器/静态块/字段、装饰器。
     ///
-    /// 调用方负责类名词法作用域的 push/pop 与最终名字绑定。
+    /// 调用方负责类名词法作用域与 classEnv 帧的 begin/finish
+    /// （`begin_class_self_name_scope` / `finish_class_self_name_scope`）；
+    /// InitializeBinding 由本函数在静态元素求值前完成（§15.7.14 步骤 29）。
     /// `js_ctor_name` 为构造器的 JS 可见 `name`（SetFunctionName：类声明/命名
     /// 类表达式取 ident；匿名类表达式取 NamedEvaluation 绑定名，无则空串）。
     /// 返回（最终 block、构造器值、未被 class decorator 替换的构造器 FunctionId）。
@@ -39,8 +41,15 @@ impl Lowerer {
         // ── 构造器 IR 函数 ──
         // 构造器体延迟到类求值完成后才执行，期间类名已初始化（构造器体/实例字段初始化器可引用类名）；
         // 函数体 lowering 期间临时退出 TDZ，结束后恢复（类求值期间仍为 TDZ）。
+        // 匿名类表达式的内部名（anon_class_N）可能撞上用户同名绑定：仅当解析
+        // 结果确为类自身名字绑定（调用方经 begin_class_self_name_scope 声明）
+        // 才参与 TDZ 切换与 InitializeBinding。
         let ctor_name = format!("{}.constructor", class_name);
-        let class_scope_id = self.scopes.resolve_scope_id(class_name).ok();
+        let class_scope_id = self
+            .scopes
+            .resolve_scope_id(class_name)
+            .ok()
+            .filter(|sid| self.scopes.is_class_self_name(*sid, class_name));
         if let Some(sid) = class_scope_id {
             self.scopes
                 .set_initialised(sid, class_name, true)
@@ -529,6 +538,15 @@ impl Lowerer {
         // static block（第二遍）可经 `this.#m()` 调用它们。
         self.emit_static_private_member_binds(block, ctor_dest, &private_members);
 
+        // InitializeBinding(classBinding, F)（§15.7.14 步骤 29）：类名绑定在
+        // 静态元素求值前初始化——静态字段初始化器与 static block 读类名取本次
+        // 求值的类对象；extends / 计算键期间仍为 TDZ 哨兵。
+        if let Some(sid) = class_scope_id {
+            block = self.initialize_class_self_name_binding(
+                block, class_name, sid, ctor_dest, class_span,
+            )?;
+        }
+
         // 第二遍（源顺序）：静态元素执行期 —— 静态字段初始化器与 static block。
         // 键已全部求值完毕，此处只求初始化器/执行块体（ES ClassDefinitionEvaluation
         // 对 staticElements 的 DefineField / Call 步骤）；静态字段初始化器以
@@ -619,6 +637,17 @@ impl Lowerer {
         let direct_constructor = class.decorators.is_empty().then_some(ctor_function_id);
         let (block, ctor_dest) =
             self.emit_apply_class_decorators(block, ctor_dest, &class.decorators, decorator_name)?;
+
+        // 类 decorator 替换构造器后重写绑定，体内后续读到最终类对象。
+        // （decorator 与静态元素的相对顺序维持既有实现：decorator 后置。）
+        let mut block = block;
+        if !class.decorators.is_empty()
+            && let Some(sid) = class_scope_id
+        {
+            block = self.initialize_class_self_name_binding(
+                block, class_name, sid, ctor_dest, class_span,
+            )?;
+        }
 
         self.pop_class_private_name_scope();
         Ok((block, ctor_dest, direct_constructor))
@@ -1181,9 +1210,17 @@ impl Lowerer {
         computed_key_count: u32,
     ) -> Result<(BasicBlockId, ValueId, Option<ValueId>), LoweringError> {
         if computed_key_count == 0 {
-            let (continuation, value) =
-                self.materialize_class_function_value(block, function, span)?;
-            return Ok((continuation, value, None));
+            if !function.captured.is_empty() {
+                let (continuation, value) =
+                    self.materialize_class_function_value(block, function, span)?;
+                return Ok((continuation, value, None));
+            }
+            // ClassDefinitionEvaluation 每次求值创建新的构造器函数对象 F：
+            // 无捕获构造器同样必须经 CreateClosure 物化为独立函数对象（与
+            // 函数表达式一致），否则 FunctionRef 常量跨求值规范化为单例，
+            // 循环内各轮共享类对象、prototype 与静态成员。
+            let (closure_block, closure) = self.materialize_captureless_ctor(block, function)?;
+            return Ok((closure_block, closure, None));
         }
 
         let function_ref = self
@@ -1228,5 +1265,52 @@ impl Lowerer {
             },
         );
         Ok((block, closure, Some(key_env)))
+    }
+
+    /// 无捕获、无计算键构造器的闭包物化：env 取 undefined（eval / vm 上下文
+    /// 传 sandbox env，嵌套 free-var 经 EvalGet/SetBinding 写回 context），
+    /// 与 `lower_fn_expr` 的无捕获路径同一约定。
+    fn materialize_captureless_ctor(
+        &mut self,
+        block: BasicBlockId,
+        function: &LoweredClassFunction,
+    ) -> Result<(BasicBlockId, ValueId), LoweringError> {
+        let function_ref = self
+            .module
+            .add_constant(Constant::FunctionRef(function.function_id));
+        let function_value = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: function_value,
+                constant: function_ref,
+            },
+        );
+        let mut closure_block = block;
+        let env_val = if self.eval_scope_bridge_active() {
+            let env = self.load_eval_scope_env(closure_block);
+            closure_block = self.resolve_store_block(closure_block);
+            env
+        } else {
+            let undef = self.alloc_value();
+            self.current_function.append_instruction(
+                closure_block,
+                Instruction::Const {
+                    dest: undef,
+                    constant: self.module.add_constant(Constant::Undefined),
+                },
+            );
+            undef
+        };
+        let closure = self.alloc_value();
+        self.current_function.append_instruction(
+            closure_block,
+            Instruction::CallBuiltin {
+                dest: Some(closure),
+                builtin: Builtin::CreateClosure,
+                args: vec![function_value, env_val],
+            },
+        );
+        Ok((closure_block, closure))
     }
 }

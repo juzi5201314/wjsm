@@ -497,6 +497,13 @@ impl Lowerer {
             return self.lower_assign_fn_expr_name(assign, block, &binding);
         }
 
+        // 类自身名字绑定（CreateImmutableBinding(className, true)）：写入按
+        // 运行时语义分流——TDZ 内 ReferenceError、初始化后 TypeError，
+        // 先于 lookup_for_assign 的 const 编译期拒绝。
+        if let Some(binding) = self.class_self_name_binding(&name) {
+            return self.lower_assign_class_self_name(assign, block, &binding);
+        }
+
         // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
         // 避免独立的 const 检查与 lookup 各自遍历 scope chain 的冗余。
         let (scope_id, kind) = match self.lookup_binding_for_assign(&name) {
@@ -742,6 +749,16 @@ impl Lowerer {
         {
             let store_block = self.resolve_store_block(block);
             return self.emit_fn_expr_name_write(store_block);
+        }
+        // 类自身名字绑定（解构目标 / for-in/of 头等收口写入）：不可变（S=true），
+        // TDZ 内 ReferenceError、初始化后在写点抛运行时 TypeError。
+        // InitializeBinding 不经此路径（initialize_class_self_name_binding 直写）。
+        if binding
+            .scope_id
+            .is_some_and(|scope_id| self.scopes.is_class_self_name(scope_id, &binding.name))
+        {
+            let store_block = self.resolve_store_block(block);
+            return self.emit_class_self_name_write(store_block, binding);
         }
         // 脚本全局绑定没有 `$0.*` 槽：一切写入按 SetMutableBinding 路由到
         // 宿主全局环境记录（声明初始化已由调用方经 GlobalEnvInitLex 分流）。
