@@ -114,76 +114,135 @@ impl NumberAccess {
     }
 }
 
-pub(crate) fn constructor_property(key: &str) -> Option<NativeCallableKind> {
-    let kind = match key {
-        "alloc" => BufferStaticKind::Alloc,
-        "allocUnsafe" => BufferStaticKind::AllocUnsafe,
-        "byteLength" => BufferStaticKind::ByteLength,
-        "concat" => BufferStaticKind::Concat,
-        "from" => BufferStaticKind::From,
-        "isBuffer" => BufferStaticKind::IsBuffer,
-        _ => return None,
-    };
-    Some(NativeCallableKind::BufferStatic(kind))
+/// Buffer 构造器自有静态方法表：名字按 Node（lib/buffer.js）的定义次序，
+/// 描述符为 { writable: true, enumerable: true, configurable: true }
+/// （Node 里经赋值定义）。未实现的静态成员（poolSize / copyBytesFrom /
+/// of / allocUnsafeSlow / compare / isEncoding）不占位。
+pub(crate) const CONSTRUCTOR_STATICS: &[(&str, BufferStaticKind)] = &[
+    ("from", BufferStaticKind::From),
+    ("alloc", BufferStaticKind::Alloc),
+    ("allocUnsafe", BufferStaticKind::AllocUnsafe),
+    ("isBuffer", BufferStaticKind::IsBuffer),
+    ("concat", BufferStaticKind::Concat),
+    ("byteLength", BufferStaticKind::ByteLength),
+];
+
+/// Buffer.prototype 自有方法表：相对次序与 Node 的
+/// `Object.getOwnPropertyNames(Buffer.prototype)` 一致（未实现的名字不
+/// 占位），描述符同为可写可枚举可配置的数据属性。
+pub(crate) const PROTOTYPE_METHODS: &[(&str, BufferMethodKind)] = &[
+    ("readUInt32LE", BufferMethodKind::ReadUInt32Le),
+    ("readUInt16LE", BufferMethodKind::ReadUInt16Le),
+    ("readUInt8", BufferMethodKind::ReadUInt8),
+    ("readUInt32BE", BufferMethodKind::ReadUInt32Be),
+    ("readUInt16BE", BufferMethodKind::ReadUInt16Be),
+    ("readInt32LE", BufferMethodKind::ReadInt32Le),
+    ("readInt16LE", BufferMethodKind::ReadInt16Le),
+    ("readInt8", BufferMethodKind::ReadInt8),
+    ("readInt32BE", BufferMethodKind::ReadInt32Be),
+    ("readInt16BE", BufferMethodKind::ReadInt16Be),
+    ("writeUInt32LE", BufferMethodKind::WriteUInt32Le),
+    ("writeUInt16LE", BufferMethodKind::WriteUInt16Le),
+    ("writeUInt8", BufferMethodKind::WriteUInt8),
+    ("writeUInt32BE", BufferMethodKind::WriteUInt32Be),
+    ("writeUInt16BE", BufferMethodKind::WriteUInt16Be),
+    ("writeInt32LE", BufferMethodKind::WriteInt32Le),
+    ("writeInt16LE", BufferMethodKind::WriteInt16Le),
+    ("writeInt8", BufferMethodKind::WriteInt8),
+    ("writeInt32BE", BufferMethodKind::WriteInt32Be),
+    ("writeInt16BE", BufferMethodKind::WriteInt16Be),
+    ("readFloatLE", BufferMethodKind::ReadFloatLe),
+    ("readFloatBE", BufferMethodKind::ReadFloatBe),
+    ("readDoubleLE", BufferMethodKind::ReadDoubleLe),
+    ("readDoubleBE", BufferMethodKind::ReadDoubleBe),
+    ("writeFloatLE", BufferMethodKind::WriteFloatLe),
+    ("writeFloatBE", BufferMethodKind::WriteFloatBe),
+    ("writeDoubleLE", BufferMethodKind::WriteDoubleLe),
+    ("writeDoubleBE", BufferMethodKind::WriteDoubleBe),
+    ("copy", BufferMethodKind::Copy),
+    ("toString", BufferMethodKind::ToString),
+    ("equals", BufferMethodKind::Equals),
+    ("compare", BufferMethodKind::Compare),
+    ("indexOf", BufferMethodKind::IndexOf),
+    ("includes", BufferMethodKind::Includes),
+    ("fill", BufferMethodKind::Fill),
+    ("write", BufferMethodKind::Write),
+    ("toJSON", BufferMethodKind::ToJson),
+    ("subarray", BufferMethodKind::Subarray),
+    ("slice", BufferMethodKind::Slice),
+];
+
+/// 静态方法的 JS 可见 name / length（与 Node v22 实测一致）。
+pub(crate) fn static_metadata(kind: BufferStaticKind) -> (&'static str, u32) {
+    match kind {
+        BufferStaticKind::Alloc => ("alloc", 3),
+        BufferStaticKind::AllocUnsafe => ("allocUnsafe", 1),
+        BufferStaticKind::ByteLength => ("byteLength", 2),
+        BufferStaticKind::Concat => ("concat", 2),
+        BufferStaticKind::From => ("from", 3),
+        BufferStaticKind::IsBuffer => ("isBuffer", 1),
+    }
 }
 
-pub(crate) fn property(
-    state: &NativeAgentState,
-    receiver: i64,
-    key: &str,
-) -> Option<BufferProperty> {
+/// 实例方法的 JS 可见 name / length（与 Node v22 实测一致；float/double
+/// 读写族在 Node 里由内部函数实现，name 为 readDoubleForwards 等）。
+pub(crate) fn method_metadata(kind: BufferMethodKind) -> (&'static str, u32) {
+    match kind {
+        BufferMethodKind::Compare => ("compare", 5),
+        BufferMethodKind::Copy => ("copy", 4),
+        BufferMethodKind::Equals => ("equals", 1),
+        BufferMethodKind::Fill => ("fill", 4),
+        BufferMethodKind::Includes => ("includes", 3),
+        BufferMethodKind::IndexOf => ("indexOf", 3),
+        BufferMethodKind::ReadDoubleBe => ("readDoubleBackwards", 0),
+        BufferMethodKind::ReadDoubleLe => ("readDoubleForwards", 0),
+        BufferMethodKind::ReadFloatBe => ("readFloatBackwards", 0),
+        BufferMethodKind::ReadFloatLe => ("readFloatForwards", 0),
+        BufferMethodKind::ReadInt8 => ("readInt8", 0),
+        BufferMethodKind::ReadInt16Be => ("readInt16BE", 0),
+        BufferMethodKind::ReadInt16Le => ("readInt16LE", 0),
+        BufferMethodKind::ReadInt32Be => ("readInt32BE", 0),
+        BufferMethodKind::ReadInt32Le => ("readInt32LE", 0),
+        BufferMethodKind::ReadUInt8 => ("readUInt8", 0),
+        BufferMethodKind::ReadUInt16Be => ("readUInt16BE", 0),
+        BufferMethodKind::ReadUInt16Le => ("readUInt16LE", 0),
+        BufferMethodKind::ReadUInt32Be => ("readUInt32BE", 0),
+        BufferMethodKind::ReadUInt32Le => ("readUInt32LE", 0),
+        BufferMethodKind::Slice => ("slice", 2),
+        BufferMethodKind::Subarray => ("subarray", 2),
+        BufferMethodKind::ToJson => ("toJSON", 0),
+        BufferMethodKind::ToString => ("toString", 3),
+        BufferMethodKind::Write => ("write", 4),
+        BufferMethodKind::WriteDoubleBe => ("writeDoubleBackwards", 1),
+        BufferMethodKind::WriteDoubleLe => ("writeDoubleForwards", 1),
+        BufferMethodKind::WriteFloatBe => ("writeFloatBackwards", 1),
+        BufferMethodKind::WriteFloatLe => ("writeFloatForwards", 1),
+        BufferMethodKind::WriteInt8 => ("writeInt8", 1),
+        BufferMethodKind::WriteInt16Be => ("writeInt16BE", 1),
+        BufferMethodKind::WriteInt16Le => ("writeInt16LE", 1),
+        BufferMethodKind::WriteInt32Be => ("writeInt32BE", 1),
+        BufferMethodKind::WriteInt32Le => ("writeInt32LE", 1),
+        BufferMethodKind::WriteUInt8 => ("writeUInt8", 1),
+        BufferMethodKind::WriteUInt16Be => ("writeUInt16BE", 1),
+        BufferMethodKind::WriteUInt16Le => ("writeUInt16LE", 1),
+        BufferMethodKind::WriteUInt32Be => ("writeUInt32BE", 1),
+        BufferMethodKind::WriteUInt32Le => ("writeUInt32LE", 1),
+    }
+}
+
+/// Buffer 实例上由宿主侧表直读的继承值：Node 中 buffer / byteLength /
+/// byteOffset / length 来自 %TypedArray%.prototype 访问器，当前
+/// %TypedArray%.prototype 尚无自有 `buffer` 访问器（见 limitations），
+/// 这些名字仍按实例侧表合成；实例方法已废除旁挂合成，沿真实原型链
+/// （Buffer.prototype 自有数据属性）解析。
+pub(crate) fn property(state: &NativeAgentState, receiver: i64, key: &str) -> Option<i64> {
     let buffer = state.buffers.get(&value::decode_handle(receiver))?;
-    let property = match key {
-        "buffer" => BufferProperty::Value(buffer.array_buffer),
-        "byteLength" | "length" => BufferProperty::Value(value::encode_f64(buffer.length as f64)),
-        "byteOffset" => BufferProperty::Value(value::encode_f64(buffer.offset as f64)),
-        "compare" => BufferProperty::Method(BufferMethodKind::Compare),
-        "copy" => BufferProperty::Method(BufferMethodKind::Copy),
-        "equals" => BufferProperty::Method(BufferMethodKind::Equals),
-        "fill" => BufferProperty::Method(BufferMethodKind::Fill),
-        "includes" => BufferProperty::Method(BufferMethodKind::Includes),
-        "indexOf" => BufferProperty::Method(BufferMethodKind::IndexOf),
-        "readDoubleBE" => BufferProperty::Method(BufferMethodKind::ReadDoubleBe),
-        "readDoubleLE" => BufferProperty::Method(BufferMethodKind::ReadDoubleLe),
-        "readFloatBE" => BufferProperty::Method(BufferMethodKind::ReadFloatBe),
-        "readFloatLE" => BufferProperty::Method(BufferMethodKind::ReadFloatLe),
-        "readInt8" => BufferProperty::Method(BufferMethodKind::ReadInt8),
-        "readInt16BE" => BufferProperty::Method(BufferMethodKind::ReadInt16Be),
-        "readInt16LE" => BufferProperty::Method(BufferMethodKind::ReadInt16Le),
-        "readInt32BE" => BufferProperty::Method(BufferMethodKind::ReadInt32Be),
-        "readInt32LE" => BufferProperty::Method(BufferMethodKind::ReadInt32Le),
-        "readUInt8" => BufferProperty::Method(BufferMethodKind::ReadUInt8),
-        "readUInt16BE" => BufferProperty::Method(BufferMethodKind::ReadUInt16Be),
-        "readUInt16LE" => BufferProperty::Method(BufferMethodKind::ReadUInt16Le),
-        "readUInt32BE" => BufferProperty::Method(BufferMethodKind::ReadUInt32Be),
-        "readUInt32LE" => BufferProperty::Method(BufferMethodKind::ReadUInt32Le),
-        "slice" => BufferProperty::Method(BufferMethodKind::Slice),
-        "subarray" => BufferProperty::Method(BufferMethodKind::Subarray),
-        "toJSON" => BufferProperty::Method(BufferMethodKind::ToJson),
-        "toString" => BufferProperty::Method(BufferMethodKind::ToString),
-        "write" => BufferProperty::Method(BufferMethodKind::Write),
-        "writeDoubleBE" => BufferProperty::Method(BufferMethodKind::WriteDoubleBe),
-        "writeDoubleLE" => BufferProperty::Method(BufferMethodKind::WriteDoubleLe),
-        "writeFloatBE" => BufferProperty::Method(BufferMethodKind::WriteFloatBe),
-        "writeFloatLE" => BufferProperty::Method(BufferMethodKind::WriteFloatLe),
-        "writeInt8" => BufferProperty::Method(BufferMethodKind::WriteInt8),
-        "writeInt16BE" => BufferProperty::Method(BufferMethodKind::WriteInt16Be),
-        "writeInt16LE" => BufferProperty::Method(BufferMethodKind::WriteInt16Le),
-        "writeInt32BE" => BufferProperty::Method(BufferMethodKind::WriteInt32Be),
-        "writeInt32LE" => BufferProperty::Method(BufferMethodKind::WriteInt32Le),
-        "writeUInt8" => BufferProperty::Method(BufferMethodKind::WriteUInt8),
-        "writeUInt16BE" => BufferProperty::Method(BufferMethodKind::WriteUInt16Be),
-        "writeUInt16LE" => BufferProperty::Method(BufferMethodKind::WriteUInt16Le),
-        "writeUInt32BE" => BufferProperty::Method(BufferMethodKind::WriteUInt32Be),
-        "writeUInt32LE" => BufferProperty::Method(BufferMethodKind::WriteUInt32Le),
-        _ => return None,
-    };
-    Some(property)
-}
-
-pub(crate) enum BufferProperty {
-    Method(BufferMethodKind),
-    Value(i64),
+    match key {
+        "buffer" => Some(buffer.array_buffer),
+        "byteLength" | "length" => Some(value::encode_f64(buffer.length as f64)),
+        "byteOffset" => Some(value::encode_f64(buffer.offset as f64)),
+        _ => None,
+    }
 }
 
 pub(crate) fn call_constructor(
@@ -954,8 +1013,18 @@ fn create_view(
     offset: usize,
     length: usize,
 ) -> Option<i64> {
+    // 先物化 Buffer.prototype 再分配实例：物化期间的分配不会悬空尚未入根
+    // 的实例对象。实例创建即接线真实 [[Prototype]]，使 instanceof 与
+    // 方法继承沿 Buffer.prototype → %Uint8Array.prototype% →
+    // %TypedArray%.prototype% 链成立。
+    let prototype = state.ensure_buffer_prototype()?;
     let object = state.allocate_object(4, false).ok()?;
     let handle = value::decode_handle(object);
+    state
+        .gc
+        .heap()
+        .set_prototype(handle, value::decode_handle(prototype))
+        .ok()?;
     state.typed_arrays.insert(
         handle,
         NativeTypedArray {

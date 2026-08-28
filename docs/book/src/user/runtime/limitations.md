@@ -47,7 +47,22 @@ Object.getOwnPropertyDescriptor(shared, "length").get.name;  // "get length"
 Uint8Array.prototype.slice.call(buf, 0, 1);            // Uint8Array(1) [1]（沿链继承）
 ```
 
-已知差异：`%TypedArray%` 抽象构造器本身不存在——`Object.getPrototypeOf(Uint8Array)` 不是 `TypedArray` 函数，`%TypedArray%.prototype` 上无自有 `constructor` / `buffer` 访问器与 `@@toStringTag`；`map` / `filter` 返回普通数组而非同类型 TypedArray；DataView 实例的原型链仍未挂接到 `DataView.prototype`；Node 的 `Buffer` 实例不经由 `Uint8Array.prototype` 继承。
+已知差异：`%TypedArray%` 抽象构造器本身不存在——`Object.getPrototypeOf(Uint8Array)` 不是 `TypedArray` 函数，`%TypedArray%.prototype` 上无自有 `buffer` 访问器；`map` / `filter` 返回普通数组而非同类型 TypedArray；DataView 实例的原型链仍未挂接到 `DataView.prototype`。
+
+## Node Buffer 原型链
+
+`Buffer.prototype` 按 Node 形态物化：own `constructor` 与已实现的实例方法是真实数据属性（可写可枚举可配置，Node 定义次序），`[[Prototype]]` 挂 `Uint8Array.prototype`，实例创建即接线三层链——覆盖 / 删除原型方法对实例立即可见，删除不复活。构造器静态链挂 `Uint8Array`（`Object.getPrototypeOf(Buffer) === Uint8Array`），`BYTES_PER_ELEMENT`、`of`、`@@species` 沿静态链继承：
+
+```js
+const buf = Buffer.from('ab');
+Object.getPrototypeOf(buf) === Buffer.prototype;                    // true
+Object.getPrototypeOf(Buffer.prototype) === Uint8Array.prototype;   // true
+buf instanceof Uint8Array;                                          // true
+buf instanceof Buffer;                                              // true
+Uint8Array.prototype.slice.call(buf, 0, 1) instanceof Uint8Array;   // true（沿链继承）
+```
+
+已知差异：未实现的静态成员（`poolSize`、`copyBytesFrom`、`allocUnsafeSlow`、`compare`、`isEncoding`）与原型方法（BigInt 读写族、`readUIntLE` 变长族、小写 `Uint` 别名、`swap16/32/64`、`lastIndexOf`、`toLocaleString`、`inspect`、`parent` / `offset` 访问器）不占位；`Buffer` 的方法是宿主可调用值，无 Node 普通函数的自有 `prototype`；`Object.getOwnPropertyNames(Buffer)` 的静态成员次序与 Node 不同；`Buffer[Symbol.species]` 经静态链取到 `Buffer` 本身（Node 返回内部 `FastBuffer`）。
 
 ## TDZ 混合判定
 
