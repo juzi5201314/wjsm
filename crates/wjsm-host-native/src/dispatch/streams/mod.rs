@@ -3,13 +3,14 @@ use std::collections::{HashMap, VecDeque};
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
+use crate::slot_table::SlotTable;
 use crate::{NativeAgentState, NativeCallableKind};
 
 mod gc;
 mod readable;
 mod writable;
 
-pub(crate) use gc::{extend_gc_edges, extend_gc_roots};
+pub(crate) use gc::{extend_gc_edges, extend_gc_roots, extend_reaction_roots, extend_task_roots};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ReadableMethod {
@@ -162,6 +163,8 @@ pub(super) enum ReaderKind {
 }
 
 pub(super) struct ReaderState {
+    /// 包装对象；供 GC 边图维系 reader ↔ stream 与挂起 promise 的存活。
+    pub object: i64,
     pub stream: u32,
     pub kind: ReaderKind,
     pub closed_promise: u32,
@@ -210,12 +213,16 @@ pub(super) struct WritableControllerState {
 }
 
 pub(super) struct WriterState {
+    /// 包装对象；供 GC 边图维系 writer ↔ stream 与挂起 promise 的存活。
+    pub object: i64,
     pub stream: u32,
     pub closed_promise: u32,
     pub ready_promise: u32,
 }
 
 pub(super) struct TransformState {
+    /// 包装对象；writable 写路径按槽位引用 transform，须经边图钉住。
+    pub object: i64,
     pub readable: u32,
     pub writable: u32,
     pub controller: u32,
@@ -232,17 +239,144 @@ pub(super) struct AsyncIteratorState {
 #[derive(Default)]
 pub(crate) struct NativeStreamsState {
     pub(super) objects: HashMap<u32, ObjectKind>,
-    pub(super) readables: Vec<ReadableState>,
-    pub(super) controllers: Vec<ControllerState>,
-    pub(super) readers: Vec<ReaderState>,
-    pub(super) byob_requests: Vec<ByobState>,
-    pub(super) writables: Vec<WritableState>,
-    pub(super) writable_controllers: Vec<WritableControllerState>,
-    pub(super) writers: Vec<WriterState>,
-    pub(super) transforms: Vec<TransformState>,
-    pub(super) async_iterators: Vec<AsyncIteratorState>,
+    pub(super) readables: SlotTable<ReadableState>,
+    pub(super) controllers: SlotTable<ControllerState>,
+    pub(super) readers: SlotTable<ReaderState>,
+    pub(super) byob_requests: SlotTable<ByobState>,
+    pub(super) writables: SlotTable<WritableState>,
+    pub(super) writable_controllers: SlotTable<WritableControllerState>,
+    pub(super) writers: SlotTable<WriterState>,
+    pub(super) transforms: SlotTable<TransformState>,
+    pub(super) async_iterators: SlotTable<AsyncIteratorState>,
     /// node:stream/web 桥对象缓存（Web Streams 构造器的可调用值集合）。
     pub(super) web_bridge: Option<i64>,
+}
+
+impl NativeStreamsState {
+    /// 是否仍有存活的 body 流按下标引用指定 fetch response 槽位
+    /// （resource timing 完成路径）。fetch 清扫据此延迟释放 response 槽。
+    pub(crate) fn body_stream_references_response(&self, response: u32) -> bool {
+        self.readables
+            .iter()
+            .any(|(_, readable)| readable.response == Some(response))
+    }
+
+    /// 活包装对象数（`objects` 登记表）。
+    #[cfg(test)]
+    pub(crate) fn live_object_count(&self) -> usize {
+        self.objects.len()
+    }
+
+    /// 各内部侧表的活槽总数。
+    #[cfg(test)]
+    pub(crate) fn live_slot_count(&self) -> usize {
+        self.readables.len()
+            + self.controllers.len()
+            + self.readers.len()
+            + self.byob_requests.len()
+            + self.writables.len()
+            + self.writable_controllers.len()
+            + self.writers.len()
+            + self.transforms.len()
+            + self.async_iterators.len()
+    }
+}
+
+/// GC 完成后按 retired 句柄清扫 streams 侧表：死包装对象的登记项与槽位
+/// 一并释放。宿主边图保证「存活槽位可达的所有槽位其包装对象也存活」，
+/// 因此仅按包装对象死活释放槽位不会悬空存活路径上的交叉下标。
+pub(crate) fn sweep_retired(streams: &mut NativeStreamsState, retired: &[u32]) {
+    let NativeStreamsState {
+        objects,
+        readables,
+        controllers,
+        readers,
+        byob_requests,
+        writables,
+        writable_controllers,
+        writers,
+        transforms,
+        async_iterators,
+        ..
+    } = streams;
+    objects.retain(|handle, kind| {
+        if retired.binary_search(handle).is_err() {
+            return true;
+        }
+        match kind {
+            ObjectKind::AsyncIterator(slot) => {
+                async_iterators.remove(*slot);
+            }
+            ObjectKind::Byob(slot) => {
+                byob_requests.remove(*slot);
+            }
+            ObjectKind::Controller(slot) => {
+                controllers.remove(*slot);
+            }
+            ObjectKind::Readable(slot) => {
+                readables.remove(*slot);
+            }
+            ObjectKind::Reader(slot) => {
+                readers.remove(*slot);
+            }
+            ObjectKind::Transform(slot) => {
+                transforms.remove(*slot);
+            }
+            ObjectKind::Writable(slot) => {
+                writables.remove(*slot);
+            }
+            ObjectKind::WritableController(slot) => {
+                writable_controllers.remove(*slot);
+            }
+            ObjectKind::Writer(slot) => {
+                writers.remove(*slot);
+            }
+        }
+        false
+    });
+}
+
+/// 提取为独立值的 stream 方法以槽位下标编码；只要方法值存活就钉住对应
+/// 包装对象，防止槽位清扫复用后旧方法操作新 owner。
+pub(crate) fn callable_gc_target(
+    streams: &NativeStreamsState,
+    callable: StreamCallable,
+) -> Option<i64> {
+    match callable {
+        StreamCallable::AsyncIterator(stream) => {
+            streams.readables.get(stream).map(|stream| stream.object)
+        }
+        StreamCallable::AsyncIteratorNext(iterator)
+        | StreamCallable::AsyncIteratorReturn(iterator)
+        | StreamCallable::AsyncIteratorSelf(iterator) => streams
+            .async_iterators
+            .get(iterator)
+            .map(|iterator| iterator.object),
+        StreamCallable::Byob(handle, _) => {
+            streams.byob_requests.get(handle).map(|byob| byob.object)
+        }
+        StreamCallable::Controller(handle, _) => streams
+            .controllers
+            .get(handle)
+            .map(|controller| controller.object),
+        StreamCallable::QueuingSize(_) => None,
+        StreamCallable::Readable(handle, _) => {
+            streams.readables.get(handle).map(|stream| stream.object)
+        }
+        StreamCallable::Reader(handle, _) => {
+            streams.readers.get(handle).map(|reader| reader.object)
+        }
+        StreamCallable::Writable(handle, _) => {
+            streams.writables.get(handle).map(|stream| stream.object)
+        }
+        StreamCallable::WritableController(handle, _) => streams
+            .writable_controllers
+            .get(handle)
+            .map(|controller| controller.object),
+        StreamCallable::Writer(handle, _) => {
+            streams.writers.get(handle).map(|writer| writer.object)
+        }
+    }
 }
 
 pub(super) fn register_object(state: &mut NativeAgentState, object: i64, kind: ObjectKind) {
@@ -274,7 +408,13 @@ pub(super) fn result_object(
     done: bool,
     stored: i64,
 ) -> i64 {
-    let Ok(result) = state.allocate_object_with_gc_retry(ctx, 2, false) else {
+    // result 对象分配可触发 GC，value（可能刚从队列弹出）仅由局部值持有，
+    // 须钉扎。
+    let initial_temp_roots = state.temporary_roots.len();
+    state.temporary_roots.push(stored);
+    let result = state.allocate_object_with_gc_retry(ctx, 2, false);
+    state.temporary_roots.truncate(initial_temp_roots);
+    let Ok(result) = result else {
         return super::fail_dispatch(ctx);
     };
     if super::modules::set_named_property(state, result, "done", value::encode_bool(done)).is_err()
@@ -395,7 +535,7 @@ pub(crate) fn call(
         StreamCallable::AsyncIteratorSelf(iterator) => state
             .streams
             .async_iterators
-            .get(iterator as usize)
+            .get(iterator)
             .map(|iterator| iterator.object)
             .unwrap_or_else(|| super::fail_dispatch(ctx)),
         StreamCallable::Writable(handle, method) => {
@@ -430,17 +570,17 @@ pub(crate) fn property(
             state
                 .streams
                 .transforms
-                .get(handle as usize)
+                .get(handle)
                 .and_then(|transform| match key {
                     "readable" => state
                         .streams
                         .readables
-                        .get(transform.readable as usize)
+                        .get(transform.readable)
                         .map(|stream| StreamProperty::Value(stream.object)),
                     "writable" => state
                         .streams
                         .writables
-                        .get(transform.writable as usize)
+                        .get(transform.writable)
                         .map(|stream| StreamProperty::Value(stream.object)),
                     _ => None,
                 })
@@ -464,7 +604,13 @@ pub(crate) fn run_task(
     state: &mut NativeAgentState,
     task: StreamTask,
 ) -> i64 {
-    match task {
+    // 任务出队后不再被队列根覆盖，执行期间再入 JS 可触发 GC；先按任务根
+    // 钉扎涉及的包装对象与 promise，防止执行中被清扫或句柄复用。
+    let initial_temp_roots = state.temporary_roots.len();
+    let mut roots = VecDeque::new();
+    gc::extend_task_roots(&state.streams, &task, &mut roots);
+    state.temporary_roots.extend(roots);
+    let result = match task {
         StreamTask::Pull { controller } => readable::run_pull(ctx, state, controller),
         StreamTask::Pump { readable } => readable::pump(ctx, state, readable),
         StreamTask::Write {
@@ -475,7 +621,9 @@ pub(crate) fn run_task(
         StreamTask::CloseWritable { stream, promise } => {
             writable::run_close(ctx, state, stream, promise)
         }
-    }
+    };
+    state.temporary_roots.truncate(initial_temp_roots);
+    result
 }
 
 pub(crate) fn run_reaction(
@@ -485,14 +633,21 @@ pub(crate) fn run_reaction(
     value: i64,
     rejected: bool,
 ) -> i64 {
-    match reaction {
+    // 反应触发后已从 promise 反应表摘除，执行期间同样须按根钉扎。
+    let initial_temp_roots = state.temporary_roots.len();
+    let mut roots = VecDeque::new();
+    gc::extend_reaction_roots(&state.streams, reaction, &mut roots);
+    state.temporary_roots.extend(roots);
+    let result = match reaction {
         StreamReaction::Pump { readable } => {
             readable::finish_pipe_write(ctx, state, readable, value, rejected)
         }
         StreamReaction::FinishClose { stream, promise } => {
             writable::finish_close(ctx, state, stream, promise, value, rejected)
         }
-    }
+    };
+    state.temporary_roots.truncate(initial_temp_roots);
+    result
 }
 
 pub(super) fn create_body_stream(

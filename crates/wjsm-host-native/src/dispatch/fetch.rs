@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use base64::Engine as _;
@@ -8,13 +8,12 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::{fail_dispatch, modules, promise, runtime};
 use crate::NativeAgentState;
+use crate::slot_table::SlotTable;
 
 mod abort;
 mod headers;
 mod request;
 mod response;
-
-pub(crate) use abort::extend_gc_roots;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HeadersMethod {
@@ -86,11 +85,138 @@ pub(super) struct NetworkResponse {
 #[derive(Default)]
 pub(crate) struct NativeFetchState {
     objects: HashMap<u32, FetchObjectKind>,
-    headers: Vec<headers::HeadersState>,
-    requests: Vec<request::RequestState>,
-    responses: Vec<response::ResponseState>,
-    abort_signals: Vec<abort::AbortSignalState>,
+    headers: SlotTable<headers::HeadersState>,
+    requests: SlotTable<request::RequestState>,
+    responses: SlotTable<response::ResponseState>,
+    abort_signals: SlotTable<abort::AbortSignalState>,
     pending: Vec<PendingFetch>,
+}
+
+#[cfg(test)]
+impl NativeFetchState {
+    /// 活包装对象数（`objects` 登记表）。
+    pub(crate) fn live_object_count(&self) -> usize {
+        self.objects.len()
+    }
+
+    /// 各内部侧表的活槽总数。
+    pub(crate) fn live_slot_count(&self) -> usize {
+        self.headers.len() + self.requests.len() + self.responses.len() + self.abort_signals.len()
+    }
+}
+
+/// 把 fetch 侧仍在飞的宿主 JS 值并入 GC 根队列：挂起网络请求的 promise
+/// 只由 `pending` 表按句柄持有，回收前必须钉扎，否则句柄复用后请求完成
+/// 会错误 settle 新 promise。包装对象本身不做永久根，生命周期交给
+/// [`extend_gc_edges`] 的宿主边图与 [`sweep_retired`] 的死 owner 清扫。
+pub(crate) fn extend_gc_roots(fetch: &NativeFetchState, roots: &mut VecDeque<i64>) {
+    for pending in &fetch.pending {
+        roots.push_back(value::encode_object_handle(pending.promise));
+    }
+}
+
+/// 把 fetch 侧表持有的 JS 值按「owner 存活 ⇒ 内部引用存活」并入 GC 边图：
+/// Request/Response 持 headers 包装对象与 body 流，AbortSignal 持 reason，
+/// AbortController 持对应 signal 对象。owner 死则边不被追踪，内部值可回收。
+pub(crate) fn extend_gc_edges(fetch: &NativeFetchState, mut add: impl FnMut(i64, i64)) {
+    for (_, request) in fetch.requests.iter() {
+        add(request.object, request.headers);
+    }
+    for (_, response) in fetch.responses.iter() {
+        add(response.object, response.headers);
+        if !value::is_null(response.body_object) {
+            add(response.object, response.body_object);
+        }
+    }
+    for (_, signal) in fetch.abort_signals.iter() {
+        if !value::is_undefined(signal.reason) {
+            add(signal.object, signal.reason);
+        }
+    }
+    for (handle, kind) in &fetch.objects {
+        if let FetchObjectKind::AbortController(signal) = kind
+            && let Some(signal) = fetch.abort_signals.get(*signal)
+        {
+            add(value::encode_object_handle(*handle), signal.object);
+        }
+    }
+}
+
+/// 提取为独立值的 fetch 方法（如 `headers.append`）以槽位下标编码；只要
+/// 方法值存活，就必须钉住对应包装对象，否则槽位被清扫复用后旧方法会
+/// 操作新 owner。返回该可调用值应指向的包装对象。
+pub(crate) fn callable_gc_target(fetch: &NativeFetchState, callable: FetchCallable) -> Option<i64> {
+    match callable {
+        FetchCallable::AbortControllerAbort(handle) => {
+            fetch.abort_signals.get(handle).map(|signal| signal.object)
+        }
+        FetchCallable::Headers(handle, _) => {
+            fetch.headers.get(handle).map(|headers| headers.object)
+        }
+        FetchCallable::Request(handle, _) => {
+            fetch.requests.get(handle).map(|request| request.object)
+        }
+        FetchCallable::Response(handle, _) => {
+            fetch.responses.get(handle).map(|response| response.object)
+        }
+    }
+}
+
+/// GC 完成后按 retired 句柄清扫 fetch 侧表：死 owner 的登记项与槽位一并
+/// 释放，防止句柄复用后新对象继承旧品牌。Response 槽位可能仍被存活的
+/// body 流（resource timing 完成路径）按下标引用，此时保留槽位、只摘登记。
+pub(crate) fn sweep_retired(
+    fetch: &mut NativeFetchState,
+    streams: &super::streams::NativeStreamsState,
+    retired: &[u32],
+) {
+    let NativeFetchState {
+        objects,
+        headers,
+        requests,
+        abort_signals,
+        ..
+    } = fetch;
+    objects.retain(|handle, kind| {
+        if retired.binary_search(handle).is_err() {
+            return true;
+        }
+        match kind {
+            FetchObjectKind::Headers(slot) => {
+                headers.remove(*slot);
+            }
+            FetchObjectKind::Request(slot) => {
+                requests.remove(*slot);
+            }
+            // AbortController 与 signal 共享槽位，槽位归 signal 所有。
+            FetchObjectKind::AbortController(_) => {}
+            FetchObjectKind::AbortSignal(slot) => {
+                abort_signals.remove(*slot);
+            }
+            // Response 槽位延后到下面统一判定（body 流可能仍引用）。
+            FetchObjectKind::Response(_) => {}
+        }
+        false
+    });
+    let dead_responses: Vec<u32> = fetch
+        .responses
+        .iter()
+        .filter(|(slot, response)| {
+            // 登记须精确匹配「本槽位的 Response」：包装对象死后堆句柄可能被
+            // 新 fetch 对象复用，仅凭句柄存在会把死槽误判为活。
+            let registered = fetch
+                .objects
+                .get(&value::decode_handle(response.object))
+                .is_some_and(
+                    |kind| matches!(kind, FetchObjectKind::Response(owner) if owner == slot),
+                );
+            !registered && !streams.body_stream_references_response(*slot)
+        })
+        .map(|(slot, _)| slot)
+        .collect();
+    for slot in dead_responses {
+        fetch.responses.remove(slot);
+    }
 }
 
 pub(super) fn dispatch_fetch(
@@ -138,7 +264,7 @@ pub(crate) fn call(
 }
 
 pub(crate) fn mark_response_used(state: &mut NativeAgentState, handle: u32) {
-    if let Some(response) = state.fetch.responses.get_mut(handle as usize) {
+    if let Some(response) = state.fetch.responses.get_mut(handle) {
         response.used = true;
     }
 }
@@ -212,7 +338,7 @@ fn fetch(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         .objects
         .get(&value::decode_handle(request_object))
         .and_then(|kind| match kind {
-            FetchObjectKind::Request(handle) => state.fetch.requests.get(*handle as usize),
+            FetchObjectKind::Request(handle) => state.fetch.requests.get(*handle),
             _ => None,
         })
         .cloned()
@@ -242,7 +368,7 @@ fn fetch(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         .objects
         .get(&value::decode_handle(request.headers))
         .and_then(|kind| match kind {
-            FetchObjectKind::Headers(handle) => state.fetch.headers.get(*handle as usize),
+            FetchObjectKind::Headers(handle) => state.fetch.headers.get(*handle),
             _ => None,
         })
         .map(|headers| {
