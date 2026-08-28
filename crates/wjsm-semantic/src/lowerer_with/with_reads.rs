@@ -241,52 +241,53 @@ impl Lowerer {
         );
 
         let mut miss_end = miss;
-        let (miss_val, miss_open) =
-            if self.eval_scope_bridge_active() && self.scopes.lookup(&name).is_err() {
-                let value = self.lower_eval_typeof_binding(&name, miss)?;
-                self.resolve_expr_continuations(&mut miss_end);
-                (value, true)
-            } else {
-                match self.with_read_fallback_kind(&name) {
-                    WithFallback::Static => {
-                        let value = self.lower_ident_static(ident, miss)?;
-                        self.resolve_expr_continuations(&mut miss_end);
-                        let ty = self.alloc_value();
-                        self.current_function.append_instruction(
-                            miss_end,
-                            Instruction::CallBuiltin {
-                                dest: Some(ty),
-                                builtin: Builtin::TypeOf,
-                                args: vec![value],
-                            },
-                        );
-                        (ty, true)
-                    }
-                    WithFallback::Undeclared => {
-                        // typeof 未解析名不抛错（§13.5.3）：读运行时全局对象属性，
-                        // 缺失时 GetProp 产出 undefined → "undefined"。
-                        let (_, _, loaded) = self.emit_global_prop_load(&name, miss_end);
-                        let ty = self.alloc_value();
-                        self.current_function.append_instruction(
-                            miss_end,
-                            Instruction::CallBuiltin {
-                                dest: Some(ty),
-                                builtin: Builtin::TypeOf,
-                                args: vec![loaded],
-                            },
-                        );
-                        (ty, true)
-                    }
-                    WithFallback::Tdz => {
-                        let dummy = self.emit_runtime_error_throw(
-                            miss,
-                            Builtin::ReferenceErrorConstructor,
-                            &format!("Cannot access '{name}' before initialization"),
-                        )?;
-                        (dummy, false)
-                    }
+        let (miss_val, miss_open) = if self.eval_scope_bridge_active()
+            && self.scopes.lookup(&name).is_err()
+        {
+            let value = self.lower_eval_typeof_binding(&name, miss)?;
+            self.resolve_expr_continuations(&mut miss_end);
+            (value, true)
+        } else {
+            match self.with_read_fallback_kind(&name) {
+                WithFallback::Static => {
+                    let value = self.lower_ident_static(ident, miss)?;
+                    self.resolve_expr_continuations(&mut miss_end);
+                    let ty = self.alloc_value();
+                    self.current_function.append_instruction(
+                        miss_end,
+                        Instruction::CallBuiltin {
+                            dest: Some(ty),
+                            builtin: Builtin::TypeOf,
+                            args: vec![value],
+                        },
+                    );
+                    (ty, true)
                 }
-            };
+                WithFallback::Undeclared => {
+                    // typeof 未解析名不抛错（§13.5.3）：读运行时全局对象属性，
+                    // 缺失时 GetProp 产出 undefined → "undefined"。
+                    let (_, _, loaded) = self.emit_global_prop_load(&name, miss_end);
+                    let ty = self.alloc_value();
+                    self.current_function.append_instruction(
+                        miss_end,
+                        Instruction::CallBuiltin {
+                            dest: Some(ty),
+                            builtin: Builtin::TypeOf,
+                            args: vec![loaded],
+                        },
+                    );
+                    (ty, true)
+                }
+                WithFallback::Tdz => {
+                    let dummy = self.emit_runtime_error_throw(
+                        miss,
+                        Builtin::ReferenceErrorConstructor,
+                        &format!("Cannot access '{name}' before initialization"),
+                    )?;
+                    (dummy, false)
+                }
+            }
+        };
 
         let (result, out) = self.merge_with_dispatch_results(&[
             (hit_end, hit_val, true),
@@ -322,10 +323,7 @@ impl Lowerer {
 
         // 未命中：未声明名对隐式全局属性执行 [[Delete]]（缺失属性也返回 true），
         // 静态绑定沿用引擎既有裸标识符 delete 语义（恒 true）。
-        let miss_val = if matches!(
-            self.with_read_fallback_kind(&name),
-            WithFallback::Undeclared
-        ) {
+        let miss_val = if matches!(self.with_read_fallback_kind(&name), WithFallback::Undeclared) {
             let global = self.alloc_value();
             self.current_function.append_instruction(
                 miss,
@@ -358,8 +356,8 @@ impl Lowerer {
             miss_val
         };
 
-        let (result, out) =
-            self.merge_with_dispatch_results(&[(hit_end, deleted, true), (miss, miss_val, true)]);
+        let (result, out) = self
+            .merge_with_dispatch_results(&[(hit_end, deleted, true), (miss, miss_val, true)]);
         self.expr_merge_block = Some(out);
         Ok(result)
     }
