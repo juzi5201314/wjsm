@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+map: [5,2]
+hole-accessor: [5,2] 2
+mid-raise: 0:1,1:2,2:99
+sort-setter: [1] 0 3
+toSorted: [3,9]
+--- stderr ---

@@ -155,8 +155,7 @@ impl ArrayLikeSource {
 /// 被侧表遮蔽），必须走完整属性协议。逐次访问重读 kind，回调在迭代中把
 /// 数组升为字典（defineProperty 装 getter）时立即可观察。
 pub(super) fn element_slots_trusted(state: &NativeAgentState, handle: u32) -> bool {
-    state.gc.heap().array_kind(handle).ok()
-        != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
+    state.gc.heap().array_kind(handle).ok() != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
 }
 
 /// 真数组的 `HasProperty(O, ToString(index))`（§7.3.11）：可信槽内非洞元素

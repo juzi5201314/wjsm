@@ -107,7 +107,7 @@ module {
       branch %34, bb5, bb4
     bb4:
       %32 = call builtin.array.map(%25, %28)
-      jump bb14
+      jump bb16
     bb5:
       %35 = const c26
       %36 = get_prop %25, %35
@@ -117,41 +117,47 @@ module {
       %43 = call builtin.array.allocate(%36)
       jump bb6
     bb6:
-      %44 = phi [(bb5, %37), (bb12, %33)]
+      %44 = phi [(bb5, %37), (bb14, %33)]
       %45 = call builtin.abstract_compare(%44, %36, %42, %42)
-      branch %45, bb7, bb13
+      branch %45, bb7, bb15
     bb7:
       %46 = call builtin.array.has_element(%25, %44)
-      branch %46, bb8, bb10
+      %47 = is_exception %46
+      branch %47, bb9, bb8
     bb8:
-      %47 = get_elem %25, %44
-      %52 = const c0
-      jump bb17
+      branch %46, bb10, bb12
     bb9:
-      %50 = set_elem %43, %44, %55
-      jump bb12
+      %48 = call builtin.exception_value(%46)
+      throw %48
     bb10:
-      jump bb12
+      %49 = get_elem %25, %44
+      %54 = const c0
+      jump bb19
     bb11:
-      %51 = call builtin.exception_value(%55)
-      throw %51
+      %52 = set_elem %43, %44, %57
+      jump bb14
     bb12:
+      jump bb14
+    bb13:
+      %53 = call builtin.exception_value(%57)
+      throw %53
+    bb14:
       %33 = add %44, %38
       jump bb6
-    bb13:
-      jump bb14
-    bb14:
-      %29 = phi [(bb4, %32), (bb13, %43)]
-      jump bb15
     bb15:
+      jump bb16
+    bb16:
+      %29 = phi [(bb4, %32), (bb15, %43)]
+      jump bb17
+    bb17:
       %30 = is_exception %29
       branch %30, bb2, bb1
-    bb16:
-      %49 = is_exception %55
-      branch %49, bb11, bb9
-    bb17:
-      %54 = const c23
-      %55 = mul %47, %54
-      store var $1.x, %52
-      jump bb16
+    bb18:
+      %51 = is_exception %57
+      branch %51, bb13, bb11
+    bb19:
+      %56 = const c23
+      %57 = mul %49, %56
+      store var $1.x, %54
+      jump bb18
 }
