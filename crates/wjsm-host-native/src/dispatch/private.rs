@@ -23,13 +23,16 @@ fn get(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) ->
     let [receiver, encoded_key] = args else {
         return fail_dispatch(ctx);
     };
+    // private_slots 按 receiver 编码值做键：来自 env/堆属性的值可能带 GC
+    // 色位，查表前必须归一（与 callable_properties 等 identity 表同约定）。
+    let receiver = value::strip_gc_color(*receiver);
     let Some(key) = private_key(*encoded_key) else {
         return fail_dispatch(ctx);
     };
-    match state.private_slots.get(&(*receiver, key)).copied() {
+    match state.private_slots.get(&(receiver, key)).copied() {
         Some(NativePrivateSlot::Data(stored)) => stored,
         Some(NativePrivateSlot::Accessor { getter, .. }) if value::is_callable(getter) => state
-            .invoke_callable(ctx, getter, *receiver, &[])
+            .invoke_callable(ctx, getter, receiver, &[])
             .unwrap_or_else(|| fail_dispatch(ctx)),
         Some(NativePrivateSlot::Accessor { .. }) => value::encode_undefined(),
         None => type_error(
@@ -44,12 +47,14 @@ fn set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) ->
     let [receiver, encoded_key, stored] = args else {
         return fail_dispatch(ctx);
     };
+    // 键值归一：见 get 的说明。
+    let receiver = value::strip_gc_color(*receiver);
     let Some(key) = private_key(*encoded_key) else {
         return fail_dispatch(ctx);
     };
-    match state.private_slots.get(&(*receiver, key)).copied() {
+    match state.private_slots.get(&(receiver, key)).copied() {
         Some(NativePrivateSlot::Accessor { setter, .. }) if value::is_callable(setter) => state
-            .invoke_callable(ctx, setter, *receiver, &[*stored])
+            .invoke_callable(ctx, setter, receiver, &[*stored])
             .unwrap_or_else(|| fail_dispatch(ctx)),
         Some(NativePrivateSlot::Accessor { .. }) => {
             type_error(ctx, state, "Private accessor was defined without a setter")
@@ -57,13 +62,13 @@ fn set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) ->
         Some(NativePrivateSlot::Data(_)) => {
             state
                 .private_slots
-                .insert((*receiver, key), NativePrivateSlot::Data(*stored));
+                .insert((receiver, key), NativePrivateSlot::Data(*stored));
             *stored
         }
-        None if establish_brand(state, *receiver, key) => {
+        None if establish_brand(state, receiver, key) => {
             state
                 .private_slots
-                .insert((*receiver, key), NativePrivateSlot::Data(*stored));
+                .insert((receiver, key), NativePrivateSlot::Data(*stored));
             *stored
         }
         None => type_error(
@@ -83,12 +88,14 @@ fn has(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) ->
     if value::is_exception(*receiver) {
         return *receiver;
     }
+    // 键值归一：见 get 的说明。
+    let receiver = value::strip_gc_color(*receiver);
     // ES §13.10.1：`#x in rval` 的 rval 必须是对象（含函数 / 数组 / Proxy / RegExp
     // 等 exotic 对象），否则 TypeError；错误文案与 V8/Node 对齐，显示名由
     // lowering 传入（字段 `#x`，实例私有方法/访问器为类 brand 名）。
-    if !(value::is_js_object(*receiver) || value::is_regexp(*receiver)) {
+    if !(value::is_js_object(receiver) || value::is_regexp(receiver)) {
         let name = state.string_to_utf8(*display_name).unwrap_or_default();
-        let rendered = runtime::render_value(state, *receiver);
+        let rendered = runtime::render_value(state, receiver);
         return type_error(
             ctx,
             state,
@@ -98,24 +105,26 @@ fn has(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) ->
     let Some(key) = private_key(*encoded_key) else {
         return fail_dispatch(ctx);
     };
-    value::encode_bool(state.private_slots.contains_key(&(*receiver, key)))
+    value::encode_bool(state.private_slots.contains_key(&(receiver, key)))
 }
 
 fn bind_accessor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
     let [receiver, encoded_key, getter, setter] = args else {
         return fail_dispatch(ctx);
     };
+    // 键值归一：见 get 的说明。
+    let receiver = value::strip_gc_color(*receiver);
     let Some(key) = private_key(*encoded_key) else {
         return fail_dispatch(ctx);
     };
     if !(value::is_callable(*getter) || value::is_undefined(*getter))
         || !(value::is_callable(*setter) || value::is_undefined(*setter))
-        || !establish_brand(state, *receiver, key)
+        || !establish_brand(state, receiver, key)
     {
         return fail_dispatch(ctx);
     }
     state.private_slots.insert(
-        (*receiver, key),
+        (receiver, key),
         NativePrivateSlot::Accessor {
             getter: *getter,
             setter: *setter,
