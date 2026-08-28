@@ -414,7 +414,8 @@ impl Lowerer {
         mut block: BasicBlockId,
         kind: VarKind,
     ) -> Result<BasicBlockId, LoweringError> {
-        // 1. 创建迭代器
+        // 1. 创建迭代器。GetIterator 自身的 abrupt 在保护区注册之前分叉：
+        // 迭代器记录尚不存在，无 close 可做。
         let iter_handle = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -425,6 +426,21 @@ impl Lowerer {
             },
         );
         block = self.lower_value_exception_branch(block, iter_handle)?;
+
+        // 迭代器保护区（§8.6.2 / §13.15.5.2 步骤 3）：元素初始化期间的任何
+        // abrupt completion（默认值求值、成员 setter、嵌套 pattern、TDZ 写入
+        // 等抛出）经 emit_throw_value / emit_unwind_for_abrupt 展开时发射
+        // IteratorClose。步骤自身的 abrupt（next/done/value 抛出）与耗尽后的
+        // abrupt 由宿主按迭代器记录的 [[Done]] 状态跳过 return() 调用——
+        // 编译期无法区分运行期 [[Done]]，门禁归宿主所有。
+        self.label_stack.push(LabelContext {
+            label: None,
+            kind: LabelKind::Destructuring,
+            break_target: block,
+            continue_target: None,
+            iterator_to_close: Some(iter_handle),
+            break_reached: false,
+        });
 
         let mut saw_rest = false;
 
@@ -478,7 +494,11 @@ impl Lowerer {
             block = self.resolve_store_block(block);
         }
 
-        // 无 rest 元素时关闭迭代器
+        self.label_stack
+            .pop()
+            .expect("destructuring label context pushed above");
+
+        // 无 rest 元素时关闭迭代器（正常完成，[[Done]] 门禁在宿主侧）
         if !saw_rest {
             block = self.emit_single_iterator_close_normal(block, iter_handle)?;
         }
@@ -627,8 +647,12 @@ impl Lowerer {
         // 异常分叉等会发布 expr_merge_block 等延续），必须先 resolve 到真正的
         // 延续块再跳 merge——这同时消耗掉残留延续，防止其泄漏给调用方的
         // resolve_store_block 而把后续 store 误写进分支块（phi 支配性破坏）。
-        let default_val = self.lower_expr(default_expr, then_block)?;
-        let then_exit = self.resolve_store_block(then_block);
+        // 默认值的 `? GetValue`（IteratorBindingInitialization 等）：表达式可
+        // 抛时立即分叉传播，异常哨兵不得经 Phi 流入绑定值；数组解构场景下
+        // 该分叉同时命中迭代器保护区的 IfAbruptCloseIterator。
+        let mut then_current = then_block;
+        let default_val = self.lower_call_operand_then_continue(default_expr, &mut then_current)?;
+        let then_exit = self.resolve_store_block(then_current);
         self.current_function.set_terminator(
             then_exit,
             Terminator::Jump {

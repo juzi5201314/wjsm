@@ -686,6 +686,12 @@ pub enum Builtin {
     /// STATIC_MEMBER 为容器全局名）；[family, wire_id, receiver] 解析
     /// receiver 上的站点属性成员。
     IntrinsicResolve,
+    /// throw completion 语义的 IteratorClose（ES §7.4.6 步骤 5）：completion
+    /// 为 throw 时原始异常胜出——return 方法查找抛出、非 callable、调用抛出、
+    /// 返回非对象全部吞咽，恒返回 completion；宿主内部 invariant 失败仍以
+    /// 异常哨兵上浮。`IteratorClose` 保留给非 throw 完成（break/return/正常
+    /// 关闭），其 return() 错误按步骤 6/7 传播。args: [iterator, completion]。
+    IteratorCloseThrowCompletion,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -721,7 +727,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::IntrinsicResolve as u16
+        Self::IteratorCloseThrowCompletion as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1246,6 +1252,7 @@ impl Builtin {
             Self::StringRaw => "string.raw",
             Self::IntrinsicPristine => "intrinsic_pristine",
             Self::IntrinsicResolve => "intrinsic_resolve",
+            Self::IteratorCloseThrowCompletion => "iterator.close_throw",
         }
     }
 }
