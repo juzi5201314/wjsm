@@ -1,0 +1,30 @@
+exit_code: 0
+--- stdout ---
+proto: true
+shared: true true
+tail: true false
+kinds: true
+subarray: true
+slice: true
+buffer view: true
+clone: true
+encode: true
+instanceof: true true false
+own: constructor,BYTES_PER_ELEMENT
+has slice: true false true
+identity: true true
+bpe: 1 false false false
+bpe statics: 1 2 8 8
+length: get length 0 undefined false true
+length own: undefined undefined
+byteLength: get byteLength 0 undefined false true
+byteLength own: undefined undefined
+byteOffset: get byteOffset 0 undefined false true
+byteOffset own: undefined undefined
+get: 3 16 2 16 8
+in: true true
+plain: true Method get TypedArray.prototype.byteLength called on incompatible receiver #<Object>
+proto read: true Method get TypedArray.prototype.length called on incompatible receiver [object Object]
+null: Method get TypedArray.prototype.byteLength called on incompatible receiver null
+number: Method get TypedArray.prototype.byteLength called on incompatible receiver 7
+--- stderr ---

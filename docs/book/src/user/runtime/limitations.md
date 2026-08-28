@@ -36,14 +36,18 @@ String.raw`a\nb${1}`                        // "a\\nb1"
 
 TypedArray 与 DataView 的原型方法可取值并经 `call` / `apply` / `bind` 复用，`name` / `length` 元数据、`Reflect.get` 与解构取值一致；各构造器的 `prototype` 对象（`Uint8Array.prototype.slice`、`DataView.prototype.getUint8` 等）同样可用。DataView 的 get/set 家族包含 `getBigInt64` / `getBigUint64` / `setBigInt64` / `setBigUint64`。
 
+TypedArray 实例的原型链按 §23.2 完整挂接：实例 → `Constructor.prototype` → `%TypedArray%.prototype` → `%Object.prototype%`，`instanceof` 与 `Object.getPrototypeOf` 沿链成立；`length` / `byteLength` / `byteOffset` 是 `%TypedArray%.prototype` 上的规范 accessor（getter 名为 `get length` 等，可跨元素类型经 `call` 复用，品牌检查失败按 V8 口径抛 TypeError），`Constructor.prototype` 与构造器自身携带 `BYTES_PER_ELEMENT`。
+
 ```js
 const buf = new Uint8Array([1, 2, 3]);
-const sub = buf.subarray;                    // function
-sub.call(buf, 1).length;                     // 2
-Uint8Array.prototype.slice.call(buf, 0, 1);  // Uint8Array(1) [1]
+Object.getPrototypeOf(buf) === Uint8Array.prototype;   // true
+buf instanceof Uint8Array;                             // true
+const shared = Object.getPrototypeOf(Uint8Array.prototype); // %TypedArray%.prototype
+Object.getOwnPropertyDescriptor(shared, "length").get.name;  // "get length"
+Uint8Array.prototype.slice.call(buf, 0, 1);            // Uint8Array(1) [1]（沿链继承）
 ```
 
-已知差异：实例的原型链未挂接到 `Constructor.prototype`——`Object.getPrototypeOf(new Uint8Array(0)) !== Uint8Array.prototype`；`length` / `byteLength` / `byteOffset` 是实例上的可读值，`Constructor.prototype` 上不暴露对应访问器。
+已知差异：`%TypedArray%` 抽象构造器本身不存在——`Object.getPrototypeOf(Uint8Array)` 不是 `TypedArray` 函数，`%TypedArray%.prototype` 上无自有 `constructor` / `buffer` 访问器与 `@@toStringTag`；`map` / `filter` 返回普通数组而非同类型 TypedArray；DataView 实例的原型链仍未挂接到 `DataView.prototype`；Node 的 `Buffer` 实例不经由 `Uint8Array.prototype` 继承。
 
 ## TDZ 混合判定
 

@@ -1129,8 +1129,14 @@ struct NativeAgentState {
     weak_map_prototype: Option<i64>,
     weak_set_prototype: Option<i64>,
     /// TypedArray 各构造器与 DataView 的 `prototype` 对象，按构造器 builtin
-    /// 懒创建缓存；方法以数据属性安装（`Uint8Array.prototype.slice` 可取值）。
+    /// 懒创建缓存。TypedArray 构造器的 `prototype` 仅自有 `constructor` 与
+    /// `BYTES_PER_ELEMENT`（§23.2.7），方法与访问器继承自
+    /// %TypedArray%.prototype；DataView 的方法仍以数据属性直接安装。
     view_prototypes: HashMap<wjsm_ir::Builtin, i64>,
+    /// %TypedArray%.prototype（§23.2.3）：全部 TypedArray 构造器 `prototype`
+    /// 的共享父原型，方法为自有数据属性，`length` / `byteLength` /
+    /// `byteOffset` 为规范 accessor；懒创建缓存。
+    typed_array_prototype: Option<i64>,
     /// fetch / Streams / AbortController 全局构造器的 `prototype` 对象，按
     /// builtin 懒创建缓存；携带不可枚举 `constructor` 自有属性，实例创建时
     /// 挂接为 [[Prototype]]，使 instanceof 与 Object.getPrototypeOf 成立。
@@ -1335,6 +1341,7 @@ impl NativeAgentState {
             weak_map_prototype: None,
             weak_set_prototype: None,
             view_prototypes: HashMap::new(),
+            typed_array_prototype: None,
             web_prototypes: HashMap::new(),
             console_object: None,
             intl: dispatch::intl::IntlState::default(),
@@ -1611,6 +1618,7 @@ impl NativeAgentState {
         self.weak_map_prototype = None;
         self.weak_set_prototype = None;
         self.view_prototypes.clear();
+        self.typed_array_prototype = None;
         self.web_prototypes.clear();
         self.array_constructor = None;
         self.global_object = None;
@@ -4477,6 +4485,16 @@ impl NativeAgentState {
                 .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
             return Some(prototype);
         }
+        // §23.2.6.1：TypedArray 构造器自有 BYTES_PER_ELEMENT，三特性全 false。
+        if let Some((builtin, false)) = self.native_callable_builtin(callable)
+            && let Some(kind) = dispatch::typedarray::constructor_kind(builtin)
+            && self.text_matches(key.to_value(), "BYTES_PER_ELEMENT")
+        {
+            let stored = value::encode_f64(kind.element_size() as f64);
+            self.callable_properties.insert((callable, key), stored);
+            self.callable_property_flags.insert((callable, key), 0);
+            return Some(stored);
+        }
         if let Some((builtin, false)) = self.native_callable_builtin(callable)
             && Self::is_web_interface_constructor(builtin)
             && self.text_matches(key.to_value(), "prototype")
@@ -4682,9 +4700,11 @@ impl NativeAgentState {
         Some(prototype)
     }
 
-    /// TypedArray 构造器 / DataView 的 `prototype` 对象：懒创建并缓存，安装
-    /// `constructor` 与全部原型方法（数据属性），使 `Uint8Array.prototype.slice`
-    /// / `DataView.prototype.getUint8` 可取值并经 `call` / `apply` 复用。
+    /// TypedArray 构造器 / DataView 的 `prototype` 对象：懒创建并缓存。
+    /// DataView 安装 `constructor` 与全部原型方法（数据属性）；TypedArray
+    /// 构造器按 §23.2.7 仅自有 `constructor` 与 `BYTES_PER_ELEMENT`，
+    /// [[Prototype]] 挂到共享的 %TypedArray%.prototype，方法与 `length` 族
+    /// 访问器沿链继承（`Uint8Array.prototype.slice` 仍可取值复用）。
     fn ensure_view_prototype(
         &mut self,
         constructor: i64,
@@ -4715,10 +4735,81 @@ impl NativeAgentState {
         if builtin == wjsm_ir::Builtin::DataViewConstructor {
             dispatch::buffers::install_data_view_prototype_methods(self, prototype).ok()?;
         } else {
-            dispatch::typedarray::install_typed_array_prototype_methods(self, prototype).ok()?;
+            let parent = self.ensure_typed_array_prototype()?;
+            self.gc
+                .heap()
+                .set_prototype(
+                    value::decode_handle(prototype),
+                    value::decode_handle(parent),
+                )
+                .ok()?;
+            // §23.2.7.1：BYTES_PER_ELEMENT 三特性全 false 的数据属性。
+            let kind = dispatch::typedarray::constructor_kind(builtin)?;
+            let bytes_key = self.intern_property_string("BYTES_PER_ELEMENT".into())?;
+            self.gc
+                .heap()
+                .define_data_property(
+                    value::decode_handle(prototype),
+                    bytes_key,
+                    value::encode_f64(kind.element_size() as f64) as u64,
+                    0,
+                )
+                .ok()?;
         }
         self.view_prototypes.insert(builtin, prototype);
         Some(prototype)
+    }
+
+    /// %TypedArray%.prototype（§23.2.3）：懒创建共享原型对象，[[Prototype]]
+    /// 为 %Object.prototype%（allocate_object 缺省）；安装全部原型方法（数据
+    /// 属性）与 `length` / `byteLength` / `byteOffset` 访问器（getter 命名
+    /// `get length` 等，{ enumerable: false, configurable: true }，无 setter）。
+    fn ensure_typed_array_prototype(&mut self) -> Option<i64> {
+        if let Some(prototype) = self.typed_array_prototype {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let prototype = self.allocate_object(30, false).ok()?;
+        dispatch::typedarray::install_typed_array_prototype_methods(self, prototype).ok()?;
+        for (name, builtin) in [
+            ("length", wjsm_ir::Builtin::TypedArrayProtoLength),
+            ("byteLength", wjsm_ir::Builtin::TypedArrayProtoByteLength),
+            ("byteOffset", wjsm_ir::Builtin::TypedArrayProtoByteOffset),
+        ] {
+            let key = self.intern_property_string(name.into())?;
+            let getter = self.native_callable(NativeCallableKind::Builtin(builtin, true))?;
+            self.gc
+                .heap()
+                .define_accessor_property_with_flags(
+                    value::decode_handle(prototype),
+                    key,
+                    getter as u64,
+                    value::encode_undefined() as u64,
+                    wjsm_ir::constants::FLAG_CONFIGURABLE as u32,
+                )
+                .ok()?;
+        }
+        self.typed_array_prototype = Some(prototype);
+        Some(prototype)
+    }
+
+    /// 把 TypedArray 实例的 [[Prototype]] 挂到对应构造器的 `prototype` 对象，
+    /// 形成 实例 → Ctor.prototype → %TypedArray%.prototype →
+    /// %Object.prototype% 的三层链（§23.2.5.1 OrdinaryCreateFromConstructor）。
+    pub(crate) fn set_typed_array_instance_prototype(
+        &mut self,
+        object: i64,
+        builtin: wjsm_ir::Builtin,
+    ) -> Option<()> {
+        let constructor = self.native_callable(NativeCallableKind::Builtin(builtin, false))?;
+        let prototype = self.ensure_view_prototype(constructor, builtin)?;
+        self.gc
+            .heap()
+            .set_prototype(
+                value::decode_handle(object),
+                value::decode_handle(prototype),
+            )
+            .ok()
     }
 
     /// fetch / Streams / AbortController 构造器的 `prototype` 对象：懒创建并
@@ -4779,13 +4870,15 @@ impl NativeAgentState {
             .map_err(|_| ())
     }
 
-    /// 判定 handle 是否为某个 TypedArray 构造器的 `prototype` 对象
-    /// （@@iterator 合成需要，DataView 除外）。
+    /// 判定 handle 是否为某个 TypedArray 构造器的 `prototype` 对象或共享的
+    /// %TypedArray%.prototype（@@iterator 合成需要，DataView 除外）。
     fn is_typed_array_prototype(&self, handle: u32) -> bool {
-        self.view_prototypes.iter().any(|(builtin, prototype)| {
-            *builtin != wjsm_ir::Builtin::DataViewConstructor
-                && value::decode_handle(*prototype) == handle
-        })
+        self.typed_array_prototype
+            .is_some_and(|prototype| value::decode_handle(prototype) == handle)
+            || self.view_prototypes.iter().any(|(builtin, prototype)| {
+                *builtin != wjsm_ir::Builtin::DataViewConstructor
+                    && value::decode_handle(*prototype) == handle
+            })
     }
 
     fn set_collection_prototype(
