@@ -23,6 +23,10 @@ pub struct DynamicFunctionSource {
     /// 函数体内不存在指向自身的 `anonymous` 绑定（Node 中
     /// `new Function("return typeof anonymous")()` 为 `"undefined"`）。
     pub compile_source: String,
+    /// 规范 sourceText（§20.2.1.1.1 步骤 16）：
+    /// `function anonymous(P\n) {\nbody\n}`，即 [[SourceText]] /
+    /// `Function.prototype.toString` 的返回文本（与 Node 一致）。
+    pub source_text: String,
     /// ExpectedArgumentCount（§15.1.5）：首个带默认值或 rest 形参之前的形参数。
     pub expected_length: u32,
 }
@@ -48,6 +52,7 @@ pub fn prepare_dynamic_function(
     check_strict_early_errors(&function)?;
     Ok(DynamicFunctionSource {
         compile_source: format!("(function({parameters}\n) {{\n{body}\n}});"),
+        source_text: format!("function anonymous({parameters}\n) {{\n{body}\n}}"),
         expected_length: expected_argument_count(&function.params),
     })
 }

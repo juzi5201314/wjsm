@@ -212,8 +212,7 @@ impl Lowerer {
                             None,
                             Self::expected_param_count(&method.function.params),
                         );
-                        let source_text =
-                            self.span_source_text(method.span()).map(str::to_owned);
+                        let source_text = self.span_source_text(method.span()).map(str::to_owned);
                         self.set_function_source_text(function.function_id, source_text);
                         self.apply_method_js_name(
                             block,

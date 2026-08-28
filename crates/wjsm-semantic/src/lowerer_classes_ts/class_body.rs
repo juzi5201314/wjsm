@@ -688,8 +688,7 @@ impl Lowerer {
                         None,
                         Self::expected_param_count(&method.function.params),
                     );
-                    let source_text =
-                        self.method_definition_source_text(method.span, is_static);
+                    let source_text = self.method_definition_source_text(method.span, is_static);
                     self.set_function_source_text(function.function_id, source_text);
                     self.apply_method_js_name(
                         block,

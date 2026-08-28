@@ -120,7 +120,11 @@ impl Lowerer {
 
     /// 回填已入模函数的 [[SourceText]]：方法/访问器等定义点在函数入模后才知道
     /// 准确的 MethodDefinition 文本（含 `static` 剥离），此处覆盖通用路径的值。
-    pub(crate) fn set_function_source_text(&mut self, function_id: FunctionId, text: Option<String>) {
+    pub(crate) fn set_function_source_text(
+        &mut self,
+        function_id: FunctionId,
+        text: Option<String>,
+    ) {
         if let (Some(function), Some(text)) = (self.module.function_mut(function_id), text) {
             function.set_source_text(text);
         }

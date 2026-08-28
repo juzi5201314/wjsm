@@ -53,3 +53,13 @@ try {
 } catch (e) {
   console.log(e instanceof TypeError);
 }
+
+// eval 内定义的函数返回其源文本；动态 Function 返回规范 sourceText
+// `function anonymous(P\n) {\nbody\n}`（§20.2.1.1.1 步骤 16），且函数体内
+// 不存在 `anonymous` 自引用绑定。
+const ev = eval("(function inner(a){ return a })");
+console.log(ev.toString());
+const dyn = new Function("a", "return a");
+console.log(dyn.toString());
+console.log(dyn.name, dyn.length);
+console.log(new Function("return typeof anonymous")());

@@ -131,7 +131,11 @@ pub(super) fn dispatch_function(
 
 /// `Function.prototype.toString`（ES §20.2.3.5）：this 非 callable 抛 TypeError
 /// （步骤 5，文案对齐 V8）；其余按 [[SourceText]] / NativeFunction 形态返回。
-fn function_to_string(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i64) -> i64 {
+fn function_to_string(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    receiver: i64,
+) -> i64 {
     let receiver = value::strip_gc_color(receiver);
     if !state.is_callable_value(receiver) {
         return type_error(

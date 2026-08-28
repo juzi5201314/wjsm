@@ -26,4 +26,11 @@ function () { [native code] }
 function () { [native code] }
 true
 true
+function inner(a){ return a }
+function anonymous(a
+) {
+return a
+}
+anonymous 1
+undefined
 --- stderr ---

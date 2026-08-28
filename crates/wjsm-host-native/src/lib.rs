@@ -4161,7 +4161,9 @@ impl NativeAgentState {
             }
             // 无源文本（如 eval 编译路径）：HostHasSourceTextAvailable=false，
             // 按步骤 4 回退 NativeFunction 形态，名字取 JS 可见 `name`。
-            return Some(native_function_form(self.callable_js_name(callable).as_deref()));
+            return Some(native_function_form(
+                self.callable_js_name(callable).as_deref(),
+            ));
         }
         match self.native_callable_kind(callable) {
             // bound 函数不展示目标名（V8 恒为匿名 NativeFunction 形态）。
@@ -4172,6 +4174,29 @@ impl NativeAgentState {
             // callable Proxy 等非 native-callable 的 callable 值。
             None => Some(native_function_form(None)),
         }
+    }
+
+    /// 覆盖用户函数的 [[SourceText]]：动态 Function（§20.2.1.1.1 步骤 16）的
+    /// sourceText 是 `function anonymous(P\n) {\nbody\n}`，与实际编译脚本
+    /// （匿名函数表达式）不同，构造完成后回写规范文本。
+    pub(crate) fn set_callable_function_source_text(
+        &mut self,
+        callable: i64,
+        text: String,
+    ) -> Option<()> {
+        let callable = value::strip_gc_color(callable);
+        let function = self.callable_function(callable)?;
+        let index = usize::try_from(function.function_index).ok()?;
+        let slot = if function.image_id == self.current_image_id {
+            self.function_source_texts.get_mut(index)?
+        } else {
+            self.programs
+                .get_mut(&function.image_id)?
+                .function_source_texts
+                .get_mut(index)?
+        };
+        *slot = Some(text);
+        Some(())
     }
 
     fn callable_property(&mut self, callable: i64, key: PropertyKey) -> Option<i64> {

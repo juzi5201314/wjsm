@@ -1470,6 +1470,7 @@ fn compile_vm_script(
         true,
         true,
         inherited_strict,
+        Some(std::sync::Arc::from(source)),
     )
     .map_err(|error| VmExecutionError::Compile(anyhow::Error::new(error)))?;
     program
