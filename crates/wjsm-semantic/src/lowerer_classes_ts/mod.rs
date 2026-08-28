@@ -942,11 +942,16 @@ impl Lowerer {
         };
         // 私有 generator 体内 super 尚未接线：构造器 id 在 collect 阶段未知，
         // 且 body/wrapper 双函数的 home 元数据需成对回填，留作后续任务。
+        // 类体代码恒为严格模式（ClassDefinitionEvaluation）：collect 阶段在
+        // 外层（可能 sloppy）上下文运行，显式抬升后再恢复。
+        let saved_strict = self.strict_mode;
+        self.strict_mode = true;
         let lowered = if pm.function.is_async {
             self.lower_async_gen_function(&declaration, MethodSuperBinding::None)
         } else {
             self.lower_gen_function(&declaration)
         };
+        self.strict_mode = saved_strict;
         if let Some(sid) = class_scope_id {
             let _ = self.scopes.set_initialised(sid, class_name, false);
         }
@@ -1008,8 +1013,13 @@ impl Lowerer {
         } else {
             HomeObject::Prototype(Self::PENDING_CTOR_FUNCTION_ID)
         };
+        // 类体代码恒为严格模式（ClassDefinitionEvaluation）：collect 阶段在
+        // 外层（可能 sloppy）上下文运行，显式抬升后再恢复。
+        let saved_strict = self.strict_mode;
+        self.strict_mode = true;
         let lowered =
             self.lower_async_function_parts(&fn_name, &fake_expr, MethodSuperBinding::Static(home));
+        self.strict_mode = saved_strict;
         if let Some(sid) = class_scope_id {
             let _ = self.scopes.set_initialised(sid, class_name, false);
         }

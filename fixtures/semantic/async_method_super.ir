@@ -60,7 +60,7 @@ module {
     c57 = undefined
     c58 = string("m")
     c59 = number(0)
-    c60 = functionref(@7)
+    c60 = undefined
     c61 = functionref(@6)
     c62 = number(7)
     c63 = number(0)
@@ -93,7 +93,7 @@ module {
     c90 = number(0)
     c91 = number(1)
     c92 = number(0)
-    c93 = functionref(@9)
+    c93 = undefined
     c94 = functionref(@8)
     c95 = number(7)
     c96 = number(0)
@@ -120,7 +120,7 @@ module {
     c117 = undefined
     c118 = string("p")
     c119 = number(0)
-    c120 = functionref(@11)
+    c120 = undefined
     c121 = functionref(@10)
     c122 = number(7)
     c123 = number(0)
@@ -147,7 +147,7 @@ module {
     c144 = undefined
     c145 = string("who")
     c146 = number(0)
-    c147 = functionref(@13)
+    c147 = undefined
     c148 = functionref(@12)
     c149 = number(7)
     c150 = number(0)
@@ -176,7 +176,7 @@ module {
     c173 = number(42)
     c174 = string("y")
     c175 = number(0)
-    c176 = functionref(@15)
+    c176 = undefined
     c177 = functionref(@14)
     c178 = number(7)
     c179 = number(0)
@@ -215,7 +215,7 @@ module {
     c212 = number(0)
     c213 = number(1)
     c214 = number(0)
-    c215 = functionref(@18)
+    c215 = undefined
     c216 = functionref(@17)
     c217 = number(8)
     c218 = number(0)
@@ -245,7 +245,7 @@ module {
     c242 = number(1)
     c243 = undefined
     c244 = number(0)
-    c245 = functionref(@20)
+    c245 = undefined
     c246 = functionref(@19)
     c247 = number(7)
     c248 = number(0)
@@ -273,7 +273,7 @@ module {
     c270 = undefined
     c271 = string("s")
     c272 = number(0)
-    c273 = functionref(@22)
+    c273 = undefined
     c274 = functionref(@21)
     c275 = number(7)
     c276 = number(0)
@@ -314,7 +314,7 @@ module {
     c311 = number(2)
     c312 = number(3)
     c313 = number(0)
-    c314 = functionref(@24)
+    c314 = undefined
     c315 = functionref(@23)
     c316 = number(7)
     c317 = undefined
@@ -652,8 +652,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c59
-      %3 = const c60
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $10.arguments, %2
       %4 = new_promise
       %5 = const c61
@@ -781,8 +780,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c92
-      %3 = const c93
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $12.arguments, %2
       %4 = new_promise
       %5 = const c94
@@ -852,8 +850,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c119
-      %3 = const c120
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $14.arguments, %2
       %4 = new_promise
       %5 = const c121
@@ -940,8 +937,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c146
-      %3 = const c147
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $16.arguments, %2
       %4 = new_promise
       %5 = const c148
@@ -1027,8 +1023,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c175
-      %3 = const c176
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $18.arguments, %2
       %4 = new_promise
       %5 = const c177
@@ -1111,7 +1106,7 @@ module {
       store var $19.$shared_env, %16
       %18 = load var $19.$this
       %19 = const c204
-      %20 = set_prop %16, %19, %18
+      %20 = set_prop %16, %19, %18, strict
       %21 = call builtin.create_closure(%15, %16)
       store var $19.f, %21
       %22 = const c205
@@ -1181,8 +1176,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c214
-      %3 = const c215
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $21.arguments, %2
       %4 = new_promise
       %5 = const c216
@@ -1262,7 +1256,7 @@ module {
     bb7:
       %28 = const c242
       %29 = add %24, %28
-      %30 = set_prop %17, %22, %29
+      %30 = set_prop %17, %22, %29, strict
       %31 = is_exception %30
       branch %31, bb10, bb9
     bb8:
@@ -1285,8 +1279,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c244
-      %3 = const c245
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $23.arguments, %2
       %4 = new_promise
       %5 = const c246
@@ -1374,8 +1367,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c272
-      %3 = const c273
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $25.arguments, %2
       %4 = new_promise
       %5 = const c274
@@ -1571,8 +1563,7 @@ module {
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c313
-      %3 = const c314
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $27.arguments, %2
       %4 = const c315
       %5 = const c316

@@ -241,11 +241,9 @@ fn binding_write(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: 
     if !entry.mapped[index] {
         let old = entry.bindings[index];
         entry.bindings[index] = stored;
-        state.gc.record_host_write(
-            value::encode_object_handle(handle),
-            Some(old),
-            Some(stored),
-        );
+        state
+            .gc
+            .record_host_write(value::encode_object_handle(handle), Some(old), Some(stored));
         return stored;
     }
     let Some(key) = state.intern_property_string(RuntimeString::from(index.to_string())) else {

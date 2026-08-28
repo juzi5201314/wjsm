@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+sync 1
+gen 1
+private-gen 1
+async 1
+agen 1
+private-async 1
+private-static-async 1
+--- stderr ---
