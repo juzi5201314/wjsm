@@ -2,9 +2,9 @@
 
 这一章说明 `node:` 前缀模块的组织和实现。
 
-## 24 个内置模块
+## 41 个内置模块
 
-`crates/wjsm-module/src/builtin_modules.rs` 定义 24 个 Node.js 内置模块。specifier 以 `node:` 前缀标识，`lookup` 时 strip 前缀后查表。
+`crates/wjsm-module/src/builtin_modules.rs` 定义 41 个 Node.js 内置模块。specifier 以 `node:` 前缀标识，`lookup` 时 strip 前缀后查表。
 
 内置模块分布在三个位置：
 

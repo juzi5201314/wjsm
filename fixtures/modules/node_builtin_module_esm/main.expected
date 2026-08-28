@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+function function function
+true true true false
+true true false false false
+cjs-dep 42
+a/b true
+true ERR_INVALID_ARG_VALUE
+true ERR_INVALID_ARG_VALUE
+true true
+--- stderr ---

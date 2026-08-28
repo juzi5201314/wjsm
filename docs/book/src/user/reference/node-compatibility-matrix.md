@@ -1,6 +1,6 @@
 # Node.js 兼容矩阵
 
-wjsm 内置 37 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到同一封装（ESM `import` 与 CJS `require` 均可）。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
+wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到同一封装（ESM `import` 与 CJS `require` 均可）。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
 
 | 模块 | 导出项 | 备注 |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ wjsm 内置 37 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 | `fs/promises` | 11 | 同上 |
 | `crypto` | 7 | |
 | `stream` | 8 | |
+| `stream/web` | 6 | re-export 既有 Web Streams：`ReadableStream` / `WritableStream` / `TransformStream` / 两种 QueuingStrategy；BYOB reader、`TextEncoderStream` 等未提供 |
 | `http` | 10 | |
 | `net` | 9 | |
 | `https` | 10 | |
@@ -41,8 +42,11 @@ wjsm 内置 37 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 | `console` | 7 | 默认导出即全局 `console`，含 `Console` 类 |
 | `constants` | 13 | `os.constants` 与 `fs.constants` 摊平（Node 中已弃用） |
 | `diagnostics_channel` | 5 | `channel`/`subscribe`/`unsubscribe`/`hasSubscribers`/`Channel` |
+| `module` | 7 | `createRequire`（与 CJS 内建 `require` 同一宿主实现）/`builtinModules`（来自注册表）/`isBuiltin`/legacy `Module` 构造器 |
+| `tty` | 4 | `isatty` 真实 fd 探测；`ReadStream`/`WriteStream` 仅形状（stdio 不挂接原始终端流） |
+| `v8` | 10 | `getHeapStatistics` 数据与 `process.memoryUsage` 同源（真实 GC 计量，未计量维度报 0）；`serialize` 等抛「not implemented」 |
 
-未列出的模块（如 `readline`、`repl`、`v8`、`module`、`tty`、`dns`、`http2`、`stream/web`）没有内置封装，导入 `node:` 前缀形式会报 `Unknown built-in module`。
+未列出的模块（如 `readline`、`repl`、`dns`、`http2`）没有内置封装，导入 `node:` 前缀形式会报 `Unknown built-in module`。其中 `readline` 属于明确排除：宿主 `process.stdin` 目前只有 `on`/`resume` 空实现，没有真实的按行读取能力，提供 `readline` 封装只能是假实现；待宿主 stdin 具备真实读取能力后再补。`dns`、`http2` 涉及真实网络协议栈，同样不在当前范围。
 
 > 命名导入 `timers` 系函数时请使用别名（如 `import { setTimeout as delay } from 'node:timers/promises'`）：不加别名的 `setTimeout(...)` 裸调用会被解析为全局 timer intrinsic（回调在前的签名），而不是导入的绑定。通过默认导出或解构 `require` 调用（`tp.setTimeout(...)`）不受影响。
 
