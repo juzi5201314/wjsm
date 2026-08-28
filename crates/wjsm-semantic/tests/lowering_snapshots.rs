@@ -889,6 +889,55 @@ fn async_method_super_fixture_matches_ir_snapshot() {
     assert_snapshot("async_method_super");
 }
 
+// ── with 语句 ───────────────────────────────────────────────────────────
+
+#[test]
+fn with_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("with_basic");
+}
+
+#[test]
+fn with_eval_fixture_matches_ir_snapshot() {
+    assert_snapshot("with_eval");
+}
+
+#[test]
+fn with_in_strict_code_reports_diagnostic() {
+    // §14.11.1 early error：模块级指令、函数级指令、类体均为严格代码。
+    let rejected = [
+        "\"use strict\"; with ({}) {}",
+        "function f() { \"use strict\"; with ({}) {} }",
+        "class C { m() { with ({}) {} } }",
+        "class C { static { with ({}) {} } }",
+        "const g = () => { \"use strict\"; with ({}) {} };",
+    ];
+    for source in rejected {
+        let error = lower_module(parse_module(source).expect("parse should succeed"), false)
+            .expect_err("strict code containing with should be rejected");
+        match error {
+            LoweringError::Diagnostic(diagnostic) => {
+                assert!(
+                    diagnostic
+                        .message
+                        .contains("Strict mode code may not include a with statement"),
+                    "source {source:?} produced unexpected diagnostic: {}",
+                    diagnostic.message
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn with_in_sloppy_function_inside_strict_free_module_lowers() {
+    // 非严格代码中的 with 正常降级为对象环境记录分派。
+    let text = dump("const o = { x: 1 }; with (o) { console.log(x); }\n");
+    assert!(
+        text.contains("with.to_object") && text.contains("with.has_binding"),
+        "with statement should lower to object environment dispatch:\n{text}"
+    );
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

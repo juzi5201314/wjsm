@@ -1,0 +1,20 @@
+exit_code: 0
+--- stdout ---
+a
+done
+42
+1 2 3
+boom
+6 5
+5
+true false
+1 2
+x
+y
+k
+y k
+10
+42
+42
+fn-ok
+--- stderr ---

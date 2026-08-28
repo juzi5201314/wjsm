@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+1
+--- stderr ---
+Runtime error: ReferenceError: notDefinedAnywhere is not defined
