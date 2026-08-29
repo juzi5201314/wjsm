@@ -1,0 +1,308 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = string("L")
+    c21 = number(0)
+    c22 = undefined
+    c23 = string("$0.label")
+    c24 = number(3)
+    c25 = bool(false)
+    c26 = bool(false)
+    c27 = string("$2.k")
+    c28 = string("push")
+    c29 = number(1)
+    c30 = number(0)
+    c31 = number(1)
+    c32 = number(0)
+    c33 = number(1)
+    c34 = number(0)
+    c35 = undefined
+    c36 = string("$0.label")
+    c37 = string("$2.k")
+    c38 = functionref(@0)
+    c39 = number(1)
+    c40 = undefined
+    c41 = string("$0.label")
+    c42 = string("M")
+    c43 = number(0)
+    c44 = number(2)
+    c45 = bool(true)
+
+  fn @arrow_0 [js_name ""] [js_length 0] [captures: $0.label, $2.k] [params: $3.$env, $3.$this] [entry=bb0]:
+    bb0:
+      %0 = const c29
+      %1 = const c30
+      %2 = call builtin.intrinsic_pristine(%0, %1)
+      branch %2, bb1, bb2
+    bb1:
+      %13 = const c35
+      jump bb8
+    bb2:
+      %3 = const c31
+      %4 = const c32
+      %5 = call builtin.intrinsic_resolve(%3, %4)
+      %6 = is_exception %5
+      branch %6, bb4, bb3
+    bb3:
+      %8 = const c33
+      %9 = const c34
+      %10 = call builtin.intrinsic_resolve(%8, %9, %5)
+      %11 = is_exception %10
+      branch %11, bb6, bb5
+    bb4:
+      %7 = call builtin.exception_value(%5)
+      throw %7
+    bb5:
+      jump bb8
+    bb6:
+      %12 = call builtin.exception_value(%10)
+      throw %12
+    bb7:
+      %24 = phi [(bb9, %22), (bb10, %23)]
+      return %24
+    bb8:
+      %14 = phi [(bb1, %13), (bb5, %10)]
+      %15 = phi [(bb1, %13), (bb5, %5)]
+      %16 = load var $env
+      %17 = const c36
+      %18 = get_prop %16, %17
+      %19 = load var $env
+      %20 = const c37
+      %21 = get_prop %19, %20
+      branch %2, bb9, bb10
+    bb9:
+      %22 = call builtin.console.log(%18, %21)
+      jump bb7
+    bb10:
+      %23 = call %14, this=%15, args=[%18, %21], callsite="console.log"
+      jump bb7
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = new_array(capacity=4)
+      store var $0.fns, %21
+      %22 = const c20
+      store var $0.label, %22
+      %23 = const c21
+      store var $1.i, %23
+      %24 = const c22
+      store var $0.$shared_env, %24
+      %25 = new_object(capacity=1)
+      %26 = load var $env
+      set_proto %25, %26
+      store var $0.$shared_env, %25
+      %27 = load var $0.label
+      %28 = const c23
+      %29 = set_prop %25, %28, %27
+      %30 = load var $0.$shared_env
+      %31 = new_object(capacity=0)
+      set_proto %31, %30
+      store var $1.$iteration_env.0, %31
+      jump bb38
+    bb1:
+      %32 = load var $1.i
+      %33 = const c24
+      %34 = lt %32, %33
+      jump bb6
+    bb2:
+      %41 = load var $1.i
+      store var $2.k, %41
+      %42 = load var $1.$iteration_env.0
+      %43 = const c27
+      %44 = set_prop %42, %43, %41
+      %46 = const c28
+      %47 = get_prop %45, %46
+      %48 = is_exception %47
+      branch %48, bb11, bb10
+    bb3:
+      %58 = load var $0.$shared_env
+      %59 = new_object(capacity=0)
+      set_proto %59, %58
+      store var $1.$iteration_env.0, %59
+      jump bb4
+    bb4:
+      %60 = load var $1.i
+      %61 = pos %60
+      jump bb14
+    bb5:
+      %66 = load var $0.fns
+      %67 = call builtin.iterator.from(%66)
+      %68 = is_exception %67
+      branch %68, bb17, bb16
+    bb6:
+      jump bb8
+    bb7:
+      unreachable
+    bb8:
+      branch %34, bb2, bb5
+    bb9:
+      unreachable
+    bb10:
+      %50 = const c38
+      %52 = load var $1.$iteration_env.0
+      %53 = call builtin.create_closure(%50, %52)
+      %54 = call %47, this=%45, args=[%53], callsite="fns.push"
+      %55 = is_exception %54
+      branch %55, bb13, bb12
+    bb11:
+      %49 = call builtin.exception_value(%47)
+      throw %49
+    bb12:
+      jump bb3
+    bb13:
+      %56 = call builtin.exception_value(%54)
+      throw %56
+    bb14:
+      %64 = const c39
+      %65 = add %61, %64
+      store var $1.i, %65
+      jump bb1
+    bb15:
+      unreachable
+    bb16:
+      jump bb18
+    bb17:
+      %69 = call builtin.exception_value(%67)
+      throw %69
+    bb18:
+      %70 = call builtin.iterator.done(%67)
+      %71 = is_exception %70
+      branch %71, bb23, bb22
+    bb19:
+      %74 = call builtin.iterator.value(%67)
+      store var $4.f, %74
+      %75 = const c40
+      %76 = load var $4.f
+      %77 = call %76, this=%75, callsite="f"
+      %78 = is_exception %77
+      branch %78, bb25, bb24
+    bb20:
+      call builtin.iterator.next(%67)
+      jump bb18
+    bb21:
+      %83 = load var $0.$shared_env
+      %84 = const c41
+      %85 = const c42
+      %86 = set_prop %83, %84, %85
+      %87 = is_exception %86
+      branch %87, bb29, bb28
+    bb22:
+      %73 = not %70
+      branch %73, bb19, bb21
+    bb23:
+      %72 = call builtin.exception_value(%70)
+      throw %72
+    bb24:
+      jump bb20
+    bb25:
+      %79 = call builtin.exception_value(%77)
+      %80 = call builtin.iterator.close_throw(%67, %79)
+      %81 = is_exception %80
+      branch %81, bb27, bb26
+    bb26:
+      throw %79
+    bb27:
+      %82 = call builtin.exception_value(%80)
+      throw %82
+    bb28:
+      %89 = load var $0.fns
+      %90 = const c43
+      %91 = get_elem %89, %90
+      %92 = is_exception %91
+      branch %92, bb31, bb30
+    bb29:
+      %88 = call builtin.exception_value(%86)
+      throw %88
+    bb30:
+      %94 = call %91, this=%89, callsite="fns[0]"
+      %95 = is_exception %94
+      branch %95, bb33, bb32
+    bb31:
+      %93 = call builtin.exception_value(%91)
+      throw %93
+    bb32:
+      %97 = load var $0.fns
+      %98 = const c44
+      %99 = get_elem %97, %98
+      %100 = is_exception %99
+      branch %100, bb35, bb34
+    bb33:
+      %96 = call builtin.exception_value(%94)
+      throw %96
+    bb34:
+      %102 = call %99, this=%97, callsite="fns[2]"
+      %103 = is_exception %102
+      branch %103, bb37, bb36
+    bb35:
+      %101 = call builtin.exception_value(%99)
+      throw %101
+    bb36:
+      return
+    bb37:
+      %104 = call builtin.exception_value(%102)
+      throw %104
+    bb38:
+      %45 = load var $0.fns
+      jump bb1
+}
