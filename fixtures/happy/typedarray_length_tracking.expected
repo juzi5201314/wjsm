@@ -1,0 +1,35 @@
+exit_code: 0
+--- stdout ---
+4 4
+8 8
+5 0 undefined false
+2 undefined
+8 0
+2 4 4
+4 8
+0 0 0
+0 0 undefined
+TypeError Cannot perform %TypedArray%.prototype.join on a detached ArrayBuffer
+TypeError Cannot perform %TypedArray%.prototype.at on a detached ArrayBuffer
+TypeError Cannot perform %TypedArray%.prototype.fill on a detached ArrayBuffer
+TypeError Cannot perform %TypedArray%.prototype.set on a detached ArrayBuffer
+TypeError Cannot perform %TypedArray%.prototype.join on a detached ArrayBuffer
+8 0
+1,2,0,0 0|1|2|3 1|2|0|0
+[[0,1],[1,2],[2,0],[3,0]]
+1,2,0,0
+7 1 2
+4
+8
+3
+RangeError Offset is outside the bounds of the DataView
+TypeError Cannot perform get DataView.prototype.byteLength on a detached ArrayBuffer
+TypeError Cannot perform get DataView.prototype.byteOffset on a detached ArrayBuffer
+TypeError Cannot perform DataView.prototype.getUint8 on a detached ArrayBuffer
+4 0
+8
+4 4
+8 8
+9
+12 true
+--- stderr ---

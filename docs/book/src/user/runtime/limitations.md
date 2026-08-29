@@ -56,7 +56,9 @@ Object.prototype.toString.call(view);                  // "[object DataView]"
 
 ## ArrayBuffer / SharedArrayBuffer / Atomics
 
-`ArrayBuffer.prototype` 与 `SharedArrayBuffer.prototype` 是真实固有原型对象：own `constructor`、`byteLength`（SharedArrayBuffer 另有 `growable` / `maxByteLength`）规范 accessor getter、`slice` / `grow` 方法与 `@@toStringTag` 品牌齐备，实例创建即接线 `[[Prototype]]`，`instanceof`、`Object.getPrototypeOf` 与 `Object.prototype.toString` 品牌一致；构造器的 `prototype` 自有属性三特性全 false。accessor / 方法在品牌检查失败时按 V8 口径抛 `TypeError`（`Method get ArrayBuffer.prototype.byteLength called on incompatible receiver #<Object>` 等），构造器与 `grow` 的非法长度按 V8 文案抛 `RangeError`。
+`ArrayBuffer.prototype` 与 `SharedArrayBuffer.prototype` 是真实固有原型对象：own `constructor`、`byteLength` / `maxByteLength` / `resizable` / `detached`（SharedArrayBuffer 为 `byteLength` / `growable` / `maxByteLength`）规范 accessor getter、`slice` / `resize` / `transfer` / `transferToFixedLength`（SharedArrayBuffer 为 `slice` / `grow`）方法与 `@@toStringTag` 品牌齐备，实例创建即接线 `[[Prototype]]`，`instanceof`、`Object.getPrototypeOf` 与 `Object.prototype.toString` 品牌一致；构造器的 `prototype` 自有属性三特性全 false。accessor / 方法在品牌检查失败时按 V8 口径抛 `TypeError`（`Method get ArrayBuffer.prototype.byteLength called on incompatible receiver #<Object>` 等），构造器与 `resize` / `grow` 的非法长度按 V8 文案抛 `RangeError`。
+
+`ArrayBuffer` resizable / transfer 家族（ES2024 §25.1）完整可用：`new ArrayBuffer(n, { maxByteLength })` 创建 resizable buffer，`resize` 原地改长（grow 补零 / shrink 截断），`transfer` / `transferToFixedLength` 按 ArrayBufferCopyAndDetach 转移字节并 detach 源 buffer（前者保留 resizability，后者收敛为固定长度）。detach 后 `byteLength` 报 0、`detached` 报 true、`maxByteLength` 报 0，`resize` / `slice` / `transfer` 按 V8 文案抛 `TypeError`，`structuredClone` 抛 `DataCloneError`。TypedArray / DataView 视图完整实现 length-tracking 语义：省略 length 构造的视图随底层 resizable AB / growable SAB 改长而重算 `length` / `byteLength`，固定长度视图在 shrink 越界后 `length` / `byteLength` / `byteOffset` 报 0、元素读 `undefined`、写静默丢弃、规范方法按 V8 文案抛 `TypeError`（再 grow 回界即恢复）；`structuredClone` 保留 `maxByteLength` 与 length-tracking 标志。
 
 `SharedArrayBuffer` 构造器与 `Atomics` 命名空间对象是全局对象上真实的自有数据属性（{writable, enumerable: false, configurable}，与 Node 一致）：own descriptor 可见、赋值 / 删除 / `defineProperty` 全按普通属性语义生效，裸标识符读取按全局环境记录语义解析——删除后读取抛 `ReferenceError`，`typeof` 容忍返回 `"undefined"`。`Atomics` 的静态方法是命名空间对象上可写可配置不可枚举的自有数据属性，覆盖后调用点立即改走新值：
 
@@ -69,7 +71,7 @@ delete globalThis.SharedArrayBuffer;
 typeof SharedArrayBuffer;                                   // "undefined"
 ```
 
-已知差异：`Atomics.pause`（ES2025 §25.4.11）在 wjsm 中存在而 Node v22 尚未提供；`ArrayBuffer` 侧 resizable 家族（`resize` / `transfer` / `maxByteLength`）、`ArrayBuffer.isView` 与构造器上的 `@@species` 访问器未实现，不占位。
+已知差异：`Atomics.pause`（ES2025 §25.4.11）在 wjsm 中存在而 Node v22 尚未提供；`ArrayBuffer.isView` 与构造器上的 `@@species` 访问器未实现，不占位。
 
 ## Node Buffer 原型链
 

@@ -12,6 +12,12 @@ use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKi
 #[derive(Clone)]
 pub(crate) struct NativeArrayBuffer {
     pub(crate) bytes: Rc<RefCell<Vec<u8>>>,
+    /// resizable buffer 的 [[ArrayBufferMaxByteLength]]（§25.1.5.1 options.maxByteLength）；
+    /// None 表示固定长度 buffer。
+    pub(crate) max_byte_length: Option<usize>,
+    /// IsDetachedBuffer（§25.1.3.4）：transfer / structuredClone 转移后置位，
+    /// bytes 同时清空（既有视图经共享 Rc 观察到零长度）。
+    pub(crate) detached: bool,
 }
 
 #[derive(Clone)]
@@ -20,6 +26,9 @@ pub(crate) struct NativeDataView {
     pub(crate) shared: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
     pub(crate) offset: usize,
     pub(crate) length: usize,
+    /// [[ByteLength]] 为 auto（§25.3.2.1 步骤 8.b）：byteLength 实参缺省且
+    /// buffer 可变长（resizable AB / growable SAB）时随底层长度重算。
+    pub(crate) length_tracking: bool,
 }
 
 pub(super) fn dispatch_buffer(
@@ -32,6 +41,14 @@ pub(super) fn dispatch_buffer(
         Builtin::ArrayBufferConstructor => array_buffer_constructor(ctx, state, args),
         Builtin::ArrayBufferProtoByteLength => array_buffer_byte_length(ctx, state, args),
         Builtin::ArrayBufferProtoSlice => array_buffer_slice(ctx, state, args),
+        Builtin::ArrayBufferProtoResize
+        | Builtin::ArrayBufferProtoTransfer
+        | Builtin::ArrayBufferProtoTransferToFixedLength
+        | Builtin::ArrayBufferProtoResizable
+        | Builtin::ArrayBufferProtoMaxByteLength
+        | Builtin::ArrayBufferProtoDetached => {
+            super::buffer_resize::dispatch(ctx, state, builtin, args)
+        }
         Builtin::DataViewConstructor => data_view_constructor(ctx, state, args),
         Builtin::DataViewProtoGetFloat64 => {
             data_view_get(ctx, state, builtin, args, ViewType::Float64)
@@ -112,8 +129,49 @@ pub(super) fn to_index(state: &NativeAgentState, encoded: Option<i64>) -> Result
     truncated.to_usize().ok_or(truncated)
 }
 
+/// GetViewByteLength（§25.3.1.1）：length-tracking 视图随底层 buffer 当前
+/// 长度重算；底层 detach 或视图越界（resizable buffer shrink 后，
+/// IsViewOutOfBounds §25.3.1.2）返回 None。
+pub(crate) fn data_view_current_length(
+    state: &NativeAgentState,
+    view: &NativeDataView,
+) -> Option<usize> {
+    let buffer_length = if let Some(shared) = &view.shared {
+        shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    } else {
+        let buffer = state.array_buffers.get(&view.buffer)?;
+        if buffer.detached {
+            return None;
+        }
+        buffer.bytes.borrow().len()
+    };
+    if view.length_tracking {
+        return buffer_length.checked_sub(view.offset);
+    }
+    (view.offset.checked_add(view.length)? <= buffer_length).then_some(view.length)
+}
+
+/// ValidateViewLength：detach / 越界按 V8 文案抛 TypeError（IsViewOutOfBounds
+/// 与 detach 共用 "detached ArrayBuffer" 措辞），成功返回当前 byteLength。
+fn require_data_view_length(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    view: &NativeDataView,
+    method: &str,
+) -> Result<usize, i64> {
+    data_view_current_length(state, view).ok_or_else(|| {
+        let message = format!("Cannot perform {method} on a detached ArrayBuffer");
+        type_error(ctx, state, &message)
+    })
+}
+
 /// `get DataView.prototype.buffer` / `byteLength` / `byteOffset`
-/// （§25.3.4.1–3）：receiver 必须携带 [[DataView]] 品牌（side table 有条目）。
+/// （§25.3.4.1–3）：receiver 必须携带 [[DataView]] 品牌（side table 有条目）；
+/// byteLength / byteOffset 对 detach / 越界视图抛 TypeError（§25.3.4.2–3
+/// 步骤 4），buffer 始终可读。
 fn data_view_accessor(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -123,13 +181,21 @@ fn data_view_accessor(
     let Some(view) = args
         .first()
         .and_then(|object| state.data_views.get(&value::decode_handle(*object)))
+        .cloned()
     else {
         let method = format!("get {}", builtin.as_str());
         return incompatible_receiver(ctx, state, &method, args);
     };
+    if builtin == Builtin::DataViewProtoBuffer {
+        return value::encode_object_handle(view.buffer);
+    }
+    let method = format!("get {}", builtin.as_str());
+    let length = match require_data_view_length(ctx, state, &view, &method) {
+        Ok(length) => length,
+        Err(exception) => return exception,
+    };
     match builtin {
-        Builtin::DataViewProtoBuffer => value::encode_object_handle(view.buffer),
-        Builtin::DataViewProtoByteLength => value::encode_f64(view.length as f64),
+        Builtin::DataViewProtoByteLength => value::encode_f64(length as f64),
         Builtin::DataViewProtoByteOffset => value::encode_f64(view.offset as f64),
         _ => fail_dispatch(ctx),
     }
@@ -193,6 +259,16 @@ pub(crate) fn from_shared_bytes(
     state: &mut NativeAgentState,
     bytes: Rc<RefCell<Vec<u8>>>,
 ) -> Option<i64> {
+    from_shared_bytes_with_max(state, bytes, None)
+}
+
+/// 同 [`from_shared_bytes`]，另携带 [[ArrayBufferMaxByteLength]]（resizable
+/// buffer 的构造 / transfer / structuredClone 复原路径）。
+pub(crate) fn from_shared_bytes_with_max(
+    state: &mut NativeAgentState,
+    bytes: Rc<RefCell<Vec<u8>>>,
+    max_byte_length: Option<usize>,
+) -> Option<i64> {
     let prototype = state.ensure_array_buffer_prototype()?;
     let object = state.allocate_object(1, false).ok()?;
     state
@@ -203,9 +279,14 @@ pub(crate) fn from_shared_bytes(
             value::decode_handle(prototype),
         )
         .ok()?;
-    state
-        .array_buffers
-        .insert(value::decode_handle(object), NativeArrayBuffer { bytes });
+    state.array_buffers.insert(
+        value::decode_handle(object),
+        NativeArrayBuffer {
+            bytes,
+            max_byte_length,
+            detached: false,
+        },
+    );
     Some(object)
 }
 
@@ -222,7 +303,26 @@ fn array_buffer_constructor(
     let Ok(length) = to_index(state, args.first().copied()) else {
         return range_error(ctx, state, "Invalid array buffer length");
     };
-    allocate_array_buffer(state, length).unwrap_or_else(|| fail_dispatch(ctx))
+    // §25.1.4.1 步骤 3 GetArrayBufferMaxByteLengthOption：options 非对象或
+    // maxByteLength 为 undefined 时保持固定长度；否则 ToIndex 且必须 ≥ length
+    //（§25.1.3.1 AllocateArrayBuffer 步骤 3，V8 文案 RangeError）。
+    let max_option = args.get(1).and_then(|options| {
+        if value::is_undefined(*options) {
+            None
+        } else {
+            super::modules::named_property(state, *options, "maxByteLength")
+        }
+    });
+    let max_byte_length = match max_option {
+        None => None,
+        Some(encoded) if value::is_undefined(encoded) => None,
+        Some(encoded) => match to_index(state, Some(encoded)) {
+            Ok(max) if length <= max => Some(max),
+            _ => return range_error(ctx, state, "Invalid array buffer max length"),
+        },
+    };
+    from_shared_bytes_with_max(state, Rc::new(RefCell::new(vec![0; length])), max_byte_length)
+        .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
 fn array_buffer_byte_length(
@@ -230,6 +330,7 @@ fn array_buffer_byte_length(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
+    // §25.1.6.2：detached buffer 返回 +0（detach 时 bytes 已清空，len 即 0）。
     let Some(length) = args
         .first()
         .and_then(|object| state.array_buffers.get(&value::decode_handle(*object)))
@@ -252,6 +353,14 @@ fn array_buffer_slice(
     else {
         return incompatible_receiver(ctx, state, "ArrayBuffer.prototype.slice", args);
     };
+    // §25.1.6.16 步骤 4：IsDetachedBuffer 抛 TypeError（V8 文案）。
+    if buffer.detached {
+        return type_error(
+            ctx,
+            state,
+            "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
+        );
+    }
     let length = buffer.bytes.borrow().len();
     let start = relative_index(state, args.get(1).copied(), length);
     let end = args.get(2).map_or(length, |encoded| {
@@ -276,10 +385,13 @@ fn array_buffer_slice(
     {
         return fail_dispatch(ctx);
     }
+    // §25.1.6.16：slice 结果是固定长度 buffer（resizable 源亦然）。
     state.array_buffers.insert(
         value::decode_handle(object),
         NativeArrayBuffer {
             bytes: Rc::new(RefCell::new(bytes)),
+            max_byte_length: None,
+            detached: false,
         },
     );
     object
@@ -296,9 +408,30 @@ fn data_view_constructor(
         .shared_array_buffers
         .get(&buffer_handle)
         .map(|sab| sab.backing.bytes.clone());
+    // buffer 可变长（resizable AB / growable SAB）且 byteLength 缺省时视图为
+    // length-tracking（§25.3.2.1 步骤 8.b [[ByteLength]] = auto）。
+    let buffer_resizable = if shared.is_some() {
+        state
+            .shared_array_buffers
+            .get(&buffer_handle)
+            .is_some_and(super::sab::NativeSharedArrayBuffer::growable)
+    } else {
+        state
+            .array_buffers
+            .get(&buffer_handle)
+            .is_some_and(|array_buffer| array_buffer.max_byte_length.is_some())
+    };
     let total_length = if let Some(shared) = &shared {
         shared.lock().map(|bytes| bytes.len()).unwrap_or(0)
     } else if let Some(array_buffer) = state.array_buffers.get(&buffer_handle) {
+        // §25.3.2.1 步骤 6：IsDetachedBuffer 抛 TypeError（V8 文案）。
+        if array_buffer.detached {
+            return type_error(
+                ctx,
+                state,
+                "Cannot perform DataView constructor on a detached ArrayBuffer",
+            );
+        }
         array_buffer.bytes.borrow().len()
     } else {
         // §25.3.2.1 步骤 2 RequireInternalSlot(buffer) 失败（V8 文案）。
@@ -323,7 +456,10 @@ fn data_view_constructor(
             return range_error(ctx, state, &message);
         }
     };
-    // §25.3.2.1 步骤 8–9：byteLength 缺省取剩余长度，越界 RangeError。
+    // §25.3.2.1 步骤 8–9：byteLength 缺省取剩余长度（可变长 buffer 转为
+    // length-tracking），越界 RangeError。
+    let length_tracking =
+        buffer_resizable && args.get(2).is_none_or(|encoded| value::is_undefined(*encoded));
     let length = match args.get(2) {
         None => total_length - offset,
         Some(encoded) if value::is_undefined(*encoded) => total_length - offset,
@@ -369,6 +505,7 @@ fn data_view_constructor(
             shared,
             offset,
             length,
+            length_tracking,
         },
     );
     object
@@ -416,11 +553,15 @@ fn data_view_get(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
+        Ok(length) => length,
+        Err(exception) => return exception,
+    };
     let Ok(index) = to_index(state, args.get(1).copied()) else {
         return data_view_out_of_bounds(ctx, state);
     };
     let start = view.offset.saturating_add(index);
-    if index.saturating_add(kind.size()) > view.length {
+    if index.saturating_add(kind.size()) > view_length {
         return data_view_out_of_bounds(ctx, state);
     }
     let little_endian = args
@@ -461,10 +602,14 @@ fn data_view_set(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
+        Ok(length) => length,
+        Err(exception) => return exception,
+    };
     let Ok(index) = to_index(state, args.get(1).copied()) else {
         return data_view_out_of_bounds(ctx, state);
     };
-    if index.saturating_add(kind.size()) > view.length {
+    if index.saturating_add(kind.size()) > view_length {
         return data_view_out_of_bounds(ctx, state);
     }
     let number = args
@@ -516,10 +661,14 @@ fn data_view_get_bigint(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
+        Ok(length) => length,
+        Err(exception) => return exception,
+    };
     let Ok(index) = to_index(state, args.get(1).copied()) else {
         return data_view_out_of_bounds(ctx, state);
     };
-    if index.saturating_add(8) > view.length {
+    if index.saturating_add(8) > view_length {
         return data_view_out_of_bounds(ctx, state);
     }
     let little_endian = args
@@ -568,10 +717,14 @@ fn data_view_set_bigint(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
+        Ok(length) => length,
+        Err(exception) => return exception,
+    };
     let Ok(index) = to_index(state, args.get(1).copied()) else {
         return data_view_out_of_bounds(ctx, state);
     };
-    if index.saturating_add(8) > view.length {
+    if index.saturating_add(8) > view_length {
         return data_view_out_of_bounds(ctx, state);
     }
     let stored = args.get(2).copied().unwrap_or_else(value::encode_undefined);
@@ -673,12 +826,26 @@ pub(crate) fn array_buffer_bytes(state: &NativeAgentState, encoded: i64) -> Opti
         .map(|buffer| buffer.bytes.borrow().clone())
 }
 
+/// structuredClone 序列化元数据：（[[ArrayBufferMaxByteLength]], detached）。
+pub(crate) fn array_buffer_clone_meta(
+    state: &NativeAgentState,
+    encoded: i64,
+) -> Option<(Option<usize>, bool)> {
+    state
+        .array_buffers
+        .get(&value::decode_handle(encoded))
+        .map(|buffer| (buffer.max_byte_length, buffer.detached))
+}
+
 pub(crate) fn from_bytes(state: &mut NativeAgentState, bytes: Vec<u8>) -> Option<i64> {
     from_shared_bytes(state, Rc::new(RefCell::new(bytes)))
 }
 
+/// DetachArrayBuffer（§25.1.3.5）：置位 detached 并清空 bytes，既有视图
+/// 经共享 Rc 立即观察到零长度（元素读 undefined / 方法抛 TypeError）。
 pub(crate) fn detach(state: &mut NativeAgentState, handle: u32) {
-    if let Some(buffer) = state.array_buffers.get(&handle) {
+    if let Some(buffer) = state.array_buffers.get_mut(&handle) {
+        buffer.detached = true;
         buffer.bytes.borrow_mut().clear();
     }
 }
@@ -686,7 +853,7 @@ pub(crate) fn detach(state: &mut NativeAgentState, handle: u32) {
 pub(crate) fn data_view_parts(
     state: &NativeAgentState,
     encoded: i64,
-) -> Option<(ViewBacking, usize, usize)> {
+) -> Option<(ViewBacking, usize, usize, bool)> {
     let handle = value::decode_handle(encoded);
     let view = state.data_views.get(&handle)?;
     let backing = if state.shared_array_buffers.contains_key(&view.buffer) {
@@ -694,7 +861,7 @@ pub(crate) fn data_view_parts(
     } else {
         ViewBacking::ArrayBuffer(value::encode_object_handle(view.buffer))
     };
-    Some((backing, view.offset, view.length))
+    Some((backing, view.offset, view.length, view.length_tracking))
 }
 
 pub(crate) fn from_view(
@@ -702,6 +869,7 @@ pub(crate) fn from_view(
     backing: i64,
     offset: usize,
     length: usize,
+    length_tracking: bool,
 ) -> Option<i64> {
     let buffer_handle = value::decode_handle(backing);
     let shared = if state.array_buffers.get(&buffer_handle).is_some_and(|buffer| {
@@ -735,6 +903,7 @@ pub(crate) fn from_view(
             shared,
             offset,
             length,
+            length_tracking,
         },
     );
     Some(object)

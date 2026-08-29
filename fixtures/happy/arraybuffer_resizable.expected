@@ -1,0 +1,29 @@
+exit_code: 0
+--- stdout ---
+constructor,byteLength,slice,maxByteLength,resizable,resize,transfer,transferToFixedLength,detached
+resize 1
+transfer 0
+transferToFixedLength 0
+resizable function undefined false true get resizable 0
+maxByteLength function undefined false true get maxByteLength 0
+detached function undefined false true get detached 0
+true false true
+true 16 4 false
+false 6 false
+12
+false false
+8 7 0
+2
+6 0
+0
+16
+true false
+TypeError Method ArrayBuffer.prototype.resize called on incompatible receiver #<ArrayBuffer>
+TypeError Method ArrayBuffer.prototype.resize called on incompatible receiver #<Object>
+TypeError Method get ArrayBuffer.prototype.resizable called on incompatible receiver #<Object>
+RangeError ArrayBuffer.prototype.resize: Invalid length parameter
+RangeError ArrayBuffer.prototype.resize: Invalid length parameter
+RangeError Invalid array buffer max length
+RangeError Invalid array buffer max length
+4 false 4
+--- stderr ---

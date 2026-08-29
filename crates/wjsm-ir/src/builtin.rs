@@ -396,6 +396,12 @@ pub enum Builtin {
     ArrayBufferConstructor,
     ArrayBufferProtoByteLength,
     ArrayBufferProtoSlice,
+    ArrayBufferProtoResize,
+    ArrayBufferProtoTransfer,
+    ArrayBufferProtoTransferToFixedLength,
+    ArrayBufferProtoResizable,
+    ArrayBufferProtoMaxByteLength,
+    ArrayBufferProtoDetached,
     // ── DataView built-in ──────────────────────────────────────────────
     DataViewConstructor,
     DataViewProtoGetFloat64,
@@ -1172,6 +1178,14 @@ impl Builtin {
             Self::ArrayBufferConstructor => "ArrayBuffer",
             Self::ArrayBufferProtoByteLength => "ArrayBuffer.prototype.byteLength",
             Self::ArrayBufferProtoSlice => "ArrayBuffer.prototype.slice",
+            Self::ArrayBufferProtoResize => "ArrayBuffer.prototype.resize",
+            Self::ArrayBufferProtoTransfer => "ArrayBuffer.prototype.transfer",
+            Self::ArrayBufferProtoTransferToFixedLength => {
+                "ArrayBuffer.prototype.transferToFixedLength"
+            }
+            Self::ArrayBufferProtoResizable => "ArrayBuffer.prototype.resizable",
+            Self::ArrayBufferProtoMaxByteLength => "ArrayBuffer.prototype.maxByteLength",
+            Self::ArrayBufferProtoDetached => "ArrayBuffer.prototype.detached",
             Self::DataViewConstructor => "DataView",
             Self::DataViewProtoGetFloat64 => "DataView.prototype.getFloat64",
             Self::DataViewProtoGetFloat32 => "DataView.prototype.getFloat32",
