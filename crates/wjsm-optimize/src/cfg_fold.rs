@@ -52,6 +52,10 @@ fn is_provably_non_exception(defs: &HashMap<ValueId, Instruction>, value: ValueI
             | Instruction::InitObjectLiteral { .. }
             | Instruction::Compare { .. }
             | Instruction::NewArray { .. } => true,
+            Instruction::CallBuiltin {
+                builtin: Builtin::CreateClosure,
+                ..
+            } => true,
             Instruction::Phi { sources, .. } => {
                 if !visiting.insert(value) {
                     return false;

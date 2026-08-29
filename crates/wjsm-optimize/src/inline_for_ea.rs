@@ -365,7 +365,37 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
     load_reaching
 }
 
+/// 函数体内仅被 `StoreVar` 写过一次的绑定是否恒为 `FunctionRef`（如 `const add = arrow`）。
+fn immutable_fnref_for_var(
+    function: &wjsm_ir::Function,
+    defs: &HashMap<ValueId, Instruction>,
+    constants: &[Constant],
+    name: &str,
+) -> Option<FunctionId> {
+    let mut store_values = Vec::new();
+    for block in function.blocks() {
+        for ins in block.instructions() {
+            if let Instruction::StoreVar { name: slot, value } = ins
+                && slot == name
+            {
+                store_values.push(*value);
+            }
+        }
+    }
+    if store_values.len() != 1 {
+        return None;
+    }
+    match defs.get(&store_values[0]) {
+        Some(Instruction::Const { constant, .. }) => match constants.get(constant.0 as usize) {
+            Some(Constant::FunctionRef(function_id)) => Some(*function_id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn resolve_callee_id(
+    caller: &wjsm_ir::Function,
     defs: &HashMap<ValueId, Instruction>,
     constants: &[Constant],
     load_reaching: &HashMap<ValueId, ValueId>,
@@ -384,6 +414,8 @@ fn resolve_callee_id(
             Some(Constant::FunctionRef(f)) => Some((*f, None)),
             _ => None,
         },
+        Some(Instruction::LoadVar { name, .. }) => immutable_fnref_for_var(caller, defs, constants, name)
+            .map(|function_id| (function_id, None)),
         Some(Instruction::CallBuiltin {
             builtin: Builtin::CreateClosure,
             args: closure_args,
@@ -476,6 +508,7 @@ fn static_inline_round(module: &mut Module) -> bool {
                     _ => continue,
                 };
                 let (callee_id, closure_env) = match resolve_callee_id(
+                    function,
                     &per_func_defs[func_idx],
                     &constants_snapshot,
                     &per_func_load_reaching[func_idx],
@@ -488,10 +521,12 @@ fn static_inline_round(module: &mut Module) -> bool {
                 if callee_idx >= per_func_info.len() {
                     continue;
                 }
-                let (direct_callable, has_eval, num_blocks, is_class_ctor) =
+                let (_direct_callable, has_eval, num_blocks, is_class_ctor) =
                     per_func_info[callee_idx];
-                let can_call = direct_callable || closure_env.is_some();
-                if !can_call || has_eval || num_blocks == 0 || callee_idx == func_idx {
+                // FunctionRef 与 CreateClosure 回调均可静态解析；前者未必
+                // direct_callable（柯里化外层用 $env 搭闭包 env 原型链），复制 IR
+                // 并在入口注入调用方词法 $env 仍语义安全。
+                if has_eval || num_blocks == 0 || callee_idx == func_idx {
                     continue;
                 }
                 // 类构造器的 [[Call]]（无 new）必须在运行时抛 TypeError
@@ -614,7 +649,26 @@ fn inline_static_candidate(
 
     let current_max = current_max_value[func_idx];
     let undefined_dest = ValueId(current_max + 1);
-    let value_offset = current_max + 2;
+    let caller = &module.functions()[func_idx];
+    let caller_env_name = caller
+        .params()
+        .first()
+        .filter(|name| is_env_name(name))
+        .cloned();
+    let needs_caller_lex_env = candidate.closure_env.is_none() && caller_env_name.is_some();
+    let caller_lex_env_dest = if needs_caller_lex_env {
+        ValueId(current_max + 2)
+    } else {
+        undefined_dest
+    };
+    let value_offset = if needs_caller_lex_env {
+        current_max + 3
+    } else {
+        current_max + 2
+    };
+    let callee_lex_env = candidate
+        .closure_env
+        .unwrap_or(caller_lex_env_dest);
 
     // ── 分裂调用块 ──
     // B_pre 保留调用前指令 + undefined 常量，终止器暂置 Jump(克隆入口)；
@@ -674,8 +728,7 @@ fn inline_static_candidate(
                     continue;
                 }
                 if is_env_name(name) {
-                    let env_val = candidate.closure_env.unwrap_or(undefined_dest);
-                    param_subst.push((mapped_dest, env_val));
+                    param_subst.push((mapped_dest, callee_lex_env));
                     continue;
                 }
                 if let Some((param_idx, _)) = callee_params
@@ -776,7 +829,11 @@ fn inline_static_candidate(
             clone_max = clone_max.max(used.0);
         }
     }
-    current_max_value[func_idx] = undefined_dest.0.max(clone_max);
+    current_max_value[func_idx] = if needs_caller_lex_env {
+        caller_lex_env_dest.0.max(clone_max)
+    } else {
+        undefined_dest.0.max(clone_max)
+    };
 
     // ── 重写 B_pre：调用前指令 + undefined 常量 + 注入的形参初始值；
     //    终止器 = Jump(克隆入口)。 ──
@@ -790,6 +847,12 @@ fn inline_static_candidate(
             dest: undefined_dest,
             constant: undefined_id,
         });
+        if needs_caller_lex_env {
+            b_pre.push_instruction(Instruction::LoadVar {
+                dest: caller_lex_env_dest,
+                name: caller_env_name.expect("caller env name checked above"),
+            });
+        }
         for (name, value) in &inject_subst {
             b_pre.push_instruction(Instruction::StoreVar {
                 name: name.clone(),
