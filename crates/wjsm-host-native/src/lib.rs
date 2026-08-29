@@ -2785,6 +2785,15 @@ impl NativeAgentState {
     ) {
         let receiver = value::strip_gc_color(receiver);
         if value::is_callable(receiver) {
+            // name / length 是所有 callable own 层的惰性物化属性（§10.2.9
+            // SetFunctionName / §10.2.10 SetFunctionLength，configurable）：
+            // 删除即落墓碑，否则读取路径按元数据重新合成（复活）。
+            if self.text_matches(encoded_key, "name") || self.text_matches(encoded_key, "length") {
+                if let Some(key) = dispatch::runtime::property_key(self, encoded_key) {
+                    self.intrinsic_tombstones.insert((receiver, key));
+                }
+                return;
+            }
             // 仅 native callable 拥有 own 层静态合成；显式改过原型的
             // callable 不再走隐式链尾合成。
             if !value::is_native_callable(receiver)
@@ -4169,6 +4178,11 @@ impl NativeAgentState {
             if !self.is_callable_value(proxy.target) {
                 return None;
             }
+            // Proxy 的 [[Construct]] 仅在 target 可构造时存在（§10.5.13）：
+            // construct 调用对非构造器 target 的 proxy 在门口拒绝。
+            if construct && !dispatch::runtime::is_constructor_value(self, callee) {
+                return None;
+            }
             let proxy_id = value::decode_proxy_handle(callee);
             let kind = if construct {
                 NativeCallableKind::ProxyConstruct(proxy_id)
@@ -4182,17 +4196,11 @@ impl NativeAgentState {
                 i64::try_from(native_callable_call as *const () as usize).ok()?,
             )
         } else if value::is_native_callable(callee) {
-            let kind = self
-                .native_callables
-                .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)
-                .copied()?;
-            if construct
-                && match kind {
-                    NativeCallableKind::Intl(kind) => !dispatch::intl::is_constructor(kind),
-                    NativeCallableKind::DateMethod(_) => true,
-                    _ => false,
-                }
-            {
+            // IsConstructor 门（§7.2.4）：无 [[Construct]] 的 native callable
+            // 拒绝 construct 调用，经 prepare_rejected_call 落
+            // "X is not a constructor"。Symbol / BigInt 有 [[Construct]]
+            // （extends / newTarget 合法），构造期在各自 dispatch 自抛。
+            if construct && !dispatch::runtime::is_constructor_value(self, callee) {
                 return None;
             }
             (
@@ -4731,6 +4739,12 @@ impl NativeAgentState {
         let callable = value::strip_gc_color(callable);
         if let Some(value) = self.callable_properties.get(&(callable, key)).copied() {
             return Some(value);
+        }
+        // 删除墓碑先于一切惰性物化：`delete Math.max.name` 后 own 层禁止
+        // 复活（name/length 三特性 configurable，删除必须可观察）；显式
+        // defineProperty 重建的条目已在上方命中，墓碑不遮蔽重建值。
+        if self.intrinsic_tombstones.contains(&(callable, key)) {
+            return None;
         }
         if self.text_matches(key.to_value(), "name") {
             let name = self.callable_js_name(callable)?;

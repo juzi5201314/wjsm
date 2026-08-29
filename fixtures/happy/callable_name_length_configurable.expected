@@ -1,0 +1,21 @@
+exit_code: 0
+--- stdout ---
+{"value":"max","writable":false,"enumerable":false,"configurable":true}
+{"value":2,"writable":false,"enumerable":false,"configurable":true}
+true true
+false
+undefined
+true true
+true true
+
+true
+{"value":"max","writable":false,"enumerable":false,"configurable":true}
+max
+true true true
+true true
+true B
+true true
+true true
+true true
+true true
+--- stderr ---

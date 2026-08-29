@@ -13,6 +13,66 @@
 
 use wjsm_ir::Builtin;
 
+/// 以 `NativeCallableKind::Builtin` 形态暴露的 JS 值中携带 [[Construct]]
+/// 的构造器（IsConstructor 语义，§7.2.4）。Symbol / BigInt 按规范有
+/// [[Construct]]（`class X extends Symbol` 合法、可作 Reflect.construct 的
+/// newTarget），构造时在各自 dispatch 自抛 TypeError（§20.4.1 / §21.2.1
+/// 步骤 1）；其余 builtin 值（原型方法 / 静态函数 / 全局函数）无
+/// [[Construct]]，construct 调用按 "X is not a constructor" 拒绝。
+pub(crate) fn is_constructor_builtin(builtin: Builtin) -> bool {
+    matches!(
+        builtin,
+        Builtin::HeadersConstructor
+            | Builtin::RequestConstructor
+            | Builtin::ResponseConstructor
+            | Builtin::AbortControllerConstructor
+            | Builtin::AbortSignalConstructor
+            | Builtin::EventTargetConstructor
+            | Builtin::EventConstructor
+            | Builtin::NumberConstructor
+            | Builtin::BooleanConstructor
+            | Builtin::ErrorConstructor
+            | Builtin::TypeErrorConstructor
+            | Builtin::RangeErrorConstructor
+            | Builtin::SyntaxErrorConstructor
+            | Builtin::ReferenceErrorConstructor
+            | Builtin::URIErrorConstructor
+            | Builtin::EvalErrorConstructor
+            | Builtin::MapConstructor
+            | Builtin::SetConstructor
+            | Builtin::DateConstructor
+            | Builtin::DateConstructorNew
+            | Builtin::WeakMapConstructor
+            | Builtin::WeakSetConstructor
+            | Builtin::SharedArrayBufferConstructor
+            | Builtin::ArrayBufferConstructor
+            | Builtin::DataViewConstructor
+            | Builtin::WeakRefConstructor
+            | Builtin::FinalizationRegistryConstructor
+            | Builtin::Int8ArrayConstructor
+            | Builtin::Uint8ArrayConstructor
+            | Builtin::Uint8ClampedArrayConstructor
+            | Builtin::Int16ArrayConstructor
+            | Builtin::Uint16ArrayConstructor
+            | Builtin::Int32ArrayConstructor
+            | Builtin::Uint32ArrayConstructor
+            | Builtin::Float32ArrayConstructor
+            | Builtin::Float64ArrayConstructor
+            | Builtin::BigInt64ArrayConstructor
+            | Builtin::BigUint64ArrayConstructor
+            | Builtin::ReadableStreamConstructor
+            | Builtin::WritableStreamConstructor
+            | Builtin::TransformStreamConstructor
+            | Builtin::CountQueuingStrategyConstructor
+            | Builtin::ByteLengthQueuingStrategyConstructor
+            | Builtin::RegExpCreate
+            | Builtin::PromiseCreate
+            | Builtin::ProxyCreate
+            | Builtin::SymbolCreate
+            | Builtin::BigIntFromLiteral
+    )
+}
+
 /// 内建函数的 JS 可见 `(name, length)`；非用户可观察函数返回 `None`。
 pub(crate) fn builtin_function_metadata(builtin: Builtin) -> Option<(&'static str, u32)> {
     console_metadata(builtin)
