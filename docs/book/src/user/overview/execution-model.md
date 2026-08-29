@@ -20,7 +20,9 @@ flowchart LR
 4. **native codegen** — 磁盘缓存可用时（默认回落 XDG/HOME，`WJSM_CACHE_DIR` 可覆盖）先查 `${cache_dir}/*.wnat`，命中则加载 image，miss 则编译并写入该目录；缓存被禁用时每次从 IR 编译；
 5. **execute** — `NativeRuntime` 调用入口，排空 Promise、微任务与外部事件，产出可观察结果与退出码。
 
-`wjsm build app.ts -o app.wjsm` 只完成前 3 步；`wjsm run app.wjsm` 从第 4 步开始。两条路径在 native codegen 处汇合。
+`wjsm build app.ts -o app.wjsm` 只完成前 3 步；`wjsm run app.wjsm` 从第 4 步开始。两条路径在 native codegen 处汇合。第 4 步产出的是 **generic native**：完整动态语义编在同一份机器码里，不是按静态类型特化过的闭世界 AOT。
+
+执行开始后仍可能再编译：`eval` / `new Function` / 动态加载走同一条 `NativeCompiler`；类型反馈稳定后后台可以发布 typed overlay，miss 则 deopt 回 generic。`WJSM_DISABLE_SPECIALIZATION=1` 只关掉 overlay，不改变 generic 路径。
 
 ## 失败不产生先行副作用
 

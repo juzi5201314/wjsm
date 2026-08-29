@@ -25,7 +25,7 @@ flowchart TD
 4. 磁盘缓存可用时（默认回落 XDG/HOME）查 native cache；被禁用或 miss 时由当前宿主把 IR 直接编译为 CLIF/native image；
 5. `NativeRuntime` 调用入口并排空 Promise、微任务与外部事件。
 
-解析与 early error 在执行前完成，因此失败的程序不会产生先行副作用。
+解析与 early error 在执行前完成，因此失败的程序不会产生先行副作用。这只覆盖**静态模块的第一次执行**。语言仍是动态 JS：generic native 编码装箱与类型检查；热路径 overlay 与 `eval` 会在运行时再次调用同一编译器。
 
 ## 值、对象与 GC
 

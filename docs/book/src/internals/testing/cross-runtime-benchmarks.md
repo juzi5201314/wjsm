@@ -4,10 +4,10 @@
 
 ## 目标与为什么
 
-wjsm 是 AOT 运行时（SWC AST → 语义 IR → portable `.wjsm` → Cranelift CLIF → native image → `NativeRuntime`），与 Node.js（V8 JIT）的执行模型不同：
+wjsm 把静态模块编成 generic native 再执行（SWC AST → 语义 IR → portable `.wjsm` → Cranelift CLIF → native image → `NativeRuntime`），与 Node.js（V8：解释器预热 + 多层 JIT）的执行模型不同：
 
 - **Node.js**：解释执行起步，热点函数被 JIT 优化到稳态；短生命周期程序测到的主要是 JIT warmup 前的性能。
-- **wjsm**：启动时一次编译到当前宿主机器码，执行路径平坦，没有 warmup 曲线。启动快照始终从嵌入的 `startup_snapshot.bin` 恢复。
+- **wjsm**：静态模块在第一次执行前编到当前宿主机器码，入口没有解释器预热。generic native 仍是动态语义；overlay 稳定后还会再编译，不是「一次编译、路径永远平坦」。启动快照始终从嵌入的 `startup_snapshot.bin` 恢复。不要把 AOT 理解成闭世界静态编译，也不要把单次墙钟时间直接当成「比 V8 本质更快」。
 
 因此单测"一次运行"的墙钟时间会把 V8 的 warmup 成本与 wjsm 的启动成本混在一起，无法区分稳态性能与启动性能。基准必须分两档：
 

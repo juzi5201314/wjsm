@@ -14,6 +14,8 @@ JS / TS source
   -> wjsm-host-native            NativeRuntime + ManagedHeap + host APIs
 ```
 
+Portable `.wjsm` 是 IR。generic native 在第一次执行静态模块前由当前宿主编译；语言仍是动态 JS。热路径 overlay 与 `eval` 在运行时再次调用同一 `NativeCompiler`，不是第二套后端，也不是「运行时不再编译」。
+
 | Crate | 唯一职责 |
 | --- | --- |
 | `wjsm-ir` | 后端无关 semantic IR、builtin/runtime operation IDs 与 value ABI 常量 |

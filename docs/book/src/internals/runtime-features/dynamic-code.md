@@ -26,7 +26,7 @@ eval 代码与主模块共用同一个 `NativeRuntime` 和 `ManagedHeap`。它�
 
 ## 限制
 
-wjsm 的 eval 是 AOT 编译，不是解释执行。每次 eval 都走 `NativeCompiler`，没有 AST 解释器 fallback。这与 V8 的解释器 + JIT 不同，但对 AOT 运行时是唯一路径。
+wjsm 的 eval 走 `NativeCompiler` 当场编成 native，不是 AST 解释器。触发时机在运行时，因此这是动态编译，不是「静态模块那种执行前 AOT」。没有解释器 fallback，也没有第二套 VM。
 
 ## 深入了解
 

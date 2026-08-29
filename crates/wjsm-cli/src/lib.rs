@@ -1,4 +1,6 @@
-//! wjsm CLI - AOT JavaScript/TypeScript to native execution compiler
+//! wjsm CLI：把 JS/TS 编成当前宿主的 generic native 并执行
+//!
+//! 静态模块在第一次执行前编译；`eval` 与 overlay 仍可能在运行时编译。
 //!
 //! Exit codes:
 //! - 0: success

@@ -1,6 +1,6 @@
 # 动态代码与隔离上下文
 
-wjsm 是 AOT 编译器，但运行时保留了一条编译通道，`eval`、`new Function` 和 `node:vm` 都走这条路径。
+静态模块可以在执行前编成 generic native，但运行时仍有编译通道：`eval`、`new Function` 和 `node:vm` 都走这条路径。动态源码不是解释执行，而是当场再走 `NativeCompiler`。
 
 ## eval 与 new Function
 

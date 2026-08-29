@@ -1,11 +1,11 @@
 # wjsm
 
-> Experimental AOT JavaScript/TypeScript runtime targeting native x86_64 Linux and Windows.
+> Experimental JavaScript/TypeScript runtime targeting native x86_64 Linux and Windows. Static modules compile to generic native before they run; the language stays dynamic.
 
-wjsm 是一个实验性的 JavaScript/TypeScript 运行时：使用 SWC 解析源码，经过自有语义 IR，生成可跨平台携带的 portable `.wjsm` 制品，再由 Cranelift 编译为当前宿主的 native image 并由 NativeRuntime 执行。整个执行链不依赖 V8。
+wjsm 是一个实验性的 JavaScript/TypeScript 运行时：使用 SWC 解析源码，经过自有语义 IR，生成可跨平台携带的 portable `.wjsm` 制品，再由 Cranelift 编译为当前宿主的 native image 并由 NativeRuntime 执行。整个执行链不依赖 V8。这里的「AOT」只表示**静态可见的模块在第一次执行前编成 generic native**，没有字节码解释器当主路径。`.wjsm` 里是 IR 而不是机器码；对象模型、GC、`eval`、动态加载和热路径 overlay 仍在运行时发生。它不是闭世界静态编译，也不表示峰值性能会超过 V8。
 
 > [!WARNING]
-> wjsm 当前版本为 `0.1.0`，尚未完整实现 ECMAScript、Web API 或 Node.js 兼容层。它适合参与运行时开发、验证 portable AOT/native runtime 方案和运行已覆盖的程序；请不要默认任意 npm 包或现有 Node.js 应用都能直接运行。
+> wjsm 当前版本为 `0.1.0`，尚未完整实现 ECMAScript、Web API 或 Node.js 兼容层。它适合参与运行时开发、验证 portable IR / native runtime 方案和运行已覆盖的程序；请不要默认任意 npm 包或现有 Node.js 应用都能直接运行。
 
 ## 当前能力
 
@@ -49,7 +49,7 @@ Hello, wjsm: 3
 ./target/release/wjsm eval '1 + 2 * 3'
 ```
 
-## Portable AOT 构建
+## Portable 制品构建
 
 ```bash
 ./target/release/wjsm build app.ts -o app.wjsm
@@ -58,7 +58,7 @@ Hello, wjsm: 3
 ./target/release/wjsm run app.wjsm
 ```
 
-`app.wjsm` 只包含经过验证的 semantic IR、模块清单及可选 source metadata，能够跨平台携带；Cranelift object、relocation、可执行 image 和 native cache 都是当前宿主私有派生数据。`--format native-executable` 在当前宿主上把预链 `wjsm-exec` stub、预编译 `NativeObject` 与制品内源码快照打成可直接运行的 ELF/PE；失败时不创建或覆盖输出文件。拷走 exe 后只读快照。交叉编译不在范围内。
+`app.wjsm` 只包含经过验证的 semantic IR、模块清单及可选 source metadata，能够跨平台携带，**不含机器码**。Cranelift object、relocation、可执行 image 和 native cache 都是当前宿主私有派生数据；`run` 时才把 IR 编成当前 ISA 的 native image（命中磁盘缓存则跳过 Cranelift）。`--format native-executable` 在当前宿主上把预链 `wjsm-exec` stub、预编译 `NativeObject` 与制品内源码快照打成可直接运行的 ELF/PE；失败时不创建或覆盖输出文件。拷走 exe 后只读快照。交叉编译不在范围内。
 
 ## 常用命令
 

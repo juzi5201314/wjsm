@@ -33,7 +33,7 @@ wjsm build -e 'console.log(1)' -o /tmp/one.wjsm
 wjsm run /tmp/one.wjsm
 ```
 
-`run` 检测到输入是 `.wjsm` 制品时，跳过解析和 lowering，直接把 IR 编译为当前宿主的 native image 并执行。这就是「构建在前，执行在后」的实际形态：构建产物跨平台携带，执行时才绑定到具体宿主。
+`run` 检测到输入是 `.wjsm` 制品时，跳过解析和 lowering，直接把 IR 编译为当前宿主的 **generic native** 并执行。构建产物跨平台携带，执行时才绑定到具体宿主。这不是闭世界静态编译：语言仍是动态 JS，之后还可能为 `eval` 或热路径 overlay 再编译。
 
 ## 初始化项目
 

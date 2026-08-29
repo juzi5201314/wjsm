@@ -4,7 +4,9 @@
 
 | 术语 | 含义 |
 | --- | --- |
-| AOT | Ahead-of-Time，编译在执行前完成 |
+| AOT | 静态模块在第一次执行前编成 generic native；`.wjsm` 仍是 IR。不是闭世界静态编译，也不禁止运行时再编译 |
+| overlay | 反馈稳定后由同一 `NativeCompiler` 派生的 typed native；deopt 目标是 generic native |
+| generic native | 编码完整动态 JS 语义的入口机器码 |
 | NaN-boxing | 用 NaN 的低位编码非浮点值的 64 位表示 |
 | ManagedHeap | 统一托管堆，三种 GC 回收器共用 |
 | NativeHeapMemory | 生产对象堆：mmap reservation + 64 位逻辑字节偏移 |

@@ -1,6 +1,6 @@
 # wjsm
 
-AOT JavaScript/TypeScript runtime: SWC AST → verified semantic IR → portable `.wjsm` → direct Cranelift native image → `NativeRuntime`. No V8, Wasm, Wasmtime, or execution-backend fallback.
+JavaScript/TypeScript runtime: SWC AST → verified semantic IR → portable `.wjsm` → direct Cranelift native image → `NativeRuntime`. Static modules compile to generic native before first execution; the language stays dynamic (`eval`, overlay). No V8, Wasm, Wasmtime, or execution-backend fallback.
 
 ## Non-negotiable rules
 

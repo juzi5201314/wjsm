@@ -1,6 +1,6 @@
 # 用户手册
 
-wjsm 是不依赖 V8 的 AOT JavaScript/TypeScript runtime。源码先被解析并降为 verified semantic IR；`build` 生成跨支持平台携带的 portable `.wjsm`，`run` 在当前宿主把 IR 直接编译为 CLIF/native image，再由 `NativeRuntime` 执行。
+wjsm 是不依赖 V8 的 JavaScript/TypeScript runtime。源码先被解析并降为 verified semantic IR；`build` 生成跨支持平台携带的 portable `.wjsm`（IR，不是机器码），`run` 在当前宿主把 IR 直接编译为 generic native image，再由 `NativeRuntime` 执行。语言语义仍是动态的：`eval`、动态加载和热路径 overlay 会在运行时再次编译。
 
 当前版本是 `0.1.0`，ECMAScript、Web API 与 Node.js 兼容层仍是子集。真实支持范围以仓库 fixture、Test262 和命令行 `--help` 为准。
 

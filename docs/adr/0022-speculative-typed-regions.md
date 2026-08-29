@@ -31,7 +31,7 @@ portable `Program` 在 AOT 管线末尾已经过静态证明折叠。overlay 编
 
 ### 3. 产品叙述
 
-「无 JIT」指：没有解释器预热，也没有把执行权交给第二编译器/VM。稳定反馈后的 overlay 编译、deopt、OSR 是同一 native owner 上的派生优化，可能引入短暂编译与控制转移，不再承诺「完全没有 deopt 尖刺」。
+「AOT」指静态模块在第一次执行前编成 generic native：没有解释器预热，也没有第二套编译器/VM。语言语义仍是动态的。`.wjsm` 是 IR，不是机器码。稳定反馈后的 overlay 编译、deopt、OSR 是同一 native owner 上的运行时特化（按编译器术语属于 JIT），可能引入短暂编译与控制转移。不要把 AOT 写成「运行时不做即时编译」，也不承诺峰值性能超过 V8。
 
 ## Consequences
 

@@ -4,7 +4,7 @@
 
 ## 目标
 
-**AOT 编译 JavaScript/TypeScript 到 native code，不依赖 V8。** 整条链路是 `swc_core` 解析 → 自有语义 IR → Cranelift → native image → 当前宿主执行。JIT 编译、字节码解释器都不是主路径。
+**把静态可见的 JavaScript/TypeScript 编成 generic native，不依赖 V8。** 整条链路是 `swc_core` 解析 → 自有语义 IR → Cranelift → native image → 当前宿主执行。没有字节码解释器当主路径，也没有第二套执行引擎。语言仍是动态的；`eval` 与热路径 overlay 在运行时调用同一 `NativeCompiler`，不要把「AOT」写成「运行时不再编译」。
 
 **ECMAScript 是语义的唯一权威。** 不接受「先跑通再补齐」的部分语义。early error、TDZ、hoisting 顺序都必须与规范一致，由 `fixtures/` 与 test262 持续验证。
 
