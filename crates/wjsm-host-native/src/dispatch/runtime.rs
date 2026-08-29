@@ -1552,7 +1552,20 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
     }
 }
 
-pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bool {
+/// 当前激活是否为对该 builtin 本体的 [[Construct]] 调用（`new Symbol()` /
+/// `Reflect.construct(Symbol, ..)` / 子类 super()）：new.target 已定义且
+/// callee 正是该 builtin 的 native callable。直连 CallBuiltin 站点（如
+/// BigInt 字面量物化）复用外层 JS 激活，其 callee 为用户函数，不会误判。
+pub(super) fn is_builtin_construct_call(state: &NativeAgentState, builtin: wjsm_ir::Builtin) -> bool {
+    state.activations.last().is_some_and(|activation| {
+        !value::is_undefined(activation.new_target)
+            && state
+                .native_callable_builtin(activation.callee)
+                .is_some_and(|(callee_builtin, _)| callee_builtin == builtin)
+    })
+}
+
+pub(crate) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bool {
     // Proxy 的 [[Construct]] 在 target 可构造时存在（ProxyCreate 10.5.12）。
     if value::is_proxy(encoded) {
         return super::proxy::is_constructor_proxy(state, encoded);
@@ -1561,6 +1574,17 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
         return false;
     }
     match state.native_callable_kind(encoded) {
+        // builtin 值按 §7.2.4 分类：构造器白名单见 is_constructor_builtin。
+        Some(crate::NativeCallableKind::Builtin(builtin, _)) => {
+            crate::builtin_metadata::is_constructor_builtin(builtin)
+        }
+        // bound 函数的 [[Construct]] 存在当且仅当 target 可构造
+        // （§10.4.1.2 BoundFunctionCreate 步骤 7）。
+        Some(crate::NativeCallableKind::Bound(index)) => state
+            .bound_functions
+            .get(usize::try_from(index).unwrap_or(usize::MAX))
+            .and_then(|bound| bound.as_ref())
+            .is_some_and(|bound| is_constructor_value(state, bound.target)),
         Some(crate::NativeCallableKind::Intl(kind)) => super::intl::is_constructor(kind),
         Some(crate::NativeCallableKind::DateMethod(_)) => false,
         Some(crate::NativeCallableKind::FunctionPrototype) => false,
@@ -1586,6 +1610,41 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
             | crate::NativeCallableKind::IteratorHelperReturn
             | crate::NativeCallableKind::IteratorWrapNext
             | crate::NativeCallableKind::IteratorWrapReturn,
+        ) => false,
+        // ECMA 层可见的方法 / 迭代器 / 宿主函数值：无 [[Construct]]。
+        Some(
+            crate::NativeCallableKind::ArrayToString
+            | crate::NativeCallableKind::RegExpToString
+            | crate::NativeCallableKind::ErrorToString
+            | crate::NativeCallableKind::ArrayIterator(_)
+            | crate::NativeCallableKind::IteratorFamilyNext(_)
+            | crate::NativeCallableKind::ArgumentsStrictCallee
+            | crate::NativeCallableKind::BufferMethod(_)
+            | crate::NativeCallableKind::BufferStatic(_)
+            | crate::NativeCallableKind::BufferTranscode
+            | crate::NativeCallableKind::Fetch(_)
+            | crate::NativeCallableKind::CjsRequire(_)
+            | crate::NativeCallableKind::CjsResolve(_)
+            | crate::NativeCallableKind::CjsResolvePaths(_)
+            | crate::NativeCallableKind::ImportMetaResolve(_)
+            | crate::NativeCallableKind::PromiseResolve(_)
+            | crate::NativeCallableKind::PromiseReject(_)
+            | crate::NativeCallableKind::ProxyRevoke(_)
+            | crate::NativeCallableKind::ProcessExit
+            | crate::NativeCallableKind::ProcessWrite(_)
+            | crate::NativeCallableKind::ProcessStreamEnd(_)
+            | crate::NativeCallableKind::ProcessStreamReturnThis
+            | crate::NativeCallableKind::ProcessStdin(_)
+            | crate::NativeCallableKind::ProcessHrtime
+            | crate::NativeCallableKind::ProcessHrtimeBigInt
+            | crate::NativeCallableKind::ProcessUptime
+            | crate::NativeCallableKind::ProcessMemoryUsage
+            | crate::NativeCallableKind::ProcessCpuUsage
+            | crate::NativeCallableKind::ProcessCwd
+            | crate::NativeCallableKind::ProcessOn
+            | crate::NativeCallableKind::ProcessNextTick
+            | crate::NativeCallableKind::SetImmediate
+            | crate::NativeCallableKind::Gc,
         ) => false,
         Some(_) => true,
         None => state

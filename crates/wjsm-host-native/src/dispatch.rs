@@ -402,14 +402,9 @@ pub(crate) fn rejected_call_error(
     }
     // kCalledNonCallable/kNotConstructor 文案：源级站点按语义层静态渲染的
     // callee 表达式（V8 CallPrinter 同型，`o.foo is not a function`），
-    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。
-    let message = if value::is_proxy(callee) {
-        if construct {
-            "Proxy target must be a constructor".to_owned()
-        } else {
-            "Proxy target must be callable".to_owned()
-        }
-    } else {
+    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。Proxy
+    // callee 同样走 callsite 渲染（Node：`proxyObject is not a function`）。
+    let message = {
         let rendered = match &callsite {
             Some(text) => text.to_string(),
             None => runtime::render_value(state, callee),
