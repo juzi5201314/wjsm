@@ -947,9 +947,8 @@ fn validated_view(
     match view_length(state, &array) {
         Some(length) => Ok((array, length)),
         None => {
-            let message = format!(
-                "Cannot perform %TypedArray%.prototype.{method} on a detached ArrayBuffer"
-            );
+            let message =
+                format!("Cannot perform %TypedArray%.prototype.{method} on a detached ArrayBuffer");
             Err(type_error(ctx, state, &message))
         }
     }

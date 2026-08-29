@@ -120,7 +120,7 @@ pub fn eval_module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
 /// `WJSM_DISABLE_LICM` 当前是否禁用 LICM。该开关改变 lower 产物，
 /// 输入寻址 artifact 缓存（issue #376）的键指纹必须包含它。
 pub fn licm_disabled_by_env() -> bool {
-    passes::licm::licm_disabled_by_env()
+    wjsm_optimize::licm_disabled_by_env()
 }
 
 mod callsite_render;

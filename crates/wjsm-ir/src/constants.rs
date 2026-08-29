@@ -257,9 +257,9 @@ pub const IC_KIND_ACCESSOR: u32 = 4;
 pub const IC_KIND_OWN_DATA_TRIO: u32 = 5;
 
 // ── 类型反馈槽布局（Issue #390 运行时特化）──────────────────────────────────
-// 每个「可观察动态语义」的调用点在编译期分配一个 48 字节反馈槽，由 image loader
+// 每个「可观察动态语义」的调用点在编译期分配一个 80 字节反馈槽，由 image loader
 // 分配零初始化缓冲；宿主 dispatcher 与生成代码的守卫快路径都原地写它，owner
-// thread 在 PrepareCall 边界读取并驱动热函数特化。
+// thread 在 CooperativePoll / dispatcher drain 读取并驱动 overlay 编译。
 //
 // +0  u64 last_target_image_id  PrepareCall 系列解析出的目标 image
 // +8  u64 last_tag_signature    参数 tag 签名（低 4 位 tag 数，随后每 6 位一个 tag）
@@ -270,8 +270,13 @@ pub const IC_KIND_OWN_DATA_TRIO: u32 = 5;
 // +32 u32 last_target_function  目标函数在其 image 内的下标
 // +36 u32 operation             观察到的 dispatcher operation / builtin id
 // +40 u32 state                 0=Empty 1=Recording 2=Disabled
-// +44 u32 reserved              保留清零
-pub const FEEDBACK_SLOT_SIZE: u32 = 48;
+// +44 u32 shape_id              单态对象 shape（GetProp/SetProp）
+// +48 u32 slot_or_kind          值槽下标或 elements kind
+// +52 u32 proto_generation      回填时的原型世代
+// +56 u32 poly_len              0–4 多态；5 = megamorphic
+// +60 u32 poly_key[4]           额外 shape / callee
+// +76 u32 flags                 bit0 = own_data
+pub const FEEDBACK_SLOT_SIZE: u32 = 80;
 pub const FEEDBACK_SLOT_TARGET_IMAGE_OFFSET: u32 = 0;
 pub const FEEDBACK_SLOT_TAG_SIGNATURE_OFFSET: u32 = 8;
 pub const FEEDBACK_SLOT_CONSECUTIVE_OFFSET: u32 = 16;
@@ -281,7 +286,14 @@ pub const FEEDBACK_SLOT_SITE_INDEX_OFFSET: u32 = 28;
 pub const FEEDBACK_SLOT_TARGET_FUNCTION_OFFSET: u32 = 32;
 pub const FEEDBACK_SLOT_OPERATION_OFFSET: u32 = 36;
 pub const FEEDBACK_SLOT_STATE_OFFSET: u32 = 40;
-pub const FEEDBACK_SLOT_RESERVED_OFFSET: u32 = 44;
+pub const FEEDBACK_SLOT_SHAPE_ID_OFFSET: u32 = 44;
+pub const FEEDBACK_SLOT_SLOT_OR_KIND_OFFSET: u32 = 48;
+pub const FEEDBACK_SLOT_PROTO_GENERATION_OFFSET: u32 = 52;
+pub const FEEDBACK_SLOT_POLY_LEN_OFFSET: u32 = 56;
+pub const FEEDBACK_SLOT_POLY_KEY_OFFSET: u32 = 60;
+pub const FEEDBACK_SLOT_FLAGS_OFFSET: u32 = 76;
+pub const FEEDBACK_POLY_MEGAMORPHIC: u32 = 5;
+pub const FEEDBACK_FLAG_OWN_DATA: u32 = 1;
 /// 目标与 tag 签名连续相同达到该次数后，宿主把该调用点列为特化编译候选。
 pub const FEEDBACK_STABLE_THRESHOLD: u32 = 100;
 /// 单个调用点最多观察的实际参数 tag 数；超出部分不进入签名。
@@ -299,19 +311,24 @@ pub const FEEDBACK_STATE_DISABLED: u32 = 2;
 // 恒为 0、无人读写，改动面收敛在本文件与 heap_access 的 kind 存取器里。
 //
 // kind 让元素读只用一次字节比较就能判定「能否直接读槽」：
-// - PACKED：无洞、无索引 accessor → 快链可直接 load
-// - HOLEY：可能含 `encode_array_hole()` → 落宿主（洞须按缺失属性继续查原型链）
+// - PACKED：无洞、无索引 accessor、槽为 boxed 对象句柄 → 快链可直接 load
+// - HOLEY：可能含 `encode_array_hole()` → overlay 须检查哨兵；generic 洞走原型链
 // - DICTIONARY：索引位置存在 accessor 等异质属性 → 必须走完整 [[Get]]
+// - PACKED_NUMBER / HOLEY_NUMBER：槽存 unboxed f64（holey 用专用 hole 哨兵）；
+//   GC 不按句柄扫这些槽
 //
-// kind 只单向升级（PACKED → HOLEY → DICTIONARY），永不回退：回退需要全扫描，
-// 而三种状态都只决定是否走快链，不影响语义正确性。
+// kind 只单向升级（PACKED → HOLEY → DICTIONARY，NUMBER 同类），永不回退。
 pub const HEAP_ARRAY_KIND_OFFSET: u32 = HEAP_OBJECT_HEADER_PAD_START;
-/// 无洞、无异质索引属性：元素快链可直接读槽。
+/// 无洞、无异质索引属性：元素快链可直接读 boxed 槽。
 pub const ARRAY_KIND_PACKED: u32 = 0;
-/// 可能含洞哨兵：洞按缺失属性处理（须查原型链），故落宿主。
+/// 可能含洞哨兵：洞按缺失属性处理（须查原型链）。
 pub const ARRAY_KIND_HOLEY: u32 = 1;
 /// 索引位置存在 accessor 等异质属性：必须走完整 `[[Get]]`。
 pub const ARRAY_KIND_DICTIONARY: u32 = 2;
+/// packed Number 元素：槽为 unboxed f64。
+pub const ARRAY_KIND_PACKED_NUMBER: u32 = 3;
+/// holey Number 元素：槽为 unboxed f64 或 hole 哨兵。
+pub const ARRAY_KIND_HOLEY_NUMBER: u32 = 4;
 pub const HEAP_ARRAY_LENGTH_OFFSET: u32 = 8;
 pub const HEAP_ARRAY_CAPACITY_OFFSET: u32 = 12;
 pub const HEAP_ARRAY_ELEMENT_SIZE: u32 = 8;
@@ -436,6 +453,8 @@ pub fn heap_layout_abi_inputs() -> &'static [(&'static str, u32)] {
         ("heap_array_kind_offset", HEAP_ARRAY_KIND_OFFSET),
         ("array_kind_holey", ARRAY_KIND_HOLEY),
         ("array_kind_dictionary", ARRAY_KIND_DICTIONARY),
+        ("array_kind_packed_number", ARRAY_KIND_PACKED_NUMBER),
+        ("array_kind_holey_number", ARRAY_KIND_HOLEY_NUMBER),
         // IC 区插在 data segment 与 heap_start 之间，改变对象堆基址 → 进 ABI。
         ("ic_slot_size", IC_SLOT_SIZE),
         ("ic_slot_holder_handle_offset", IC_SLOT_HOLDER_HANDLE_OFFSET),

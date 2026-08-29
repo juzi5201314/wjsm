@@ -87,10 +87,9 @@ impl Lowerer {
                         );
                         // 带默认值的形参：V8 把形参初始化脱糖为三元表达式，
                         // 文案调用点为三连 "(intermediate value)"。
-                        let default_source =
-                            DestructureSource::TopLevel(DestructureCallsite::Text(
-                                "(intermediate value)".repeat(3),
-                            ));
+                        let default_source = DestructureSource::TopLevel(
+                            DestructureCallsite::Text("(intermediate value)".repeat(3)),
+                        );
                         block = self.lower_destructure_pattern(
                             &assign.left,
                             loaded,
@@ -334,6 +333,8 @@ impl Lowerer {
                             dest,
                             object: src_val,
                             key: key_val,
+                            latch: None,
+                            latch_template: None,
                         },
                     );
                     // getter 可能抛出：异常须先于后续绑定/写入传播。
@@ -344,8 +345,13 @@ impl Lowerer {
                         outer_key: decl_coercible::render_prop_name(&kv.key),
                         callsite: child_callsite.clone(),
                     };
-                    block =
-                        self.lower_destructure_pattern(&kv.value, dest, block, kind, &nested_source)?;
+                    block = self.lower_destructure_pattern(
+                        &kv.value,
+                        dest,
+                        block,
+                        kind,
+                        &nested_source,
+                    )?;
                 }
                 swc_ast::ObjectPatProp::Assign(assign) => {
                     // { key } 等价于 { key: key }
@@ -367,6 +373,8 @@ impl Lowerer {
                             dest,
                             object: src_val,
                             key: key_val,
+                            latch: None,
+                            latch_template: None,
                         },
                     );
                     // getter 可能抛出：异常须先于默认值判定/绑定传播。

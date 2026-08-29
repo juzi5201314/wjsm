@@ -115,7 +115,7 @@ module {
       store var $0.sum, %31
       %32 = const c30
       store var $1.i, %32
-      jump bb41
+      jump bb40
     bb1:
       %33 = load var $1.i
       %35 = const c31
@@ -125,9 +125,9 @@ module {
     bb2:
       %46 = load var $0.sum
       %48 = load var $1.i
-      %49 = get_elem_guarded %47, %48, guard=%109
+      %49 = get_elem %47, %48, latch=%109
       %50 = const c34
-      %51 = get_prop_guarded %49, %50, guard=%109, template=c20
+      %51 = get_prop %49, %50, latch=%109, template=c20
       %52 = add %46, %51
       store var $0.sum, %52
       %53 = is_exception %52
@@ -140,7 +140,7 @@ module {
       %61 = const c36
       %62 = const c37
       %63 = call builtin.intrinsic_pristine(%61, %62)
-      branch %63, bb15, bb16
+      branch %63, bb14, bb15
     bb5:
       %40 = const c32
       %41 = const c33
@@ -172,109 +172,107 @@ module {
       store var $1.i, %60
       jump bb1
     bb14:
-      unreachable
-    bb15:
       %74 = const c42
-      jump bb22
-    bb16:
+      jump bb21
+    bb15:
       %64 = const c38
       %65 = const c39
       %66 = call builtin.intrinsic_resolve(%64, %65)
       %67 = is_exception %66
-      branch %67, bb18, bb17
-    bb17:
+      branch %67, bb17, bb16
+    bb16:
       %69 = const c40
       %70 = const c41
       %71 = call builtin.intrinsic_resolve(%69, %70, %66)
       %72 = is_exception %71
-      branch %72, bb20, bb19
-    bb18:
+      branch %72, bb19, bb18
+    bb17:
       %68 = call builtin.exception_value(%66)
       throw %68
+    bb18:
+      jump bb21
     bb19:
-      jump bb22
-    bb20:
       %73 = call builtin.exception_value(%71)
       throw %73
-    bb21:
-      %80 = phi [(bb23, %78), (bb24, %79)]
+    bb20:
+      %80 = phi [(bb22, %78), (bb23, %79)]
       %81 = is_exception %80
-      branch %81, bb26, bb25
-    bb22:
-      %75 = phi [(bb15, %74), (bb19, %71)]
-      %76 = phi [(bb15, %74), (bb19, %66)]
+      branch %81, bb25, bb24
+    bb21:
+      %75 = phi [(bb14, %74), (bb18, %71)]
+      %76 = phi [(bb14, %74), (bb18, %66)]
       %77 = load var $0.sum
-      branch %63, bb23, bb24
-    bb23:
+      branch %63, bb22, bb23
+    bb22:
       %78 = call builtin.console.log(%77)
-      jump bb21
-    bb24:
+      jump bb20
+    bb23:
       %79 = call %75, this=%76, args=[%77], callsite="console.log"
-      jump bb21
-    bb25:
+      jump bb20
+    bb24:
       %83 = const c43
       %84 = const c44
       %85 = call builtin.intrinsic_pristine(%83, %84)
-      branch %85, bb27, bb28
-    bb26:
+      branch %85, bb26, bb27
+    bb25:
       %82 = call builtin.exception_value(%80)
       throw %82
-    bb27:
+    bb26:
       %96 = const c49
-      jump bb34
-    bb28:
+      jump bb33
+    bb27:
       %86 = const c45
       %87 = const c46
       %88 = call builtin.intrinsic_resolve(%86, %87)
       %89 = is_exception %88
-      branch %89, bb30, bb29
-    bb29:
+      branch %89, bb29, bb28
+    bb28:
       %91 = const c47
       %92 = const c48
       %93 = call builtin.intrinsic_resolve(%91, %92, %88)
       %94 = is_exception %93
-      branch %94, bb32, bb31
-    bb30:
+      branch %94, bb31, bb30
+    bb29:
       %90 = call builtin.exception_value(%88)
       throw %90
+    bb30:
+      jump bb33
     bb31:
-      jump bb34
-    bb32:
       %95 = call builtin.exception_value(%93)
       throw %95
-    bb33:
-      %106 = phi [(bb37, %104), (bb38, %105)]
+    bb32:
+      %106 = phi [(bb36, %104), (bb37, %105)]
       %107 = is_exception %106
-      branch %107, bb40, bb39
-    bb34:
-      %97 = phi [(bb27, %96), (bb31, %93)]
-      %98 = phi [(bb27, %96), (bb31, %88)]
+      branch %107, bb39, bb38
+    bb33:
+      %97 = phi [(bb26, %96), (bb30, %93)]
+      %98 = phi [(bb26, %96), (bb30, %88)]
       %99 = load var $0.POINTS
       %100 = const c50
       %101 = get_prop %99, %100
       %102 = is_exception %101
-      branch %102, bb36, bb35
+      branch %102, bb35, bb34
+    bb34:
+      branch %85, bb36, bb37
     bb35:
-      branch %85, bb37, bb38
-    bb36:
       %103 = call builtin.exception_value(%101)
       throw %103
-    bb37:
+    bb36:
       %104 = call builtin.console.log(%101)
-      jump bb33
-    bb38:
+      jump bb32
+    bb37:
       %105 = call %97, this=%98, args=[%101], callsite="console.log"
-      jump bb33
-    bb39:
+      jump bb32
+    bb38:
       return
-    bb40:
+    bb39:
       %108 = call builtin.exception_value(%106)
       throw %108
-    bb41:
+    bb40:
       %34 = load var $0.POINTS
       %47 = load var $0.POINTS
-      jump bb42
-    bb42:
-      %109 = elem_shape_guard %47, c20
+      jump bb41
+    bb41:
+      %109 = guard_elements_kind %47, 0, template=c20
       jump bb1
 }

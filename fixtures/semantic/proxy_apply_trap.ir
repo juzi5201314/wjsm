@@ -120,9 +120,8 @@ module {
       %24 = call builtin.create_closure(%22, %23)
       %25 = init_object_literal(c21, values=[%24])
       store var $0.handler, %25
-      %26 = const c20
       %27 = load var $0.handler
-      %28 = call builtin.proxy.create(%26, %27)
+      %28 = call builtin.proxy.create(%21, %27)
       %29 = is_exception %28
       branch %29, bb2, bb1
     bb1:

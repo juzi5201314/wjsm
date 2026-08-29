@@ -370,145 +370,22 @@ fn verify_instruction_uses(
     site: ValueUseSite,
     dominance: &Dominators,
 ) -> Result<(), IrVerificationError> {
-    match instruction {
-        Instruction::Const { .. } | Instruction::LoadVar { .. } | Instruction::Phi { .. } => {}
-        Instruction::Binary { lhs, rhs, .. } | Instruction::Compare { lhs, rhs, .. } => {
-            verify_value_use(function, definitions, *lhs, site, dominance)?;
-            verify_value_use(function, definitions, *rhs, site, dominance)?;
-        }
-        Instruction::Unary { value, .. }
-        | Instruction::StoreVar { value, .. }
-        | Instruction::PromiseResolve { value, .. }
-        | Instruction::PromiseReject { reason: value, .. }
-        | Instruction::Suspend { promise: value, .. }
-        | Instruction::GeneratorSuspend { result: value, .. }
-        | Instruction::IsException { value, .. }
-        | Instruction::EncodeException { value, .. }
-        | Instruction::ExceptionToObject { value, .. } => {
-            verify_value_use(function, definitions, *value, site, dominance)?;
-        }
-        Instruction::ObjectSpread { object, source, .. } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *source, site, dominance)?;
-        }
-        Instruction::GuardSameFunction { callee, .. } => {
-            verify_value_use(function, definitions, *callee, site, dominance)?;
-        }
-        Instruction::CallBuiltin { args, .. } => {
-            verify_value_slice(function, definitions, args, site, dominance)?;
-        }
-        Instruction::StringConcatVa { parts, .. } => {
-            verify_value_slice(function, definitions, parts, site, dominance)?;
-        }
-        Instruction::Call {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | Instruction::ConstructCall {
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            verify_value_use(function, definitions, *callee, site, dominance)?;
-            verify_value_use(function, definitions, *this_val, site, dominance)?;
-            verify_value_slice(function, definitions, args, site, dominance)?;
-        }
-        Instruction::SuperCall {
-            callee,
-            this_val,
-            args,
-            forward_args,
-            ..
-        } => {
-            if *forward_args && !args.is_empty() {
-                return Err(function_error(
-                    function,
-                    format_args!("super_call cannot combine forward_args with explicit args"),
-                ));
-            }
-            verify_value_use(function, definitions, *callee, site, dominance)?;
-            verify_value_use(function, definitions, *this_val, site, dominance)?;
-            verify_value_slice(function, definitions, args, site, dominance)?;
-        }
-        Instruction::GetProp { object, key, .. }
-        | Instruction::DeleteProp { object, key, .. }
-        | Instruction::GetElem {
-            object, index: key, ..
-        } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *key, site, dominance)?;
-        }
-        Instruction::ElemShapeGuard { array, .. } => {
-            verify_value_use(function, definitions, *array, site, dominance)?;
-        }
-        Instruction::GetElemGuarded {
-            object,
-            index,
-            guard,
-            ..
-        } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *index, site, dominance)?;
-            verify_value_use(function, definitions, *guard, site, dominance)?;
-        }
-        Instruction::GetPropGuarded {
-            object, key, guard, ..
-        } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *key, site, dominance)?;
-            verify_value_use(function, definitions, *guard, site, dominance)?;
-        }
-        Instruction::SetProp {
-            object, key, value, ..
-        }
-        | Instruction::CreateDataProperty {
-            object, key, value, ..
-        } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *key, site, dominance)?;
-            verify_value_use(function, definitions, *value, site, dominance)?;
-        }
-        Instruction::InitObjectLiteral { values, .. } => {
-            verify_value_slice(function, definitions, values, site, dominance)?;
-        }
-        Instruction::SetElem {
-            object,
-            index: key,
-            value,
-            ..
-        } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *key, site, dominance)?;
-            verify_value_use(function, definitions, *value, site, dominance)?;
-        }
-        Instruction::SetProto { object, value } => {
-            verify_value_use(function, definitions, *object, site, dominance)?;
-            verify_value_use(function, definitions, *value, site, dominance)?;
-        }
-        Instruction::NewObject { .. }
-        | Instruction::NewArray { .. }
-        | Instruction::CloneArrayTemplate { .. }
-        | Instruction::GetSuperBase { .. }
-        | Instruction::GetSuperConstructor { .. }
-        | Instruction::NewPromise { .. }
-        | Instruction::CollectRestArgs { .. }
-        | Instruction::DebugCheck { .. } => {}
+    if matches!(instruction, Instruction::Phi { .. }) {
+        return Ok(());
     }
-    Ok(())
-}
-
-fn verify_value_slice(
-    function: &Function,
-    definitions: &Definitions,
-    values: &[ValueId],
-    site: ValueUseSite,
-    dominance: &Dominators,
-) -> Result<(), IrVerificationError> {
-    for value in values {
-        verify_value_use(function, definitions, *value, site, dominance)?;
+    if let Instruction::SuperCall {
+        forward_args, args, ..
+    } = instruction
+        && *forward_args
+        && !args.is_empty()
+    {
+        return Err(function_error(
+            function,
+            format_args!("super_call cannot combine forward_args with explicit args"),
+        ));
+    }
+    for value in instruction.uses() {
+        verify_value_use(function, definitions, value, site, dominance)?;
     }
     Ok(())
 }
@@ -530,6 +407,13 @@ fn verify_terminator_uses(
             value: condition, ..
         } => {
             verify_value_use(function, definitions, *condition, site, dominance)?;
+        }
+        Terminator::Deopt { frames } => {
+            for frame in frames {
+                for live in &frame.lives {
+                    verify_value_use(function, definitions, *live, site, dominance)?;
+                }
+            }
         }
         Terminator::Return { value: None } | Terminator::Jump { .. } | Terminator::Unreachable => {}
     }
@@ -628,84 +512,11 @@ fn verify_value_use(
 }
 
 fn instruction_dest(instruction: &Instruction) -> Option<ValueId> {
-    match instruction {
-        Instruction::Const { dest, .. }
-        | Instruction::Binary { dest, .. }
-        | Instruction::Unary { dest, .. }
-        | Instruction::Compare { dest, .. }
-        | Instruction::Phi { dest, .. }
-        | Instruction::StringConcatVa { dest, .. }
-        | Instruction::LoadVar { dest, .. }
-        | Instruction::NewObject { dest, .. }
-        | Instruction::GetProp { dest, .. }
-        | Instruction::SetProp { dest, .. }
-        | Instruction::DeleteProp { dest, .. }
-        | Instruction::NewArray { dest, .. }
-        | Instruction::CloneArrayTemplate { dest, .. }
-        | Instruction::InitObjectLiteral { dest, .. }
-        | Instruction::GetElem { dest, .. }
-        | Instruction::SetElem { dest, .. }
-        | Instruction::ElemShapeGuard { dest, .. }
-        | Instruction::GetElemGuarded { dest, .. }
-        | Instruction::GetPropGuarded { dest, .. }
-        | Instruction::GetSuperBase { dest }
-        | Instruction::GetSuperConstructor { dest }
-        | Instruction::NewPromise { dest }
-        | Instruction::CollectRestArgs { dest, .. }
-        | Instruction::IsException { dest, .. }
-        | Instruction::GuardSameFunction { dest, .. }
-        | Instruction::EncodeException { dest, .. }
-        | Instruction::ExceptionToObject { dest, .. }
-        | Instruction::CreateDataProperty { dest, .. }
-        | Instruction::ObjectSpread { dest, .. } => Some(*dest),
-
-        Instruction::CallBuiltin { dest, .. }
-        | Instruction::Call { dest, .. }
-        | Instruction::SuperCall { dest, .. }
-        | Instruction::ConstructCall { dest, .. } => *dest,
-        Instruction::StoreVar { .. }
-        | Instruction::SetProto { .. }
-        | Instruction::PromiseResolve { .. }
-        | Instruction::PromiseReject { .. }
-        | Instruction::Suspend { .. }
-        | Instruction::GeneratorSuspend { .. }
-        | Instruction::DebugCheck { .. } => None,
-    }
+    instruction.dest()
 }
 
 fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId> {
-    let mut successors = Vec::new();
-    match terminator {
-        Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
-        Terminator::Jump { target } => push_unique(&mut successors, *target),
-        Terminator::Branch {
-            true_block,
-            false_block,
-            ..
-        } => {
-            push_unique(&mut successors, *true_block);
-            push_unique(&mut successors, *false_block);
-        }
-        Terminator::Switch {
-            cases,
-            default_block,
-            exit_block,
-            ..
-        } => {
-            for case in cases {
-                push_unique(&mut successors, case.target);
-            }
-            push_unique(&mut successors, *default_block);
-            push_unique(&mut successors, *exit_block);
-        }
-    }
-    successors
-}
-
-fn push_unique(values: &mut Vec<BasicBlockId>, value: BasicBlockId) {
-    if !values.contains(&value) {
-        values.push(value);
-    }
+    crate::cfg::terminator_successors(terminator)
 }
 
 fn function_error(function: &Function, detail: fmt::Arguments<'_>) -> IrVerificationError {

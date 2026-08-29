@@ -177,48 +177,7 @@ fn instruction_uses(instruction: &Instruction) -> HashSet<ValueId> {
 }
 
 fn instruction_destination(instruction: &Instruction) -> Option<ValueId> {
-    match instruction {
-        Instruction::Const { dest, .. }
-        | Instruction::Binary { dest, .. }
-        | Instruction::Unary { dest, .. }
-        | Instruction::Compare { dest, .. }
-        | Instruction::Phi { dest, .. }
-        | Instruction::StringConcatVa { dest, .. }
-        | Instruction::LoadVar { dest, .. }
-        | Instruction::NewObject { dest, .. }
-        | Instruction::GetProp { dest, .. }
-        | Instruction::SetProp { dest, .. }
-        | Instruction::CreateDataProperty { dest, .. }
-        | Instruction::DeleteProp { dest, .. }
-        | Instruction::NewArray { dest, .. }
-        | Instruction::CloneArrayTemplate { dest, .. }
-        | Instruction::InitObjectLiteral { dest, .. }
-        | Instruction::GetElem { dest, .. }
-        | Instruction::SetElem { dest, .. }
-        | Instruction::ElemShapeGuard { dest, .. }
-        | Instruction::GetElemGuarded { dest, .. }
-        | Instruction::GetPropGuarded { dest, .. }
-        | Instruction::GetSuperBase { dest }
-        | Instruction::GetSuperConstructor { dest }
-        | Instruction::NewPromise { dest }
-        | Instruction::CollectRestArgs { dest, .. }
-        | Instruction::IsException { dest, .. }
-        | Instruction::GuardSameFunction { dest, .. }
-        | Instruction::EncodeException { dest, .. }
-        | Instruction::ExceptionToObject { dest, .. }
-        | Instruction::ObjectSpread { dest, .. } => Some(*dest),
-        Instruction::CallBuiltin { dest, .. }
-        | Instruction::Call { dest, .. }
-        | Instruction::SuperCall { dest, .. }
-        | Instruction::ConstructCall { dest, .. } => *dest,
-        Instruction::StoreVar { .. }
-        | Instruction::SetProto { .. }
-        | Instruction::PromiseResolve { .. }
-        | Instruction::PromiseReject { .. }
-        | Instruction::Suspend { .. }
-        | Instruction::GeneratorSuspend { .. }
-        | Instruction::DebugCheck { .. } => None,
-    }
+    instruction.dest()
 }
 
 fn terminator_uses(terminator: &Terminator) -> HashSet<ValueId> {
@@ -234,7 +193,10 @@ fn terminator_uses(terminator: &Terminator) -> HashSet<ValueId> {
 pub(crate) fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId> {
     let mut successors = Vec::new();
     match terminator {
-        Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
+        Terminator::Return { .. }
+        | Terminator::Throw { .. }
+        | Terminator::Unreachable
+        | Terminator::Deopt { .. } => {}
         Terminator::Jump { target } => successors.push(*target),
         Terminator::Branch {
             true_block,

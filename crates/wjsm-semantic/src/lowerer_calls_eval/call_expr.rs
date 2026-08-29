@@ -58,6 +58,7 @@ impl Lowerer {
                 dest,
                 object: array,
                 index: index_val,
+                latch: None,
             },
         );
         dest
@@ -607,8 +608,11 @@ impl Lowerer {
                     let mut member_block = block;
                     this_val =
                         self.lower_call_operand_then_continue(&member_expr.obj, &mut member_block)?;
-                    callee_val =
-                        self.lower_member_expr_from_object(member_expr, this_val, &mut member_block)?;
+                    callee_val = self.lower_member_expr_from_object(
+                        member_expr,
+                        this_val,
+                        &mut member_block,
+                    )?;
                     // 方法查找（getter / Proxy get 陷阱）抛出必须先于调用分叉
                     // 传播，哨兵不得作为 callee 流入 Call（否则误报
                     // "... is not a function" 且丢失原始异常）。
@@ -1042,6 +1046,8 @@ impl Lowerer {
                     dest: new_target,
                     object: env_val,
                     key: key_val,
+                    latch: None,
+                    latch_template: None,
                 },
             );
             new_target

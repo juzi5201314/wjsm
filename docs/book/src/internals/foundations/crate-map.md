@@ -5,7 +5,8 @@
 | Crate | 职责 |
 | --- | --- |
 | `wjsm-parser` | SWC 解析与源码诊断 |
-| `wjsm-semantic` | scope/early-error/lowering |
+| `wjsm-semantic` | scope/early-error/AST→IR 与语言去糖 |
+| `wjsm-optimize` | 后端无关 IR→IR 优化（Sound AOT 与 Speculative overlay） |
 | `wjsm-ir` | 后端无关 semantic IR、value/builtin wire IDs |
 | `wjsm-module` | module graph、ESM/CJS resolution 与 bundling |
 | `wjsm-artifact-format` | portable `.wjsm` encode/decode/limits/hash/verify |
@@ -31,6 +32,7 @@ Cranelift、object、平台映射与 native ABI 只属于 `wjsm-backend-native`/
 | 改动 | Owner |
 | --- | --- |
 | 新语法/early error | `wjsm-semantic`，必要时 `wjsm-ir` |
+| IR 优化 / overlay 投机 | `wjsm-optimize` |
 | IR wire/layout | `wjsm-ir` + artifact verifier + semantic snapshots |
 | module resolution | `wjsm-module` |
 | artifact schema/limits | `wjsm-artifact-format` |

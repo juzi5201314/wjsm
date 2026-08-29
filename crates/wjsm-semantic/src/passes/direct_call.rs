@@ -28,169 +28,22 @@ pub(crate) fn is_env_name(name: &str) -> bool {
 
 /// 指令的 ValueId 操作数（uses）。与后端 `analysis_liveness` 的收集规则一致。
 pub(crate) fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
-    use Instruction::*;
-    match ins {
-        Binary { lhs, rhs, .. } | Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
-        Unary { value, .. } => vec![*value],
-        StringConcatVa { parts, .. } => parts.clone(),
-        GetProp { object, key, .. } => vec![*object, *key],
-        SetProp {
-            object, key, value, ..
-        }
-        | CreateDataProperty {
-            object, key, value, ..
-        } => vec![*object, *key, *value],
-        SetProto { object, value } => vec![*object, *value],
-        GetElem { object, index, .. } => vec![*object, *index],
-        ElemShapeGuard { array, .. } => vec![*array],
-        GetElemGuarded {
-            object,
-            index,
-            guard,
-            ..
-        } => vec![*object, *index, *guard],
-        GetPropGuarded {
-            object, key, guard, ..
-        } => vec![*object, *key, *guard],
-        SetElem {
-            object,
-            index,
-            value,
-            ..
-        } => vec![*object, *index, *value],
-        Call {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | SuperCall {
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            let mut v = vec![*callee, *this_val];
-            v.extend(args.iter().copied());
-            v
-        }
-        ConstructCall {
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            let mut v = vec![*callee, *this_val];
-            v.extend(args.iter().copied());
-            v
-        }
-        CallBuiltin { args, .. } => args.clone(),
-        DeleteProp { object, key, .. } => vec![*object, *key],
-        PromiseResolve { promise, value }
-        | PromiseReject {
-            promise,
-            reason: value,
-        } => vec![*promise, *value],
-        Suspend { promise, .. } => vec![*promise],
-        GeneratorSuspend { result, .. } => vec![*result],
-        IsException { value, .. }
-        | EncodeException { value, .. }
-        | ExceptionToObject { value, .. } => vec![*value],
-        GuardSameFunction { callee, .. } => vec![*callee],
-        ObjectSpread { object, source, .. } => vec![*object, *source],
-        StoreVar { value, .. } => vec![*value],
-        InitObjectLiteral { values, .. } => values.clone(),
-        // 无操作数
-        Const { .. }
-        | LoadVar { .. }
-        | NewObject { .. }
-        | NewArray { .. }
-        | CloneArrayTemplate { .. }
-        | GetSuperBase { .. }
-        | GetSuperConstructor { .. }
-        | NewPromise { .. }
-        | CollectRestArgs { .. }
-        | DebugCheck { .. }
-        | Phi { .. } => vec![],
-    }
+    wjsm_optimize::instr_uses(ins)
 }
 
 /// 终止器的 ValueId 操作数（uses）。
 pub(crate) fn terminator_uses(terminator: &Terminator) -> Vec<ValueId> {
-    match terminator {
-        Terminator::Return { value: Some(v) } => vec![*v],
-        Terminator::Branch { condition, .. } => vec![*condition],
-        Terminator::Switch { value, .. } => vec![*value],
-        Terminator::Throw { value } => vec![*value],
-        Terminator::Return { value: None } | Terminator::Jump { .. } | Terminator::Unreachable => {
-            vec![]
-        }
-    }
+    wjsm_optimize::terminator_uses(terminator)
 }
 
 /// 收集 `target` 在本函数中的全部 use 指令（含 Phi source）。
 pub(crate) fn collect_uses(function: &Function, target: ValueId) -> Vec<&Instruction> {
-    let mut uses = Vec::new();
-    for block in function.blocks() {
-        for instruction in block.instructions() {
-            let mut used = instr_uses(instruction);
-            if let Instruction::Phi { sources, .. } = instruction {
-                used.extend(sources.iter().map(|s| s.value));
-            }
-            if used.contains(&target) {
-                uses.push(instruction);
-            }
-        }
-    }
-    uses
+    wjsm_optimize::collect_uses(function, target)
 }
 
 /// 取 producing 指令的 dest（def）。非 producing 返回 None。
 pub(crate) fn instruction_dest(ins: &Instruction) -> Option<ValueId> {
-    use Instruction::*;
-    Some(match ins {
-        Const { dest, .. }
-        | Binary { dest, .. }
-        | Unary { dest, .. }
-        | Compare { dest, .. }
-        | Phi { dest, .. }
-        | StringConcatVa { dest, .. }
-        | LoadVar { dest, .. }
-        | NewObject { dest, .. }
-        | GetProp { dest, .. }
-        | SetProp { dest, .. }
-        | CreateDataProperty { dest, .. }
-        | DeleteProp { dest, .. }
-        | NewArray { dest, .. }
-        | CloneArrayTemplate { dest, .. }
-        | InitObjectLiteral { dest, .. }
-        | GetElem { dest, .. }
-        | SetElem { dest, .. }
-        | ElemShapeGuard { dest, .. }
-        | GetElemGuarded { dest, .. }
-        | GetPropGuarded { dest, .. }
-        | GetSuperBase { dest }
-        | GetSuperConstructor { dest }
-        | NewPromise { dest }
-        | CollectRestArgs { dest, .. }
-        | IsException { dest, .. }
-        | GuardSameFunction { dest, .. }
-        | EncodeException { dest, .. }
-        | ExceptionToObject { dest, .. }
-        | ObjectSpread { dest, .. } => *dest,
-        Call { dest, .. }
-        | CallBuiltin { dest, .. }
-        | SuperCall { dest, .. }
-        | ConstructCall { dest, .. } => (*dest)?,
-        // 非 producing
-        StoreVar { .. }
-        | SetProto { .. }
-        | PromiseResolve { .. }
-        | PromiseReject { .. }
-        | Suspend { .. }
-        | GeneratorSuspend { .. }
-        | DebugCheck { .. } => return None,
-    })
+    wjsm_optimize::instruction_dest(ins)
 }
 
 /// 收集本函数中作为 `TdzCheck` 首参的 ValueId 集合。
@@ -345,7 +198,9 @@ pub fn run(module: &mut Module) {
             }
             for use_instr in collect_uses(function, env_dest) {
                 match use_instr {
-                    Instruction::GetProp { dest, object, key } if *object == env_dest => {
+                    Instruction::GetProp {
+                        dest, object, key, ..
+                    } if *object == env_dest => {
                         // TDZ 受检读取必须保留真实 env 读取，视为不可解析。
                         if tdz_checked.contains(dest) {
                             all_resolvable = false;
@@ -481,7 +336,9 @@ pub fn run(module: &mut Module) {
                             };
                         }
                     }
-                    Instruction::GetProp { dest, object, key } => {
+                    Instruction::GetProp {
+                        dest, object, key, ..
+                    } => {
                         // key 的 def 是 Const(String) 且 (object, key_str) 可解析、key_str 可替换；
                         // TDZ 受检读取除外（必须在运行时观察 env 槽的哨兵状态）。
                         if !tdz_checked.contains(dest)

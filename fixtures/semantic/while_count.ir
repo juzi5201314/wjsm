@@ -90,66 +90,60 @@ module {
       %32 = const c25
       %33 = const c26
       %34 = call builtin.intrinsic_pristine(%32, %33)
-      branch %34, bb8, bb9
+      branch %34, bb6, bb7
     bb3:
       return
     bb4:
-      jump bb6
+      jump bb5
     bb5:
-      unreachable
-    bb6:
       branch %25, bb2, bb3
-    bb7:
-      unreachable
-    bb8:
+    bb6:
       %45 = const c31
-      jump bb15
-    bb9:
+      jump bb13
+    bb7:
       %35 = const c27
       %36 = const c28
       %37 = call builtin.intrinsic_resolve(%35, %36)
       %38 = is_exception %37
-      branch %38, bb11, bb10
-    bb10:
+      branch %38, bb9, bb8
+    bb8:
       %40 = const c29
       %41 = const c30
       %42 = call builtin.intrinsic_resolve(%40, %41, %37)
       %43 = is_exception %42
-      branch %43, bb13, bb12
-    bb11:
+      branch %43, bb11, bb10
+    bb9:
       %39 = call builtin.exception_value(%37)
       throw %39
-    bb12:
-      jump bb15
-    bb13:
+    bb10:
+      jump bb13
+    bb11:
       %44 = call builtin.exception_value(%42)
       throw %44
-    bb14:
-      %51 = phi [(bb16, %49), (bb17, %50)]
+    bb12:
+      %51 = phi [(bb14, %49), (bb15, %50)]
       %52 = is_exception %51
-      branch %52, bb19, bb18
-    bb15:
-      %46 = phi [(bb8, %45), (bb12, %42)]
-      %47 = phi [(bb8, %45), (bb12, %37)]
+      branch %52, bb17, bb16
+    bb13:
+      %46 = phi [(bb6, %45), (bb10, %42)]
+      %47 = phi [(bb6, %45), (bb10, %37)]
       %48 = load var $0.i
-      branch %34, bb16, bb17
-    bb16:
+      branch %34, bb14, bb15
+    bb14:
       %49 = call builtin.console.log(%48)
-      jump bb14
-    bb17:
+      jump bb12
+    bb15:
       %50 = call %46, this=%47, args=[%48], callsite="console.log"
-      jump bb14
-    bb18:
+      jump bb12
+    bb16:
       %54 = load var $0.i
       %55 = const c32
       %56 = add %54, %55
       store var $0.i, %56
-      jump bb20
-    bb19:
+      jump bb18
+    bb17:
       %53 = call builtin.exception_value(%51)
       throw %53
-    bb20:
+    bb18:
       jump bb1
-    bb21:
-      unreachable
 }

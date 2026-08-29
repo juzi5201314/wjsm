@@ -5,11 +5,11 @@
 //! 循环头 Phi、循环内纯 SSA，仅在循环出口与调用边界写回。
 
 use super::cfg_fold::terminator_successors;
-use super::direct_call::{instr_uses, instruction_dest, terminator_uses};
 use super::escape_scalar::{
     CandidateAnalysis, PropertyPhi, PropertyRead, PropertyWrite, apply_value_replacements,
     close_replacements, next_value_id, resolve_property_replacements,
 };
+use crate::ir_walk::{instr_uses, instruction_dest, terminator_uses};
 use std::collections::{HashMap, HashSet};
 use wjsm_ir::{
     BasicBlockId, Builtin, Constant, ConstantId, Function, FunctionId, Instruction, Module,
@@ -150,9 +150,9 @@ fn seed_views(
                         Instruction::LoadVar { dest, name } if bindings.contains(name) => {
                             changed |= views[function_index].family.insert(*dest);
                         }
-                        Instruction::GetProp { dest, object, key }
-                            if views[function_index].env_values.contains(object) =>
-                        {
+                        Instruction::GetProp {
+                            dest, object, key, ..
+                        } if views[function_index].env_values.contains(object) => {
                             if strings
                                 .get(key)
                                 .is_some_and(|key_name| bindings.contains(key_name))
@@ -268,7 +268,9 @@ fn use_is_allowed(
         Instruction::GetProp { object, key, .. } if family.contains(object) => strings
             .get(key)
             .is_some_and(|key_name| key_allowed(keys, key_name)),
-        Instruction::GetProp { object, key, dest } if view.env_values.contains(object) => {
+        Instruction::GetProp {
+            object, key, dest, ..
+        } if view.env_values.contains(object) => {
             family.contains(dest)
                 && strings
                     .get(key)
@@ -911,6 +913,8 @@ mod tests {
             dest: ValueId(6),
             object: ValueId(4),
             key: ValueId(5),
+            latch: None,
+            latch_template: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(6)),

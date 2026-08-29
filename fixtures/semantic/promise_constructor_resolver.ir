@@ -135,7 +135,6 @@ module {
       %21 = new_promise
       %23 = call builtin.promise.create_resolve_function(%21)
       %24 = call builtin.promise.create_reject_function(%21)
-      %33 = const c0
       jump bb6
     bb1:
       %28 = const c31
@@ -158,6 +157,6 @@ module {
       %34 = const c20
       %36 = const c21
       %37 = call %23, this=%34, args=[%36], callsite="resolve"
-      store var $1.resolve, %33
+      store var $1.resolve, %0
       jump bb5
 }

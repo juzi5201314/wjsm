@@ -90,7 +90,7 @@ module {
       %49 = load var $0.x
       %50 = const c29
       %51 = lt %49, %50
-      jump bb18
+      jump bb17
     bb3:
       return
     bb4:
@@ -143,13 +143,7 @@ module {
     bb16:
       jump bb2
     bb17:
-      unreachable
+      jump bb18
     bb18:
-      jump bb20
-    bb19:
-      unreachable
-    bb20:
       branch %51, bb1, bb3
-    bb21:
-      unreachable
 }

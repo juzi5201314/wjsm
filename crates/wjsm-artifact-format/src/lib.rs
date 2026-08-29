@@ -24,7 +24,10 @@ const MAGIC: &[u8; 8] = b"WJSMART\0";
 // v14：Call/ConstructCall 指令新增源级 callsite 表达式渲染（TypeError
 //      文案对齐 Node 的 `<expr> is not a function/constructor`），旧
 //      artifact必须重新构建。
-const FORMAT_VERSION: u16 = 14;
+// v15：Guard/LoadSlot/StoreSlot/Deopt 与反馈 80B 槽。
+// v16：删除 ElemShapeGuard/GetPropGuarded/GetElemGuarded；GetProp/GetElem 闩锁
+//      与 GuardElementsKind 模板并进通用指令。
+const FORMAT_VERSION: u16 = 16;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

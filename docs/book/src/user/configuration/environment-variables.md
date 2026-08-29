@@ -25,6 +25,8 @@
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级（`none`/`speed`/`speed_and_size`） | 未设置时为 `speed` |
 | `WJSM_VERIFY_CLIF` | CLIF verifier（`0`/`false`/`FALSE` 关闭） | 开启 |
 | `WJSM_DISABLE_SPECIALIZATION` | 关闭运行时类型反馈与热函数特化（设为 `1`） | 启用 |
+| `WJSM_OVERLAY_MAX_BYTES` | overlay 代码体积上限（字节）；`0` 不限 | `clamp(32MiB, 12.5% RSS, 256MiB)` |
+| `WJSM_OVERLAY_MAX_COUNT` | overlay 份数上限；`0` 不限 | `4096` |
 
 `WJSM_OPT_LEVEL` 进入 native cache key，不同档位的 `.wnat` 互不复用。非法值在 native compiler 初始化时被拒绝。`WJSM_VERIFY_CLIF` 不进入 cache key。
 

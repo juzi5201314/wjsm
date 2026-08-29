@@ -327,6 +327,8 @@ impl Lowerer {
                 dest: home_val,
                 object: env_val,
                 key: home_key,
+                latch: None,
+                latch_template: None,
             },
         );
         self.emit_set_prop(block, cont_val, home_key, home_val);

@@ -661,7 +661,6 @@ module {
     bb34:
       %113 = load var $3.$resume_val
       %114 = const c76
-      %115 = get_prop %113, %114
       %116 = const c77
       %117 = call builtin.async_iterator.from(%116)
       %118 = is_exception %117
@@ -742,7 +741,6 @@ module {
     bb47:
       %146 = load var $3.$resume_val
       %147 = const c83
-      %148 = get_prop %146, %147
       %149 = new_array(capacity=4)
       %150 = const c84
       call builtin.array.push(%149, %150)
@@ -834,7 +832,6 @@ module {
     bb62:
       %184 = load var $3.$resume_val
       %185 = const c90
-      %186 = get_prop %184, %185
       %187 = const c91
       %188 = load var $3.$generator
       call builtin.async_generator.return(%188, %187)
@@ -1125,7 +1122,6 @@ module {
     bb12:
       %48 = load var $7.$resume_val
       %49 = const c165
-      %50 = get_prop %48, %49
       jump bb4
     bb13:
       %108 = load var $7.$env
@@ -1316,7 +1312,7 @@ module {
       %10 = const c204
       store var $13.$shared_env, %10
       %405 = load var $13.$state
-      switch %405 [case c311 -> bb2, case c312 -> bb12, case c313 -> bb49, case c314 -> bb86, case c315 -> bb99, case c316 -> bb130], default bb139, exit bb140
+      switch %405 [case c311 -> bb2, case c312 -> bb12, case c313 -> bb48, case c314 -> bb83, case c315 -> bb96, case c316 -> bb127], default bb136, exit bb137
     bb2:
       %11 = const c205
       %12 = load var $13.$closure_env
@@ -1541,7 +1537,7 @@ module {
       %355 = load var $15.$for_await_iter.0
       call builtin.continuation.save_var(%353, %354, %355)
       suspend %116, state=2
-      jump bb50
+      jump bb49
     bb46:
       %125 = load var $15.$for_await_iter.0
       %126 = load var $13.$resume_val
@@ -1551,164 +1547,158 @@ module {
       %129 = const c237
       %130 = const c238
       %131 = call builtin.intrinsic_pristine(%129, %130)
-      branch %131, bb52, bb53
+      branch %131, bb51, bb52
     bb47:
-      unreachable
-    bb48:
       %173 = const c246
       %174 = load var $13.$closure_env
       %175 = const c247
       %176 = get_prop %174, %175
       %177 = call %176, this=%173, callsite="outer"
       %178 = is_exception %177
-      branch %178, bb73, bb72
-    bb49:
+      branch %178, bb70, bb69
+    bb48:
       %356 = load var $13.$env
       %357 = const c290
       %358 = call builtin.continuation.load_var(%356, %357)
       store var $15.$for_await_iter.0, %358
       %118 = load var $13.$resume_val
       %119 = load var $13.$is_rejected
-      branch %119, bb51, bb50
-    bb50:
+      branch %119, bb50, bb49
+    bb49:
       %121 = load var $13.$resume_val
       %122 = const c235
       %123 = get_prop %121, %122
       %124 = not %123
-      branch %124, bb46, bb48
-    bb51:
+      branch %124, bb46, bb47
+    bb50:
       %120 = load var $13.$promise
       promise_reject %120, %118
       return
-    bb52:
+    bb51:
       %152 = const c243
-      jump bb63
-    bb53:
+      jump bb62
+    bb52:
       %132 = const c239
       %133 = const c240
       %134 = call builtin.intrinsic_resolve(%132, %133)
       %135 = is_exception %134
-      branch %135, bb55, bb54
-    bb54:
+      branch %135, bb54, bb53
+    bb53:
       %142 = const c241
       %143 = const c242
       %144 = call builtin.intrinsic_resolve(%142, %143, %134)
       %145 = is_exception %144
-      branch %145, bb59, bb58
-    bb55:
+      branch %145, bb58, bb57
+    bb54:
       %136 = call builtin.exception_value(%134)
       %137 = call builtin.iterator.close_throw(%125, %136)
       %138 = is_exception %137
-      branch %138, bb57, bb56
-    bb56:
+      branch %138, bb56, bb55
+    bb55:
       %141 = load var $13.$promise
       promise_reject %141, %136
       return
-    bb57:
+    bb56:
       %139 = call builtin.exception_value(%137)
       %140 = load var $13.$promise
       promise_reject %140, %139
       return
+    bb57:
+      jump bb62
     bb58:
-      jump bb63
-    bb59:
       %146 = call builtin.exception_value(%144)
       %147 = call builtin.iterator.close_throw(%125, %146)
       %148 = is_exception %147
-      branch %148, bb61, bb60
-    bb60:
+      branch %148, bb60, bb59
+    bb59:
       %151 = load var $13.$promise
       promise_reject %151, %146
       return
-    bb61:
+    bb60:
       %149 = call builtin.exception_value(%147)
       %150 = load var $13.$promise
       promise_reject %150, %149
       return
-    bb62:
-      %159 = phi [(bb64, %157), (bb65, %158)]
+    bb61:
+      %159 = phi [(bb63, %157), (bb64, %158)]
       %160 = is_exception %159
-      branch %160, bb67, bb66
-    bb63:
-      %153 = phi [(bb52, %152), (bb58, %144)]
-      %154 = phi [(bb52, %152), (bb58, %134)]
+      branch %160, bb66, bb65
+    bb62:
+      %153 = phi [(bb51, %152), (bb57, %144)]
+      %154 = phi [(bb51, %152), (bb57, %134)]
       %155 = const c244
       %156 = load var $15.value
-      branch %131, bb64, bb65
-    bb64:
+      branch %131, bb63, bb64
+    bb63:
       %157 = call builtin.console.log(%155, %156)
-      jump bb62
-    bb65:
+      jump bb61
+    bb64:
       %158 = call %153, this=%154, args=[%155, %156], callsite="console.log"
-      jump bb62
-    bb66:
+      jump bb61
+    bb65:
       jump bb45
-    bb67:
+    bb66:
       %161 = call builtin.exception_value(%159)
       %162 = call builtin.iterator.close_throw(%125, %161)
       %163 = is_exception %162
-      branch %163, bb69, bb68
-    bb68:
+      branch %163, bb68, bb67
+    bb67:
       %166 = load var $13.$promise
       promise_reject %166, %161
       return
-    bb69:
+    bb68:
       %164 = call builtin.exception_value(%162)
       %165 = load var $13.$promise
       promise_reject %165, %164
       return
-    bb70:
-      unreachable
-    bb71:
-      unreachable
-    bb72:
+    bb69:
       store var $13.aborted, %177
       %181 = const c248
       %182 = const c249
       %183 = call builtin.intrinsic_pristine(%181, %182)
       store var $suspend_spill_13_0, %183
       %335 = load var $suspend_spill_13_0
-      branch %335, bb74, bb75
-    bb73:
+      branch %335, bb71, bb72
+    bb70:
       %179 = call builtin.exception_value(%177)
       %180 = load var $13.$promise
       promise_reject %180, %179
       return
-    bb74:
+    bb71:
       %196 = const c254
-      jump bb81
-    bb75:
+      jump bb78
+    bb72:
       %184 = const c250
       %185 = const c251
       %186 = call builtin.intrinsic_resolve(%184, %185)
       %187 = is_exception %186
-      branch %187, bb77, bb76
-    bb76:
+      branch %187, bb74, bb73
+    bb73:
       %190 = const c252
       %191 = const c253
       %192 = call builtin.intrinsic_resolve(%190, %191, %186)
       %193 = is_exception %192
-      branch %193, bb79, bb78
-    bb77:
+      branch %193, bb76, bb75
+    bb74:
       %188 = call builtin.exception_value(%186)
       %189 = load var $13.$promise
       promise_reject %189, %188
       return
-    bb78:
-      jump bb81
-    bb79:
+    bb75:
+      jump bb78
+    bb76:
       %194 = call builtin.exception_value(%192)
       %195 = load var $13.$promise
       promise_reject %195, %194
       return
-    bb80:
-      %225 = phi [(bb91, %223), (bb92, %224)]
+    bb77:
+      %225 = phi [(bb88, %223), (bb89, %224)]
       %226 = is_exception %225
-      branch %226, bb94, bb93
-    bb81:
-      %197 = phi [(bb74, %196), (bb78, %192)]
+      branch %226, bb91, bb90
+    bb78:
+      %197 = phi [(bb71, %196), (bb75, %192)]
       store var $suspend_spill_13_1, %197
-      %198 = phi [(bb74, %196), (bb78, %186)]
+      %198 = phi [(bb71, %196), (bb75, %186)]
       store var $suspend_spill_13_2, %198
       %199 = const c255
       store var $suspend_spill_13_3, %199
@@ -1716,17 +1706,17 @@ module {
       %201 = const c256
       %202 = get_prop %200, %201
       %203 = is_exception %202
-      branch %203, bb83, bb82
-    bb82:
+      branch %203, bb80, bb79
+    bb79:
       %206 = call %202, this=%200, callsite="aborted.next"
       %207 = is_exception %206
-      branch %207, bb85, bb84
-    bb83:
+      branch %207, bb82, bb81
+    bb80:
       %204 = call builtin.exception_value(%202)
       %205 = load var $13.$promise
       promise_reject %205, %204
       return
-    bb84:
+    bb81:
       %211 = const c257
       %210 = call builtin.promise.resolve_static(%211, %206)
       %359 = load var $13.$env
@@ -1746,13 +1736,13 @@ module {
       %369 = load var $suspend_spill_13_3
       call builtin.continuation.save_var(%359, %368, %369)
       suspend %210, state=3
-      jump bb88
-    bb85:
+      jump bb85
+    bb82:
       %208 = call builtin.exception_value(%206)
       %209 = load var $13.$promise
       promise_reject %209, %208
       return
-    bb86:
+    bb83:
       %370 = load var $13.$env
       %371 = const c296
       %372 = call builtin.continuation.load_var(%370, %371)
@@ -1773,57 +1763,57 @@ module {
       %213 = load var $13.$is_rejected
       %214 = const c258
       %215 = stricteq %213, %214
-      branch %215, bb87, bb88
-    bb87:
+      branch %215, bb84, bb85
+    bb84:
       %216 = load var $13.$promise
       promise_reject %216, %212
       return
-    bb88:
+    bb85:
       %217 = load var $13.$resume_val
       %218 = const c259
       %219 = get_prop %217, %218
       %220 = is_exception %219
-      branch %220, bb90, bb89
-    bb89:
+      branch %220, bb87, bb86
+    bb86:
       %336 = load var $suspend_spill_13_0
-      branch %336, bb91, bb92
-    bb90:
+      branch %336, bb88, bb89
+    bb87:
       %221 = call builtin.exception_value(%219)
       %222 = load var $13.$promise
       promise_reject %222, %221
       return
-    bb91:
+    bb88:
       %339 = load var $suspend_spill_13_3
       %223 = call builtin.console.log(%339, %219)
-      jump bb80
-    bb92:
+      jump bb77
+    bb89:
       %337 = load var $suspend_spill_13_1
       %338 = load var $suspend_spill_13_2
       %340 = load var $suspend_spill_13_3
       %224 = call %337, this=%338, args=[%340, %219], callsite="console.log"
-      jump bb80
-    bb93:
+      jump bb77
+    bb90:
       %229 = load var $13.aborted
       %230 = const c260
       %231 = get_prop %229, %230
       %232 = is_exception %231
-      branch %232, bb96, bb95
-    bb94:
+      branch %232, bb93, bb92
+    bb91:
       %227 = call builtin.exception_value(%225)
       %228 = load var $13.$promise
       promise_reject %228, %227
       return
-    bb95:
+    bb92:
       %235 = const c261
       %236 = call %231, this=%229, args=[%235], callsite="aborted.return"
       %237 = is_exception %236
-      branch %237, bb98, bb97
-    bb96:
+      branch %237, bb95, bb94
+    bb93:
       %233 = call builtin.exception_value(%231)
       %234 = load var $13.$promise
       promise_reject %234, %233
       return
-    bb97:
+    bb94:
       %241 = const c262
       %240 = call builtin.promise.resolve_static(%241, %236)
       %381 = load var $13.$env
@@ -1831,13 +1821,13 @@ module {
       %383 = load var $13.aborted
       call builtin.continuation.save_var(%381, %382, %383)
       suspend %240, state=4
-      jump bb101
-    bb98:
+      jump bb98
+    bb95:
       %238 = call builtin.exception_value(%236)
       %239 = load var $13.$promise
       promise_reject %239, %238
       return
-    bb99:
+    bb96:
       %384 = load var $13.$env
       %385 = const c302
       %386 = call builtin.continuation.load_var(%384, %385)
@@ -1846,129 +1836,129 @@ module {
       %243 = load var $13.$is_rejected
       %244 = const c263
       %245 = stricteq %243, %244
-      branch %245, bb100, bb101
-    bb100:
+      branch %245, bb97, bb98
+    bb97:
       %246 = load var $13.$promise
       promise_reject %246, %242
       return
-    bb101:
+    bb98:
       %247 = load var $13.$resume_val
       store var $13.returned, %247
       %248 = const c264
       %249 = const c265
       %250 = call builtin.intrinsic_pristine(%248, %249)
-      branch %250, bb102, bb103
-    bb102:
+      branch %250, bb99, bb100
+    bb99:
       %263 = const c270
-      jump bb109
-    bb103:
+      jump bb106
+    bb100:
       %251 = const c266
       %252 = const c267
       %253 = call builtin.intrinsic_resolve(%251, %252)
       %254 = is_exception %253
-      branch %254, bb105, bb104
-    bb104:
+      branch %254, bb102, bb101
+    bb101:
       %257 = const c268
       %258 = const c269
       %259 = call builtin.intrinsic_resolve(%257, %258, %253)
       %260 = is_exception %259
-      branch %260, bb107, bb106
-    bb105:
+      branch %260, bb104, bb103
+    bb102:
       %255 = call builtin.exception_value(%253)
       %256 = load var $13.$promise
       promise_reject %256, %255
       return
-    bb106:
-      jump bb109
-    bb107:
+    bb103:
+      jump bb106
+    bb104:
       %261 = call builtin.exception_value(%259)
       %262 = load var $13.$promise
       promise_reject %262, %261
       return
-    bb108:
-      %281 = phi [(bb114, %279), (bb115, %280)]
+    bb105:
+      %281 = phi [(bb111, %279), (bb112, %280)]
       %282 = is_exception %281
-      branch %282, bb117, bb116
-    bb109:
-      %264 = phi [(bb102, %263), (bb106, %259)]
-      %265 = phi [(bb102, %263), (bb106, %253)]
+      branch %282, bb114, bb113
+    bb106:
+      %264 = phi [(bb99, %263), (bb103, %259)]
+      %265 = phi [(bb99, %263), (bb103, %253)]
       %266 = const c271
       %267 = load var $13.returned
       %268 = const c272
       %269 = get_prop %267, %268
       %270 = is_exception %269
-      branch %270, bb111, bb110
-    bb110:
+      branch %270, bb108, bb107
+    bb107:
       %273 = load var $13.returned
       %274 = const c273
       %275 = get_prop %273, %274
       %276 = is_exception %275
-      branch %276, bb113, bb112
-    bb111:
+      branch %276, bb110, bb109
+    bb108:
       %271 = call builtin.exception_value(%269)
       %272 = load var $13.$promise
       promise_reject %272, %271
       return
-    bb112:
-      branch %250, bb114, bb115
-    bb113:
+    bb109:
+      branch %250, bb111, bb112
+    bb110:
       %277 = call builtin.exception_value(%275)
       %278 = load var $13.$promise
       promise_reject %278, %277
       return
-    bb114:
+    bb111:
       %279 = call builtin.console.log(%266, %269, %275)
-      jump bb108
-    bb115:
+      jump bb105
+    bb112:
       %280 = call %264, this=%265, args=[%266, %269, %275], callsite="console.log"
-      jump bb108
-    bb116:
+      jump bb105
+    bb113:
       %285 = const c274
       %286 = const c275
       %287 = call builtin.intrinsic_pristine(%285, %286)
       store var $suspend_spill_13_4, %287
       %341 = load var $suspend_spill_13_4
-      branch %341, bb118, bb119
-    bb117:
+      branch %341, bb115, bb116
+    bb114:
       %283 = call builtin.exception_value(%281)
       %284 = load var $13.$promise
       promise_reject %284, %283
       return
-    bb118:
+    bb115:
       %300 = const c280
-      jump bb125
-    bb119:
+      jump bb122
+    bb116:
       %288 = const c276
       %289 = const c277
       %290 = call builtin.intrinsic_resolve(%288, %289)
       %291 = is_exception %290
-      branch %291, bb121, bb120
-    bb120:
+      branch %291, bb118, bb117
+    bb117:
       %294 = const c278
       %295 = const c279
       %296 = call builtin.intrinsic_resolve(%294, %295, %290)
       %297 = is_exception %296
-      branch %297, bb123, bb122
-    bb121:
+      branch %297, bb120, bb119
+    bb118:
       %292 = call builtin.exception_value(%290)
       %293 = load var $13.$promise
       promise_reject %293, %292
       return
-    bb122:
-      jump bb125
-    bb123:
+    bb119:
+      jump bb122
+    bb120:
       %298 = call builtin.exception_value(%296)
       %299 = load var $13.$promise
       promise_reject %299, %298
       return
-    bb124:
-      %329 = phi [(bb135, %327), (bb136, %328)]
+    bb121:
+      %329 = phi [(bb132, %327), (bb133, %328)]
       %330 = is_exception %329
-      branch %330, bb138, bb137
-    bb125:
-      %301 = phi [(bb118, %300), (bb122, %296)]
+      branch %330, bb135, bb134
+    bb122:
+      %301 = phi [(bb115, %300), (bb119, %296)]
       store var $suspend_spill_13_5, %301
-      %302 = phi [(bb118, %300), (bb122, %290)]
+      %302 = phi [(bb115, %300), (bb119, %290)]
       store var $suspend_spill_13_6, %302
       %303 = const c281
       store var $suspend_spill_13_7, %303
@@ -1976,17 +1966,17 @@ module {
       %305 = const c282
       %306 = get_prop %304, %305
       %307 = is_exception %306
-      branch %307, bb127, bb126
-    bb126:
+      branch %307, bb124, bb123
+    bb123:
       %310 = call %306, this=%304, callsite="aborted.next"
       %311 = is_exception %310
-      branch %311, bb129, bb128
-    bb127:
+      branch %311, bb126, bb125
+    bb124:
       %308 = call builtin.exception_value(%306)
       %309 = load var $13.$promise
       promise_reject %309, %308
       return
-    bb128:
+    bb125:
       %315 = const c283
       %314 = call builtin.promise.resolve_static(%315, %310)
       %387 = load var $13.$env
@@ -2003,13 +1993,13 @@ module {
       %395 = load var $suspend_spill_13_7
       call builtin.continuation.save_var(%387, %394, %395)
       suspend %314, state=5
-      jump bb132
-    bb129:
+      jump bb129
+    bb126:
       %312 = call builtin.exception_value(%310)
       %313 = load var $13.$promise
       promise_reject %313, %312
       return
-    bb130:
+    bb127:
       %396 = load var $13.$env
       %397 = const c307
       %398 = call builtin.continuation.load_var(%396, %397)
@@ -2027,48 +2017,48 @@ module {
       %317 = load var $13.$is_rejected
       %318 = const c284
       %319 = stricteq %317, %318
-      branch %319, bb131, bb132
-    bb131:
+      branch %319, bb128, bb129
+    bb128:
       %320 = load var $13.$promise
       promise_reject %320, %316
       return
-    bb132:
+    bb129:
       %321 = load var $13.$resume_val
       %322 = const c285
       %323 = get_prop %321, %322
       %324 = is_exception %323
-      branch %324, bb134, bb133
-    bb133:
+      branch %324, bb131, bb130
+    bb130:
       %342 = load var $suspend_spill_13_4
-      branch %342, bb135, bb136
-    bb134:
+      branch %342, bb132, bb133
+    bb131:
       %325 = call builtin.exception_value(%323)
       %326 = load var $13.$promise
       promise_reject %326, %325
       return
-    bb135:
+    bb132:
       %345 = load var $suspend_spill_13_7
       %327 = call builtin.console.log(%345, %323)
-      jump bb124
-    bb136:
+      jump bb121
+    bb133:
       %343 = load var $suspend_spill_13_5
       %344 = load var $suspend_spill_13_6
       %346 = load var $suspend_spill_13_7
       %328 = call %343, this=%344, args=[%346, %323], callsite="console.log"
-      jump bb124
-    bb137:
+      jump bb121
+    bb134:
       %333 = const c286
       %334 = load var $13.$promise
       promise_resolve %334, %333
       return
-    bb138:
+    bb135:
       %331 = call builtin.exception_value(%329)
       %332 = load var $13.$promise
       promise_reject %332, %331
       return
-    bb139:
+    bb136:
       return
-    bb140:
+    bb137:
       unreachable
 
   fn @arrow_8 [js_name ""] [js_length 0] [captures: $0.outer, $0.catching] [params: $17.$env, $17.$this] [entry=bb0]:

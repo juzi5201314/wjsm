@@ -193,6 +193,8 @@ impl Lowerer {
                         dest,
                         object: global_obj,
                         key: key_val,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 return Ok(dest);
@@ -417,12 +419,15 @@ impl Lowerer {
                         dest: loaded,
                         object: obj_val,
                         index: key,
+                        latch: None,
                     }
                 } else {
                     Instruction::GetProp {
                         dest: loaded,
                         object: obj_val,
                         key,
+                        latch: None,
+                        latch_template: None,
                     }
                 },
             );

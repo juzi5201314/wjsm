@@ -15,8 +15,8 @@
 //!    读写、无异常、无分配），实参全部循环不变。Cranelift egraph LICM 把
 //!    call 硬编码为有副作用永远不提升，此处在 IR 层完成。
 //! 4. **elem-guard 外提（`POINTS[i].x` 型逐迭代 receiver）**：pre-header 插
-//!    一条 `ElemShapeGuard` 运行期一次性校验数组与元素 shape，循环体内成对
-//!    的 `GetElem`/`GetProp` 替换为 Guarded 变体——守卫为真时属性读取跳过
+//!    一条带模板的 `GuardElementsKind` 运行期一次性校验数组与元素 shape，循环体内成对
+//!    的 `GetElem`/`GetProp` 带上共享闩锁——守卫为真时属性读取跳过
 //!    逐迭代 shape 检查、单指令直读模板槽。见 [`super::licm_elem_guard`]。
 //!
 //! 安全性基线：被外提指令必须「无可观察副作用、不抛异常、必然终止」，因此
@@ -35,10 +35,10 @@ use wjsm_ir::{
     is_builtin_entry_ir_function, is_module_entry_ir_function,
 };
 
-use super::direct_call::instruction_dest;
 use super::inline_for_ea::max_value_id_in_function;
 use super::licm_apply::{Plan, apply_plan};
 use super::licm_facts::{ModuleFacts, collect_const_strings, is_protocol_or_env_name};
+use crate::ir_walk::instruction_dest;
 
 /// 单函数外提轮数上限（每轮最多变换一个循环；正常在候选耗尽时提前收敛）。
 const MAX_ROUNDS: usize = 64;
@@ -46,7 +46,7 @@ const MAX_ROUNDS: usize = 64;
 /// `WJSM_DISABLE_LICM` 是否生效：除空值与显式 0/false/off 外均视为禁用。
 /// 该开关改变 lower 产物，输入寻址 artifact 缓存的键必须包含它
 /// （经 [`crate::licm_disabled_by_env`] 暴露给缓存层）。
-pub(crate) fn licm_disabled_by_env() -> bool {
+pub fn licm_disabled_by_env() -> bool {
     !matches!(
         std::env::var("WJSM_DISABLE_LICM").as_deref(),
         Err(_) | Ok("") | Ok("0") | Ok("false") | Ok("off")

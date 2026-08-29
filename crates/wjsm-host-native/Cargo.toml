@@ -38,6 +38,7 @@ wjsm-gc = { path = "../wjsm-gc" }
 wjsm-host = { path = "../wjsm-host" }
 wjsm-intl-data = { path = "../wjsm-intl-data" }
 wjsm-ir = { path = "../wjsm-ir" }
+wjsm-optimize = { path = "../wjsm-optimize" }
 wjsm-module = { path = "../wjsm-module" }
 wjsm-native-abi = { path = "../wjsm-native-abi" }
 wjsm-parser = { path = "../wjsm-parser" }

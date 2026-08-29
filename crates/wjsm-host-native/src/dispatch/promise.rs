@@ -247,7 +247,11 @@ pub(crate) fn enqueue_reaction_microtask(
     let context = super::node_async_hooks::capture_context(state);
     enqueue_microtask_with_context(
         state,
-        NativeMicrotask::PromiseReaction { reaction, value, rejected },
+        NativeMicrotask::PromiseReaction {
+            reaction,
+            value,
+            rejected,
+        },
         context,
     );
 }

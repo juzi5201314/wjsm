@@ -40,8 +40,7 @@ pub(super) fn dispatch_proxy(
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         Builtin::ReflectPreventExtensions => {
-            if let Some(exception) = require_reflect_object(ctx, state, args, "preventExtensions")
-            {
+            if let Some(exception) = require_reflect_object(ctx, state, args, "preventExtensions") {
                 return Some(exception);
             }
             let Some(target) = args.first().copied() else {

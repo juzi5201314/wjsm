@@ -502,6 +502,8 @@ mod tests {
             dest: ValueId(12),
             object: ValueId(1),
             key: ValueId(1),
+            latch: None,
+            latch_template: None,
         });
         entry.push_instruction(Instruction::SetElem {
             dest: ValueId(13),
@@ -1047,8 +1049,17 @@ impl Function {
         self.entry
     }
 
+    /// 压缩/重排块向量后同步入口 id（必须仍指向现有块）。
+    pub fn set_entry(&mut self, entry: BasicBlockId) {
+        self.entry = entry;
+    }
+
     pub fn push_block(&mut self, block: BasicBlock) {
         self.blocks.push(block);
+    }
+
+    pub fn replace_blocks(&mut self, blocks: Vec<BasicBlock>) {
+        self.blocks = blocks;
     }
 
     pub fn blocks(&self) -> &[BasicBlock] {
@@ -1180,6 +1191,11 @@ impl BasicBlock {
         self.id
     }
 
+    /// 压缩块向量后令 id 等于新下标。
+    pub fn set_id(&mut self, id: BasicBlockId) {
+        self.id = id;
+    }
+
     pub fn push_instruction(&mut self, instruction: Instruction) {
         self.instructions.push(instruction);
     }
@@ -1285,6 +1301,12 @@ pub enum Instruction {
         dest: ValueId,
         object: ValueId,
         key: ValueId,
+        /// Sound LICM 闩锁：为 Some 时 lowering 走 Guard+LoadSlot 快路径。
+        #[serde(default)]
+        latch: Option<ValueId>,
+        /// 与 `latch` 配对的对象字面量模板，用于快路径槽偏移。
+        #[serde(default)]
+        latch_template: Option<ConstantId>,
     },
     SetProp {
         dest: ValueId,
@@ -1341,6 +1363,9 @@ pub enum Instruction {
         dest: ValueId,
         object: ValueId,
         index: ValueId,
+        /// Sound LICM 闩锁：为 Some 时 miss 路径先熄灭守卫。
+        #[serde(default)]
+        latch: Option<ValueId>,
     },
     /// 按数字索引写入数组元素
     SetElem {
@@ -1351,37 +1376,6 @@ pub enum Instruction {
         /// 与 [`Instruction::SetProp`] 的 `strict` 含义一致。
         #[serde(default)]
         strict: bool,
-    },
-    /// 元素 shape 守卫（licm elem-guard 外提专用，仅出现在循环 pre-header）：
-    /// 宿主一次性校验 `array` 当前是无洞的普通 packed 数组、全部元素都是
-    /// shape 等于 `template` 烘焙 shape 的普通对象、且元素各值槽均非对象
-    /// （消除循环内 ToPrimitive 触发用户代码的可能）。产出布尔值；false 时
-    /// 同循环的 Guarded 指令逐次退回通用路径，语义不变。
-    ElemShapeGuard {
-        dest: ValueId,
-        array: ValueId,
-        template: ConstantId,
-    },
-    /// 语义与 [`Instruction::GetElem`] 完全一致；唯一区别是宿主 miss 路径
-    /// 可能执行用户代码（原型链上的索引 accessor / ToPropertyKey 回调），
-    /// 进入宿主前后端必须先把 `guard` 的变量置 false，使同循环全部
-    /// GetPropGuarded 快路径失效（true→false 单向闩锁，只关闭优化）。
-    GetElemGuarded {
-        dest: ValueId,
-        object: ValueId,
-        index: ValueId,
-        guard: ValueId,
-    },
-    /// 语义与 [`Instruction::GetProp`] 完全一致；`guard` 为 true 时 receiver
-    /// 已被 [`Instruction::ElemShapeGuard`] 证明持有 `template` 的烘焙 shape，
-    /// 后端跳过逐迭代 shape 检查，直接按模板槽偏移读取；其余情况先把
-    /// `guard` 置 false 再走完整 GetProp IC。
-    GetPropGuarded {
-        dest: ValueId,
-        object: ValueId,
-        key: ValueId,
-        guard: ValueId,
-        template: ConstantId,
     },
     /// 对象 spread：将 source 的 own enumerable 属性复制到 object。
     /// dest 接收运行时结果——成功为 object 本身，属性读取/getter 抛错时为
@@ -1448,6 +1442,47 @@ pub enum Instruction {
     DebugCheck {
         line: u32,
         col: u32,
+    },
+    /// overlay / Sound LICM：值为期望 NaN-box tag 时 dest=true。
+    GuardTag {
+        dest: ValueId,
+        value: ValueId,
+        tag: u8,
+    },
+    /// overlay / Sound LICM：对象 shape_id 等于期望值时 dest=true。
+    GuardShape {
+        dest: ValueId,
+        object: ValueId,
+        shape_id: u32,
+    },
+    /// overlay / Sound LICM：数组 elements kind 等于期望值时 dest=true。
+    /// `template` 为 Some 时宿主还校验元素均持有该烘焙 shape（`GuardElementsKind`）。
+    GuardElementsKind {
+        dest: ValueId,
+        array: ValueId,
+        kind: u32,
+        #[serde(default)]
+        template: Option<ConstantId>,
+    },
+    /// overlay：callee 解析为指定 FunctionId 时 dest=true。
+    GuardCallTarget {
+        dest: ValueId,
+        callee: ValueId,
+        function: FunctionId,
+    },
+    /// 已证明 shape 后按常量值槽下标读取 boxed i64。
+    LoadSlot {
+        dest: ValueId,
+        object: ValueId,
+        index: u32,
+    },
+    /// 已证明 shape 后按常量值槽下标写入；`transition_shape` 为 Some 时同时更新对象 shape_id。
+    StoreSlot {
+        dest: Option<ValueId>,
+        object: ValueId,
+        index: u32,
+        value: ValueId,
+        transition_shape: Option<u32>,
     },
 }
 
@@ -1588,8 +1623,21 @@ impl fmt::Display for Instruction {
             Self::NewObject { dest, capacity } => {
                 write!(formatter, "{dest} = new_object(capacity={capacity})")
             }
-            Self::GetProp { dest, object, key } => {
-                write!(formatter, "{dest} = get_prop {object}, {key}")
+            Self::GetProp {
+                dest,
+                object,
+                key,
+                latch,
+                latch_template,
+            } => {
+                write!(formatter, "{dest} = get_prop {object}, {key}")?;
+                if let Some(latch) = latch {
+                    write!(formatter, ", latch={latch}")?;
+                }
+                if let Some(template) = latch_template {
+                    write!(formatter, ", template={template}")?;
+                }
+                Ok(())
             }
             Self::SetProp {
                 dest,
@@ -1658,8 +1706,13 @@ impl fmt::Display for Instruction {
                 dest,
                 object,
                 index,
+                latch,
             } => {
-                write!(formatter, "{dest} = get_elem {object}, {index}")
+                write!(formatter, "{dest} = get_elem {object}, {index}")?;
+                if let Some(latch) = latch {
+                    write!(formatter, ", latch={latch}")?;
+                }
+                Ok(())
             }
             Self::SetElem {
                 dest,
@@ -1673,36 +1726,6 @@ impl fmt::Display for Instruction {
                     formatter.write_str(", strict")?;
                 }
                 Ok(())
-            }
-            Self::ElemShapeGuard {
-                dest,
-                array,
-                template,
-            } => {
-                write!(formatter, "{dest} = elem_shape_guard {array}, {template}")
-            }
-            Self::GetElemGuarded {
-                dest,
-                object,
-                index,
-                guard,
-            } => {
-                write!(
-                    formatter,
-                    "{dest} = get_elem_guarded {object}, {index}, guard={guard}"
-                )
-            }
-            Self::GetPropGuarded {
-                dest,
-                object,
-                key,
-                guard,
-                template,
-            } => {
-                write!(
-                    formatter,
-                    "{dest} = get_prop_guarded {object}, {key}, guard={guard}, template={template}"
-                )
             }
             Self::ObjectSpread {
                 dest,
@@ -1753,6 +1776,56 @@ impl fmt::Display for Instruction {
             }
             Self::DebugCheck { line, col } => {
                 write!(formatter, "debug_check line={line} col={col}")
+            }
+            Self::GuardTag { dest, value, tag } => {
+                write!(formatter, "{dest} = guard_tag {value}, {tag}")
+            }
+            Self::GuardShape {
+                dest,
+                object,
+                shape_id,
+            } => write!(formatter, "{dest} = guard_shape {object}, {shape_id}"),
+            Self::GuardElementsKind {
+                dest,
+                array,
+                kind,
+                template,
+            } => {
+                write!(formatter, "{dest} = guard_elements_kind {array}, {kind}")?;
+                if let Some(template) = template {
+                    write!(formatter, ", template={template}")?;
+                }
+                Ok(())
+            }
+            Self::GuardCallTarget {
+                dest,
+                callee,
+                function,
+            } => write!(
+                formatter,
+                "{dest} = guard_call_target {callee}, @{id}",
+                id = function.0
+            ),
+            Self::LoadSlot {
+                dest,
+                object,
+                index,
+            } => write!(formatter, "{dest} = load_slot {object}, {index}"),
+            Self::StoreSlot {
+                dest,
+                object,
+                index,
+                value,
+                transition_shape,
+            } => {
+                if let Some(dest) = dest {
+                    write!(formatter, "{dest} = ")?;
+                }
+                write!(formatter, "store_slot {object}, {index}, {value}")?;
+                if let Some(shape) = transition_shape {
+                    write!(formatter, ", transition={shape}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -1859,10 +1932,19 @@ impl Instruction {
                     *value = f(*value);
                 }
             }
-            Self::GetProp { dest, object, key } => {
+            Self::GetProp {
+                dest,
+                object,
+                key,
+                latch,
+                ..
+            } => {
                 *dest = f(*dest);
                 *object = f(*object);
                 *key = f(*key);
+                if let Some(latch) = latch {
+                    *latch = f(*latch);
+                }
             }
             Self::SetProp {
                 dest,
@@ -1902,10 +1984,14 @@ impl Instruction {
                 dest,
                 object,
                 index,
+                latch,
             } => {
                 *dest = f(*dest);
                 *object = f(*object);
                 *index = f(*index);
+                if let Some(latch) = latch {
+                    *latch = f(*latch);
+                }
             }
             Self::SetElem {
                 dest,
@@ -1918,33 +2004,6 @@ impl Instruction {
                 *object = f(*object);
                 *index = f(*index);
                 *value = f(*value);
-            }
-            Self::ElemShapeGuard { dest, array, .. } => {
-                *dest = f(*dest);
-                *array = f(*array);
-            }
-            Self::GetElemGuarded {
-                dest,
-                object,
-                index,
-                guard,
-            } => {
-                *dest = f(*dest);
-                *object = f(*object);
-                *index = f(*index);
-                *guard = f(*guard);
-            }
-            Self::GetPropGuarded {
-                dest,
-                object,
-                key,
-                guard,
-                ..
-            } => {
-                *dest = f(*dest);
-                *object = f(*object);
-                *key = f(*key);
-                *guard = f(*guard);
             }
             Self::ObjectSpread {
                 dest,
@@ -1987,6 +2046,181 @@ impl Instruction {
                 *value = f(*value);
             }
             Self::DebugCheck { .. } => {}
+            Self::GuardTag { dest, value, .. } => {
+                *dest = f(*dest);
+                *value = f(*value);
+            }
+            Self::GuardShape { dest, object, .. } | Self::LoadSlot { dest, object, .. } => {
+                *dest = f(*dest);
+                *object = f(*object);
+            }
+            Self::GuardElementsKind { dest, array, .. } => {
+                *dest = f(*dest);
+                *array = f(*array);
+            }
+            Self::GuardCallTarget { dest, callee, .. } => {
+                *dest = f(*dest);
+                *callee = f(*callee);
+            }
+            Self::StoreSlot {
+                dest,
+                object,
+                value,
+                ..
+            } => {
+                if let Some(dest) = dest {
+                    *dest = f(*dest);
+                }
+                *object = f(*object);
+                *value = f(*value);
+            }
+        }
+    }
+
+    /// producing dest；无 dest 的指令返回 None。
+    pub fn dest(&self) -> Option<ValueId> {
+        match self {
+            Self::Const { dest, .. }
+            | Self::Binary { dest, .. }
+            | Self::Unary { dest, .. }
+            | Self::Compare { dest, .. }
+            | Self::Phi { dest, .. }
+            | Self::StringConcatVa { dest, .. }
+            | Self::LoadVar { dest, .. }
+            | Self::NewObject { dest, .. }
+            | Self::GetProp { dest, .. }
+            | Self::SetProp { dest, .. }
+            | Self::DeleteProp { dest, .. }
+            | Self::NewArray { dest, .. }
+            | Self::CloneArrayTemplate { dest, .. }
+            | Self::InitObjectLiteral { dest, .. }
+            | Self::GetElem { dest, .. }
+            | Self::SetElem { dest, .. }
+            | Self::GetSuperBase { dest }
+            | Self::GetSuperConstructor { dest }
+            | Self::NewPromise { dest }
+            | Self::CollectRestArgs { dest, .. }
+            | Self::IsException { dest, .. }
+            | Self::GuardSameFunction { dest, .. }
+            | Self::EncodeException { dest, .. }
+            | Self::ExceptionToObject { dest, .. }
+            | Self::CreateDataProperty { dest, .. }
+            | Self::ObjectSpread { dest, .. }
+            | Self::GuardTag { dest, .. }
+            | Self::GuardShape { dest, .. }
+            | Self::GuardElementsKind { dest, .. }
+            | Self::GuardCallTarget { dest, .. }
+            | Self::LoadSlot { dest, .. } => Some(*dest),
+            Self::CallBuiltin { dest, .. }
+            | Self::Call { dest, .. }
+            | Self::SuperCall { dest, .. }
+            | Self::ConstructCall { dest, .. }
+            | Self::StoreSlot { dest, .. } => *dest,
+            Self::StoreVar { .. }
+            | Self::SetProto { .. }
+            | Self::PromiseResolve { .. }
+            | Self::PromiseReject { .. }
+            | Self::Suspend { .. }
+            | Self::GeneratorSuspend { .. }
+            | Self::DebugCheck { .. } => None,
+        }
+    }
+
+    /// 操作数（不含 dest）。Phi 含各前驱值。
+    pub fn uses(&self) -> Vec<ValueId> {
+        match self {
+            Self::Binary { lhs, rhs, .. } | Self::Compare { lhs, rhs, .. } => vec![*lhs, *rhs],
+            Self::Unary { value, .. } => vec![*value],
+            Self::Phi { sources, .. } => sources.iter().map(|source| source.value).collect(),
+            Self::CallBuiltin { args, .. } => args.clone(),
+            Self::StringConcatVa { parts, .. } => parts.clone(),
+            Self::StoreVar { value, .. } => vec![*value],
+            Self::Call {
+                callee,
+                this_val,
+                args,
+                ..
+            }
+            | Self::SuperCall {
+                callee,
+                this_val,
+                args,
+                ..
+            }
+            | Self::ConstructCall {
+                callee,
+                this_val,
+                args,
+                ..
+            } => {
+                let mut uses = vec![*callee, *this_val];
+                uses.extend(args.iter().copied());
+                uses
+            }
+            Self::GetProp {
+                object, key, latch, ..
+            } => {
+                let mut uses = vec![*object, *key];
+                if let Some(latch) = latch {
+                    uses.push(*latch);
+                }
+                uses
+            }
+            Self::GetElem {
+                object,
+                index,
+                latch,
+                ..
+            } => {
+                let mut uses = vec![*object, *index];
+                if let Some(latch) = latch {
+                    uses.push(*latch);
+                }
+                uses
+            }
+            Self::DeleteProp { object, key, .. } => vec![*object, *key],
+            Self::SetProp {
+                object, key, value, ..
+            }
+            | Self::CreateDataProperty {
+                object, key, value, ..
+            } => vec![*object, *key, *value],
+            Self::SetProto { object, value } => vec![*object, *value],
+            Self::SetElem {
+                object,
+                index,
+                value,
+                ..
+            } => vec![*object, *index, *value],
+            Self::GuardElementsKind { array, .. } => vec![*array],
+            Self::InitObjectLiteral { values, .. } => values.clone(),
+            Self::ObjectSpread { object, source, .. } => vec![*object, *source],
+            Self::PromiseResolve { promise, value }
+            | Self::PromiseReject {
+                promise,
+                reason: value,
+            } => vec![*promise, *value],
+            Self::Suspend { promise, .. } => vec![*promise],
+            Self::GeneratorSuspend { result, .. } => vec![*result],
+            Self::IsException { value, .. }
+            | Self::EncodeException { value, .. }
+            | Self::ExceptionToObject { value, .. } => vec![*value],
+            Self::GuardSameFunction { callee, .. } | Self::GuardCallTarget { callee, .. } => {
+                vec![*callee]
+            }
+            Self::GuardTag { value, .. } => vec![*value],
+            Self::GuardShape { object, .. } | Self::LoadSlot { object, .. } => vec![*object],
+            Self::StoreSlot { object, value, .. } => vec![*object, *value],
+            Self::Const { .. }
+            | Self::LoadVar { .. }
+            | Self::NewObject { .. }
+            | Self::NewArray { .. }
+            | Self::CloneArrayTemplate { .. }
+            | Self::GetSuperBase { .. }
+            | Self::GetSuperConstructor { .. }
+            | Self::NewPromise { .. }
+            | Self::CollectRestArgs { .. }
+            | Self::DebugCheck { .. } => vec![],
         }
     }
 
@@ -2012,6 +2246,13 @@ impl Terminator {
             Self::Branch { condition, .. } => *condition = f(*condition),
             Self::Switch { value, .. } => *value = f(*value),
             Self::Throw { value } => *value = f(*value),
+            Self::Deopt { frames } => {
+                for frame in frames {
+                    for live in &mut frame.lives {
+                        *live = f(*live);
+                    }
+                }
+            }
             Self::Jump { .. } | Self::Unreachable => {}
         }
     }
@@ -2039,6 +2280,11 @@ impl Terminator {
                 }
                 *default_block = f(*default_block);
                 *exit_block = f(*exit_block);
+            }
+            Self::Deopt { frames } => {
+                for frame in frames {
+                    frame.block = f(frame.block);
+                }
             }
             Self::Return { .. } | Self::Throw { .. } | Self::Unreachable => {}
         }

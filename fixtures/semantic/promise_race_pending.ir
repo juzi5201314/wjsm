@@ -215,7 +215,6 @@ module {
       %30 = set_prop %26, %29, %28
       %32 = call builtin.promise.create_resolve_function(%23)
       %33 = call builtin.promise.create_reject_function(%23)
-      %106 = const c0
       jump bb28
     bb1:
       store var $0.p1, %23
@@ -349,10 +348,10 @@ module {
       %111 = is_exception %110
       branch %111, bb30, bb29
     bb29:
-      store var $1.resolve, %106
+      store var $1.resolve, %0
       jump bb27
     bb30:
       %112 = call builtin.exception_value(%110)
-      store var $1.resolve, %106
+      store var $1.resolve, %0
       throw %112
 }

@@ -4494,6 +4494,7 @@ dependencies = [
  "wjsm-artifact-format",
  "wjsm-ir",
  "wjsm-native-abi",
+ "wjsm-optimize",
 ]
 
 [[package]]
@@ -4657,6 +4658,7 @@ dependencies = [
  "wjsm-ir",
  "wjsm-module",
  "wjsm-native-abi",
+ "wjsm-optimize",
  "wjsm-parser",
  "wjsm-semantic",
  "wjsm-snapshot-format",
@@ -4717,6 +4719,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wjsm-optimize"
+version = "0.1.0"
+dependencies = [
+ "wjsm-ir",
+ "wjsm-parser",
+ "wjsm-semantic",
+]
+
+[[package]]
 name = "wjsm-parser"
 version = "0.1.0"
 dependencies = [
@@ -4740,6 +4751,7 @@ dependencies = [
  "swc_core",
  "thiserror",
  "wjsm-ir",
+ "wjsm-optimize",
  "wjsm-parser",
 ]
 

@@ -6,7 +6,8 @@ use crate::gc::NativeGcError;
 use wjsm_host::RuntimeString;
 use wjsm_ir::{Constant, constants, value};
 use wjsm_native_abi::{
-    COOPERATIVE_POLL_BUDGET, NativeRuntimeOp, NativeVmContext, PendingExceptionKind,
+    COOPERATIVE_POLL_BUDGET, NativeFeedbackSlot, NativeRuntimeOp, NativeVmContext,
+    PendingExceptionKind,
 };
 
 use super::callable_chain::{self, CallableChainHit};
@@ -62,7 +63,15 @@ pub(super) fn dispatch_runtime(
             value::encode_undefined()
         }
         NativeRuntimeOp::DeoptToGeneric => {
-            let [function_id, block_id, env, this_value, _live_count] = args else {
+            let [
+                function_id,
+                block_id,
+                instruction,
+                env,
+                this_value,
+                live_count,
+            ] = args
+            else {
                 return fail_dispatch(ctx);
             };
             let Ok(function_id) = u32::try_from(*function_id) else {
@@ -71,8 +80,14 @@ pub(super) fn dispatch_runtime(
             let Ok(block_id) = u32::try_from(*block_id) else {
                 return fail_dispatch(ctx);
             };
+            let Ok(instruction) = u32::try_from(*instruction) else {
+                return fail_dispatch(ctx);
+            };
             ctx.resume_function_id = function_id;
             ctx.resume_block_plus_one = block_id.saturating_add(1);
+            ctx.resume_instruction_index = instruction;
+            ctx.resume_frame_count = 1;
+            let _ = live_count;
             if ctx.function_table.is_null() || function_id >= ctx.function_table_len {
                 return fail_dispatch(ctx);
             }
@@ -213,7 +228,7 @@ pub(super) fn dispatch_runtime(
             init_object_literal_or_fail(ctx, state, template_index, &args[1..])
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
-        NativeRuntimeOp::ElemShapeGuard => {
+        NativeRuntimeOp::GuardElementsKind => {
             let [array, template_index] = args else {
                 return fail_dispatch(ctx);
             };
@@ -262,7 +277,7 @@ pub(super) fn dispatch_runtime(
             }
             let result =
                 get_property(ctx, state, *object, *key).unwrap_or_else(|()| fail_dispatch(ctx));
-            backfill_get_prop_ic(state, *object, *key, *ic_slot_ptr);
+            backfill_get_prop_ic(state, *object, *key, *ic_slot_ptr, feedback_slot);
             result
         }
         NativeRuntimeOp::GetPropAccessor => {
@@ -1950,10 +1965,43 @@ pub(super) fn ordinary_set_key(
     assign_data_property_to_receiver(ctx, state, receiver, key, stored)
 }
 
+fn record_poly_shape(slot: &mut NativeFeedbackSlot, shape_id: u32) {
+    if shape_id == 0 {
+        return;
+    }
+    if slot.poly_len == 0 {
+        slot.poly_key[0] = shape_id;
+        slot.poly_len = 1;
+        return;
+    }
+    let taken = slot.poly_len as usize;
+    if slot.poly_key[..taken].contains(&shape_id) || slot.shape_id == shape_id {
+        slot.poly_len = slot.poly_len.max(1);
+        return;
+    }
+    if slot.poly_len >= wjsm_ir::constants::FEEDBACK_POLY_MEGAMORPHIC {
+        slot.poly_len = wjsm_ir::constants::FEEDBACK_POLY_MEGAMORPHIC;
+        return;
+    }
+    let index = slot.poly_len as usize;
+    if index < slot.poly_key.len() {
+        slot.poly_key[index] = shape_id;
+        slot.poly_len += 1;
+    } else {
+        slot.poly_len = wjsm_ir::constants::FEEDBACK_POLY_MEGAMORPHIC;
+    }
+}
+
 /// GetPropIc 的 miss 回填：按「自有数据 → 原型链数据 → accessor」优先级回填
 /// CLIF 快路径；proxy / 字典 shape / 数组 / 缺失 / 非 callable accessor 一律
 /// 永久退化 MEGAMORPHIC（此后每次访问都走宿主完整 [[Get]]）。
-fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_slot_ptr: i64) {
+fn backfill_get_prop_ic(
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    ic_slot_ptr: i64,
+    feedback_slot: Option<ValidatedFeedbackSlot>,
+) {
     if !value::is_object(object) {
         return;
     }
@@ -1985,6 +2033,15 @@ fn backfill_get_prop_ic(state: &mut NativeAgentState, object: i64, key: i64, ic_
                     0,
                 )
             };
+            if let Some(feedback) = feedback_slot {
+                // SAFETY: 当前 image 反馈槽，owner 线程唯一写入。
+                let mut slot = unsafe { feedback.slot().read_unaligned() };
+                slot.shape_id = shape_id;
+                slot.slot_or_kind = value_index;
+                slot.flags |= constants::FEEDBACK_FLAG_OWN_DATA;
+                record_poly_shape(&mut slot, shape_id);
+                unsafe { feedback.slot().write_unaligned(slot) };
+            }
             return;
         }
         Ok(None) => {}
@@ -3228,12 +3285,14 @@ fn ensure_current(
         return Ok(());
     }
     let exhausted = match iterator.source {
-        super::super::NativeIteratorSource::Array(source) => state
-            .gc
-            .heap()
-            .array_length(source)
-            .map_err(|_| fail_dispatch(ctx))?
-            <= iterator.index,
+        super::super::NativeIteratorSource::Array(source) => {
+            state
+                .gc
+                .heap()
+                .array_length(source)
+                .map_err(|_| fail_dispatch(ctx))?
+                <= iterator.index
+        }
         super::super::NativeIteratorSource::ArrayLike(source) => {
             iterator.index >= array_like_length(state, source).unwrap_or(0)
         }
@@ -3282,8 +3341,7 @@ fn ensure_current(
                 return Err(fail_dispatch(ctx));
             };
             let object = value::encode_object_handle(source);
-            let result =
-                get_property(ctx, state, object, key).map_err(|()| fail_dispatch(ctx))?;
+            let result = get_property(ctx, state, object, key).map_err(|()| fail_dispatch(ctx))?;
             // 属性读取抛出（getter）：不推进不缓存，异常直接传播。
             if value::is_exception(result) {
                 return Err(result);
@@ -3647,7 +3705,7 @@ pub(super) fn range_error(
 ///
 /// `array` 当前必须是 PACKED 普通数组，全部元素为 shape 等于模板烘焙 shape 的
 /// 普通对象，且每个元素的所有值槽均非对象（含 regexp）。三个条件合起来保证：
-/// 循环体内 `GetPropGuarded` 可以跳过逐迭代 shape 检查直读模板槽偏移，且读出
+/// 循环体内闩锁 `GetProp` 可以跳过逐迭代 shape 检查直读模板槽偏移，且读出
 /// 的值参与协变运算（ToPrimitive）时不可能回调用户代码。任一条件不满足时返回
 /// false，同循环的 Guarded 指令全部退回通用路径，语义不变。
 fn elem_shape_guard_holds(state: &NativeAgentState, array: i64, template_index: u32) -> bool {

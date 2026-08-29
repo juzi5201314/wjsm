@@ -932,6 +932,8 @@ impl Lowerer {
                         dest: old_val,
                         object: *env_val,
                         key: *key_val,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
             }
@@ -942,6 +944,8 @@ impl Lowerer {
                         dest: old_val,
                         object: *obj,
                         key: *key,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 // 成员读取可触发用户 getter 抛出，必须在 ToNumeric 前中止传播。
@@ -1132,6 +1136,8 @@ impl Lowerer {
                 dest: env_old,
                 object: env_val,
                 key: key_val,
+                latch: None,
+                latch_template: None,
             },
         );
         let (env_num, env_new, env_math_continue) =

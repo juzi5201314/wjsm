@@ -43,6 +43,8 @@ impl Lowerer {
                 dest: hit_callee,
                 object: base,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
         let hit_end = self.fork_with_dispatch_exception(hit, hit_callee)?;
@@ -187,6 +189,8 @@ impl Lowerer {
                 dest: hit_callee,
                 object: base,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
         let hit_entry = self.fork_with_dispatch_exception(hit, hit_callee)?;

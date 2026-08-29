@@ -80,7 +80,8 @@ impl Lowerer {
         let mut current = block;
         let result = match oc.base.as_ref() {
             swc_ast::OptChainBase::Member(member) => {
-                let object = self.lower_optchain_base(member.obj.as_ref(), &mut current, &mut state)?;
+                let object =
+                    self.lower_optchain_base(member.obj.as_ref(), &mut current, &mut state)?;
                 if oc.optional {
                     self.emit_optchain_nullish_branch(object, &mut current, &mut state);
                 }
@@ -94,10 +95,9 @@ impl Lowerer {
                     swc_ast::MemberProp::PrivateName(name) => {
                         // §13.5.1.1 早错误：delete 不得作用于私有成员引用
                         // （V8 同口径文案）。
-                        return Err(self.error(
-                            name.span,
-                            "Private fields can not be deleted".to_string(),
-                        ));
+                        return Err(
+                            self.error(name.span, "Private fields can not be deleted".to_string())
+                        );
                     }
                 };
                 let dest = self.alloc_value();
@@ -370,5 +370,4 @@ impl Lowerer {
         );
         *block = continue_block;
     }
-
 }

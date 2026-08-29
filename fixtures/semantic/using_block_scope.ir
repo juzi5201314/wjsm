@@ -182,7 +182,6 @@ module {
       %21 = const c33
       store var $0.makeDisposable, %21
       %24 = const c35
-      %75 = const c0
       jump bb29
     bb1:
       %39 = const c42
@@ -305,7 +304,7 @@ module {
       branch %85, bb33, bb32
     bb31:
       %83 = call builtin.exception_value(%81)
-      store var $1.name, %75
+      store var $1.name, %0
       throw %83
     bb32:
       %87 = const c30
@@ -314,10 +313,10 @@ module {
       %90 = const c32
       call builtin.function.set_name(%89, %84, %90)
       %91 = create_data_property %76, %84, %89
-      store var $1.name, %75
+      store var $1.name, %0
       jump bb28
     bb33:
       %86 = call builtin.exception_value(%84)
-      store var $1.name, %75
+      store var $1.name, %0
       throw %86
 }

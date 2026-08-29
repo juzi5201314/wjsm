@@ -9,7 +9,7 @@
 //! - 被移动指令按「无操作数的 Const/LoadVar 在前、消费者在后」排序，
 //!   依赖深度 ≤ 1，块内 def-before-use 因此成立；
 //! - elem-guard 的循环体内替换是原地改写（不动块结构和下标），必须先于
-//!   `extract_moves` 执行；`ElemShapeGuard` 追加在 pre-header 被移动指令之后
+//!   `extract_moves` 执行；`GuardElementsKind`（带模板）追加在 pre-header 被移动指令之后
 //!   （其 array 操作数可能正是本轮或往轮被移动进 pre-header 的 LoadVar）。
 
 use std::collections::{HashMap, HashSet};
@@ -29,16 +29,16 @@ pub(crate) struct Plan {
     pub(crate) elem_guards: Vec<ElemGuard>,
 }
 
-/// 单个被守卫数组的替换计划：pre-header 插入一条 `ElemShapeGuard`，
-/// 循环体内的 `GetElem`/`GetProp` 站点改写为共享该守卫值的 Guarded 变体。
+/// 单个被守卫数组的替换计划：pre-header 插入一条带模板的 `GuardElementsKind`，
+/// 循环体内的 `GetElem`/`GetProp` 带上共享闩锁。
 pub(crate) struct ElemGuard {
     /// 循环不变的数组值（定义在循环体外）。
     pub(crate) array: ValueId,
     /// 元素统一的对象字面量模板。
     pub(crate) template: ConstantId,
-    /// 待替换为 `GetElemGuarded` 的 `GetElem` 位置。
+    /// 待加上闩锁的 `GetElem` 位置。
     pub(crate) elem_sites: Vec<(BasicBlockId, usize)>,
-    /// 待替换为 `GetPropGuarded` 的 `GetProp` 位置。
+    /// 待加上闩锁与模板的 `GetProp` 位置。
     pub(crate) prop_sites: Vec<(BasicBlockId, usize)>,
 }
 
@@ -59,7 +59,7 @@ pub(crate) fn apply_plan(function: &mut Function, plan: &Plan, next_value: &mut 
 }
 
 /// 按计划原地替换循环体内的成对访问，返回要追加进 pre-header 的
-/// `ElemShapeGuard` 指令（每个被守卫数组一条，dest 即共享守卫值）。
+/// 带模板的 `GuardElementsKind`（每个被守卫数组一条，dest 即共享守卫值）。
 fn apply_elem_guards(
     function: &mut Function,
     plan: &Plan,
@@ -75,31 +75,35 @@ fn apply_elem_guards(
                     dest,
                     object,
                     index,
-                } => Some(Instruction::GetElemGuarded {
+                    ..
+                } => Some(Instruction::GetElem {
                     dest,
                     object,
                     index,
-                    guard: guard_value,
+                    latch: Some(guard_value),
                 }),
                 _ => None,
             });
         }
         for (block, index) in &guard.prop_sites {
             replace_site(function, *block, *index, |instruction| match instruction {
-                Instruction::GetProp { dest, object, key } => Some(Instruction::GetPropGuarded {
+                Instruction::GetProp {
+                    dest, object, key, ..
+                } => Some(Instruction::GetProp {
                     dest,
                     object,
                     key,
-                    guard: guard_value,
-                    template: guard.template,
+                    latch: Some(guard_value),
+                    latch_template: Some(guard.template),
                 }),
                 _ => None,
             });
         }
-        guards.push(Instruction::ElemShapeGuard {
+        guards.push(Instruction::GuardElementsKind {
             dest: guard_value,
             array: guard.array,
-            template: guard.template,
+            kind: wjsm_ir::constants::ARRAY_KIND_PACKED,
+            template: Some(guard.template),
         });
     }
     guards
@@ -219,7 +223,7 @@ fn retarget_external_predecessors(
     }
 }
 
-/// 追加 pre-header：合并 phi 在前，被移动指令随后，`ElemShapeGuard` 收尾
+/// 追加 pre-header：合并 phi 在前，被移动指令随后，`GuardElementsKind` 收尾
 /// （守卫的 array 操作数可能是刚移入的 LoadVar）。
 fn push_preheader(
     function: &mut Function,

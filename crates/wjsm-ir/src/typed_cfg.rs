@@ -1,7 +1,6 @@
 //! 按值类重建 CFG：折叠证明不抛的 `is_exception`，把 Number 关系比较改成 `Compare`。
 //!
-//! 只做**原地替换**与终止器改写，不删除指令、不压缩块，以便 overlay 的反馈槽
-//! `(block, instruction_index)` 与 generic 镜像对齐。
+//! 原地替换与终止器改写。投机 overlay 的反馈槽对齐由 `wjsm-optimize` 的 `slot_map` 负责。
 
 use std::collections::{HashMap, HashSet};
 

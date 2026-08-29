@@ -154,20 +154,15 @@ impl Lowerer {
         let mut slow_block = slow_pre;
         let (slow_callee, slow_this) = match &site {
             IntrinsicCallSite::GlobalIdent => {
-                let callee =
-                    self.emit_intrinsic_resolve(&mut slow_block, family, builtin, None)?;
+                let callee = self.emit_intrinsic_resolve(&mut slow_block, family, builtin, None)?;
                 let this_val = self.append_undefined(slow_block);
                 (callee, this_val)
             }
             IntrinsicCallSite::StaticMember { .. } => {
                 let container =
                     self.emit_intrinsic_resolve(&mut slow_block, family, builtin, None)?;
-                let callee = self.emit_intrinsic_resolve(
-                    &mut slow_block,
-                    family,
-                    builtin,
-                    Some(container),
-                )?;
+                let callee =
+                    self.emit_intrinsic_resolve(&mut slow_block, family, builtin, Some(container))?;
                 (callee, container)
             }
         };
@@ -209,14 +204,10 @@ impl Lowerer {
         // 快路径前置：无属性读取，占位 undefined 汇入 phi。
         let fast_placeholder = self.append_undefined(fast_pre);
         let prep_merge = self.current_function.new_block();
-        self.current_function.set_terminator(
-            fast_pre,
-            Terminator::Jump { target: prep_merge },
-        );
-        self.current_function.set_terminator(
-            slow_block,
-            Terminator::Jump { target: prep_merge },
-        );
+        self.current_function
+            .set_terminator(fast_pre, Terminator::Jump { target: prep_merge });
+        self.current_function
+            .set_terminator(slow_block, Terminator::Jump { target: prep_merge });
         let callee_phi = self.alloc_value();
         self.current_function.append_instruction(
             prep_merge,
@@ -262,8 +253,7 @@ impl Lowerer {
             spread_array = Some(array);
         } else {
             for arg in &call.args {
-                plain_args
-                    .push(self.lower_call_operand_then_continue(&arg.expr, &mut args_block)?);
+                plain_args.push(self.lower_call_operand_then_continue(&arg.expr, &mut args_block)?);
             }
         }
         let args_block = self.resolve_store_block(args_block);
@@ -293,9 +283,7 @@ impl Lowerer {
         // 慢路径 callee 由 IntrinsicResolve 动态解析（被遮蔽/改写后的值），
         // 非 callable 拒绝的文案按源级 callee 表达式渲染。
         let callsite = match &call.callee {
-            swc_ast::Callee::Expr(expr) => {
-                Some(crate::callsite_render::render_call_callsite(expr))
-            }
+            swc_ast::Callee::Expr(expr) => Some(crate::callsite_render::render_call_callsite(expr)),
             _ => None,
         };
         let (slow_result, slow_end) = self.emit_intrinsic_slow_call(

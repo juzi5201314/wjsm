@@ -27,8 +27,9 @@ pub(crate) fn create_helper(
     let initial_temp_roots = state.temporary_roots.len();
     state.temporary_roots.push(underlying.iterator);
     state.temporary_roots.push(underlying.next);
-    if let HelperKind::Map(callback) | HelperKind::Filter(callback) | HelperKind::FlatMap(callback) =
-        kind
+    if let HelperKind::Map(callback)
+    | HelperKind::Filter(callback)
+    | HelperKind::FlatMap(callback) = kind
     {
         state.temporary_roots.push(callback);
     }
@@ -134,21 +135,10 @@ pub(crate) fn helper_return(
             // flatMap 内层 yield 被 return 完成打断（§27.1.4.8 步骤 viii.4.b）：
             // 先 IteratorClose(inner, completion)，异常再对外层做 throw 关闭。
             if let Some(inner) = entry.inner {
-                let closed = close_iterator(
-                    ctx,
-                    state,
-                    inner.iterator,
-                    value::encode_undefined(),
-                    false,
-                );
+                let closed =
+                    close_iterator(ctx, state, inner.iterator, value::encode_undefined(), false);
                 if value::is_exception(closed) {
-                    return close_iterator(
-                        ctx,
-                        state,
-                        entry.underlying.iterator,
-                        closed,
-                        true,
-                    );
+                    return close_iterator(ctx, state, entry.underlying.iterator, closed, true);
                 }
             }
             let closed = close_iterator(

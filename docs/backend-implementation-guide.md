@@ -7,7 +7,8 @@
 ```text
 JS / TS source
   -> wjsm-parser                 SWC AST
-  -> wjsm-semantic               verified semantic IR
+  -> wjsm-semantic               AST → IR（语言去糖）
+  -> wjsm-optimize               Sound IR→IR
   -> wjsm-module                 module graph + portable manifest
   -> wjsm-artifact-format        portable .wjsm
   -> wjsm-backend-native         IR -> CLIF -> relocatable object -> native image
@@ -19,7 +20,8 @@ Portable `.wjsm` 是 IR。generic native 在第一次执行静态模块前由当
 | Crate | 唯一职责 |
 | --- | --- |
 | `wjsm-ir` | 后端无关 semantic IR、builtin/runtime operation IDs 与 value ABI 常量 |
-| `wjsm-semantic` | SWC AST 到 verified IR 的 lowering |
+| `wjsm-semantic` | SWC AST 到 IR 的源语言 lowering 与语言去糖 |
+| `wjsm-optimize` | 后端无关 IR→IR 优化：AOT `Sound` 与 overlay `Speculative` |
 | `wjsm-module` | ESM/CJS graph、resolution 与 portable module manifest |
 | `wjsm-artifact-format` | `.wjsm` canonical encode/decode、limits、hash、semantic ABI 与 verification |
 | `wjsm-native-abi` | compiler/runtime 共用的 fixed-width vmctx、host symbol、call/root/source frame contract |
@@ -90,7 +92,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 overlay 的循环头类型守卫对 typed 活跃值恒真，直接省略；它们进入 `store_resume_lives` 时按 boxed 规范化，deopt / OSR 对端读到的仍是合法 NaN-Box 值。
 
-`NativeCompiler::compile_specialized_function` 只接受已验证 `Program`、目标函数、变量槽快照和实际参数 tag profile。wrapper 保持 `NativeSlowEntry` ABI，入口 tag 不符时读取 base function table 的 slow entry 回落；编译前克隆 `Program`，用与 AOT 相同的值类 / `typed_cfg` 按种子重建 CFG。命中时 number 参数从 call arena 进入重建后的 typed body。循环头类型 miss 调用 `DeoptToGeneric` 恢复 generic 循环头 live；generic 循环头在 `osr_entry` 非零时 OSR 进入 overlay body。typed body 继续复用 generic dispatcher、Shape IC、`RootPlan`、W^X 与 unwind 路径。
+`NativeCompiler::compile_specialized_function` 接受已验证 `Program`、目标函数、变量槽快照、参数 tag 与纯整数 `SpeculativeFacts`。worker 克隆 `Program` 后跑 `optimize(Speculative)`，用同一 `NativeCompiler` 编 overlay。wrapper 保持 `NativeSlowEntry` ABI。守卫 miss 调用 `DeoptToGeneric`，按 `DeoptFrame` 在 generic 指令边界恢复 live；generic 热循环头在 `osr_entry` 非零时 OSR 进入 overlay `osr_map` 同位块。overlay 热路径把单态 GetProp 编成 shape 比较加槽 load，不再经 `NativeRuntimeOp::GetProp` dispatcher。
 
 ## 3. Native image 与 cache
 

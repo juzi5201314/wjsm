@@ -465,530 +465,514 @@ module {
       %84 = new_object(capacity=4)
       %85 = call builtin.get_prototype_from_constructor(%83)
       set_proto %84, %85
-      jump bb146
+      jump bb138
     bb1:
-      unreachable
+      jump bb2
     bb2:
       jump bb3
     bb3:
-      jump bb5
+      jump bb4
     bb4:
-      unreachable
+      jump bb5
     bb5:
-      jump bb6
-    bb6:
-      jump bb8
-    bb7:
-      unreachable
-    bb8:
       store var $0.first, %84
       %94 = load var $0.PrivateClosure
       %95 = new_object(capacity=4)
       %96 = call builtin.get_prototype_from_constructor(%94)
       set_proto %95, %96
-      jump bb144
+      jump bb136
+    bb6:
+      jump bb7
+    bb7:
+      jump bb8
+    bb8:
+      jump bb9
     bb9:
-      unreachable
+      jump bb10
     bb10:
-      unreachable
-    bb11:
-      jump bb12
-    bb12:
-      jump bb14
-    bb13:
-      unreachable
-    bb14:
-      jump bb15
-    bb15:
-      jump bb17
-    bb16:
-      unreachable
-    bb17:
       store var $0.second, %95
       %105 = const c80
       %106 = const c81
       %107 = call builtin.intrinsic_pristine(%105, %106)
-      branch %107, bb19, bb20
-    bb18:
-      unreachable
-    bb19:
+      branch %107, bb11, bb12
+    bb11:
       %118 = const c86
-      jump bb26
-    bb20:
+      jump bb18
+    bb12:
       %108 = const c82
       %109 = const c83
       %110 = call builtin.intrinsic_resolve(%108, %109)
       %111 = is_exception %110
-      branch %111, bb22, bb21
-    bb21:
+      branch %111, bb14, bb13
+    bb13:
       %113 = const c84
       %114 = const c85
       %115 = call builtin.intrinsic_resolve(%113, %114, %110)
       %116 = is_exception %115
-      branch %116, bb24, bb23
-    bb22:
+      branch %116, bb16, bb15
+    bb14:
       %112 = call builtin.exception_value(%110)
       throw %112
-    bb23:
-      jump bb26
-    bb24:
+    bb15:
+      jump bb18
+    bb16:
       %117 = call builtin.exception_value(%115)
       throw %117
-    bb25:
-      %142 = phi [(bb37, %140), (bb38, %141)]
+    bb17:
+      %142 = phi [(bb29, %140), (bb30, %141)]
       %143 = is_exception %142
-      branch %143, bb40, bb39
-    bb26:
-      %119 = phi [(bb19, %118), (bb23, %115)]
-      %120 = phi [(bb19, %118), (bb23, %110)]
+      branch %143, bb32, bb31
+    bb18:
+      %119 = phi [(bb11, %118), (bb15, %115)]
+      %120 = phi [(bb11, %118), (bb15, %110)]
       %121 = load var $0.first
       %122 = const c87
       %123 = get_prop %121, %122
       %124 = is_exception %123
-      branch %124, bb28, bb27
-    bb27:
+      branch %124, bb20, bb19
+    bb19:
       %126 = call %123, this=%121, callsite="first.capturedMethod"
       %127 = is_exception %126
-      branch %127, bb30, bb29
-    bb28:
+      branch %127, bb22, bb21
+    bb20:
       %125 = call builtin.exception_value(%123)
       throw %125
-    bb29:
+    bb21:
       %129 = load var $0.second
       %130 = const c88
       %131 = get_prop %129, %130
       %132 = is_exception %131
-      branch %132, bb32, bb31
-    bb30:
+      branch %132, bb24, bb23
+    bb22:
       %128 = call builtin.exception_value(%126)
       throw %128
-    bb31:
+    bb23:
       %134 = call %131, this=%129, callsite="second.capturedMethod"
       %135 = is_exception %134
-      branch %135, bb34, bb33
-    bb32:
+      branch %135, bb26, bb25
+    bb24:
       %133 = call builtin.exception_value(%131)
       throw %133
-    bb33:
+    bb25:
       %137 = call builtin.strict_eq(%126, %134)
       %138 = is_exception %137
-      branch %138, bb36, bb35
-    bb34:
+      branch %138, bb28, bb27
+    bb26:
       %136 = call builtin.exception_value(%134)
       throw %136
-    bb35:
-      branch %107, bb37, bb38
-    bb36:
+    bb27:
+      branch %107, bb29, bb30
+    bb28:
       %139 = call builtin.exception_value(%137)
       throw %139
-    bb37:
+    bb29:
       %140 = call builtin.console.log(%137)
-      jump bb25
-    bb38:
+      jump bb17
+    bb30:
       %141 = call %119, this=%120, args=[%137], callsite="console.log"
-      jump bb25
-    bb39:
+      jump bb17
+    bb31:
       %145 = const c89
       %146 = const c90
       %147 = call builtin.intrinsic_pristine(%145, %146)
-      branch %147, bb41, bb42
-    bb40:
+      branch %147, bb33, bb34
+    bb32:
       %144 = call builtin.exception_value(%142)
       throw %144
-    bb41:
+    bb33:
       %158 = const c95
-      jump bb48
-    bb42:
+      jump bb40
+    bb34:
       %148 = const c91
       %149 = const c92
       %150 = call builtin.intrinsic_resolve(%148, %149)
       %151 = is_exception %150
-      branch %151, bb44, bb43
-    bb43:
+      branch %151, bb36, bb35
+    bb35:
       %153 = const c93
       %154 = const c94
       %155 = call builtin.intrinsic_resolve(%153, %154, %150)
       %156 = is_exception %155
-      branch %156, bb46, bb45
-    bb44:
+      branch %156, bb38, bb37
+    bb36:
       %152 = call builtin.exception_value(%150)
       throw %152
-    bb45:
-      jump bb48
-    bb46:
+    bb37:
+      jump bb40
+    bb38:
       %157 = call builtin.exception_value(%155)
       throw %157
-    bb47:
-      %182 = phi [(bb59, %180), (bb60, %181)]
+    bb39:
+      %182 = phi [(bb51, %180), (bb52, %181)]
       %183 = is_exception %182
-      branch %183, bb62, bb61
-    bb48:
-      %159 = phi [(bb41, %158), (bb45, %155)]
-      %160 = phi [(bb41, %158), (bb45, %150)]
+      branch %183, bb54, bb53
+    bb40:
+      %159 = phi [(bb33, %158), (bb37, %155)]
+      %160 = phi [(bb33, %158), (bb37, %150)]
       %161 = load var $0.first
       %162 = const c96
       %163 = get_prop %161, %162
       %164 = is_exception %163
-      branch %164, bb50, bb49
-    bb49:
+      branch %164, bb42, bb41
+    bb41:
       %166 = call %163, this=%161, callsite="first.emptyMethod"
       %167 = is_exception %166
-      branch %167, bb52, bb51
-    bb50:
+      branch %167, bb44, bb43
+    bb42:
       %165 = call builtin.exception_value(%163)
       throw %165
-    bb51:
+    bb43:
       %169 = load var $0.second
       %170 = const c97
       %171 = get_prop %169, %170
       %172 = is_exception %171
-      branch %172, bb54, bb53
-    bb52:
+      branch %172, bb46, bb45
+    bb44:
       %168 = call builtin.exception_value(%166)
       throw %168
-    bb53:
+    bb45:
       %174 = call %171, this=%169, callsite="second.emptyMethod"
       %175 = is_exception %174
-      branch %175, bb56, bb55
-    bb54:
+      branch %175, bb48, bb47
+    bb46:
       %173 = call builtin.exception_value(%171)
       throw %173
-    bb55:
+    bb47:
       %177 = call builtin.strict_eq(%166, %174)
       %178 = is_exception %177
-      branch %178, bb58, bb57
-    bb56:
+      branch %178, bb50, bb49
+    bb48:
       %176 = call builtin.exception_value(%174)
       throw %176
-    bb57:
-      branch %147, bb59, bb60
-    bb58:
+    bb49:
+      branch %147, bb51, bb52
+    bb50:
       %179 = call builtin.exception_value(%177)
       throw %179
-    bb59:
+    bb51:
       %180 = call builtin.console.log(%177)
-      jump bb47
-    bb60:
+      jump bb39
+    bb52:
       %181 = call %159, this=%160, args=[%177], callsite="console.log"
-      jump bb47
-    bb61:
+      jump bb39
+    bb53:
       %185 = load var $0.first
       %186 = const c98
       %187 = get_prop %185, %186
       %188 = is_exception %187
-      branch %188, bb64, bb63
-    bb62:
+      branch %188, bb56, bb55
+    bb54:
       %184 = call builtin.exception_value(%182)
       throw %184
-    bb63:
+    bb55:
       %190 = const c99
       %191 = call %187, this=%185, args=[%190], callsite="first.write"
       %192 = is_exception %191
-      branch %192, bb66, bb65
-    bb64:
+      branch %192, bb58, bb57
+    bb56:
       %189 = call builtin.exception_value(%187)
       throw %189
-    bb65:
+    bb57:
       %194 = const c100
       %195 = const c101
       %196 = call builtin.intrinsic_pristine(%194, %195)
-      branch %196, bb67, bb68
-    bb66:
+      branch %196, bb59, bb60
+    bb58:
       %193 = call builtin.exception_value(%191)
       throw %193
-    bb67:
+    bb59:
       %207 = const c106
-      jump bb74
-    bb68:
+      jump bb66
+    bb60:
       %197 = const c102
       %198 = const c103
       %199 = call builtin.intrinsic_resolve(%197, %198)
       %200 = is_exception %199
-      branch %200, bb70, bb69
-    bb69:
+      branch %200, bb62, bb61
+    bb61:
       %202 = const c104
       %203 = const c105
       %204 = call builtin.intrinsic_resolve(%202, %203, %199)
       %205 = is_exception %204
-      branch %205, bb72, bb71
-    bb70:
+      branch %205, bb64, bb63
+    bb62:
       %201 = call builtin.exception_value(%199)
       throw %201
-    bb71:
-      jump bb74
-    bb72:
+    bb63:
+      jump bb66
+    bb64:
       %206 = call builtin.exception_value(%204)
       throw %206
-    bb73:
-      %224 = phi [(bb81, %222), (bb82, %223)]
+    bb65:
+      %224 = phi [(bb73, %222), (bb74, %223)]
       %225 = is_exception %224
-      branch %225, bb84, bb83
-    bb74:
-      %208 = phi [(bb67, %207), (bb71, %204)]
-      %209 = phi [(bb67, %207), (bb71, %199)]
+      branch %225, bb76, bb75
+    bb66:
+      %208 = phi [(bb59, %207), (bb63, %204)]
+      %209 = phi [(bb59, %207), (bb63, %199)]
       %210 = load var $0.second
       %211 = const c107
       %212 = get_prop %210, %211
       %213 = is_exception %212
-      branch %213, bb76, bb75
-    bb75:
+      branch %213, bb68, bb67
+    bb67:
       %215 = call %212, this=%210, callsite="second.read"
       %216 = is_exception %215
-      branch %216, bb78, bb77
-    bb76:
+      branch %216, bb70, bb69
+    bb68:
       %214 = call builtin.exception_value(%212)
       throw %214
-    bb77:
+    bb69:
       %218 = const c108
       %219 = call builtin.strict_eq(%215, %218)
       %220 = is_exception %219
-      branch %220, bb80, bb79
-    bb78:
+      branch %220, bb72, bb71
+    bb70:
       %217 = call builtin.exception_value(%215)
       throw %217
-    bb79:
-      branch %196, bb81, bb82
-    bb80:
+    bb71:
+      branch %196, bb73, bb74
+    bb72:
       %221 = call builtin.exception_value(%219)
       throw %221
-    bb81:
+    bb73:
       %222 = call builtin.console.log(%219)
-      jump bb73
-    bb82:
+      jump bb65
+    bb74:
       %223 = call %208, this=%209, args=[%219], callsite="console.log"
-      jump bb73
-    bb83:
+      jump bb65
+    bb75:
       %227 = load var $0.first
       %228 = const c109
       %229 = get_prop %227, %228
       %230 = is_exception %229
-      branch %230, bb86, bb85
-    bb84:
+      branch %230, bb78, bb77
+    bb76:
       %226 = call builtin.exception_value(%224)
       throw %226
-    bb85:
+    bb77:
       %232 = call %229, this=%227, callsite="first.capturedMethod"
       %233 = is_exception %232
-      branch %233, bb88, bb87
-    bb86:
+      branch %233, bb80, bb79
+    bb78:
       %231 = call builtin.exception_value(%229)
       throw %231
-    bb87:
+    bb79:
       store var $0.captured, %232
       %235 = const c110
       %236 = const c111
       %237 = call builtin.intrinsic_pristine(%235, %236)
-      branch %237, bb89, bb90
-    bb88:
+      branch %237, bb81, bb82
+    bb80:
       %234 = call builtin.exception_value(%232)
       throw %234
-    bb89:
+    bb81:
       %248 = const c116
-      jump bb96
-    bb90:
+      jump bb88
+    bb82:
       %238 = const c112
       %239 = const c113
       %240 = call builtin.intrinsic_resolve(%238, %239)
       %241 = is_exception %240
-      branch %241, bb92, bb91
-    bb91:
+      branch %241, bb84, bb83
+    bb83:
       %243 = const c114
       %244 = const c115
       %245 = call builtin.intrinsic_resolve(%243, %244, %240)
       %246 = is_exception %245
-      branch %246, bb94, bb93
-    bb92:
+      branch %246, bb86, bb85
+    bb84:
       %242 = call builtin.exception_value(%240)
       throw %242
-    bb93:
-      jump bb96
-    bb94:
+    bb85:
+      jump bb88
+    bb86:
       %247 = call builtin.exception_value(%245)
       throw %247
-    bb95:
-      %276 = phi [(bb109, %274), (bb110, %275)]
+    bb87:
+      %276 = phi [(bb101, %274), (bb102, %275)]
       %277 = is_exception %276
-      branch %277, bb112, bb111
-    bb96:
-      %249 = phi [(bb89, %248), (bb93, %245)]
-      %250 = phi [(bb89, %248), (bb93, %240)]
+      branch %277, bb104, bb103
+    bb88:
+      %249 = phi [(bb81, %248), (bb85, %245)]
+      %250 = phi [(bb81, %248), (bb85, %240)]
       %251 = const c117
       %252 = load var $0.captured
       %253 = const c118
       %254 = call %252, this=%251, args=[%253], callsite="captured"
       %255 = is_exception %254
-      branch %255, bb98, bb97
-    bb97:
+      branch %255, bb90, bb89
+    bb89:
       %257 = const c119
       %258 = call builtin.strict_eq(%254, %257)
       %259 = is_exception %258
-      branch %259, bb100, bb99
-    bb98:
+      branch %259, bb92, bb91
+    bb90:
       %256 = call builtin.exception_value(%254)
       throw %256
-    bb99:
-      branch %258, bb101, bb102
-    bb100:
+    bb91:
+      branch %258, bb93, bb94
+    bb92:
       %260 = call builtin.exception_value(%258)
       throw %260
-    bb101:
+    bb93:
       %261 = load var $0.second
       %262 = const c120
       %263 = get_prop %261, %262
       %264 = is_exception %263
-      branch %264, bb104, bb103
-    bb102:
-      %271 = phi [(bb99, %258), (bb105, %270)]
+      branch %264, bb96, bb95
+    bb94:
+      %271 = phi [(bb91, %258), (bb97, %270)]
       %272 = is_exception %271
-      branch %272, bb108, bb107
-    bb103:
+      branch %272, bb100, bb99
+    bb95:
       %266 = call %263, this=%261, callsite="second.read"
       %267 = is_exception %266
-      branch %267, bb106, bb105
-    bb104:
+      branch %267, bb98, bb97
+    bb96:
       %265 = call builtin.exception_value(%263)
       throw %265
-    bb105:
+    bb97:
       %269 = const c121
       %270 = call builtin.strict_eq(%266, %269)
-      jump bb102
-    bb106:
+      jump bb94
+    bb98:
       %268 = call builtin.exception_value(%266)
       throw %268
-    bb107:
-      branch %237, bb109, bb110
-    bb108:
+    bb99:
+      branch %237, bb101, bb102
+    bb100:
       %273 = call builtin.exception_value(%271)
       throw %273
-    bb109:
+    bb101:
       %274 = call builtin.console.log(%271)
-      jump bb95
-    bb110:
+      jump bb87
+    bb102:
       %275 = call %249, this=%250, args=[%271], callsite="console.log"
-      jump bb95
-    bb111:
+      jump bb87
+    bb103:
       %279 = load var $0.PrivateClosure
       %280 = const c122
       %281 = get_prop %279, %280
       %282 = is_exception %281
-      branch %282, bb114, bb113
-    bb112:
+      branch %282, bb106, bb105
+    bb104:
       %278 = call builtin.exception_value(%276)
       throw %278
-    bb113:
+    bb105:
       %284 = const c123
       %285 = call %281, this=%279, args=[%284], callsite="PrivateClosure.writeStatic"
       %286 = is_exception %285
-      branch %286, bb116, bb115
-    bb114:
+      branch %286, bb108, bb107
+    bb106:
       %283 = call builtin.exception_value(%281)
       throw %283
-    bb115:
+    bb107:
       %288 = const c124
       %289 = const c125
       %290 = call builtin.intrinsic_pristine(%288, %289)
-      branch %290, bb117, bb118
-    bb116:
+      branch %290, bb109, bb110
+    bb108:
       %287 = call builtin.exception_value(%285)
       throw %287
-    bb117:
+    bb109:
       %301 = const c130
-      jump bb124
-    bb118:
+      jump bb116
+    bb110:
       %291 = const c126
       %292 = const c127
       %293 = call builtin.intrinsic_resolve(%291, %292)
       %294 = is_exception %293
-      branch %294, bb120, bb119
-    bb119:
+      branch %294, bb112, bb111
+    bb111:
       %296 = const c128
       %297 = const c129
       %298 = call builtin.intrinsic_resolve(%296, %297, %293)
       %299 = is_exception %298
-      branch %299, bb122, bb121
-    bb120:
+      branch %299, bb114, bb113
+    bb112:
       %295 = call builtin.exception_value(%293)
       throw %295
-    bb121:
-      jump bb124
-    bb122:
+    bb113:
+      jump bb116
+    bb114:
       %300 = call builtin.exception_value(%298)
       throw %300
-    bb123:
-      %331 = phi [(bb139, %329), (bb140, %330)]
+    bb115:
+      %331 = phi [(bb131, %329), (bb132, %330)]
       %332 = is_exception %331
-      branch %332, bb142, bb141
-    bb124:
-      %302 = phi [(bb117, %301), (bb121, %298)]
-      %303 = phi [(bb117, %301), (bb121, %293)]
+      branch %332, bb134, bb133
+    bb116:
+      %302 = phi [(bb109, %301), (bb113, %298)]
+      %303 = phi [(bb109, %301), (bb113, %293)]
       %304 = load var $0.PrivateClosure
       %305 = const c131
       %306 = get_prop %304, %305
       %307 = is_exception %306
-      branch %307, bb126, bb125
-    bb125:
+      branch %307, bb118, bb117
+    bb117:
       %309 = call %306, this=%304, callsite="PrivateClosure.readStatic"
       %310 = is_exception %309
-      branch %310, bb128, bb127
-    bb126:
+      branch %310, bb120, bb119
+    bb118:
       %308 = call builtin.exception_value(%306)
       throw %308
-    bb127:
+    bb119:
       %312 = const c132
       %313 = call builtin.strict_eq(%309, %312)
       %314 = is_exception %313
-      branch %314, bb130, bb129
-    bb128:
+      branch %314, bb122, bb121
+    bb120:
       %311 = call builtin.exception_value(%309)
       throw %311
-    bb129:
-      branch %313, bb131, bb132
-    bb130:
+    bb121:
+      branch %313, bb123, bb124
+    bb122:
       %315 = call builtin.exception_value(%313)
       throw %315
-    bb131:
+    bb123:
       %316 = load var $0.PrivateClosure
       %317 = const c133
       %318 = get_prop %316, %317
       %319 = is_exception %318
-      branch %319, bb134, bb133
-    bb132:
-      %326 = phi [(bb129, %313), (bb135, %325)]
+      branch %319, bb126, bb125
+    bb124:
+      %326 = phi [(bb121, %313), (bb127, %325)]
       %327 = is_exception %326
-      branch %327, bb138, bb137
-    bb133:
+      branch %327, bb130, bb129
+    bb125:
       %321 = call %318, this=%316, callsite="PrivateClosure.read"
       %322 = is_exception %321
-      branch %322, bb136, bb135
-    bb134:
+      branch %322, bb128, bb127
+    bb126:
       %320 = call builtin.exception_value(%318)
       throw %320
-    bb135:
+    bb127:
       %324 = const c134
       %325 = call builtin.strict_eq(%321, %324)
-      jump bb132
-    bb136:
+      jump bb124
+    bb128:
       %323 = call builtin.exception_value(%321)
       throw %323
-    bb137:
-      branch %290, bb139, bb140
-    bb138:
+    bb129:
+      branch %290, bb131, bb132
+    bb130:
       %328 = call builtin.exception_value(%326)
       throw %328
-    bb139:
+    bb131:
       %329 = call builtin.console.log(%326)
-      jump bb123
-    bb140:
+      jump bb115
+    bb132:
       %330 = call %302, this=%303, args=[%326], callsite="console.log"
-      jump bb123
-    bb141:
+      jump bb115
+    bb133:
       return
-    bb142:
+    bb134:
       %333 = call builtin.exception_value(%331)
       throw %333
-    bb143:
-      jump bb11
-    bb144:
+    bb135:
+      jump bb6
+    bb136:
       %337 = const c32
       %338 = get_prop %24, %337
       %339 = const c33
@@ -1003,10 +987,10 @@ module {
       %351 = get_prop %24, %350
       %352 = const c38
       call builtin.private_accessor_bind(%95, %352, %348, %351)
-      jump bb143
-    bb145:
-      jump bb2
-    bb146:
+      jump bb135
+    bb137:
+      jump bb1
+    bb138:
       %356 = const c32
       %357 = get_prop %24, %356
       %358 = const c33
@@ -1021,5 +1005,5 @@ module {
       %370 = get_prop %24, %369
       %371 = const c38
       call builtin.private_accessor_bind(%84, %371, %367, %370)
-      jump bb145
+      jump bb137
 }

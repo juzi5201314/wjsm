@@ -260,7 +260,6 @@ module {
       %22 = new_promise
       %24 = call builtin.promise.create_resolve_function(%22)
       %25 = call builtin.promise.create_reject_function(%22)
-      %79 = const c0
       jump bb23
     bb1:
       %29 = const c39
@@ -378,8 +377,8 @@ module {
       branch %90, bb27, bb26
     bb25:
       %85 = call builtin.exception_value(%83)
-      store var $1.reject, %79
-      store var $1.resolve, %79
+      store var $1.reject, %0
+      store var $1.resolve, %0
       throw %85
     bb26:
       %92 = const c25
@@ -389,16 +388,16 @@ module {
       branch %96, bb29, bb28
     bb27:
       %91 = call builtin.exception_value(%89)
-      store var $1.reject, %79
-      store var $1.resolve, %79
+      store var $1.reject, %0
+      store var $1.resolve, %0
       throw %91
     bb28:
-      store var $1.reject, %79
-      store var $1.resolve, %79
+      store var $1.reject, %0
+      store var $1.resolve, %0
       jump bb22
     bb29:
       %97 = call builtin.exception_value(%95)
-      store var $1.reject, %79
-      store var $1.resolve, %79
+      store var $1.reject, %0
+      store var $1.resolve, %0
       throw %97
 }

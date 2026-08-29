@@ -156,7 +156,11 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
         | EncodeException { value, .. }
         | ExceptionToObject { value, .. }
         | GuardSameFunction { callee: value, .. }
-        | ElemShapeGuard { array: value, .. } => replace(value),
+        | GuardElementsKind { array: value, .. }
+        | GuardShape { object: value, .. }
+        | LoadSlot { object: value, .. }
+        | GuardTag { value, .. }
+        | GuardCallTarget { callee: value, .. } => replace(value),
         StringConcatVa { parts, .. } => replace_all(parts),
         InitObjectLiteral { values, .. } => replace_all(values),
         CallBuiltin { args, .. } => replace_all(args),
@@ -182,30 +186,30 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
             replace(this_val);
             replace_all(args);
         }
-        GetProp { object, key, .. }
-        | DeleteProp { object, key, .. }
-        | GetElem {
-            object, index: key, ..
+        GetProp {
+            object, key, latch, ..
         } => {
             replace(object);
             replace(key);
+            if let Some(latch) = latch {
+                replace(latch);
+            }
         }
-        GetElemGuarded {
+        DeleteProp { object, key, .. } => {
+            replace(object);
+            replace(key);
+        }
+        GetElem {
             object,
             index,
-            guard,
+            latch,
             ..
         } => {
             replace(object);
             replace(index);
-            replace(guard);
-        }
-        GetPropGuarded {
-            object, key, guard, ..
-        } => {
-            replace(object);
-            replace(key);
-            replace(guard);
+            if let Some(latch) = latch {
+                replace(latch);
+            }
         }
         SetProp {
             object, key, value, ..
@@ -251,6 +255,10 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
         | NewPromise { .. }
         | CollectRestArgs { .. }
         | DebugCheck { .. } => {}
+        StoreSlot { object, value, .. } => {
+            replace(object);
+            replace(value);
+        }
     }
 }
 
@@ -265,6 +273,15 @@ fn replace_value_in_terminator(terminator: &mut Terminator, from: ValueId, to: V
         | Terminator::Switch { value, .. } => {
             if *value == from {
                 *value = to;
+            }
+        }
+        Terminator::Deopt { frames } => {
+            for frame in frames {
+                for live in &mut frame.lives {
+                    if *live == from {
+                        *live = to;
+                    }
+                }
             }
         }
         Terminator::Return { value: None } | Terminator::Jump { .. } | Terminator::Unreachable => {}

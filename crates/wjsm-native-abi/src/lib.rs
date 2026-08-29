@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 21;
+pub const NATIVE_ABI_VERSION: u32 = 22;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -144,8 +144,12 @@ pub struct NativeVmContext {
     pub resume_function_id: u32,
     pub resume_live_count: u32,
     pub resume_live_capacity: u32,
-    /// 循环头 deopt/OSR 的 boxed live 槽；由宿主持有。
+    /// deopt/OSR 的 boxed live 槽；由宿主按需增长。
     pub resume_live_slots: *mut i64,
+    /// 要恢复的 IR 指令下标；与 `resume_block_plus_one` 一起定位 generic landing pad。
+    pub resume_instruction_index: u32,
+    /// 内联 deopt 帧数；1 表示仅当前函数。
+    pub resume_frame_count: u32,
 }
 impl Default for NativeVmContext {
     fn default() -> Self {
@@ -201,6 +205,8 @@ impl Default for NativeVmContext {
             resume_live_count: 0,
             resume_live_capacity: 0,
             resume_live_slots: std::ptr::null_mut(),
+            resume_instruction_index: 0,
+            resume_frame_count: 1,
         }
     }
 }
@@ -312,7 +318,12 @@ pub struct NativeFeedbackSlot {
     pub last_target_function: u32,
     pub operation: u32,
     pub state: u32,
-    pub reserved: u32,
+    pub shape_id: u32,
+    pub slot_or_kind: u32,
+    pub proto_generation: u32,
+    pub poly_len: u32,
+    pub poly_key: [u32; 4],
+    pub flags: u32,
 }
 
 #[derive(Debug)]
@@ -457,10 +468,10 @@ pub enum NativeRuntimeOp {
     InitPromise = 0x1_0512,
     /// 以 install 期烘焙的对象模板初始化字面量：`[template_meta_index, ...values]`。
     InitObjectLiteral = 0x1_0513,
-    /// licm elem-guard 外提的 pre-header 守卫：`[array, template_meta_index]`。
+    /// Sound LICM 外提的元素 kind / 模板守卫：`[array, template_meta_index]`。
     /// 校验数组当前 packed 无洞、全部元素为该模板烘焙 shape 的普通对象、
-    /// 元素值槽均非对象；只读不分配，返回编码布尔。
-    ElemShapeGuard = 0x1_0514,
+    /// 元素值槽均非对象；只读不分配，返回编码布尔。与 IR `GuardElementsKind` 同源。
+    GuardElementsKind = 0x1_0514,
     PrepareCall = 0x1_0600,
     PrepareConstruct = 0x1_0606,
     FinishCall = 0x1_0601,
@@ -536,7 +547,7 @@ impl NativeRuntimeOp {
             0x1_0510 => Some(Self::GetPropAccessor),
             0x1_0512 => Some(Self::InitPromise),
             0x1_0513 => Some(Self::InitObjectLiteral),
-            0x1_0514 => Some(Self::ElemShapeGuard),
+            0x1_0514 => Some(Self::GuardElementsKind),
             0x1_0515 => Some(Self::SetPropStrict),
             0x1_0516 => Some(Self::SetElemStrict),
             0x1_0517 => Some(Self::SetPropIcStrict),
@@ -670,7 +681,7 @@ impl NativeSignature {
 /// `HostOperationDispatcher` 的 C ABI 自 ABI v10 起为五参数：
 /// `(ctx: *mut NativeVmContext, operation: u32, args: *const i64, args_count: u32,
 /// feedback_slot: *mut u8) -> i64`；非反馈调用点传 null 槽指针，反馈调用点传
-/// 当前 image 反馈区内的 48 字节槽地址。
+/// 当前 image 反馈区内的 80 字节槽地址。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum NativeHostSymbol {
@@ -866,6 +877,8 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, object_template_meta_count),
             offset_of!(NativeVmContext, resume_block_plus_one),
             offset_of!(NativeVmContext, resume_live_slots),
+            offset_of!(NativeVmContext, resume_instruction_index),
+            offset_of!(NativeVmContext, resume_frame_count),
             offset_of!(NativeFunctionEntry, osr_entry),
         ] {
             hasher.update(
@@ -885,6 +898,11 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeFeedbackSlot, last_target_function),
             offset_of!(NativeFeedbackSlot, operation),
             offset_of!(NativeFeedbackSlot, state),
+            offset_of!(NativeFeedbackSlot, shape_id),
+            offset_of!(NativeFeedbackSlot, slot_or_kind),
+            offset_of!(NativeFeedbackSlot, proto_generation),
+            offset_of!(NativeFeedbackSlot, poly_len),
+            offset_of!(NativeFeedbackSlot, flags),
         ] {
             hasher.update(
                 u64::try_from(offset)
@@ -978,7 +996,7 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::GetPropAccessor,
             NativeRuntimeOp::InitPromise,
             NativeRuntimeOp::InitObjectLiteral,
-            NativeRuntimeOp::ElemShapeGuard,
+            NativeRuntimeOp::GuardElementsKind,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,
             NativeRuntimeOp::LoadArgument,
@@ -1039,7 +1057,7 @@ const _: () = {
     assert!(offset_of!(CallArgs, len) == 4);
     assert!(size_of::<PendingExceptionKind>() == 4);
     // 反馈槽视图必须与 wjsm-ir::constants 的布局常量逐字段一致。
-    assert!(size_of::<NativeFeedbackSlot>() == 48);
+    assert!(size_of::<NativeFeedbackSlot>() == 80);
     assert!(size_of::<NativeFeedbackSlot>() == wjsm_ir::constants::FEEDBACK_SLOT_SIZE as usize);
     assert!(
         offset_of!(NativeFeedbackSlot, last_target_image_id)
@@ -1076,6 +1094,14 @@ const _: () = {
     assert!(
         offset_of!(NativeFeedbackSlot, state)
             == wjsm_ir::constants::FEEDBACK_SLOT_STATE_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, shape_id)
+            == wjsm_ir::constants::FEEDBACK_SLOT_SHAPE_ID_OFFSET as usize
+    );
+    assert!(
+        offset_of!(NativeFeedbackSlot, slot_or_kind)
+            == wjsm_ir::constants::FEEDBACK_SLOT_SLOT_OR_KIND_OFFSET as usize
     );
     assert!(NativeFeedbackTag::Number.code() <= 0x1f);
     assert!(NativeFeedbackTag::Other.code() <= 0x1f);

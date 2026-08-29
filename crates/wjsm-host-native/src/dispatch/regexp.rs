@@ -365,7 +365,10 @@ pub(super) fn string_match_all(
     let Some((&receiver, rest)) = args.split_first() else {
         return fail_dispatch(ctx);
     };
-    let pattern = rest.first().copied().unwrap_or_else(value::encode_undefined);
+    let pattern = rest
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     // §22.1.3.14 步骤 2.b：IsRegExp 且 flags 不含 "g" 在取 @@matchAll 之前先抛。
     if value::is_regexp(pattern)
         && !state

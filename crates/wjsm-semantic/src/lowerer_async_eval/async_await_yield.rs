@@ -488,12 +488,7 @@ impl Lowerer {
     }
 
     /// 以字符串常量键发射一次普通 GetProp。
-    fn emit_get_string_prop(
-        &mut self,
-        block: BasicBlockId,
-        object: ValueId,
-        key: &str,
-    ) -> ValueId {
+    fn emit_get_string_prop(&mut self, block: BasicBlockId, object: ValueId, key: &str) -> ValueId {
         let key_const = self.module.add_constant(Constant::String(key.to_string()));
         let key_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -510,6 +505,8 @@ impl Lowerer {
                 dest,
                 object,
                 key: key_val,
+                latch: None,
+                latch_template: None,
             },
         );
         dest

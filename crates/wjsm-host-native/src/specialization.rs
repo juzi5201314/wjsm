@@ -3,20 +3,55 @@
 //! worker 只接触 compiler、`Arc<Program>` 与变量槽快照；RX image 的加载、发布、
 //! 淘汰和 activation pin 均由 owner thread 上的 `NativeAgentState` 完成。
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
 use wjsm_backend_native::image::CompiledImage;
 use wjsm_backend_native::{NativeCompiler, NativeObject};
 use wjsm_ir::{FunctionId, Program, ValueId, constants};
 use wjsm_native_abi::{NativeFeedbackSlot, NativeFeedbackTag};
+use wjsm_optimize::SpeculativeFacts;
 
-const REQUEST_QUEUE_CAPACITY: usize = 8;
-const MAX_ACTIVE_OVERLAYS: usize = 64;
-const MAX_ACTIVE_OVERLAY_BYTES: usize = 16 * 1024 * 1024;
+const REQUEST_QUEUE_CAPACITY: usize = 256;
+
+fn overlay_count_limit() -> usize {
+    match std::env::var("WJSM_OVERLAY_MAX_COUNT") {
+        Ok(value) => {
+            let parsed = value.parse::<usize>().unwrap_or(4096);
+            if parsed == 0 { usize::MAX } else { parsed }
+        }
+        Err(_) => 4096,
+    }
+}
+
+fn overlay_byte_limit() -> usize {
+    match std::env::var("WJSM_OVERLAY_MAX_BYTES") {
+        Ok(value) => {
+            let parsed = value.parse::<usize>().unwrap_or(0);
+            if parsed == 0 { usize::MAX } else { parsed }
+        }
+        Err(_) => {
+            let rss = current_rss_bytes().unwrap_or(256 * 1024 * 1024);
+            (rss / 8).clamp(32 * 1024 * 1024, 256 * 1024 * 1024)
+        }
+    }
+}
+
+fn current_rss_bytes() -> Option<usize> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        let Some(kb) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let kb = kb.trim().trim_end_matches(" kB").trim();
+        let kb = kb.parse::<usize>().ok()?;
+        return Some(kb.saturating_mul(1024));
+    }
+    None
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct ValidatedFeedbackSlot {
@@ -67,6 +102,7 @@ pub(crate) struct CompilationRequest {
     pub(crate) variable_slots: Arc<HashMap<String, u32>>,
     pub(crate) argument_tags: Box<[NativeFeedbackTag]>,
     pub(crate) extra_numbers: HashSet<ValueId>,
+    pub(crate) facts: SpeculativeFacts,
     pub(crate) ic_epoch: u64,
     pub(crate) proto_generation: u64,
 }
@@ -84,9 +120,15 @@ struct PublishedOverlay {
     proto_generation: u64,
 }
 
+struct Inbox {
+    queue: Mutex<VecDeque<CompilationRequest>>,
+    cv: Condvar,
+    closed: AtomicBool,
+}
+
 pub(crate) struct SpecializationCoordinator {
     compiler: Option<NativeCompiler>,
-    request_tx: Option<SyncSender<CompilationRequest>>,
+    inbox: Option<Arc<Inbox>>,
     result_rx: Option<Receiver<CompilationResult>>,
     worker: Option<JoinHandle<()>>,
     pending: HashSet<VariantKey>,
@@ -108,7 +150,7 @@ impl SpecializationCoordinator {
     pub(crate) fn new(compiler: NativeCompiler) -> Self {
         Self {
             compiler: Some(compiler),
-            request_tx: None,
+            inbox: None,
             result_rx: None,
             worker: None,
             pending: HashSet::new(),
@@ -122,17 +164,33 @@ impl SpecializationCoordinator {
         }
     }
 
-    fn ensure_worker(&mut self) -> Option<&SyncSender<CompilationRequest>> {
-        if self.request_tx.is_none() {
+    fn ensure_worker(&mut self) -> Option<Arc<Inbox>> {
+        if self.inbox.is_none() {
             let compiler = self.compiler.take()?;
-            let (request_tx, request_rx) =
-                mpsc::sync_channel::<CompilationRequest>(REQUEST_QUEUE_CAPACITY);
+            let inbox = Arc::new(Inbox {
+                queue: Mutex::new(VecDeque::new()),
+                cv: Condvar::new(),
+                closed: AtomicBool::new(false),
+            });
             let (result_tx, result_rx) = mpsc::channel::<CompilationResult>();
             let completed = Arc::clone(&self.completed);
+            let worker_inbox = Arc::clone(&inbox);
             let worker = thread::Builder::new()
                 .name("wjsm-specialization".into())
                 .spawn(move || {
-                    while let Ok(request) = request_rx.recv() {
+                    loop {
+                        let request = {
+                            let mut queue = worker_inbox.queue.lock().unwrap();
+                            loop {
+                                if let Some(request) = queue.pop_front() {
+                                    break request;
+                                }
+                                if worker_inbox.closed.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                queue = worker_inbox.cv.wait(queue).unwrap();
+                            }
+                        };
                         let object = compiler
                             .compile_specialized_function(
                                 &request.program,
@@ -140,6 +198,7 @@ impl SpecializationCoordinator {
                                 FunctionId(request.key.target_function),
                                 &request.argument_tags,
                                 &request.extra_numbers,
+                                Some(request.facts.clone()),
                                 false,
                             )
                             .ok()
@@ -154,11 +213,11 @@ impl SpecializationCoordinator {
                     }
                 })
                 .ok()?;
-            self.request_tx = Some(request_tx);
+            self.inbox = Some(inbox);
             self.result_rx = Some(result_rx);
             self.worker = Some(worker);
         }
-        self.request_tx.as_ref()
+        self.inbox.clone()
     }
 
     pub(crate) fn enqueue(&mut self, request: CompilationRequest) {
@@ -166,19 +225,22 @@ impl SpecializationCoordinator {
             return;
         }
         let key = request.key;
-        let Some(sender) = self.ensure_worker() else {
+        let Some(inbox) = self.ensure_worker() else {
             self.disabled.insert(key);
             return;
         };
-        match sender.try_send(request) {
-            Ok(()) => {
-                self.pending.insert(key);
-            }
-            Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => {
-                self.disabled.insert(key);
+        let mut queue = inbox.queue.lock().unwrap();
+        queue.retain(|pending| pending.key != key);
+        while queue.len() >= REQUEST_QUEUE_CAPACITY {
+            if let Some(oldest) = queue.pop_front() {
+                self.pending.remove(&oldest.key);
+            } else {
+                break;
             }
         }
+        queue.push_back(request);
+        self.pending.insert(key);
+        inbox.cv.notify_one();
     }
 
     /// 是否有 worker 已投递、尚未收敛的结果。
@@ -284,8 +346,8 @@ impl SpecializationCoordinator {
     }
 
     fn enforce_global_limits(&mut self) {
-        while self.overlays.len() > MAX_ACTIVE_OVERLAYS
-            || self.active_bytes > MAX_ACTIVE_OVERLAY_BYTES
+        while self.overlays.len() > overlay_count_limit()
+            || self.active_bytes > overlay_byte_limit()
         {
             let Some(oldest) = self
                 .overlays
@@ -339,7 +401,11 @@ impl SpecializationCoordinator {
 
 impl Drop for SpecializationCoordinator {
     fn drop(&mut self) {
-        self.request_tx.take();
+        if let Some(inbox) = &self.inbox {
+            inbox.closed.store(true, Ordering::Release);
+            inbox.cv.notify_all();
+        }
+        self.inbox.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }

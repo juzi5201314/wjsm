@@ -994,9 +994,32 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             .map_err(HeapAccessV2Error::Memory)?;
         let shift = constants::HEAP_ARRAY_KIND_OFFSET * 8;
         let current = ((header >> shift) & 0xFF) as u32;
-        if current >= kind {
+        let next = raised_array_kind(current, kind);
+        if next == current {
             return Ok(());
         }
+        self.store_array_kind_header(object, header, next)
+    }
+
+    /// 无条件写入 kind 字节。NUMBER → boxed 是表示转换（GC 必须重新扫槽），
+    /// 不能走 [`raised_array_kind`]：该格把 NUMBER 当成更高阶，请求 PACKED/HOLEY 仍会留下 NUMBER。
+    fn write_array_kind(&self, handle: u32, kind: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let header = self
+            .heap
+            .memory()
+            .load_word(HeapAddress::new(object))
+            .map_err(HeapAccessV2Error::Memory)?;
+        self.store_array_kind_header(object, header, kind)
+    }
+
+    fn store_array_kind_header(
+        &self,
+        object: u64,
+        header: u64,
+        kind: u32,
+    ) -> Result<(), HeapAccessV2Error> {
+        let shift = constants::HEAP_ARRAY_KIND_OFFSET * 8;
         let cleared = header & !(0xFF_u64 << shift);
         self.heap
             .memory()
@@ -1049,7 +1072,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             self.grow_array_capacity(handle, index.saturating_add(1))?;
             // 写入 length 以内、尚未分配的槽：前后仍是隐式 hole。
             if index < length {
-                self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+                self.raise_holey_kind(handle)?;
             }
             return self.set_element(handle, index, value);
         }
@@ -1062,7 +1085,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                     value::encode_array_hole() as u64,
                 )?;
             }
-            self.raise_array_kind(handle, constants::ARRAY_KIND_HOLEY)?;
+            self.raise_holey_kind(handle)?;
         }
         let current = self.resolve_handle(handle)?;
         self.store_reference(handle, array_element_address(current, index)?, value)?;
@@ -1075,7 +1098,86 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
                 )
                 .map_err(HeapAccessV2Error::Memory)?;
         }
+        self.adjust_kind_after_element_store(handle, value)?;
         Ok(())
+    }
+
+    fn raise_holey_kind(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let kind = self.array_kind_at(object)?;
+        let holey = if matches!(
+            kind,
+            constants::ARRAY_KIND_PACKED_NUMBER | constants::ARRAY_KIND_HOLEY_NUMBER
+        ) {
+            constants::ARRAY_KIND_HOLEY_NUMBER
+        } else {
+            constants::ARRAY_KIND_HOLEY
+        };
+        self.raise_array_kind(handle, holey)
+    }
+
+    /// Number 槽与 boxed 槽位型相同（JS Number 即 f64 比特）；kind 只决定 GC 是否扫槽。
+    fn adjust_kind_after_element_store(
+        &self,
+        handle: u32,
+        value: u64,
+    ) -> Result<(), HeapAccessV2Error> {
+        let encoded = value as i64;
+        if value::is_f64(encoded) {
+            return self.maybe_raise_number_kind(handle);
+        }
+        if value::is_array_hole(encoded) {
+            return self.raise_holey_kind(handle);
+        }
+        let object = self.resolve_handle(handle)?;
+        let kind = self.array_kind_at(object)?;
+        if matches!(
+            kind,
+            constants::ARRAY_KIND_PACKED_NUMBER | constants::ARRAY_KIND_HOLEY_NUMBER
+        ) {
+            let boxed = if kind == constants::ARRAY_KIND_HOLEY_NUMBER {
+                constants::ARRAY_KIND_HOLEY
+            } else {
+                constants::ARRAY_KIND_PACKED
+            };
+            self.write_array_kind(handle, boxed)?;
+        }
+        Ok(())
+    }
+
+    fn maybe_raise_number_kind(&self, handle: u32) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        let kind = self.array_kind_at(object)?;
+        if matches!(
+            kind,
+            constants::ARRAY_KIND_DICTIONARY
+                | constants::ARRAY_KIND_PACKED_NUMBER
+                | constants::ARRAY_KIND_HOLEY_NUMBER
+        ) {
+            return Ok(());
+        }
+        let length = self.array_length(handle)?;
+        let mut holey = matches!(kind, constants::ARRAY_KIND_HOLEY);
+        for index in 0..length {
+            let Some(stored) = self.get_element(handle, index)? else {
+                holey = true;
+                continue;
+            };
+            let encoded = stored as i64;
+            if value::is_array_hole(encoded) {
+                holey = true;
+                continue;
+            }
+            if !value::is_f64(encoded) {
+                return Ok(());
+            }
+        }
+        let target = if holey {
+            constants::ARRAY_KIND_HOLEY_NUMBER
+        } else {
+            constants::ARRAY_KIND_PACKED_NUMBER
+        };
+        self.raise_array_kind(handle, target)
     }
 
     pub fn array_length(&self, handle: u32) -> Result<u32, HeapAccessV2Error> {
@@ -2260,6 +2362,13 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
             return Ok(());
         }
         let capacity = if header_heap_type(header) == u32::from(wjsm_ir::HEAP_TYPE_ARRAY) {
+            let kind = self.array_kind_at(object)?;
+            if matches!(
+                kind,
+                constants::ARRAY_KIND_PACKED_NUMBER | constants::ARRAY_KIND_HOLEY_NUMBER
+            ) {
+                return Ok(());
+            }
             self.heap
                 .memory()
                 .load_word(HeapAddress::new(
@@ -2904,7 +3013,7 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
     }
 
     /// 按槽下标读对象值槽（strip GC color 后返回），供宿主只读校验
-    /// （如 licm elem-guard 的 `ElemShapeGuard`）绕过属性名查找直读槽值。
+    /// （如 licm elem-guard 的带模板 `GuardElementsKind`）绕过属性名查找直读槽值。
     pub fn value_slot(&self, handle: u32, index: u32) -> Result<u64, HeapAccessV2Error> {
         let object = self.resolve_handle(handle)?;
         self.load_value_slot(object, index)
@@ -3029,6 +3138,38 @@ pub fn string_payload_bytes(capacity: u32) -> Result<u64, HeapAccessV2Error> {
 /// 数组元素地址；与对象值槽同构，故直接复用同一公式。
 fn array_element_address(object: u64, index: u32) -> Result<u64, HeapAccessV2Error> {
     value_slot_address(object, index)
+}
+
+fn raised_array_kind(current: u32, requested: u32) -> u32 {
+    if current == constants::ARRAY_KIND_DICTIONARY || requested == constants::ARRAY_KIND_DICTIONARY
+    {
+        return constants::ARRAY_KIND_DICTIONARY;
+    }
+    let number = matches!(
+        current,
+        constants::ARRAY_KIND_PACKED_NUMBER | constants::ARRAY_KIND_HOLEY_NUMBER
+    ) || matches!(
+        requested,
+        constants::ARRAY_KIND_PACKED_NUMBER | constants::ARRAY_KIND_HOLEY_NUMBER
+    );
+    let holey = matches!(
+        current,
+        constants::ARRAY_KIND_HOLEY | constants::ARRAY_KIND_HOLEY_NUMBER
+    ) || matches!(
+        requested,
+        constants::ARRAY_KIND_HOLEY | constants::ARRAY_KIND_HOLEY_NUMBER
+    );
+    if number {
+        if holey {
+            constants::ARRAY_KIND_HOLEY_NUMBER
+        } else {
+            constants::ARRAY_KIND_PACKED_NUMBER
+        }
+    } else if holey {
+        constants::ARRAY_KIND_HOLEY
+    } else {
+        constants::ARRAY_KIND_PACKED
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

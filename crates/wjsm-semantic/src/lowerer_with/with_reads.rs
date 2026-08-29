@@ -95,6 +95,8 @@ impl Lowerer {
                 dest: loaded,
                 object: global,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
         (global, key, loaded)
@@ -172,6 +174,8 @@ impl Lowerer {
                 dest: hit_val,
                 object: base,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
         let hit_end = self.fork_with_dispatch_exception(hit, hit_val)?;
@@ -227,6 +231,8 @@ impl Lowerer {
                 dest: loaded,
                 object: base,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
         let hit_end = self.fork_with_dispatch_exception(hit, loaded)?;

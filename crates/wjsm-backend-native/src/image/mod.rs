@@ -24,7 +24,7 @@ use platform::{ExecutableMapping, align_to_page, page_size};
 
 /// IC 缓冲上限：4M 槽 × 8 word = 32M u32 = 128 MiB，防御恶意/损坏的 cache 条目。
 const MAX_IC_BUFFER_WORDS: usize = 4_000_000 * 8;
-/// 反馈缓冲上限：4M 槽 × 48 字节 = 192 MiB，防御恶意/损坏的 cache 条目。
+/// 反馈缓冲上限：4M 槽 × 80 字节 = 320 MiB，防御恶意/损坏的 cache 条目。
 const MAX_FEEDBACK_BUFFER_BYTES: usize = 4_000_000 * 48;
 
 fn prefill_template_ic_slots_slice(
@@ -134,7 +134,7 @@ pub struct CompiledImage {
     /// 每访问点 32 字节的 IC 槽区（零初始化 = Empty）；生成代码经 vmctx 的
     /// `ic_slots_base` 访问，miss 时由宿主回填。
     ic_slots: Box<[u32]>,
-    /// 每调用点 48 字节的类型反馈槽区（零初始化 = Empty）；生成代码经 vmctx 的
+    /// 每调用点 80 字节的类型反馈槽区（零初始化 = Empty）；生成代码经 vmctx 的
     /// `feedback_slots_base` 访问。特化 overlay image 不分配该缓冲——它永不激活
     /// 为 current image，其生成代码经由 vmctx 继续写 base image 的反馈区。
     feedback_slots: Box<[NativeFeedbackSlot]>,

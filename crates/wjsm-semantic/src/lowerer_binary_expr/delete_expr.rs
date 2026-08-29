@@ -144,8 +144,7 @@ impl Lowerer {
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
         // 脚本全局绑定 / 脚本模式未声明名：全局环境 DeleteBinding
         // （词法与非可配置 var/函数属性返回 false；隐式全局按 [[Delete]]）。
-        if self.script_global_kind_for(name).is_some()
-            || self.script_global_dynamic_free_name(name)
+        if self.script_global_kind_for(name).is_some() || self.script_global_dynamic_free_name(name)
         {
             let value = self.lower_script_global_delete(block, name)?;
             return Ok((value, block));

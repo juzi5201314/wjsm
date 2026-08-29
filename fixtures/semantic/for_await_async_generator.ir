@@ -235,7 +235,7 @@ module {
       %14 = const c26
       store var $1.$shared_env, %14
       %112 = load var $1.$state
-      switch %112 [case c77 -> bb2, case c78 -> bb7], default bb42, exit bb43
+      switch %112 [case c77 -> bb2, case c78 -> bb6], default bb39, exit bb40
     bb2:
       %15 = const c52
       store var $1.gen, %15
@@ -256,7 +256,7 @@ module {
       %108 = load var $4.$for_await_iter.0
       call builtin.continuation.save_var(%106, %107, %108)
       suspend %23, state=1
-      jump bb8
+      jump bb7
     bb4:
       %32 = load var $4.$for_await_iter.0
       %33 = load var $1.$resume_val
@@ -266,167 +266,161 @@ module {
       %36 = const c58
       %37 = const c59
       %38 = call builtin.intrinsic_pristine(%36, %37)
-      branch %38, bb10, bb11
+      branch %38, bb9, bb10
     bb5:
-      unreachable
-    bb6:
       %79 = const c66
       %80 = const c67
       %81 = call builtin.intrinsic_pristine(%79, %80)
-      branch %81, bb30, bb31
-    bb7:
+      branch %81, bb27, bb28
+    bb6:
       %109 = load var $1.$env
       %110 = const c76
       %111 = call builtin.continuation.load_var(%109, %110)
       store var $4.$for_await_iter.0, %111
       %25 = load var $1.$resume_val
       %26 = load var $1.$is_rejected
-      branch %26, bb9, bb8
-    bb8:
+      branch %26, bb8, bb7
+    bb7:
       %28 = load var $1.$resume_val
       %29 = const c56
       %30 = get_prop %28, %29
       %31 = not %30
-      branch %31, bb4, bb6
-    bb9:
+      branch %31, bb4, bb5
+    bb8:
       %27 = load var $1.$promise
       promise_reject %27, %25
       return
-    bb10:
+    bb9:
       %59 = const c64
-      jump bb21
-    bb11:
+      jump bb20
+    bb10:
       %39 = const c60
       %40 = const c61
       %41 = call builtin.intrinsic_resolve(%39, %40)
       %42 = is_exception %41
-      branch %42, bb13, bb12
-    bb12:
+      branch %42, bb12, bb11
+    bb11:
       %49 = const c62
       %50 = const c63
       %51 = call builtin.intrinsic_resolve(%49, %50, %41)
       %52 = is_exception %51
-      branch %52, bb17, bb16
-    bb13:
+      branch %52, bb16, bb15
+    bb12:
       %43 = call builtin.exception_value(%41)
       %44 = call builtin.iterator.close_throw(%32, %43)
       %45 = is_exception %44
-      branch %45, bb15, bb14
-    bb14:
+      branch %45, bb14, bb13
+    bb13:
       %48 = load var $1.$promise
       promise_reject %48, %43
       return
-    bb15:
+    bb14:
       %46 = call builtin.exception_value(%44)
       %47 = load var $1.$promise
       promise_reject %47, %46
       return
+    bb15:
+      jump bb20
     bb16:
-      jump bb21
-    bb17:
       %53 = call builtin.exception_value(%51)
       %54 = call builtin.iterator.close_throw(%32, %53)
       %55 = is_exception %54
-      branch %55, bb19, bb18
-    bb18:
+      branch %55, bb18, bb17
+    bb17:
       %58 = load var $1.$promise
       promise_reject %58, %53
       return
-    bb19:
+    bb18:
       %56 = call builtin.exception_value(%54)
       %57 = load var $1.$promise
       promise_reject %57, %56
       return
-    bb20:
-      %65 = phi [(bb22, %63), (bb23, %64)]
+    bb19:
+      %65 = phi [(bb21, %63), (bb22, %64)]
       %66 = is_exception %65
-      branch %66, bb25, bb24
-    bb21:
-      %60 = phi [(bb10, %59), (bb16, %51)]
-      %61 = phi [(bb10, %59), (bb16, %41)]
+      branch %66, bb24, bb23
+    bb20:
+      %60 = phi [(bb9, %59), (bb15, %51)]
+      %61 = phi [(bb9, %59), (bb15, %41)]
       %62 = load var $4.value
-      branch %38, bb22, bb23
-    bb22:
+      branch %38, bb21, bb22
+    bb21:
       %63 = call builtin.console.log(%62)
-      jump bb20
-    bb23:
+      jump bb19
+    bb22:
       %64 = call %60, this=%61, args=[%62], callsite="console.log"
-      jump bb20
-    bb24:
+      jump bb19
+    bb23:
       jump bb3
-    bb25:
+    bb24:
       %67 = call builtin.exception_value(%65)
       %68 = call builtin.iterator.close_throw(%32, %67)
       %69 = is_exception %68
-      branch %69, bb27, bb26
-    bb26:
+      branch %69, bb26, bb25
+    bb25:
       %72 = load var $1.$promise
       promise_reject %72, %67
       return
-    bb27:
+    bb26:
       %70 = call builtin.exception_value(%68)
       %71 = load var $1.$promise
       promise_reject %71, %70
       return
-    bb28:
-      unreachable
-    bb29:
-      unreachable
-    bb30:
+    bb27:
       %94 = const c72
-      jump bb37
-    bb31:
+      jump bb34
+    bb28:
       %82 = const c68
       %83 = const c69
       %84 = call builtin.intrinsic_resolve(%82, %83)
       %85 = is_exception %84
-      branch %85, bb33, bb32
-    bb32:
+      branch %85, bb30, bb29
+    bb29:
       %88 = const c70
       %89 = const c71
       %90 = call builtin.intrinsic_resolve(%88, %89, %84)
       %91 = is_exception %90
-      branch %91, bb35, bb34
-    bb33:
+      branch %91, bb32, bb31
+    bb30:
       %86 = call builtin.exception_value(%84)
       %87 = load var $1.$promise
       promise_reject %87, %86
       return
-    bb34:
-      jump bb37
-    bb35:
+    bb31:
+      jump bb34
+    bb32:
       %92 = call builtin.exception_value(%90)
       %93 = load var $1.$promise
       promise_reject %93, %92
       return
-    bb36:
-      %100 = phi [(bb38, %98), (bb39, %99)]
+    bb33:
+      %100 = phi [(bb35, %98), (bb36, %99)]
       %101 = is_exception %100
-      branch %101, bb41, bb40
-    bb37:
-      %95 = phi [(bb30, %94), (bb34, %90)]
-      %96 = phi [(bb30, %94), (bb34, %84)]
+      branch %101, bb38, bb37
+    bb34:
+      %95 = phi [(bb27, %94), (bb31, %90)]
+      %96 = phi [(bb27, %94), (bb31, %84)]
       %97 = const c73
-      branch %81, bb38, bb39
-    bb38:
+      branch %81, bb35, bb36
+    bb35:
       %98 = call builtin.console.log(%97)
-      jump bb36
-    bb39:
+      jump bb33
+    bb36:
       %99 = call %95, this=%96, args=[%97], callsite="console.log"
-      jump bb36
-    bb40:
+      jump bb33
+    bb37:
       %104 = const c74
       %105 = load var $1.$promise
       promise_resolve %105, %104
       return
-    bb41:
+    bb38:
       %102 = call builtin.exception_value(%100)
       %103 = load var $1.$promise
       promise_reject %103, %102
       return
-    bb42:
+    bb39:
       return
-    bb43:
+    bb40:
       unreachable
 
   fn @run [needs_prototype] [js_name "run"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:

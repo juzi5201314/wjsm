@@ -97,21 +97,19 @@ module {
       %7 = const c25
       %5 = call builtin.abstract_compare(%3, %4, %6, %7)
       %8 = is_exception %5
-      branch %8, bb4, bb3
+      branch %8, bb3, bb2
     bb2:
-      unreachable
-    bb3:
       %10 = is_exception %5
-      branch %10, bb6, bb5
-    bb4:
+      branch %10, bb5, bb4
+    bb3:
       %9 = call builtin.exception_value(%5)
       throw %9
+    bb4:
+      branch %5, bb6, bb7
     bb5:
-      branch %5, bb7, bb8
-    bb6:
       %11 = call builtin.exception_value(%5)
       throw %11
-    bb7:
+    bb6:
       %12 = const c26
       %13 = load var $env
       %14 = const c27
@@ -120,17 +118,17 @@ module {
       %17 = const c28
       %18 = sub %16, %17
       %19 = is_exception %18
-      branch %19, bb11, bb10
-    bb8:
+      branch %19, bb10, bb9
+    bb7:
       %22 = load var $2.n
-      jump bb9
-    bb9:
-      %23 = phi [(bb10, %21), (bb8, %22)]
+      jump bb8
+    bb8:
+      %23 = phi [(bb9, %21), (bb7, %22)]
       return %23
-    bb10:
+    bb9:
       %21 = call %15, this=%12, args=[%18], callsite="g2"
-      jump bb9
-    bb11:
+      jump bb8
+    bb10:
       %20 = call builtin.exception_value(%18)
       throw %20
 
@@ -167,7 +165,7 @@ module {
       %13 = get_prop %11, %12
       %14 = call builtin.op_instanceof(%10, %13)
       %15 = is_exception %14
-      branch %15, bb9, bb8
+      branch %15, bb8, bb7
     bb4:
       jump bb6
     bb5:
@@ -177,10 +175,8 @@ module {
     bb6:
       jump bb2
     bb7:
-      unreachable
-    bb8:
       return %14
-    bb9:
+    bb8:
       %16 = call builtin.exception_value(%14)
       throw %16
 
@@ -285,7 +281,7 @@ module {
       %48 = phi [(bb1, %46), (bb5, %38)]
       %51 = const c39
       %239 = const c0
-      jump bb92
+      jump bb91
     bb9:
       branch %35, bb11, bb12
     bb10:
@@ -309,7 +305,7 @@ module {
       %66 = const c41
       %67 = set_prop %64, %66, %65
       store var $3.$iteration_env.1, %64
-      jump bb104
+      jump bb99
     bb14:
       %59 = call builtin.exception_value(%57)
       throw %59
@@ -599,7 +595,7 @@ module {
       %220 = call builtin.exception_value(%218)
       throw %220
     bb80:
-      %196 = phi [(bb83, %221), (bb89, %236)]
+      %196 = phi [(bb83, %221), (bb88, %236)]
       %197 = is_exception %196
       branch %197, bb67, bb66
     bb81:
@@ -623,7 +619,7 @@ module {
       %235 = get_prop %233, %234
       %236 = call builtin.op_instanceof(%232, %235)
       %237 = is_exception %236
-      branch %237, bb90, bb89
+      branch %237, bb89, bb88
     bb85:
       jump bb87
     bb86:
@@ -633,54 +629,44 @@ module {
     bb87:
       jump bb83
     bb88:
-      unreachable
-    bb89:
       store var $11.e, %221
       store var $tmp.0, %221
       jump bb80
-    bb90:
+    bb89:
       %238 = call builtin.exception_value(%236)
       store var $11.e, %221
       store var $tmp.0, %221
       throw %238
-    bb91:
+    bb90:
       %53 = is_exception %263
       branch %53, bb10, bb9
+    bb91:
+      jump bb92
     bb92:
-      jump bb93
-    bb93:
       %244 = const c23
       %245 = gt %51, %244
-      jump bb95
+      jump bb93
+    bb93:
+      jump bb94
     bb94:
-      unreachable
+      branch %245, bb95, bb96
     bb95:
-      jump bb97
-    bb96:
-      unreachable
-    bb97:
-      branch %245, bb99, bb100
-    bb98:
-      unreachable
-    bb99:
       %252 = const c26
       %254 = const c27
       %255 = get_prop %28, %254
       %257 = const c28
       %258 = sub %51, %257
-      jump bb102
-    bb100:
-      jump bb101
-    bb101:
-      %263 = phi [(bb102, %261), (bb100, %51)]
+      jump bb98
+    bb96:
+      jump bb97
+    bb97:
+      %263 = phi [(bb98, %261), (bb96, %51)]
       store var $2.n, %239
-      jump bb91
-    bb102:
+      jump bb90
+    bb98:
       %261 = call %255, this=%252, args=[%258], callsite="g2"
-      jump bb101
-    bb103:
-      unreachable
-    bb104:
+      jump bb97
+    bb99:
       %79 = load var $0.fns
       jump bb15
 }

@@ -93,103 +93,97 @@ module {
       %33 = const c25
       %34 = add %32, %33
       store var $0.i, %34
-      jump bb8
+      jump bb6
     bb3:
       return
     bb4:
-      jump bb6
+      jump bb5
     bb5:
-      unreachable
-    bb6:
       branch %25, bb2, bb3
-    bb7:
-      unreachable
-    bb8:
+    bb6:
       %37 = load var $0.i
       %38 = const c26
       %39 = call builtin.abstract_eq(%37, %38)
       %40 = is_exception %39
-      branch %40, bb11, bb10
-    bb9:
-      unreachable
-    bb10:
+      branch %40, bb8, bb7
+    bb7:
       %42 = is_exception %39
-      branch %42, bb13, bb12
-    bb11:
+      branch %42, bb10, bb9
+    bb8:
       %41 = call builtin.exception_value(%39)
       throw %41
-    bb12:
-      branch %39, bb14, bb15
-    bb13:
+    bb9:
+      branch %39, bb11, bb12
+    bb10:
       %43 = call builtin.exception_value(%39)
       throw %43
-    bb14:
+    bb11:
       jump bb1
-    bb15:
+    bb12:
       %44 = load var $0.i
       %45 = const c27
       %46 = call builtin.abstract_eq(%44, %45)
       %47 = is_exception %46
-      branch %47, bb17, bb16
-    bb16:
+      branch %47, bb14, bb13
+    bb13:
       %49 = is_exception %46
-      branch %49, bb19, bb18
-    bb17:
+      branch %49, bb16, bb15
+    bb14:
       %48 = call builtin.exception_value(%46)
       throw %48
-    bb18:
-      branch %46, bb20, bb21
-    bb19:
+    bb15:
+      branch %46, bb17, bb18
+    bb16:
       %50 = call builtin.exception_value(%46)
       throw %50
-    bb20:
+    bb17:
       jump bb3
-    bb21:
+    bb18:
       %51 = const c28
       %52 = const c29
       %53 = call builtin.intrinsic_pristine(%51, %52)
-      branch %53, bb22, bb23
-    bb22:
+      branch %53, bb19, bb20
+    bb19:
       %64 = const c34
-      jump bb29
-    bb23:
+      jump bb26
+    bb20:
       %54 = const c30
       %55 = const c31
       %56 = call builtin.intrinsic_resolve(%54, %55)
       %57 = is_exception %56
-      branch %57, bb25, bb24
-    bb24:
+      branch %57, bb22, bb21
+    bb21:
       %59 = const c32
       %60 = const c33
       %61 = call builtin.intrinsic_resolve(%59, %60, %56)
       %62 = is_exception %61
-      branch %62, bb27, bb26
-    bb25:
+      branch %62, bb24, bb23
+    bb22:
       %58 = call builtin.exception_value(%56)
       throw %58
-    bb26:
-      jump bb29
-    bb27:
+    bb23:
+      jump bb26
+    bb24:
       %63 = call builtin.exception_value(%61)
       throw %63
-    bb28:
-      %70 = phi [(bb30, %68), (bb31, %69)]
+    bb25:
+      %70 = phi [(bb27, %68), (bb28, %69)]
       %71 = is_exception %70
-      branch %71, bb33, bb32
-    bb29:
-      %65 = phi [(bb22, %64), (bb26, %61)]
-      %66 = phi [(bb22, %64), (bb26, %56)]
+      branch %71, bb30, bb29
+    bb26:
+      %65 = phi [(bb19, %64), (bb23, %61)]
+      %66 = phi [(bb19, %64), (bb23, %56)]
       %67 = load var $0.i
-      branch %53, bb30, bb31
-    bb30:
+      branch %53, bb27, bb28
+    bb27:
       %68 = call builtin.console.log(%67)
-      jump bb28
-    bb31:
+      jump bb25
+    bb28:
       %69 = call %65, this=%66, args=[%67], callsite="console.log"
-      jump bb28
-    bb32:
+      jump bb25
+    bb29:
       jump bb1
-    bb33:
+    bb30:
       %72 = call builtin.exception_value(%70)
       throw %72
 }

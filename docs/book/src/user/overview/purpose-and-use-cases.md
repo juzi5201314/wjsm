@@ -22,7 +22,7 @@ wjsm 是一个 JavaScript/TypeScript 运行时，整条执行链不依赖 V8。�
 | 制品可携带 | 一次 `build` 产出的 `.wjsm` 可在任意受支持宿主上 `run`；机器码由该宿主再编 |
 | 可验证加载 | artifact verifier、checked lowering、strict relocation、symbol allowlist 与 W^X 构成受信加载边界 |
 | 不是闭世界 AOT | 不是 Graal Native Image / .NET Native AOT 那种静态子集；也不是「编完就不再编译」 |
-| 不是 V8 替代峰值 | overlay 覆盖已证明的 Number/Int32 标量热区，不是完整 Maglev/TurboFan；AOT 本身不保证更快 |
+| 不是 V8 替代峰值 | overlay 覆盖对象、元素、调用与标量热路径，不是完整 Maglev/TurboFan；AOT 本身不保证更快 |
 
 ## 适用场景
 
@@ -37,7 +37,7 @@ wjsm 是一个 JavaScript/TypeScript 运行时，整条执行链不依赖 V8。�
 | 场景 | 原因 |
 | --- | --- |
 | 完整 Node.js API 兼容 | 内置 24 个模块为自有 JS 实现的子集，不是 Node.js 移植，大量 npm 包无法直接运行 |
-| 与 V8 比拼一切微架构 | overlay/deopt/OSR 覆盖已证明的 Number/Int32 标量热区，不是完整 Maglev/TurboFan |
+| 与 V8 比拼一切微架构 | overlay/deopt/OSR 覆盖对象、元素、调用与标量热路径，不是完整 Maglev/TurboFan |
 | 类型检查 | TypeScript 语法参与解析与 lowering 后擦除，类型不做检查——这是 `tsc` 的职责 |
 | 运行不受信任代码 | Direct native code 不提供进程内 sandbox，必须用独立 OS process 与权限隔离 |
 | 期望「编成 native 就变成静态语言」 | 运行时对象模型、GC、动态代码和 overlay 都还在 |

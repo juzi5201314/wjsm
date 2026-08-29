@@ -21,7 +21,7 @@ const MAX_CACHE_OBJECT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_CACHE_FUNCTIONS: u32 = 4_000_000;
 /// IC 槽上限：每槽 16 字节，4M 槽即 64 MiB 缓冲，远超任何真实程序。
 const MAX_CACHE_IC_SLOTS: u32 = 4_000_000;
-/// 反馈槽上限：4M 槽 × 48 字节 = 192 MiB，防御恶意/损坏条目。
+/// 反馈槽上限：4M 槽 × 80 字节 = 320 MiB，防御恶意/损坏条目。
 const MAX_CACHE_FEEDBACK_SLOTS: u32 = 4_000_000;
 /// 自动淘汰上限：缓存总字节数超过该值后按 mtime 删最旧条目。
 /// 可用 `WJSM_CACHE_MAX_BYTES` 覆盖；`0` 表示禁用自动淘汰。

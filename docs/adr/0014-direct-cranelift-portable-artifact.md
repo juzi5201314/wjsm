@@ -41,9 +41,9 @@ JS/TS source
 
 `NativeImageRepository` 以 artifact digest、native ABI hash、native codegen source hash、target、Cranelift 版本和 codegen settings 组成 key。repository 只持有 `Weak<CompiledImage>`，由 runtime 的 `Arc` 决定 base image 生命周期；磁盘 cache 只保存当前宿主派生对象。校验失败的 cache 被 invalidated 后重编译，不能执行损坏字节。当合并 Program 含 `$builtin_main` 时，runtime 派生两份 image（builtin 段按 frontier IR digest，用户段按用户函数子 Program digest）。
 
-热调用点或函数内 binary 反馈达到稳定阈值后，后台 worker 仍通过 `NativeCompiler` 从同一 verified `Program` 的**克隆**编译 typed wrapper/body（先跑与 AOT 相同的值类 / CFG 重建，再 Cranelift）；owner thread 只在 dispatcher 边界用 `CompiledImage::load_single_entry` 完成 relocation、RW→RX 与 unwind 注册后发布。overlay 不进入 artifact digest、`.wjsm`、repository 或磁盘 cache；每调用点最多两个版本，全 agent 同时受 64 个 overlay 与 16 MiB code+rodata 上限约束。LRU 淘汰只移除选择表中的 `Arc`，正在执行的 activation 继续 pin mapping；`CompiledImage` drop 必须先注销 unwind 再释放 mapping。
+热调用点或函数内反馈达到稳定阈值后，后台 worker 仍通过 `NativeCompiler` 从同一 verified `Program` 的**克隆**编译 overlay（先跑 `wjsm-optimize` 的投机优化，再 Cranelift）；owner thread 只在 dispatcher 边界用 `CompiledImage::load_single_entry` 完成 relocation、RW→RX 与 unwind 注册后发布。overlay 不进入 artifact digest、`.wjsm`、repository 或磁盘 cache。每站点最多四个多态版本；全 agent overlay 份数与 code+rodata 字节受 RSS 缩放上限约束（环境变量可覆盖）。LRU 淘汰只移除选择表中的 `Arc`，正在执行的 activation 继续 pin mapping；`CompiledImage` drop 必须先注销 unwind 再释放 mapping。
 
-投机 typed 区的类型 miss 必须 **deopt 回 generic native**（IR 循环头 + live boxed 值），generic 热循环可 **OSR 进入 overlay**。这不是解释器，也不是第二执行后端。合同见 [ADR 0022](0022-speculative-typed-regions.md)。
+投机 overlay 的类型 / shape / 元素种类 / 调用目标 miss 必须 **精确 deopt 回 generic native 对应指令边界**（有序 live boxed 值 + 内联帧栈），generic 热循环可 **OSR 进入 overlay 映射块**。这不是解释器，也不是第二执行后端。合同见 [ADR 0023](0023-speculative-full-language-overlay.md)。
 
 ### 4. `NativeRuntime` 是唯一运行时 owner
 
@@ -92,5 +92,6 @@ Direct native code 不具备 Wasm memory/control-flow sandbox。artifact verifie
 - ADR 0012 — Host builtins 后端解耦（历史）
 - ADR 0013 — 多后端完全支撑契约（历史）
 - ADR 0016 — 同宿主 native executable 为 stub + overlay
-- ADR 0022 — 投机 typed 区、deopt 与 OSR
+- ADR 0022 — 投机 typed 区、deopt 与 OSR（overlay 范围由 ADR 0023 取代）
+- ADR 0023 — 全语言投机 overlay、精确 deopt 与 IR 优化器
 - `docs/backend-implementation-guide.md`

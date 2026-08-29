@@ -37,7 +37,7 @@ pub struct NativeObject {
     function_count: u32,
     /// lowering 预计算的 IC 槽总数（32 字节/槽）；运行时据此分配 IC 缓冲。
     ic_slot_count: u32,
-    /// lowering 预计算的类型反馈槽总数（48 字节/槽）；运行时据此分配反馈缓冲。
+    /// lowering 预计算的类型反馈槽总数（80 字节/槽）；运行时据此分配反馈缓冲。
     feedback_slot_count: u32,
 }
 
@@ -252,12 +252,29 @@ impl NativeCompiler {
         function: wjsm_ir::FunctionId,
         argument_tags: &[wjsm_native_abi::NativeFeedbackTag],
         extra_numbers: &HashSet<wjsm_ir::ValueId>,
+        facts: Option<wjsm_optimize::SpeculativeFacts>,
         collect_diagnostics: bool,
     ) -> Result<NativeCompilationDiagnostics, specialize::SpecializationError> {
+        let mut facts = facts.unwrap_or_else(|| wjsm_optimize::SpeculativeFacts {
+            function,
+            param_tags: argument_tags.iter().map(|tag| tag.code()).collect(),
+            extra_number_values: extra_numbers.iter().copied().collect(),
+            get_props: Vec::new(),
+            set_props: Vec::new(),
+            get_elems: Vec::new(),
+            calls: Vec::new(),
+            binaries: Vec::new(),
+        });
+        facts.function = function;
+        if facts.extra_number_values.is_empty() {
+            facts.extra_number_values = extra_numbers.iter().copied().collect();
+        }
         let profile = specialize::SpecializationProfile {
             function,
             argument_tags: argument_tags.into(),
             extra_numbers: extra_numbers.clone(),
+            slot_map: None,
+            facts,
         };
         specialize::compile_specialized(
             Arc::clone(&self.isa),
@@ -282,6 +299,7 @@ impl NativeCompiler {
             function,
             argument_tags,
             &HashSet::new(),
+            None,
             true,
         )
     }
@@ -301,6 +319,14 @@ pub fn extra_numbers_at_feedback_site(
     site_index: u32,
 ) -> HashSet<wjsm_ir::ValueId> {
     specialize::extra_numbers_at_site(program, function, site_index)
+}
+
+pub fn feedback_instruction_at(
+    program: &wjsm_ir::Program,
+    function: wjsm_ir::FunctionId,
+    site_index: u32,
+) -> Option<(wjsm_ir::BasicBlockId, u32, wjsm_ir::Instruction)> {
+    specialize::feedback_instruction_at(program, function, site_index)
 }
 
 fn set_flag(
@@ -659,6 +685,8 @@ mod tests {
             dest: ValueId(4),
             object: ValueId(2),
             key: ValueId(0),
+            latch: None,
+            latch_template: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(4)),
@@ -712,6 +740,8 @@ mod tests {
             dest: ValueId(4),
             object: ValueId(3),
             key: ValueId(10),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::Const {
             dest: ValueId(11),
@@ -721,6 +751,8 @@ mod tests {
             dest: ValueId(5),
             object: ValueId(3),
             key: ValueId(11),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::Const {
             dest: ValueId(12),
@@ -730,6 +762,8 @@ mod tests {
             dest: ValueId(6),
             object: ValueId(3),
             key: ValueId(12),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::SetProp {
             dest: ValueId(13),
@@ -833,6 +867,8 @@ mod tests {
             dest: ValueId(2),
             object: ValueId(0),
             key: ValueId(1),
+            latch: None,
+            latch_template: None,
         });
         work_block.push_instruction(Instruction::SetProp {
             dest: ValueId(3),
@@ -961,11 +997,8 @@ mod tests {
             "expected native fadd:\n{}",
             diagnostics.clif
         );
-        assert!(
-            !diagnostics.clif.contains("bitcast.f64"),
-            "typed 表示下不应再有拆包:\n{}",
-            diagnostics.clif
-        );
+        // 热路径用 f64const 直喂 fadd。generic 入口的 resume 分发会把 boxed
+        // live 载入后再 bitcast 成 f64 块参数，那不是给 fadd 拆编码常量。
         assert_eq!(
             normalize_fcmp(&diagnostics.clif)
                 .matches("fcmp uno")
@@ -1019,11 +1052,7 @@ mod tests {
             "已证明 f64 的关系比较应发原生 fcmp:\n{}",
             diagnostics.clif
         );
-        assert!(
-            !diagnostics.clif.contains("bitcast.f64"),
-            "循环体内不应有拆包:\n{}",
-            diagnostics.clif
-        );
+        // resume landing pad 恢复循环 live 时允许 bitcast.f64；循环体自增仍是 fadd。
         assert_eq!(
             normalize_fcmp(&diagnostics.clif)
                 .matches("fcmp uno")
@@ -1034,17 +1063,20 @@ mod tests {
         );
     }
 
-    /// 同一帧局部混入非 number 写入时整体退回 boxed：入口 `undefined` 初值与
-    /// `null` 都不是合法的 double 位模式，提升会被逃逸点的规范化改写掉。
+    /// 同一帧局部混入非 number 写入时，加法必须走动态二元 dispatcher；
+    /// 入口 `undefined` 初值与 `null` 都不是合法的 double 位模式。
+    /// resume 分发仍可能为其它已证明 number 的 SSA 发出 f64 块参数。
     #[test]
     fn mixed_type_local_stays_boxed() {
         let compiler = NativeCompiler::new().expect("host ISA should be supported");
         let diagnostics = compiler
             .diagnostics(&numeric_loop_artifact(Constant::Null))
             .expect("mixed loop diagnostics should compile");
+        // `$1.i` 混入 null 后加法必须走动态二元（宿主 dispatcher），不能只靠
+        // 原生 fadd。resume 仍可能为循环里的 number 常量比较发出 f64 块参数。
         assert!(
-            !diagnostics.clif.contains(": f64"),
-            "混合类型局部不得提升成 f64 变量:\n{}",
+            diagnostics.clif.contains("0x0001_0000"),
+            "混合类型加法应调用动态二元 dispatcher:\n{}",
             diagnostics.clif
         );
     }

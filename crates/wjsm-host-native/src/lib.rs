@@ -1082,7 +1082,7 @@ struct NativeAgentState {
     output: RefCell<Vec<u8>>,
     stderr: RefCell<Vec<u8>>,
     call_arena: Box<[i64]>,
-    resume_live: Box<[i64]>,
+    resume_live: Vec<i64>,
     gc: gc::NativeGc,
     runtime_config: NativeRuntimeConfig,
     variables: Vec<i64>,
@@ -1380,7 +1380,7 @@ impl NativeAgentState {
             stderr: RefCell::new(Vec::new()),
             call_arena: vec![value::encode_undefined(); DEFAULT_CALL_ARENA_SLOTS]
                 .into_boxed_slice(),
-            resume_live: vec![0; 64].into_boxed_slice(),
+            resume_live: vec![0; 1024],
             runtime_config: config.clone(),
             gc,
             variables: Vec::new(),
@@ -3918,6 +3918,40 @@ impl NativeAgentState {
         }
     }
 
+    fn setprop_transition_shape(
+        &mut self,
+        program: &wjsm_ir::Program,
+        function_id: wjsm_ir::FunctionId,
+        instruction: &wjsm_ir::Instruction,
+        shape_id: u32,
+    ) -> Option<u32> {
+        let wjsm_ir::Instruction::SetProp { key, .. } = instruction else {
+            return None;
+        };
+        let function = program.functions().get(function_id.0 as usize)?;
+        let constant_id = function.blocks().iter().find_map(|block| {
+            block.instructions().iter().find_map(|inst| match inst {
+                wjsm_ir::Instruction::Const { dest, constant } if dest == key => Some(*constant),
+                _ => None,
+            })
+        })?;
+        let name = match program.constants().get(constant_id.0 as usize)? {
+            Constant::String(text) => text.clone(),
+            _ => return None,
+        };
+        let property_key = self.intern_property_string(RuntimeString::from(name))?;
+        let flags = (wjsm_ir::constants::FLAG_CONFIGURABLE
+            | wjsm_ir::constants::FLAG_ENUMERABLE
+            | wjsm_ir::constants::FLAG_WRITABLE) as u32;
+        let shapes = self.gc.heap().shapes();
+        if shapes.lookup(shape_id, property_key).is_some() {
+            return None;
+        }
+        shapes
+            .peek_transition(shape_id, property_key, flags)
+            .filter(|next| *next != shape_id)
+    }
+
     fn enqueue_binary_specialization(
         &mut self,
         feedback: ValidatedFeedbackSlot,
@@ -3925,14 +3959,23 @@ impl NativeAgentState {
         arguments: &[i64],
     ) {
         if arguments.len() < 2 {
-            return;
+            let signature = Self::feedback_tag_signature(arguments);
+            if signature.is_none() && arguments.is_empty() {
+                // 纯对象站点仍用槽内容哈希作为 key。
+            }
         }
-        if NativeFeedbackTag::of(arguments[0]) != NativeFeedbackTag::Number
-            || NativeFeedbackTag::of(arguments[1]) != NativeFeedbackTag::Number
+        if arguments.len() >= 2
+            && NativeFeedbackTag::of(arguments[0]) == NativeFeedbackTag::Number
+            && NativeFeedbackTag::of(arguments[1]) == NativeFeedbackTag::Number
         {
-            return;
+            // Number 二元仍走同一队列。
         }
-        let Some(signature) = Self::feedback_tag_signature(&arguments[..2]) else {
+        let Some(signature) = (if arguments.len() >= 2 {
+            Self::feedback_tag_signature(&arguments[..2])
+        } else {
+            Self::feedback_tag_signature(arguments)
+        })
+        .or_else(|| Some(u64::from(feedback.site_index))) else {
             return;
         };
         let Some(caller_function) = self
@@ -3974,15 +4017,144 @@ impl NativeAgentState {
             wjsm_ir::FunctionId(caller_function.function_index),
             feedback.site_index,
         );
+        let function_id = wjsm_ir::FunctionId(caller_function.function_index);
+        let slot = Self::load_feedback_slot(feedback);
+        let mut facts = wjsm_optimize::SpeculativeFacts {
+            function: function_id,
+            param_tags: arguments
+                .iter()
+                .map(|value| NativeFeedbackTag::of(*value).code())
+                .collect(),
+            extra_number_values: extra_numbers.iter().copied().collect(),
+            get_props: Vec::new(),
+            set_props: Vec::new(),
+            get_elems: Vec::new(),
+            calls: Vec::new(),
+            binaries: Vec::new(),
+        };
+        if let Some((block, instruction_index, instruction)) =
+            wjsm_backend_native::feedback_instruction_at(
+                program.as_ref(),
+                function_id,
+                feedback.site_index,
+            )
+        {
+            match instruction {
+                wjsm_ir::Instruction::GetProp { .. }
+                    if slot.shape_id != 0
+                        && slot.poly_len < wjsm_ir::constants::FEEDBACK_POLY_MEGAMORPHIC =>
+                {
+                    let poly_len = slot.poly_len.min(4) as u8;
+                    let mut poly_shapes = slot.poly_key;
+                    if poly_shapes[0] == 0 {
+                        poly_shapes[0] = slot.shape_id;
+                    }
+                    facts.get_props.push(wjsm_optimize::PropFact {
+                        block,
+                        instruction_index,
+                        shape_id: slot.shape_id,
+                        slot_index: slot.slot_or_kind,
+                        proto_generation: slot.proto_generation,
+                        expected_proto: 0,
+                        own_data: true,
+                        poly_len: poly_len.max(1),
+                        poly_shapes,
+                        poly_slots: [slot.slot_or_kind; 4],
+                        transition_shape: None,
+                    });
+                }
+                wjsm_ir::Instruction::SetProp { .. } if slot.shape_id != 0 => {
+                    let poly_len = slot.poly_len.min(4).max(1) as u8;
+                    let mut poly_shapes = slot.poly_key;
+                    if poly_shapes[0] == 0 {
+                        poly_shapes[0] = slot.shape_id;
+                    }
+                    facts.set_props.push(wjsm_optimize::PropFact {
+                        block,
+                        instruction_index,
+                        shape_id: slot.shape_id,
+                        slot_index: slot.slot_or_kind,
+                        proto_generation: slot.proto_generation,
+                        expected_proto: 0,
+                        own_data: true,
+                        poly_len,
+                        poly_shapes,
+                        poly_slots: [slot.slot_or_kind; 4],
+                        transition_shape: self.setprop_transition_shape(
+                            program.as_ref(),
+                            function_id,
+                            &instruction,
+                            slot.shape_id,
+                        ),
+                    });
+                }
+                wjsm_ir::Instruction::GetElem { .. } => {
+                    facts.get_elems.push(wjsm_optimize::ElemFact {
+                        block,
+                        instruction_index,
+                        elements_kind: slot.slot_or_kind,
+                        shape_id: slot.shape_id,
+                        first_kind: (slot.poly_key[3] != 0).then_some(slot.poly_key[3]),
+                    });
+                }
+                wjsm_ir::Instruction::Call { .. } | wjsm_ir::Instruction::ConstructCall { .. }
+                    if slot.last_target_function != 0 =>
+                {
+                    facts.calls.push(wjsm_optimize::CallFact {
+                        block,
+                        instruction_index,
+                        target_function: slot.last_target_function,
+                        target_image_id: slot.last_target_image_id,
+                        this_tag: 0,
+                        this_shape: slot.shape_id,
+                        construct: matches!(
+                            instruction,
+                            wjsm_ir::Instruction::ConstructCall { .. }
+                        ),
+                        poly_len: slot.poly_len.clamp(1, 4) as u8,
+                        poly_functions: [
+                            slot.last_target_function,
+                            slot.poly_key[0],
+                            slot.poly_key[1],
+                            slot.poly_key[2],
+                        ],
+                    });
+                }
+                wjsm_ir::Instruction::Binary { .. } | wjsm_ir::Instruction::Compare { .. } => {
+                    facts.binaries.push(wjsm_optimize::BinaryFact {
+                        block,
+                        instruction_index,
+                        lhs_tag: NativeFeedbackTag::of(arguments.first().copied().unwrap_or(0))
+                            .code(),
+                        rhs_tag: NativeFeedbackTag::of(arguments.get(1).copied().unwrap_or(0))
+                            .code(),
+                    });
+                }
+                _ => {}
+            }
+        }
         let Some(coordinator) = self.specialization.as_mut() else {
             return;
         };
         coordinator.enqueue(CompilationRequest {
-            key,
+            key: VariantKey {
+                caller_image_id: key.caller_image_id,
+                site_index: key.site_index,
+                target_image_id: key.target_image_id,
+                target_function: key.target_function,
+                tag_signature: key.tag_signature
+                    ^ facts
+                        .get_props
+                        .iter()
+                        .chain(facts.set_props.iter())
+                        .map(|prop| u64::from(prop.shape_id))
+                        .fold(0, |acc, shape| acc ^ shape),
+            },
             program,
             variable_slots,
             argument_tags: Box::new([]),
             extra_numbers,
+            facts,
             ic_epoch,
             proto_generation,
         });
@@ -4176,6 +4348,19 @@ impl NativeAgentState {
                     .map(NativeFeedbackTag::of)
                     .collect(),
                 extra_numbers: HashSet::new(),
+                facts: wjsm_optimize::SpeculativeFacts {
+                    function: wjsm_ir::FunctionId(function.function_index),
+                    param_tags: arguments
+                        .iter()
+                        .map(|value| NativeFeedbackTag::of(*value).code())
+                        .collect(),
+                    extra_number_values: Vec::new(),
+                    get_props: Vec::new(),
+                    set_props: Vec::new(),
+                    get_elems: Vec::new(),
+                    calls: Vec::new(),
+                    binaries: Vec::new(),
+                },
                 ic_epoch,
                 proto_generation,
             });
@@ -5306,7 +5491,10 @@ impl NativeAgentState {
         self.shared_array_buffer_prototype = Some(prototype);
         self.define_prototype_constructor(prototype, constructor)?;
         for (name, builtin) in [
-            ("byteLength", wjsm_ir::Builtin::SharedArrayBufferProtoByteLength),
+            (
+                "byteLength",
+                wjsm_ir::Builtin::SharedArrayBufferProtoByteLength,
+            ),
             ("growable", wjsm_ir::Builtin::SharedArrayBufferProtoGrowable),
             (
                 "maxByteLength",
@@ -5315,7 +5503,11 @@ impl NativeAgentState {
         ] {
             self.install_prototype_getter(prototype, name, builtin)?;
         }
-        self.define_prototype_method(prototype, "grow", wjsm_ir::Builtin::SharedArrayBufferProtoGrow)?;
+        self.define_prototype_method(
+            prototype,
+            "grow",
+            wjsm_ir::Builtin::SharedArrayBufferProtoGrow,
+        )?;
         self.define_prototype_method(
             prototype,
             "slice",

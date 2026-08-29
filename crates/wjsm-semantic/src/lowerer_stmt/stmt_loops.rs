@@ -551,6 +551,8 @@ impl Lowerer {
                 dest: done_val,
                 object: awaited_result,
                 key: done_key,
+                latch: None,
+                latch_template: None,
             },
         );
         let not_done = self.alloc_value();
@@ -614,6 +616,8 @@ impl Lowerer {
                 dest: value_val,
                 object: awaited_result_for_value,
                 key: value_key,
+                latch: None,
+                latch_template: None,
             },
         );
 

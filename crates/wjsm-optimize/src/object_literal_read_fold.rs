@@ -180,7 +180,9 @@ fn fold_function(function: &mut wjsm_ir::Function, constants: &[Constant]) -> bo
                         aliases.insert(*dest, canonical);
                     }
                 }
-                Instruction::GetProp { dest, object, key } => {
+                Instruction::GetProp {
+                    dest, object, key, ..
+                } => {
                     let canonical = resolve_canonical(*object, &aliases);
                     let Some(site) = sites.get(&canonical) else {
                         continue;
@@ -301,6 +303,8 @@ mod tests {
             dest: ValueId(6),
             object: ValueId(4),
             key: ValueId(5),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::LoadVar {
             dest: ValueId(7),
@@ -314,6 +318,8 @@ mod tests {
             dest: ValueId(9),
             object: ValueId(7),
             key: ValueId(8),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::LoadVar {
             dest: ValueId(10),
@@ -327,6 +333,8 @@ mod tests {
             dest: ValueId(12),
             object: ValueId(10),
             key: ValueId(11),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::Binary {
             dest: ValueId(13),
@@ -410,6 +418,8 @@ mod tests {
             dest: ValueId(3),
             object: ValueId(1),
             key: ValueId(2),
+            latch: None,
+            latch_template: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(3)),
@@ -468,6 +478,8 @@ mod tests {
             dest: ValueId(5),
             object: ValueId(1),
             key: ValueId(2),
+            latch: None,
+            latch_template: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(5)),
@@ -524,6 +536,8 @@ mod tests {
             dest: ValueId(5),
             object: ValueId(3),
             key: ValueId(4),
+            latch: None,
+            latch_template: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(5)),
@@ -573,6 +587,8 @@ mod tests {
             dest: ValueId(3),
             object: ValueId(1),
             key: ValueId(2),
+            latch: None,
+            latch_template: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(3)),

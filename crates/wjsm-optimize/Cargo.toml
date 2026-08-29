@@ -1,0 +1,11 @@
+[package]
+name = "wjsm-optimize"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wjsm-ir = { path = "../wjsm-ir" }
+
+[dev-dependencies]
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-semantic = { path = "../wjsm-semantic" }

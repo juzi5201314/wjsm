@@ -22,7 +22,10 @@ pub struct Dominators {
 /// 遍历终止器的后继块（可能重复访问同一目标，调用方需自行幂等）。
 fn for_each_successor(terminator: &Terminator, mut visit: impl FnMut(BasicBlockId)) {
     match terminator {
-        Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
+        Terminator::Return { .. }
+        | Terminator::Throw { .. }
+        | Terminator::Unreachable
+        | Terminator::Deopt { .. } => {}
         Terminator::Jump { target } => visit(*target),
         Terminator::Branch {
             true_block,

@@ -97,6 +97,8 @@ impl Lowerer {
                             dest: loaded,
                             object: env_val,
                             key: key_val,
+                            latch: None,
+                            latch_template: None,
                         },
                     );
                     let (_, continue_block) =
@@ -138,6 +140,8 @@ impl Lowerer {
                         dest: loaded,
                         object: env_val,
                         key: key_val,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 if tdz_check {
@@ -185,6 +189,8 @@ impl Lowerer {
                 dest: loaded,
                 object: env_val,
                 key: key_val,
+                latch: None,
+                latch_template: None,
             },
         );
         if tdz_check {
@@ -294,6 +300,8 @@ impl Lowerer {
                     dest: loaded,
                     object: env_val,
                     key: key_val,
+                    latch: None,
+                    latch_template: None,
                 },
             );
         }
@@ -463,6 +471,8 @@ impl Lowerer {
                 dest: loaded,
                 object: obj_val,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
 

@@ -22,7 +22,10 @@ pub fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId> {
         }
     };
     match terminator {
-        Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
+        Terminator::Return { .. }
+        | Terminator::Throw { .. }
+        | Terminator::Unreachable
+        | Terminator::Deopt { .. } => {}
         Terminator::Jump { target } => push(*target, &mut successors),
         Terminator::Branch {
             true_block,

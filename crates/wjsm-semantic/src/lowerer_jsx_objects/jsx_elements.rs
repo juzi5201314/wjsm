@@ -121,6 +121,8 @@ impl Lowerer {
                         dest,
                         object: obj_val,
                         key: prop_key,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 Ok(dest)
@@ -167,6 +169,8 @@ impl Lowerer {
                         dest,
                         object: obj_val,
                         key: prop_key,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 Ok(dest)

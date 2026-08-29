@@ -181,9 +181,10 @@ pub(crate) fn deserialize(
             )
             .ok_or_else(|| "DataCloneError: ArrayBuffer allocation failed".to_string())?,
             CloneNode::SharedArrayBuffer(backing_id) => {
-                let object = sab::materialize_from_backing(state, *backing_id).ok_or_else(|| {
-                    "DataCloneError: SharedArrayBuffer allocation failed".to_string()
-                })?;
+                let object =
+                    sab::materialize_from_backing(state, *backing_id).ok_or_else(|| {
+                        "DataCloneError: SharedArrayBuffer allocation failed".to_string()
+                    })?;
                 if !state
                     .shared_array_buffers
                     .contains_key(&value::decode_handle(object))

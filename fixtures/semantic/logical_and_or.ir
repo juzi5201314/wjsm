@@ -141,9 +141,9 @@ module {
       %34 = call builtin.exception_value(%32)
       throw %34
     bb7:
-      %45 = phi [(bb14, %43), (bb15, %44)]
+      %45 = phi [(bb13, %43), (bb14, %44)]
       %46 = is_exception %45
-      branch %46, bb17, bb16
+      branch %46, bb16, bb15
     bb8:
       %36 = phi [(bb1, %35), (bb5, %32)]
       %37 = phi [(bb1, %35), (bb5, %27)]
@@ -159,231 +159,227 @@ module {
       %40 = phi [(bb9, %38), (bb10, %39)]
       jump bb12
     bb12:
-      branch %24, bb14, bb15
+      branch %24, bb13, bb14
     bb13:
-      unreachable
-    bb14:
       %43 = call builtin.console.log(%40)
       jump bb7
-    bb15:
+    bb14:
       %44 = call %36, this=%37, args=[%40], callsite="console.log"
       jump bb7
-    bb16:
+    bb15:
       %48 = const c30
       %49 = const c31
       %50 = call builtin.intrinsic_pristine(%48, %49)
-      branch %50, bb18, bb19
-    bb17:
+      branch %50, bb17, bb18
+    bb16:
       %47 = call builtin.exception_value(%45)
       throw %47
-    bb18:
+    bb17:
       %61 = const c36
-      jump bb25
-    bb19:
+      jump bb24
+    bb18:
       %51 = const c32
       %52 = const c33
       %53 = call builtin.intrinsic_resolve(%51, %52)
       %54 = is_exception %53
-      branch %54, bb21, bb20
-    bb20:
+      branch %54, bb20, bb19
+    bb19:
       %56 = const c34
       %57 = const c35
       %58 = call builtin.intrinsic_resolve(%56, %57, %53)
       %59 = is_exception %58
-      branch %59, bb23, bb22
-    bb21:
+      branch %59, bb22, bb21
+    bb20:
       %55 = call builtin.exception_value(%53)
       throw %55
+    bb21:
+      jump bb24
     bb22:
-      jump bb25
-    bb23:
       %60 = call builtin.exception_value(%58)
       throw %60
-    bb24:
-      %71 = phi [(bb31, %69), (bb32, %70)]
+    bb23:
+      %71 = phi [(bb29, %69), (bb30, %70)]
       %72 = is_exception %71
-      branch %72, bb34, bb33
-    bb25:
-      %62 = phi [(bb18, %61), (bb22, %58)]
-      %63 = phi [(bb18, %61), (bb22, %53)]
+      branch %72, bb32, bb31
+    bb24:
+      %62 = phi [(bb17, %61), (bb21, %58)]
+      %63 = phi [(bb17, %61), (bb21, %53)]
       %64 = const c37
-      jump bb26
+      jump bb25
+    bb25:
+      branch %64, bb27, bb26
     bb26:
-      branch %64, bb28, bb27
-    bb27:
       %65 = const c38
       store var $0.hit, %65
+      jump bb27
+    bb27:
+      %66 = phi [(bb25, %64), (bb26, %65)]
       jump bb28
     bb28:
-      %66 = phi [(bb26, %64), (bb27, %65)]
-      jump bb29
+      branch %50, bb29, bb30
     bb29:
-      branch %50, bb31, bb32
-    bb30:
-      unreachable
-    bb31:
       %69 = call builtin.console.log(%66)
-      jump bb24
-    bb32:
+      jump bb23
+    bb30:
       %70 = call %62, this=%63, args=[%66], callsite="console.log"
-      jump bb24
-    bb33:
+      jump bb23
+    bb31:
       %74 = const c39
       %75 = const c40
       %76 = call builtin.intrinsic_pristine(%74, %75)
-      branch %76, bb35, bb36
-    bb34:
+      branch %76, bb33, bb34
+    bb32:
       %73 = call builtin.exception_value(%71)
       throw %73
-    bb35:
+    bb33:
       %87 = const c45
-      jump bb42
-    bb36:
+      jump bb40
+    bb34:
       %77 = const c41
       %78 = const c42
       %79 = call builtin.intrinsic_resolve(%77, %78)
       %80 = is_exception %79
-      branch %80, bb38, bb37
-    bb37:
+      branch %80, bb36, bb35
+    bb35:
       %82 = const c43
       %83 = const c44
       %84 = call builtin.intrinsic_resolve(%82, %83, %79)
       %85 = is_exception %84
-      branch %85, bb40, bb39
-    bb38:
+      branch %85, bb38, bb37
+    bb36:
       %81 = call builtin.exception_value(%79)
       throw %81
-    bb39:
-      jump bb42
-    bb40:
+    bb37:
+      jump bb40
+    bb38:
       %86 = call builtin.exception_value(%84)
       throw %86
-    bb41:
-      %93 = phi [(bb43, %91), (bb44, %92)]
+    bb39:
+      %93 = phi [(bb41, %91), (bb42, %92)]
       %94 = is_exception %93
-      branch %94, bb46, bb45
-    bb42:
-      %88 = phi [(bb35, %87), (bb39, %84)]
-      %89 = phi [(bb35, %87), (bb39, %79)]
+      branch %94, bb44, bb43
+    bb40:
+      %88 = phi [(bb33, %87), (bb37, %84)]
+      %89 = phi [(bb33, %87), (bb37, %79)]
       %90 = load var $0.hit
-      branch %76, bb43, bb44
-    bb43:
+      branch %76, bb41, bb42
+    bb41:
       %91 = call builtin.console.log(%90)
-      jump bb41
-    bb44:
+      jump bb39
+    bb42:
       %92 = call %88, this=%89, args=[%90], callsite="console.log"
-      jump bb41
-    bb45:
+      jump bb39
+    bb43:
       %96 = const c46
       %97 = const c47
       %98 = call builtin.intrinsic_pristine(%96, %97)
-      branch %98, bb47, bb48
-    bb46:
+      branch %98, bb45, bb46
+    bb44:
       %95 = call builtin.exception_value(%93)
       throw %95
-    bb47:
+    bb45:
       %109 = const c52
-      jump bb54
-    bb48:
+      jump bb52
+    bb46:
       %99 = const c48
       %100 = const c49
       %101 = call builtin.intrinsic_resolve(%99, %100)
       %102 = is_exception %101
-      branch %102, bb50, bb49
-    bb49:
+      branch %102, bb48, bb47
+    bb47:
       %104 = const c50
       %105 = const c51
       %106 = call builtin.intrinsic_resolve(%104, %105, %101)
       %107 = is_exception %106
-      branch %107, bb52, bb51
-    bb50:
+      branch %107, bb50, bb49
+    bb48:
       %103 = call builtin.exception_value(%101)
       throw %103
-    bb51:
-      jump bb54
-    bb52:
+    bb49:
+      jump bb52
+    bb50:
       %108 = call builtin.exception_value(%106)
       throw %108
-    bb53:
-      %117 = phi [(bb58, %115), (bb59, %116)]
+    bb51:
+      %117 = phi [(bb56, %115), (bb57, %116)]
       %118 = is_exception %117
-      branch %118, bb61, bb60
-    bb54:
-      %110 = phi [(bb47, %109), (bb51, %106)]
-      %111 = phi [(bb47, %109), (bb51, %101)]
+      branch %118, bb59, bb58
+    bb52:
+      %110 = phi [(bb45, %109), (bb49, %106)]
+      %111 = phi [(bb45, %109), (bb49, %101)]
       %112 = const c53
+      jump bb53
+    bb53:
+      branch %112, bb54, bb55
+    bb54:
+      %113 = const c54
       jump bb55
     bb55:
-      branch %112, bb56, bb57
+      %114 = phi [(bb53, %112), (bb54, %113)]
+      branch %98, bb56, bb57
     bb56:
-      %113 = const c54
-      jump bb57
-    bb57:
-      %114 = phi [(bb55, %112), (bb56, %113)]
-      branch %98, bb58, bb59
-    bb58:
       %115 = call builtin.console.log(%114)
-      jump bb53
-    bb59:
+      jump bb51
+    bb57:
       %116 = call %110, this=%111, args=[%114], callsite="console.log"
-      jump bb53
-    bb60:
+      jump bb51
+    bb58:
       %120 = const c55
       %121 = const c56
       %122 = call builtin.intrinsic_pristine(%120, %121)
-      branch %122, bb62, bb63
-    bb61:
+      branch %122, bb60, bb61
+    bb59:
       %119 = call builtin.exception_value(%117)
       throw %119
-    bb62:
+    bb60:
       %133 = const c61
-      jump bb69
-    bb63:
+      jump bb67
+    bb61:
       %123 = const c57
       %124 = const c58
       %125 = call builtin.intrinsic_resolve(%123, %124)
       %126 = is_exception %125
-      branch %126, bb65, bb64
-    bb64:
+      branch %126, bb63, bb62
+    bb62:
       %128 = const c59
       %129 = const c60
       %130 = call builtin.intrinsic_resolve(%128, %129, %125)
       %131 = is_exception %130
-      branch %131, bb67, bb66
-    bb65:
+      branch %131, bb65, bb64
+    bb63:
       %127 = call builtin.exception_value(%125)
       throw %127
-    bb66:
-      jump bb69
-    bb67:
+    bb64:
+      jump bb67
+    bb65:
       %132 = call builtin.exception_value(%130)
       throw %132
-    bb68:
-      %141 = phi [(bb73, %139), (bb74, %140)]
+    bb66:
+      %141 = phi [(bb71, %139), (bb72, %140)]
       %142 = is_exception %141
-      branch %142, bb76, bb75
-    bb69:
-      %134 = phi [(bb62, %133), (bb66, %130)]
-      %135 = phi [(bb62, %133), (bb66, %125)]
+      branch %142, bb74, bb73
+    bb67:
+      %134 = phi [(bb60, %133), (bb64, %130)]
+      %135 = phi [(bb60, %133), (bb64, %125)]
       %136 = const c62
+      jump bb68
+    bb68:
+      branch %136, bb70, bb69
+    bb69:
+      %137 = const c63
       jump bb70
     bb70:
-      branch %136, bb72, bb71
+      %138 = phi [(bb68, %136), (bb69, %137)]
+      branch %122, bb71, bb72
     bb71:
-      %137 = const c63
-      jump bb72
-    bb72:
-      %138 = phi [(bb70, %136), (bb71, %137)]
-      branch %122, bb73, bb74
-    bb73:
       %139 = call builtin.console.log(%138)
-      jump bb68
-    bb74:
+      jump bb66
+    bb72:
       %140 = call %134, this=%135, args=[%138], callsite="console.log"
-      jump bb68
-    bb75:
+      jump bb66
+    bb73:
       return
-    bb76:
+    bb74:
       %143 = call builtin.exception_value(%141)
       throw %143
 }

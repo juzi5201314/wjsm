@@ -3,10 +3,10 @@
 //!
 //! 与常量键 GetProp 外提（receiver 循环不变，整条指令搬进 pre-header）不同，
 //! `POINTS[i]` 每次迭代都是不同对象，指令本身不能移动。本阶段改为在
-//! pre-header 插入一条 [`Instruction::ElemShapeGuard`]：宿主一次性校验
+//! pre-header 插入一条带模板的 [`Instruction::GuardElementsKind`]：宿主一次性校验
 //! 「数组 packed 无洞、全部元素持有同一烘焙模板 shape、元素值槽均非对象」，
-//! 并把循环体内成对的 `GetElem`/`GetProp` 替换为共享守卫值的 Guarded 变体。
-//! 守卫为真时 `GetPropGuarded` 跳过逐迭代 tag/shape/proto 检查、直接按模板
+//! 并把循环体内成对的 `GetElem`/`GetProp` 带上共享守卫值闩锁。
+//! 守卫为真时 `GetProp` 快路径跳过逐迭代 tag/shape/proto 检查、直接按模板
 //! 槽偏移单指令读取；任何可能执行用户代码的宿主回退路径都先把守卫值置
 //! false（单向闩锁），之后所有访问退回通用 IC 路径，语义与未优化完全一致。
 //!
@@ -51,7 +51,7 @@ enum ArrayState {
 
 /// 收集「全模块恰好一次 StoreVar、写入值是同函数内统一模板对象字面量数组」
 /// 的绑定 → 元素模板。模板只是守卫的静态候选：绑定或数组内容后续被改写时，
-/// 运行期 `ElemShapeGuard` 校验失败、退回通用路径，正确性不受影响。
+/// 运行期 `GuardElementsKind`（带模板）校验失败、退回通用路径，正确性不受影响。
 pub(crate) fn stable_elem_array_bindings(module: &Module) -> HashMap<String, ConstantId> {
     let mut store_sites: HashMap<&str, u32> = HashMap::new();
     for function in module.functions() {
@@ -193,7 +193,17 @@ fn collect_elem_candidates(
             continue;
         }
         for (index, instruction) in block.instructions().iter().enumerate() {
-            let Instruction::GetElem { dest, object, .. } = instruction else {
+            let Instruction::GetElem {
+                dest,
+                object,
+                latch,
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            // 已带闩锁的站点是往轮外提产物，再规划会空插 pre-header。
+            if latch.is_some() {
                 continue;
             };
             let Some(template) = stable_array_template(view, facts, *object) else {
@@ -248,7 +258,13 @@ fn collect_prop_candidates(
             continue;
         }
         for (index, instruction) in block.instructions().iter().enumerate() {
-            let Instruction::GetProp { object, key, .. } = instruction else {
+            let Instruction::GetProp {
+                object, key, latch, ..
+            } = instruction
+            else {
+                continue;
+            };
+            if latch.is_some() {
                 continue;
             };
             let Some(candidate) = elems.get(object) else {
@@ -404,9 +420,9 @@ fn prim_dest(
         Instruction::LoadVar { dest, name } => {
             prim_bindings.contains(name.as_str()).then_some(*dest)
         }
-        Instruction::GetProp { dest, object, key } => {
-            stable_array_length_read(view, facts, *object, *key).then_some(*dest)
-        }
+        Instruction::GetProp {
+            dest, object, key, ..
+        } => stable_array_length_read(view, facts, *object, *key).then_some(*dest),
         _ => None,
     }
 }

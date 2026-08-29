@@ -114,30 +114,28 @@ module {
       store var $sroa.$0.p.age, %22
       throw %36
     bb7:
-      %47 = phi [(bb11, %45), (bb12, %46)]
+      %47 = phi [(bb10, %45), (bb11, %46)]
       %48 = is_exception %47
-      branch %48, bb14, bb13
+      branch %48, bb13, bb12
     bb8:
       %38 = phi [(bb1, %37), (bb5, %34)]
       %39 = phi [(bb1, %37), (bb5, %29)]
       jump bb9
     bb9:
-      branch %26, bb11, bb12
+      branch %26, bb10, bb11
     bb10:
-      unreachable
-    bb11:
       %45 = call builtin.console.log(%21)
       jump bb7
-    bb12:
+    bb11:
       store var $sroa.$0.p.name, %21
       store var $sroa.$0.p.age, %22
       %46 = call %38, this=%39, args=[%21], callsite="console.log"
       jump bb7
-    bb13:
+    bb12:
       store var $sroa.$0.p.name, %21
       store var $sroa.$0.p.age, %22
       return
-    bb14:
+    bb13:
       %49 = call builtin.exception_value(%47)
       store var $sroa.$0.p.name, %21
       store var $sroa.$0.p.age, %22

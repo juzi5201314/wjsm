@@ -7,9 +7,7 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::super::array_callbacks::push_element_with_gc_retry;
 use super::super::runtime::{fail_dispatch, is_truthy, type_error};
-use super::{
-    IteratorProtoMethod, IteratorRecord, close_iterator, get_iterator_direct, step_value,
-};
+use super::{IteratorProtoMethod, IteratorRecord, close_iterator, get_iterator_direct, step_value};
 use crate::NativeAgentState;
 
 fn call_callback(
@@ -56,7 +54,10 @@ pub(crate) fn eager_method(
     receiver: i64,
     args: &[i64],
 ) -> i64 {
-    let callback = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let callback = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     if method != IteratorProtoMethod::ToArray && !value::is_callable(callback) {
         let message = format!(
             "string \"Iterator.prototype.{}\" is not a function",

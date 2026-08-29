@@ -87,50 +87,48 @@ module {
       %27 = const c22
       %28 = const c23
       %29 = call builtin.intrinsic_pristine(%27, %28)
-      branch %29, bb3, bb4
+      branch %29, bb2, bb3
     bb2:
-      unreachable
-    bb3:
       %40 = const c28
-      jump bb10
-    bb4:
+      jump bb9
+    bb3:
       %30 = const c24
       %31 = const c25
       %32 = call builtin.intrinsic_resolve(%30, %31)
       %33 = is_exception %32
-      branch %33, bb6, bb5
-    bb5:
+      branch %33, bb5, bb4
+    bb4:
       %35 = const c26
       %36 = const c27
       %37 = call builtin.intrinsic_resolve(%35, %36, %32)
       %38 = is_exception %37
-      branch %38, bb8, bb7
-    bb6:
+      branch %38, bb7, bb6
+    bb5:
       %34 = call builtin.exception_value(%32)
       throw %34
+    bb6:
+      jump bb9
     bb7:
-      jump bb10
-    bb8:
       %39 = call builtin.exception_value(%37)
       throw %39
-    bb9:
-      %46 = phi [(bb11, %44), (bb12, %45)]
+    bb8:
+      %46 = phi [(bb10, %44), (bb11, %45)]
       %47 = is_exception %46
-      branch %47, bb14, bb13
-    bb10:
-      %41 = phi [(bb3, %40), (bb7, %37)]
-      %42 = phi [(bb3, %40), (bb7, %32)]
+      branch %47, bb13, bb12
+    bb9:
+      %41 = phi [(bb2, %40), (bb6, %37)]
+      %42 = phi [(bb2, %40), (bb6, %32)]
       %43 = load var $0.x
-      branch %29, bb11, bb12
-    bb11:
+      branch %29, bb10, bb11
+    bb10:
       %44 = call builtin.console.log(%43)
-      jump bb9
-    bb12:
+      jump bb8
+    bb11:
       %45 = call %41, this=%42, args=[%43], callsite="console.log"
-      jump bb9
-    bb13:
+      jump bb8
+    bb12:
       return
-    bb14:
+    bb13:
       %48 = call builtin.exception_value(%46)
       throw %48
 }

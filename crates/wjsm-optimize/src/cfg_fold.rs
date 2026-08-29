@@ -27,8 +27,8 @@ use wjsm_ir::{
     ValueId,
 };
 
-use super::direct_call::{instr_uses, instruction_dest, terminator_uses};
 use super::inline_for_ea::replace_all_uses_of;
+use crate::ir_walk::{instr_uses, instruction_dest, terminator_uses};
 
 /// 判断值是否可证明非异常（其 def 不可能产生 TAG_EXCEPTION）。
 /// 仅覆盖恒不抛异常的指令：Const/NewObject（分配成功即普通对象/数组）、
@@ -146,29 +146,7 @@ fn const_id_or_add(module: &mut Module, constant: Constant) -> ConstantId {
 
 /// 终止器的后继块（Jump/Branch/Switch）。
 pub(crate) fn terminator_successors(terminator: &Terminator) -> Vec<BasicBlockId> {
-    match terminator {
-        Terminator::Jump { target } => vec![*target],
-        Terminator::Branch {
-            true_block,
-            false_block,
-            ..
-        } => vec![*true_block, *false_block],
-        Terminator::Switch {
-            cases,
-            default_block,
-            exit_block,
-            ..
-        } => {
-            let mut succs = Vec::with_capacity(cases.len() + 2);
-            for case in cases {
-                succs.push(case.target);
-            }
-            succs.push(*default_block);
-            succs.push(*exit_block);
-            succs
-        }
-        Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => vec![],
-    }
+    wjsm_ir::cfg::terminator_successors(terminator)
 }
 
 /// 运行 cfg_fold pass。`fold_proven_numbers` 仅在逃逸分析之后打开，避免过早

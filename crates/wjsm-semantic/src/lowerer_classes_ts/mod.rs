@@ -600,6 +600,8 @@ impl Lowerer {
                                 dest: key_dest,
                                 object: env_val,
                                 key: name_const,
+                                latch: None,
+                                latch_template: None,
                             },
                         );
                         self.emit_field_init_common(block, key_dest, prop.value.as_deref(), false)?

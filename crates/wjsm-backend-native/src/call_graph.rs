@@ -120,83 +120,7 @@ pub(crate) fn direct_call_targets(
 }
 
 fn instruction_uses_value(instruction: &Instruction, target: ValueId) -> bool {
-    match instruction {
-        Instruction::Binary { lhs, rhs, .. } | Instruction::Compare { lhs, rhs, .. } => {
-            *lhs == target || *rhs == target
-        }
-        Instruction::Unary { value, .. }
-        | Instruction::IsException { value, .. }
-        | Instruction::EncodeException { value, .. }
-        | Instruction::ExceptionToObject { value, .. } => *value == target,
-        Instruction::StringConcatVa { parts, .. }
-        | Instruction::CallBuiltin { args: parts, .. } => parts.contains(&target),
-        Instruction::GetProp { object, key, .. } => *object == target || *key == target,
-        Instruction::SetProp {
-            object, key, value, ..
-        }
-        | Instruction::CreateDataProperty {
-            object, key, value, ..
-        } => *object == target || *key == target || *value == target,
-        Instruction::SetProto { object, value } => *object == target || *value == target,
-        Instruction::GetElem { object, index, .. } => *object == target || *index == target,
-        Instruction::ElemShapeGuard { array, .. } => *array == target,
-        Instruction::GetElemGuarded {
-            object,
-            index,
-            guard,
-            ..
-        } => *object == target || *index == target || *guard == target,
-        Instruction::GetPropGuarded {
-            object, key, guard, ..
-        } => *object == target || *key == target || *guard == target,
-        Instruction::SetElem {
-            object,
-            index,
-            value,
-            ..
-        } => *object == target || *index == target || *value == target,
-        Instruction::Call {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | Instruction::SuperCall {
-            callee,
-            this_val,
-            args,
-            ..
-        }
-        | Instruction::ConstructCall {
-            callee,
-            this_val,
-            args,
-            ..
-        } => *callee == target || *this_val == target || args.contains(&target),
-        Instruction::DeleteProp { object, key, .. } => *object == target || *key == target,
-        Instruction::PromiseResolve { promise, value }
-        | Instruction::PromiseReject {
-            promise,
-            reason: value,
-        } => *promise == target || *value == target,
-        Instruction::Suspend { promise, .. } => *promise == target,
-        Instruction::GeneratorSuspend { result, .. } => *result == target,
-        Instruction::GuardSameFunction { callee, .. } => *callee == target,
-        Instruction::ObjectSpread { object, source, .. } => *object == target || *source == target,
-        Instruction::StoreVar { value, .. } => *value == target,
-        Instruction::Phi { sources, .. } => sources.iter().any(|source| source.value == target),
-        Instruction::Const { .. }
-        | Instruction::LoadVar { .. }
-        | Instruction::NewObject { .. }
-        | Instruction::NewArray { .. }
-        | Instruction::CloneArrayTemplate { .. }
-        | Instruction::InitObjectLiteral { .. }
-        | Instruction::GetSuperBase { .. }
-        | Instruction::GetSuperConstructor { .. }
-        | Instruction::NewPromise { .. }
-        | Instruction::CollectRestArgs { .. }
-        | Instruction::DebugCheck { .. } => false,
-    }
+    instruction.uses().contains(&target)
 }
 
 fn instruction_uses_other_than_callee(instruction: &Instruction, target: ValueId) -> bool {
@@ -218,6 +142,9 @@ fn terminator_uses_value(terminator: &Terminator, target: ValueId) -> bool {
         | Terminator::Switch {
             value: condition, ..
         } => *condition == target,
+        Terminator::Deopt { frames } => frames
+            .iter()
+            .any(|frame| frame.lives.iter().any(|live| *live == target)),
         Terminator::Jump { .. } | Terminator::Unreachable => false,
     }
 }

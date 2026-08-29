@@ -90,6 +90,8 @@ impl Lowerer {
                     dest,
                     object: env,
                     key,
+                    latch: None,
+                    latch_template: None,
                 },
             );
             Ok(dest)

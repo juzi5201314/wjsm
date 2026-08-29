@@ -359,6 +359,8 @@ impl Lowerer {
                     dest: value,
                     object: previous_env,
                     key,
+                    latch: None,
+                    latch_template: None,
                 }
             } else if self.binding_in_tdz(binding) {
                 // 首个迭代 env 在循环头声明执行前创建：TDZ 绑定写入哨兵，
@@ -441,6 +443,8 @@ impl Lowerer {
                 dest: value,
                 object: env,
                 key,
+                latch: None,
+                latch_template: None,
             },
         );
         value
@@ -516,6 +520,8 @@ impl Lowerer {
                         dest: current_val,
                         object: env_val,
                         key: key_val,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 return current_val;
@@ -554,6 +560,8 @@ impl Lowerer {
                         dest: current_val,
                         object: env_val,
                         key: key_val,
+                        latch: None,
+                        latch_template: None,
                     },
                 );
                 return current_val;
@@ -606,6 +614,8 @@ impl Lowerer {
                     dest: current_val,
                     object: parent_env,
                     key: parent_key,
+                    latch: None,
+                    latch_template: None,
                 },
             );
             current_val
@@ -838,6 +848,8 @@ impl Lowerer {
                     dest,
                     object: env_val,
                     key: key_val,
+                    latch: None,
+                    latch_template: None,
                 },
             );
             return dest;
@@ -859,6 +871,8 @@ impl Lowerer {
                     dest,
                     object: env_val,
                     key: key_val,
+                    latch: None,
+                    latch_template: None,
                 },
             );
             return dest;

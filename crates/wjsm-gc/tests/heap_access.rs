@@ -540,6 +540,54 @@ fn sparse_length_write_grows_only_requested_slots() {
     assert!(capacity > 50 && capacity < 100);
     assert_eq!(
         heap.array_kind(handle).unwrap(),
-        constants::ARRAY_KIND_HOLEY
+        constants::ARRAY_KIND_HOLEY_NUMBER
+    );
+}
+
+#[test]
+fn number_kind_converts_to_boxed_when_storing_undefined() {
+    let layout = Arc::new(ManagedHeapLayout::new(1024 * 1024, 64 * 1024).unwrap());
+    let memory = TestHeapMemory::for_layout(&layout);
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let heap = HeapAccessV2::with_handles(memory, layout, handles, wjsm_gc::HeapBarrier::Disabled)
+        .unwrap();
+    let handle = heap.allocate_handle().unwrap();
+    let object = allocate(&heap, u64::from(constants::HEAP_OBJECT_HEADER_SIZE + 16));
+    heap.publish_array(handle, object, PROTO_NULL_SENTINEL, 2)
+        .unwrap();
+    let number = wjsm_ir::value::encode_f64(1.0) as u64;
+    heap.set_element(handle, 0, number).unwrap();
+    heap.set_element(handle, 1, number).unwrap();
+    assert_eq!(
+        heap.array_kind(handle).unwrap(),
+        constants::ARRAY_KIND_PACKED_NUMBER
+    );
+    heap.set_element(handle, 1, wjsm_ir::value::encode_undefined() as u64)
+        .unwrap();
+    assert_eq!(
+        heap.array_kind(handle).unwrap(),
+        constants::ARRAY_KIND_PACKED
+    );
+}
+
+#[test]
+fn packed_number_raises_holey_number_when_storing_hole() {
+    let layout = Arc::new(ManagedHeapLayout::new(1024 * 1024, 64 * 1024).unwrap());
+    let memory = TestHeapMemory::for_layout(&layout);
+    let handles = Arc::new(HandleTableV2::new(layout.as_ref().clone()).unwrap());
+    let heap = HeapAccessV2::with_handles(memory, layout, handles, wjsm_gc::HeapBarrier::Disabled)
+        .unwrap();
+    let handle = heap.allocate_handle().unwrap();
+    let object = allocate(&heap, u64::from(constants::HEAP_OBJECT_HEADER_SIZE + 16));
+    heap.publish_array(handle, object, PROTO_NULL_SENTINEL, 2)
+        .unwrap();
+    let number = wjsm_ir::value::encode_f64(1.0) as u64;
+    heap.set_element(handle, 0, number).unwrap();
+    heap.set_element(handle, 1, number).unwrap();
+    heap.set_element(handle, 1, wjsm_ir::value::encode_array_hole() as u64)
+        .unwrap();
+    assert_eq!(
+        heap.array_kind(handle).unwrap(),
+        constants::ARRAY_KIND_HOLEY_NUMBER
     );
 }

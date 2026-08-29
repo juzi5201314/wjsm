@@ -9,6 +9,7 @@ members = [
     "crates/wjsm-parser",
     "crates/wjsm-semantic",
     "crates/wjsm-ir",
+    "crates/wjsm-optimize",
     "crates/wjsm-artifact-format",
     "crates/wjsm-exec-format",
     "crates/wjsm-exec",

@@ -1189,10 +1189,7 @@ fn sab_atomics_globals_lower_to_global_env_semantics() {
         "builtin.SharedArrayBuffer",
         "string(\"Atomics\")",
     ] {
-        assert!(
-            text.contains(marker),
-            "expected `{marker}` in IR:\n{text}"
-        );
+        assert!(text.contains(marker), "expected `{marker}` in IR:\n{text}");
     }
     // typeof 与裸读各 2 处，全部经全局环境记录语义（4 个 GlobalEnvGet）。
     assert_eq!(

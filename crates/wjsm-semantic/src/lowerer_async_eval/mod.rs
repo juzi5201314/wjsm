@@ -49,9 +49,10 @@ fn build_cfg(
                     targets.push(*default_block);
                     targets
                 }
-                Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {
-                    Vec::new()
-                }
+                Terminator::Return { .. }
+                | Terminator::Throw { .. }
+                | Terminator::Unreachable
+                | Terminator::Deopt { .. } => Vec::new(),
             }
         };
 

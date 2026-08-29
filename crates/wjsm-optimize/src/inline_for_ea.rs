@@ -24,10 +24,10 @@ use wjsm_ir::{
 };
 
 use super::cfg_fold::{self, terminator_successors};
-use crate::passes::direct_call::{instr_uses, instruction_dest, terminator_uses};
+use crate::ir_walk::{instr_uses, instruction_dest, terminator_uses};
 
 /// 计算函数内最大的 ValueId。
-pub(crate) fn max_value_id_in_function(function: &wjsm_ir::Function) -> u32 {
+pub fn max_value_id_in_function(function: &wjsm_ir::Function) -> u32 {
     let mut max = 0u32;
     for block in function.blocks() {
         for instruction in block.instructions() {
@@ -47,482 +47,12 @@ pub(crate) fn max_value_id_in_function(function: &wjsm_ir::Function) -> u32 {
 
 /// 为指令中的 ValueId 添加偏移量。
 fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
-    use Instruction::*;
-    let add = |id: &mut ValueId| id.0 += offset;
-    let add_vec = |ids: &mut [ValueId]| {
-        for id in ids.iter_mut() {
-            id.0 += offset;
-        }
-    };
-    match ins {
-        Const { dest, .. } => {
-            add(dest);
-        }
-        Binary { dest, lhs, rhs, .. } => {
-            add(dest);
-            add(lhs);
-            add(rhs);
-        }
-        Unary { dest, value, .. } => {
-            add(dest);
-            add(value);
-        }
-        Compare { dest, lhs, rhs, .. } => {
-            add(dest);
-            add(lhs);
-            add(rhs);
-        }
-        Phi { dest, sources } => {
-            add(dest);
-            for source in sources.iter_mut() {
-                source.value.0 += offset;
-            }
-        }
-        CallBuiltin {
-            dest,
-            args,
-            builtin: _,
-        } => {
-            if let Some(dest) = dest {
-                add(dest);
-            }
-            add_vec(args);
-        }
-        StringConcatVa { dest, parts } => {
-            add(dest);
-            add_vec(parts);
-        }
-        LoadVar { dest, .. } => {
-            add(dest);
-        }
-        StoreVar { value, .. } => {
-            add(value);
-        }
-        Call {
-            dest,
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            if let Some(dest) = dest {
-                add(dest);
-            }
-            add(callee);
-            add(this_val);
-            add_vec(args);
-        }
-        SuperCall {
-            dest,
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            if let Some(dest) = dest {
-                add(dest);
-            }
-            add(callee);
-            add(this_val);
-            add_vec(args);
-        }
-        ConstructCall {
-            dest,
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            if let Some(dest) = dest {
-                add(dest);
-            }
-            add(callee);
-            add(this_val);
-            add_vec(args);
-        }
-        NewObject { dest, .. } => {
-            add(dest);
-        }
-        GetProp { dest, object, key } => {
-            add(dest);
-            add(object);
-            add(key);
-        }
-        SetProp {
-            dest,
-            object,
-            key,
-            value,
-            ..
-        } => {
-            add(dest);
-            add(object);
-            add(key);
-            add(value);
-        }
-        CreateDataProperty {
-            dest,
-            object,
-            key,
-            value,
-        } => {
-            add(dest);
-            add(object);
-            add(key);
-            add(value);
-        }
-        DeleteProp {
-            dest, object, key, ..
-        } => {
-            add(dest);
-            add(object);
-            add(key);
-        }
-        SetProto { object, value } => {
-            add(object);
-            add(value);
-        }
-        NewArray { dest, .. } => {
-            add(dest);
-        }
-        CloneArrayTemplate { dest, .. } => {
-            add(dest);
-        }
-        InitObjectLiteral { dest, values, .. } => {
-            add(dest);
-            for value in values {
-                add(value);
-            }
-        }
-        GetElem {
-            dest,
-            object,
-            index,
-        } => {
-            add(dest);
-            add(object);
-            add(index);
-        }
-        ElemShapeGuard { dest, array, .. } => {
-            add(dest);
-            add(array);
-        }
-        GetElemGuarded {
-            dest,
-            object,
-            index,
-            guard,
-        } => {
-            add(dest);
-            add(object);
-            add(index);
-            add(guard);
-        }
-        GetPropGuarded {
-            dest,
-            object,
-            key,
-            guard,
-            ..
-        } => {
-            add(dest);
-            add(object);
-            add(key);
-            add(guard);
-        }
-        SetElem {
-            dest,
-            object,
-            index,
-            value,
-            ..
-        } => {
-            add(dest);
-            add(object);
-            add(index);
-            add(value);
-        }
-        ObjectSpread {
-            dest,
-            object,
-            source,
-        } => {
-            add(dest);
-            add(object);
-            add(source);
-        }
-        GetSuperBase { dest } => add(dest),
-        GetSuperConstructor { dest } => add(dest),
-        NewPromise { dest } => add(dest),
-        PromiseResolve { promise, value } => {
-            add(promise);
-            add(value);
-        }
-        PromiseReject { promise, reason } => {
-            add(promise);
-            add(reason);
-        }
-        Suspend { promise, .. } => {
-            add(promise);
-        }
-        GeneratorSuspend { result, .. } => {
-            add(result);
-        }
-        CollectRestArgs { dest, .. } => {
-            add(dest);
-        }
-        IsException { dest, value } => {
-            add(dest);
-            add(value);
-        }
-        GuardSameFunction { dest, callee, .. } => {
-            add(dest);
-            add(callee);
-        }
-        EncodeException { dest, value } => {
-            add(dest);
-            add(value);
-        }
-        ExceptionToObject { dest, value } => {
-            add(dest);
-            add(value);
-        }
-        DebugCheck { .. } => {}
-    }
+    ins.remap_values(&mut |id| wjsm_ir::ValueId(id.0 + offset));
 }
 
 /// 替换指令中所有 `old_val` 为 `new_val`。
 pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val: ValueId) {
-    use Instruction::*;
-    let rep = |id: &mut ValueId| {
-        if *id == old_val {
-            *id = new_val;
-        }
-    };
-    let rep_vec = |ids: &mut [ValueId]| {
-        for id in ids.iter_mut() {
-            if *id == old_val {
-                *id = new_val;
-            }
-        }
-    };
-    match ins {
-        Const { .. } => {}
-        Binary { dest, lhs, rhs, .. } => {
-            rep(dest);
-            rep(lhs);
-            rep(rhs);
-        }
-        Unary { dest, value, .. } => {
-            rep(dest);
-            rep(value);
-        }
-        Compare { dest, lhs, rhs, .. } => {
-            rep(dest);
-            rep(lhs);
-            rep(rhs);
-        }
-        Phi { dest, sources } => {
-            rep(dest);
-            for source in sources.iter_mut() {
-                rep(&mut source.value);
-            }
-        }
-        CallBuiltin {
-            dest,
-            args,
-            builtin: _,
-        } => {
-            if let Some(dest) = dest {
-                rep(dest);
-            }
-            rep_vec(args);
-        }
-        StringConcatVa { dest, parts } => {
-            rep(dest);
-            rep_vec(parts);
-        }
-        LoadVar { dest, .. } => rep(dest),
-        StoreVar { value, .. } => rep(value),
-        Call {
-            dest,
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            if let Some(dest) = dest {
-                rep(dest);
-            }
-            rep(callee);
-            rep(this_val);
-            rep_vec(args);
-        }
-        SuperCall {
-            dest,
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            if let Some(dest) = dest {
-                rep(dest);
-            }
-            rep(callee);
-            rep(this_val);
-            rep_vec(args);
-        }
-        ConstructCall {
-            dest,
-            callee,
-            this_val,
-            args,
-            ..
-        } => {
-            if let Some(dest) = dest {
-                rep(dest);
-            }
-            rep(callee);
-            rep(this_val);
-            rep_vec(args);
-        }
-        NewObject { dest, .. } => rep(dest),
-        GetProp { dest, object, key } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-        }
-        SetProp {
-            dest,
-            object,
-            key,
-            value,
-            ..
-        } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-            rep(value);
-        }
-        CreateDataProperty {
-            dest,
-            object,
-            key,
-            value,
-        } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-            rep(value);
-        }
-        DeleteProp {
-            dest, object, key, ..
-        } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-        }
-        SetProto { object, value } => {
-            rep(object);
-            rep(value);
-        }
-        NewArray { dest, .. } => rep(dest),
-        CloneArrayTemplate { dest, .. } => rep(dest),
-        InitObjectLiteral { dest, values, .. } => {
-            rep(dest);
-            for value in values {
-                rep(value);
-            }
-        }
-        GetElem {
-            dest,
-            object,
-            index,
-        } => {
-            rep(dest);
-            rep(object);
-            rep(index);
-        }
-        ElemShapeGuard { dest, array, .. } => {
-            rep(dest);
-            rep(array);
-        }
-        GetElemGuarded {
-            dest,
-            object,
-            index,
-            guard,
-        } => {
-            rep(dest);
-            rep(object);
-            rep(index);
-            rep(guard);
-        }
-        GetPropGuarded {
-            dest,
-            object,
-            key,
-            guard,
-            ..
-        } => {
-            rep(dest);
-            rep(object);
-            rep(key);
-            rep(guard);
-        }
-        SetElem {
-            dest,
-            object,
-            index,
-            value,
-            ..
-        } => {
-            rep(dest);
-            rep(object);
-            rep(index);
-            rep(value);
-        }
-        ObjectSpread {
-            dest,
-            object,
-            source,
-        } => {
-            rep(dest);
-            rep(object);
-            rep(source);
-        }
-        GetSuperBase { dest } => rep(dest),
-        GetSuperConstructor { dest } => rep(dest),
-        NewPromise { dest } => rep(dest),
-        PromiseResolve { promise, value } => {
-            rep(promise);
-            rep(value);
-        }
-        PromiseReject { promise, reason } => {
-            rep(promise);
-            rep(reason);
-        }
-        Suspend { promise, .. } => rep(promise),
-        GeneratorSuspend { result, .. } => rep(result),
-        CollectRestArgs { dest, .. } => rep(dest),
-        IsException { dest, value } => {
-            rep(dest);
-            rep(value);
-        }
-        GuardSameFunction { dest, callee, .. } => {
-            rep(dest);
-            rep(callee);
-        }
-        EncodeException { dest, value } => {
-            rep(dest);
-            rep(value);
-        }
-        ExceptionToObject { dest, value } => {
-            rep(dest);
-            rep(value);
-        }
-        DebugCheck { .. } => {}
-    }
+    ins.remap_values(&mut |id| if id == old_val { new_val } else { id });
 }
 
 /// 替换终止器中所有 `old_val` 为 `new_val`。
@@ -531,16 +61,9 @@ pub(crate) fn replace_value_id_in_terminator(
     old_val: ValueId,
     new_val: ValueId,
 ) {
-    match terminator {
-        Terminator::Return { value: Some(v) } if *v == old_val => *v = new_val,
-        Terminator::Branch { condition, .. } if *condition == old_val => *condition = new_val,
-        Terminator::Switch { value, .. } if *value == old_val => *value = new_val,
-        Terminator::Throw { value } if *value == old_val => *value = new_val,
-        _ => {}
-    }
+    terminator.remap_values(&mut |id| if id == old_val { new_val } else { id });
 }
 
-/// 在函数中，将 `old_val` 的所有引用替换为 `new_val`。
 pub(crate) fn replace_all_uses_of(
     function: &mut wjsm_ir::Function,
     old_val: ValueId,
@@ -626,8 +149,54 @@ fn contains_excluded_instruction(function: &wjsm_ir::Function) -> bool {
     })
 }
 
+/// 静态 FunctionRef 调用链深度（含当前 callee）；同一 `FunctionId` 再入视为超限。
+fn static_call_depth(module: &Module, callee: FunctionId) -> usize {
+    fn rec(module: &Module, callee: FunctionId, visiting: &mut HashSet<u32>) -> usize {
+        if !visiting.insert(callee.0) {
+            return crate::facts::INLINE_MAX_DEPTH + 1;
+        }
+        if visiting.len() > crate::facts::INLINE_MAX_DEPTH {
+            visiting.remove(&callee.0);
+            return crate::facts::INLINE_MAX_DEPTH + 1;
+        }
+        let mut depth = 1;
+        if let Some(function) = module.functions().get(callee.0 as usize) {
+            let defs: HashMap<ValueId, ConstantId> = function
+                .blocks()
+                .iter()
+                .flat_map(|block| block.instructions())
+                .filter_map(|instruction| match instruction {
+                    Instruction::Const { dest, constant } => Some((*dest, *constant)),
+                    _ => None,
+                })
+                .collect();
+            for block in function.blocks() {
+                for instruction in block.instructions() {
+                    let target = match instruction {
+                        Instruction::Call { callee: target, .. }
+                        | Instruction::ConstructCall { callee: target, .. } => *target,
+                        _ => continue,
+                    };
+                    let Some(constant) = defs.get(&target) else {
+                        continue;
+                    };
+                    let Some(Constant::FunctionRef(next)) =
+                        module.constants().get(constant.0 as usize)
+                    else {
+                        continue;
+                    };
+                    depth = depth.max(1 + rec(module, *next, visiting));
+                }
+            }
+        }
+        visiting.remove(&callee.0);
+        depth
+    }
+    rec(module, callee, &mut HashSet::new())
+}
+
 /// 查找或追加 `Constant::Undefined` 常量。
-pub(crate) fn undefined_const_id(module: &mut Module) -> ConstantId {
+pub fn undefined_const_id(module: &mut Module) -> ConstantId {
     for (i, c) in module.constants().iter().enumerate() {
         if matches!(c, Constant::Undefined) {
             return ConstantId(i as u32);
@@ -931,7 +500,25 @@ fn static_inline_round(module: &mut Module) -> bool {
                     continue;
                 }
                 let callee_func = &module.functions()[callee_idx];
-                if callee_func.blocks().len() > 200 {
+                let callee_instructions: usize = callee_func
+                    .blocks()
+                    .iter()
+                    .map(|block| block.instructions().len())
+                    .sum();
+                if callee_instructions > crate::facts::INLINE_MAX_CALLEE_INSTRUCTIONS {
+                    continue;
+                }
+                if static_call_depth(module, callee_id) > crate::facts::INLINE_MAX_DEPTH {
+                    continue;
+                }
+                let caller_instructions: usize = function
+                    .blocks()
+                    .iter()
+                    .map(|block| block.instructions().len())
+                    .sum();
+                if caller_instructions.saturating_add(callee_instructions)
+                    > crate::facts::INLINE_MAX_NET_GROWTH
+                {
                     continue;
                 }
                 if contains_excluded_instruction(callee_func) {
@@ -1278,7 +865,7 @@ fn inline_static_candidate(
 /// 绕过语句级异常检查（try/catch 失效）。
 ///
 /// 返回 (tmp 变量名, catch 处理块)。找不到（调用点无语句级检查）→ None。
-pub(crate) fn find_exception_path(
+pub fn find_exception_path(
     function: &wjsm_ir::Function,
     block_idx: usize,
     instr_idx: usize,
@@ -2203,6 +1790,8 @@ mod tests {
             dest: v_callee,
             object: v_obj,
             key: v_key,
+            latch: None,
+            latch_template: None,
         });
         bb.push_instruction(Instruction::Const {
             dest: v_arg,

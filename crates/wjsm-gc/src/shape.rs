@@ -8,13 +8,14 @@
 //! name_id / flags / 值槽下标全部搬到本模块的 [`ShapeTable`]：
 //!
 //! ```text
-//! 对象堆布局（16 字节 header + N×8 值槽）
+//! 对象堆布局（24 字节 header + N×8 值槽）
 //! +0   u32  proto handle      ← 与数组共用，GC / handle remap 的唯一 proto 来源
 //! +4   u8   heap_type
-//! +5   3B   pad
+//! +5   3B   pad（数组 kind 占用首字节）
 //! +8   u32  value_capacity    ← 值槽容量（不是属性数）
 //! +12  u32  shape_id          ← 指向 ShapeTable
-//! +16  8×N  值槽（boxed i64）
+//! +16  u64  gc_word
+//! +24  8×N  值槽（boxed i64）
 //! ```
 //!
 //! 这带来三个直接后果：
@@ -289,6 +290,17 @@ impl ShapeTable {
     ) -> ShapeTransition {
         let mut inner = self.inner.write();
         inner.transition(shape_id, name_id, flags)
+    }
+
+    /// 只读窥视 `(shape, name, flags)` 的已缓存出边；不分配、不退化字典。
+    /// owner 线程拷贝 `SpeculativeFacts.transition_shape` 时使用。
+    pub fn peek_transition(&self, shape_id: u32, name_id: PropertyKey, flags: u32) -> Option<u32> {
+        let inner = self.inner.read();
+        let shape = inner.shapes.get(shape_id as usize)?;
+        if shape.dictionary {
+            return None;
+        }
+        shape.transitions.get(&(name_id, flags)).copied()
     }
 
     /// 收紧已存在属性的 flags（`Object.freeze` / `seal` / 描述符收紧）。
@@ -608,6 +620,15 @@ mod tests {
         assert_eq!(ab.shape_id, ab2.shape_id);
         assert_eq!((a.index, ab.index), (0, 1));
         assert_eq!(table.slot_count(ab.shape_id), 2);
+        assert_eq!(
+            table.peek_transition(ShapeTable::empty_shape(), key(1), DATA),
+            Some(a.shape_id)
+        );
+        assert_eq!(
+            table.peek_transition(a.shape_id, key(2), DATA),
+            Some(ab.shape_id)
+        );
+        assert_eq!(table.peek_transition(ab.shape_id, key(3), DATA), None);
     }
 
     #[test]

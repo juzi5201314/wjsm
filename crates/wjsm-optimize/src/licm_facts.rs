@@ -10,8 +10,8 @@ use wjsm_ir::{
     BasicBlockId, Builtin, Constant, Function, Instruction, Module, Terminator, UnaryOp, ValueId,
 };
 
-use super::direct_call::{instr_uses, terminator_uses};
 use super::escape_scalar_record::template_key_names;
+use crate::ir_walk::{instr_uses, terminator_uses};
 
 /// 环境/协议槽：读写它们不是普通绑定语义，一律不参与外提。
 pub(crate) fn is_protocol_or_env_name(name: &str) -> bool {
@@ -305,9 +305,7 @@ fn record_use_verdict(
         }
         // 读取：对象只有自有数据属性，读不产生用户代码也不泄漏引用。
         // 键本身是家族值则会流入 ToPropertyKey（this=对象的 toString）→ 拒绝。
-        Instruction::GetProp { object, key, .. }
-            if fam.contains(object) && !fam.contains(key) =>
-        {
+        Instruction::GetProp { object, key, .. } if fam.contains(object) && !fam.contains(key) => {
             UseVerdict::Ok
         }
         Instruction::GetElem { object, index, .. }

@@ -70,9 +70,15 @@ impl IteratorPrototypesState {
 
     /// GC 根枚举：已物化的原型对象全部保活。
     pub(crate) fn roots(&self) -> impl Iterator<Item = i64> {
-        [self.array, self.string, self.map, self.set, self.regexp_string]
-            .into_iter()
-            .flatten()
+        [
+            self.array,
+            self.string,
+            self.map,
+            self.set,
+            self.regexp_string,
+        ]
+        .into_iter()
+        .flatten()
     }
 
     fn slot(&mut self, family: NativeIteratorFamily) -> &mut Option<i64> {
@@ -88,7 +94,9 @@ impl IteratorPrototypesState {
 
 /// `array_iterators` 条目源 → 原型家族。Custom 是用户自己的迭代器对象，
 /// 不属于任何内建家族（不得改写其 [[Prototype]]）。
-pub(crate) fn family_of_source(source: crate::NativeIteratorSource) -> Option<NativeIteratorFamily> {
+pub(crate) fn family_of_source(
+    source: crate::NativeIteratorSource,
+) -> Option<NativeIteratorFamily> {
     match source {
         crate::NativeIteratorSource::Array(_)
         | crate::NativeIteratorSource::ArrayLike(_)
@@ -126,7 +134,12 @@ pub(crate) fn ensure_prototype(
     state
         .gc
         .heap()
-        .define_data_property(handle, next_key, next as u64, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+        .define_data_property(
+            handle,
+            next_key,
+            next as u64,
+            BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+        )
         .ok()?;
     let tag = state.intern_text(family.to_string_tag().into(), value::TAG_STRING)?;
     state

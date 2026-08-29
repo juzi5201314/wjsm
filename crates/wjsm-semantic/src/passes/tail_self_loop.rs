@@ -522,6 +522,8 @@ mod tests {
             dest: ValueId(2),
             object: ValueId(0),
             key: ValueId(1),
+            latch: None,
+            latch_template: None,
         });
         block.push_instruction(Instruction::Const {
             dest: ValueId(3),

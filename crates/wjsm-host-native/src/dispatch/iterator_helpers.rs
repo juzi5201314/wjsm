@@ -170,7 +170,9 @@ pub(crate) fn ensure_constructor(state: &mut NativeAgentState) -> Option<i64> {
         .insert((constructor, prototype_key), 0);
     let from = state.native_callable(NativeCallableKind::IteratorStaticFrom)?;
     let from_key = state.intern_property_string("from".into())?;
-    state.callable_properties.insert((constructor, from_key), from);
+    state
+        .callable_properties
+        .insert((constructor, from_key), from);
     state
         .callable_property_flags
         .insert((constructor, from_key), BUILTIN_PROTOTYPE_PROPERTY_FLAGS);
@@ -225,7 +227,12 @@ pub(crate) fn ensure_prototype(state: &mut NativeAgentState) -> Option<i64> {
         state
             .gc
             .heap()
-            .define_data_property(handle, key, callable as u64, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .define_data_property(
+                handle,
+                key,
+                callable as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
             .ok()?;
     }
     let self_fn = state.native_callable(NativeCallableKind::IteratorProtoIterator)?;
@@ -280,7 +287,12 @@ pub(crate) fn ensure_helper_prototype(state: &mut NativeAgentState) -> Option<i6
         state
             .gc
             .heap()
-            .define_data_property(handle, key, callable as u64, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .define_data_property(
+                handle,
+                key,
+                callable as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
             .ok()?;
     }
     let tag = state.intern_text("Iterator Helper".into(), value::TAG_STRING)?;
@@ -321,7 +333,12 @@ pub(crate) fn ensure_wrap_prototype(state: &mut NativeAgentState) -> Option<i64>
         state
             .gc
             .heap()
-            .define_data_property(handle, key, callable as u64, BUILTIN_PROTOTYPE_PROPERTY_FLAGS)
+            .define_data_property(
+                handle,
+                key,
+                callable as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
             .ok()?;
     }
     Some(prototype)
@@ -532,7 +549,11 @@ pub(crate) fn close_iterator(
         return fail_dispatch(ctx);
     };
     if value::is_exception(method) {
-        return if completion_is_throw { completion } else { method };
+        return if completion_is_throw {
+            completion
+        } else {
+            method
+        };
     }
     if value::is_undefined(method) || value::is_null(method) {
         return completion;
@@ -547,7 +568,11 @@ pub(crate) fn close_iterator(
         return fail_dispatch(ctx);
     };
     if value::is_exception(result) {
-        return if completion_is_throw { completion } else { result };
+        return if completion_is_throw {
+            completion
+        } else {
+            result
+        };
     }
     if !is_object_value(result) {
         if completion_is_throw {
@@ -690,7 +715,10 @@ pub(crate) fn static_from(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let source = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let source = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let record = match get_iterator_flattenable(
         ctx,
         state,
@@ -796,18 +824,12 @@ pub(crate) fn wrap_return(
 }
 
 /// get Iterator.prototype.constructor（§27.1.4.1.1）：返回 %Iterator%。
-pub(crate) fn constructor_getter(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-) -> i64 {
+pub(crate) fn constructor_getter(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
     ensure_constructor(state).unwrap_or_else(|| fail_dispatch(ctx))
 }
 
 /// get Iterator.prototype[@@toStringTag]（§27.1.4.14.1）：返回 "Iterator"。
-pub(crate) fn to_string_tag_getter(
-    ctx: &mut NativeVmContext,
-    state: &mut NativeAgentState,
-) -> i64 {
+pub(crate) fn to_string_tag_getter(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
     state
         .intern_text("Iterator".into(), value::TAG_STRING)
         .unwrap_or_else(|| fail_dispatch(ctx))
@@ -825,7 +847,10 @@ pub(crate) fn setter_that_ignores(
     key_value: i64,
 ) -> i64 {
     if !is_object_value(receiver) {
-        let message = format!("Cannot convert {} to an object", render_value(state, receiver));
+        let message = format!(
+            "Cannot convert {} to an object",
+            render_value(state, receiver)
+        );
         return type_error(ctx, state, &message);
     }
     if state.iterator_helpers.prototype == Some(receiver) {
@@ -834,7 +859,10 @@ pub(crate) fn setter_that_ignores(
         );
         return type_error(ctx, state, &message);
     }
-    let stored = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let stored = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let result = create_data_property_impl(ctx, state, receiver, key_value, stored);
     if value::is_exception(result) {
         return result;
@@ -887,10 +915,11 @@ pub(crate) fn proto_method(
         return type_error(ctx, state, &message);
     }
     match method {
-        IteratorProtoMethod::Map
-        | IteratorProtoMethod::Filter
-        | IteratorProtoMethod::FlatMap => {
-            let callback = args.first().copied().unwrap_or_else(value::encode_undefined);
+        IteratorProtoMethod::Map | IteratorProtoMethod::Filter | IteratorProtoMethod::FlatMap => {
+            let callback = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             if !value::is_callable(callback) {
                 let message = if method == IteratorProtoMethod::FlatMap {
                     "Iterator.prototype.flatMap is not a function".to_owned()
@@ -917,7 +946,10 @@ pub(crate) fn proto_method(
             create_helper(ctx, state, kind, record)
         }
         IteratorProtoMethod::Take | IteratorProtoMethod::Drop => {
-            let limit = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let limit = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             // limit 校验异常（ToNumber 抛出 / NaN / 负数）同样先对 this 做
             // throw 完成的 IteratorClose 再传播（§27.1.4.11 / §27.1.4.5 步骤 3–8）。
             let number = match to_number_coerced(ctx, state, limit) {

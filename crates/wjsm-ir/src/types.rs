@@ -172,6 +172,19 @@ pub enum Terminator {
         value: ValueId,
     },
     Unreachable,
+    /// overlay 守卫失败：按帧栈重建 generic 后从对应指令继续。
+    Deopt {
+        frames: Vec<DeoptFrame>,
+    },
+}
+
+/// 一帧 generic 恢复点：live 为有序 boxed SSA。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeoptFrame {
+    pub function: FunctionId,
+    pub block: BasicBlockId,
+    pub instruction_index: u32,
+    pub lives: Vec<ValueId>,
 }
 
 impl fmt::Display for Terminator {
@@ -204,6 +217,9 @@ impl fmt::Display for Terminator {
             }
             Self::Throw { value } => write!(formatter, "throw {value}"),
             Self::Unreachable => formatter.write_str("unreachable"),
+            Self::Deopt { frames } => {
+                write!(formatter, "deopt frames={}", frames.len())
+            }
         }
     }
 }

@@ -1,11 +1,10 @@
 //! 运行时类型反馈驱动的单函数特化编译（Issue #390 阶段 3）。
 //!
-//! generic `lower.rs` 只有 boxed lowering；本模块提供「profile → typed wrapper +
-//! typed body」入口：wrapper 以固定 `NativeSlowEntry` ABI 导出，先校验 `args_count`
-//! 与每个 profile 参数的 tag，命中后调用同一 object 内部的 typed body（number
-//! 参数从 call arena 直读、经种子 f64 分析消除守卫），失配则读取当前 base image
-//! 的 `function_table[function_index].slow_entry` 以原始五参数回落 generic entry。
-//! 特化 image 只在进程内存在，不进入 `.wjsm`、磁盘 cache 或分发制品。
+//! generic lowering 走 boxed 路径；本模块提供「profile → overlay wrapper +
+//! 投机 body」入口：wrapper 以固定 `NativeSlowEntry` ABI 导出，先校验 `args_count`
+//! 与每个 profile 参数的 tag，命中后调用同一 object 内部的 overlay body，
+//! 失配则读取当前 base image 的 `function_table[function_index].slow_entry`
+//! 回落 generic entry。overlay 只在进程内存在，不进入 `.wjsm`、磁盘 cache 或分发制品。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem::{offset_of, size_of};
@@ -20,7 +19,7 @@ use cranelift_object::{ObjectBuilder, ObjectModule};
 use wjsm_ir::{Builtin, Function, FunctionId, Instruction, Program, ValueId, constants};
 use wjsm_native_abi::{NativeFeedbackTag, NativeFunctionEntry, NativeVmContext};
 
-use crate::f64_analysis::{infer_f64_values, infer_f64_values_with_param_seeds};
+use crate::f64_analysis::infer_f64_values_with_param_seeds;
 use crate::lower::{
     DeclaredBarrierThunks, DeclaredData, DeclaredFunction, FunctionCompileInput,
     allocate_feedback_slots, allocate_ic_slots, boxed_frame_local_names, compile_one_function,
@@ -37,14 +36,15 @@ use crate::{NativeCompilationDiagnostics, NativeCompileError, NativeObject};
 /// 一条特化 profile：目标函数 + 每个实际参数（跳过 env/this）的反馈 tag。
 ///
 /// tag 序列由反馈槽的 `last_tag_signature` 解码而来，与 wrapper 的入口守卫
-/// 逐位一致；`Number` tag 是唯一可安全提升的类别，其余 tag 只允许 wrapper
-/// 直读（不再发 LoadArgument），不会让分析证明任何 f64 值。
+/// 逐位一致。任意可证明收益的站点都可以编 overlay，不限于 Number 参数。
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SpecializationProfile {
     pub function: FunctionId,
     pub argument_tags: Box<[NativeFeedbackTag]>,
     /// 稳定 Number 二元/比较反馈对应的 SSA（dest 与操作数），供无参热函数重建。
     pub extra_numbers: HashSet<ValueId>,
+    pub slot_map: Option<wjsm_optimize::SlotMap>,
+    pub facts: wjsm_optimize::SpeculativeFacts,
 }
 
 /// 特化编译的内部失败：`NoBenefit` 表示宿主应保持 generic，不是 JS 异常。
@@ -81,44 +81,28 @@ pub(crate) fn compile_specialized(
             "profile tags exceed the parameter count",
         ));
     }
-    if !profile.argument_tags.is_empty()
-        && !profile.argument_tags.contains(&NativeFeedbackTag::Number)
-    {
-        return Err(SpecializationError::NoBenefit(
-            "profile has no number argument",
-        ));
-    }
-    let name = ir_function.name();
-    if name.ends_with("$async") || name.ends_with("$asyncgen") {
-        return Err(SpecializationError::NoBenefit(
-            "async and generator functions resume through dedicated entries",
-        ));
-    }
-    for block in ir_function.blocks() {
-        for instruction in block.instructions() {
-            match instruction {
-                Instruction::Suspend { .. } | Instruction::GeneratorSuspend { .. } => {
-                    return Err(SpecializationError::NoBenefit(
-                        "suspending functions resume through dedicated entries",
-                    ));
-                }
-                // mapped arguments 对象在语义上应与参数槽别名；当前实现虽未建立
-                // 别名，仍保守拒绝，避免未来补齐语义时 overlay 静默偏离。
-                Instruction::CallBuiltin {
-                    builtin: Builtin::CreateMappedArgumentsObject,
-                    ..
-                } => {
-                    return Err(SpecializationError::NoBenefit(
-                        "mapped arguments objects alias parameter slots",
-                    ));
-                }
-                _ => {}
-            }
-        }
-    }
 
-    // 克隆 IR 后按种子重建 CFG；分析与 lowering 都针对派生函数，反馈槽仍按原 Program 编号。
     let mut derived = program.clone();
+    let unit = wjsm_optimize::optimize_speculative(&mut derived, &profile.facts);
+    let ir_function = derived
+        .functions()
+        .get(target_index)
+        .ok_or(SpecializationError::NoBenefit("cloned target is missing"))?;
+    let has_overlay_shape = unit.deopt_map.points.iter().any(|_| true)
+        || !profile.facts.get_props.is_empty()
+        || !profile.facts.set_props.is_empty()
+        || !profile.facts.get_elems.is_empty()
+        || !profile.facts.calls.is_empty()
+        || !profile.extra_numbers.is_empty()
+        || profile
+            .argument_tags
+            .iter()
+            .any(|tag| *tag == NativeFeedbackTag::Number);
+    if !has_overlay_shape {
+        return Err(SpecializationError::NoBenefit(
+            "profile has no speculative sites",
+        ));
+    }
     let class_seeds = wjsm_ir::value_class::FunctionSeeds {
         param_is_number: profile
             .argument_tags
@@ -127,44 +111,22 @@ pub(crate) fn compile_specialized(
             .collect(),
         extra_numbers: profile.extra_numbers.clone(),
     };
-    let rewritten =
-        wjsm_ir::typed_cfg::rewrite_function(&mut derived, profile.function, Some(&class_seeds));
-    let ir_function = derived
-        .functions()
-        .get(target_index)
-        .ok_or(SpecializationError::NoBenefit("cloned target is missing"))?;
     let frame_locals: BTreeSet<&str> = derived.frame_local_variable_names(ir_function);
     let classes =
         wjsm_ir::value_class::infer_function(&derived, ir_function, &frame_locals, &class_seeds);
     let mut seeds: HashMap<FunctionId, Vec<bool>> = HashMap::new();
     seeds.insert(profile.function, class_seeds.param_is_number.clone());
-    let unseeded = infer_f64_values(program);
     let mut seeded = infer_f64_values_with_param_seeds(&derived, &seeds);
     let target_function_id =
         FunctionId(u32::try_from(target_index).map_err(|_| {
             SpecializationError::NoBenefit("target function index does not fit u32")
         })?);
-    let unseeded_values = unseeded
-        .get(&target_function_id)
-        .cloned()
-        .unwrap_or_default();
-    // 入口 tag 守卫背书的种子分析结果是**可靠**集合，只有它能提升成 F64 机器
-    // 变量；下面并入的 `classes.numbers` 来自运行时反馈推测，必须留在 boxed 表示
-    // 里由循环头守卫兜底。
     let typed_f64_values = seeded.get(&target_function_id).cloned().unwrap_or_default();
     seeded
         .entry(target_function_id)
         .or_default()
         .extend(classes.numbers.iter().copied());
     let seeded_values = seeded.get(&target_function_id).cloned().unwrap_or_default();
-    if profile.extra_numbers.is_empty()
-        && !rewritten
-        && seeded_values.len() <= unseeded_values.len()
-    {
-        return Err(SpecializationError::NoBenefit(
-            "seeded analysis proves no additional f64 values",
-        ));
-    }
 
     let unwind_policy = UnwindPolicy::for_triple(isa.triple())?;
     let builder = ObjectBuilder::new(
@@ -256,6 +218,7 @@ pub(crate) fn compile_specialized(
         template_origins: &template_origins[target_index],
         feedback_slots: feedback_plan.function_slots(target_index),
         specialized_tags: Some(profile.argument_tags.as_ref()),
+        slot_map: Some(&unit.slot_map),
         int32_values: &int32_values,
         function_decls: &[],
         direct_callable_functions: &HashSet::new(),
@@ -520,6 +483,29 @@ fn compile_wrapper(
         clif,
         disassembly,
     })
+}
+
+/// 按与 generic 相同的槽编号取出该站点的 IR 位置与指令。
+pub(crate) fn feedback_instruction_at(
+    program: &Program,
+    function_id: FunctionId,
+    site_index: u32,
+) -> Option<(wjsm_ir::BasicBlockId, u32, Instruction)> {
+    let plan = allocate_feedback_slots(program);
+    let index = function_id.0 as usize;
+    let function = program.functions().get(index)?;
+    for ((block_id, instruction_index), slot) in plan.function_slots(index) {
+        if *slot != site_index {
+            continue;
+        }
+        let block = function
+            .blocks()
+            .iter()
+            .find(|block| block.id() == *block_id)?;
+        let instruction = block.instructions().get(*instruction_index)?.clone();
+        return Some((*block_id, *instruction_index as u32, instruction));
+    }
+    None
 }
 
 /// 按与 generic 相同的槽编号取出该站点的 SSA 操作数与 dest。

@@ -228,10 +228,7 @@ pub(crate) fn print_ir_dot(program: &Program) {
                     );
                     println!("    bb{} -> bb{} [label=\"exit\"];", bb_id.0, exit_block.0);
                 }
-                Terminator::Throw { .. } => {
-                    // No outgoing edges
-                }
-                Terminator::Unreachable => {
+                Terminator::Throw { .. } | Terminator::Unreachable | Terminator::Deopt { .. } => {
                     // No outgoing edges
                 }
             }

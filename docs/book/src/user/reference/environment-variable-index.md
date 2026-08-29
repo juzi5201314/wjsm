@@ -19,6 +19,8 @@
 | `WJSM_OPT_LEVEL` | Cranelift 优化等级（`none` / `speed` / `speed_and_size`） | `speed` |
 | `WJSM_VERIFY_CLIF` | CLIF verifier（`0` / `false` / `FALSE` 关闭） | 开启 |
 | `WJSM_DISABLE_SPECIALIZATION` | 关闭运行时类型反馈与热函数特化 | 启用（设为 `1` 关闭） |
+| `WJSM_OVERLAY_MAX_BYTES` | overlay 代码体积上限（`0` 不限） | RSS 12.5% clamp 32–256MiB |
+| `WJSM_OVERLAY_MAX_COUNT` | overlay 份数上限（`0` 不限） | 4096 |
 | `WJSM_EXEC_STUB` | `wjsm-exec` stub 路径，供 `--format native-executable` 打包 | 与 `wjsm` 同目录的 `wjsm-exec` |
 | `WJSM_INSPECT` | packed exe / 环境启用 CDP（`HOST:PORT` 或端口） | 关闭 |
 | `WJSM_INSPECT_BRK` | 同上，并在入口暂停 | 关闭 |

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted（2026-08-27）
+Superseded by [ADR 0023](0023-speculative-full-language-overlay.md)（2026-08-29）对于 Number-only 种子、循环头 deopt 粒度、以及中段「重做当前迭代」合同。
+Accepted（2026-08-27）中「同一 `NativeCompiler`、克隆 `Program`、deopt 目标为 generic native、禁止解释器」的部分仍有效，并由 0023 继承。
 
 Amends ADR 0014 中「overlay 只做入口 tag 守卫、guard miss 不回滚、无 deopt/OSR」的运行时特化合同。不改变 ADR 0014 的唯一生产编译链、portable `.wjsm` 边界，以及禁止解释器 / Wasm / 第二执行后端的约束。
 

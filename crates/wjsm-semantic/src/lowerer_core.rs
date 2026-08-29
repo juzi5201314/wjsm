@@ -849,6 +849,8 @@ impl Lowerer {
                     dest: env_val,
                     object: shared_env,
                     key: key_val,
+                    latch: None,
+                    latch_template: None,
                 },
             );
             self.current_function
@@ -900,6 +902,8 @@ impl Lowerer {
                 dest,
                 object: env_val,
                 key: key_val,
+                latch: None,
+                latch_template: None,
             },
         );
         Ok(dest)
@@ -1346,21 +1350,7 @@ impl Lowerer {
         // array_inline pass：展开可静态解析回调的数组高阶函数为显式循环，
         // 使 inline_for_ea 能内联 direct_callable 回调。
         crate::passes::array_inline::run(&mut self.module);
-        // inline_for_ea pass：构造器体 + 方法内联，使 EA/SR 能消除 new 分配。
-        crate::passes::inline_for_ea::run(&mut self.module);
-        // 初轮 cfg_fold：化简已知类型分支（is_string/is_js_object 等）与 Phi，打平控制流供 EA 跨块分析。
-        crate::passes::cfg_fold::run(&mut self.module);
-        // object_literal_read_fold：同块 InitObjectLiteral 后的常量键 GetProp 折叠为 SSA 值。
-        crate::passes::object_literal_read_fold::run(&mut self.module);
-        // escape_scalar pass：逃逸分析 + 标量替换，消除局部 NewObject / ArrayTemplate / 字符串切片等分配。
-        crate::passes::escape_scalar::run(&mut self.module);
-        // 值类重建：证明 Number 的算术不再保留 is_exception，关系比较改为 Compare。
-        wjsm_ir::typed_cfg::rewrite_program(&mut self.module, &std::collections::HashMap::new());
-        // 终轮 cfg_fold：折叠 EA 消除后新生成的常量表达式、清理死块与 Phi。
-        crate::passes::cfg_fold::run_after_value_class(&mut self.module);
-        // licm pass：循环不变 LoadVar / 稳定 record 常量键 GetProp（shape 检查
-        // 外提）/ 纯直接调用外提到新建 pre-header，循环体内退化为寄存器复用。
-        crate::passes::licm::run(&mut self.module);
+        wjsm_optimize::optimize_sound(&mut self.module);
         Ok(self.module)
     }
 }

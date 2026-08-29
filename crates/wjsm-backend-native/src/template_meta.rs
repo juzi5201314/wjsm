@@ -55,12 +55,10 @@ pub(crate) fn plan_ic_slots(program: &Program) -> IcSlotPlan {
         for block in function.blocks() {
             for instruction in block.instructions() {
                 let (dest, object, key) = match instruction {
-                    Instruction::GetProp { dest, object, key } => (*dest, Some(*object), *key),
-                    // GetPropGuarded 的慢路径复用完整 GetProp IC，同样分配槽。
-                    Instruction::GetPropGuarded {
+                    Instruction::GetProp {
                         dest, object, key, ..
-                    } => (*dest, Some(*object), *key),
-                    Instruction::SetProp {
+                    }
+                    | Instruction::SetProp {
                         dest, object, key, ..
                     } => (*dest, Some(*object), *key),
                     _ => continue,

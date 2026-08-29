@@ -13,6 +13,7 @@ graph BT
     INTL["wjsm-intl-data"]
     PARSER["wjsm-parser"]
     SEMANTIC["wjsm-semantic"]
+    OPT["wjsm-optimize"]
     MODULE["wjsm-module"]
     BN["wjsm-backend-native"]
     HN["wjsm-host-native"]
@@ -26,7 +27,10 @@ graph BT
     HN --> INTL
     PARSER --> IR
     SEMANTIC --> PARSER
+    SEMANTIC --> OPT
+    OPT --> IR
     BN --> IR
+    BN --> OPT
     HN --> BUILTINS
     HN --> GC
     HN --> BN

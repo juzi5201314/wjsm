@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, Function,
-    FunctionId, HomeObject, Instruction, ModuleId, PhiSource, Program, SourceSpan,
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, DeoptFrame,
+    Function, FunctionId, HomeObject, Instruction, ModuleId, PhiSource, Program, SourceSpan,
     SwitchCaseTarget, Terminator, UnaryOp, ValueId,
 };
 
@@ -573,9 +573,17 @@ fn encode_instruction(
             value_id(encoder, *dest);
             encoder.u32(*capacity);
         }
-        Instruction::GetProp { dest, object, key } => {
+        Instruction::GetProp {
+            dest,
+            object,
+            key,
+            latch,
+            latch_template,
+        } => {
             encoder.u16(13);
             three_values(encoder, *dest, *object, *key);
+            optional_value_id(encoder, *latch);
+            encoder.u32(latch_template.map(|id| id.0).unwrap_or(u32::MAX));
         }
         Instruction::SetProp {
             dest,
@@ -619,9 +627,11 @@ fn encode_instruction(
             dest,
             object,
             index,
+            latch,
         } => {
             encoder.u16(18);
             three_values(encoder, *dest, *object, *index);
+            optional_value_id(encoder, *latch);
         }
         Instruction::SetElem {
             dest,
@@ -728,40 +738,61 @@ fn encode_instruction(
             encoder.u32(template.0);
             value_ids(encoder, values)?;
         }
-        Instruction::ElemShapeGuard {
+        Instruction::GuardTag { dest, value, tag } => {
+            encoder.u16(43);
+            two_values(encoder, *dest, *value);
+            encoder.u8(*tag);
+        }
+        Instruction::GuardShape {
+            dest,
+            object,
+            shape_id,
+        } => {
+            encoder.u16(44);
+            two_values(encoder, *dest, *object);
+            encoder.u32(*shape_id);
+        }
+        Instruction::GuardElementsKind {
             dest,
             array,
+            kind,
             template,
         } => {
-            encoder.u16(40);
+            encoder.u16(45);
             two_values(encoder, *dest, *array);
-            encoder.u32(template.0);
+            encoder.u32(*kind);
+            encoder.u32(template.map(|id| id.0).unwrap_or(u32::MAX));
         }
-        Instruction::GetElemGuarded {
+        Instruction::GuardCallTarget {
+            dest,
+            callee,
+            function,
+        } => {
+            encoder.u16(46);
+            two_values(encoder, *dest, *callee);
+            encoder.u32(function.0);
+        }
+        Instruction::LoadSlot {
             dest,
             object,
             index,
-            guard,
         } => {
-            encoder.u16(41);
-            value_id(encoder, *dest);
-            value_id(encoder, *object);
-            value_id(encoder, *index);
-            value_id(encoder, *guard);
+            encoder.u16(47);
+            two_values(encoder, *dest, *object);
+            encoder.u32(*index);
         }
-        Instruction::GetPropGuarded {
+        Instruction::StoreSlot {
             dest,
             object,
-            key,
-            guard,
-            template,
+            index,
+            value,
+            transition_shape,
         } => {
-            encoder.u16(42);
-            value_id(encoder, *dest);
-            value_id(encoder, *object);
-            value_id(encoder, *key);
-            value_id(encoder, *guard);
-            encoder.u32(template.0);
+            encoder.u16(48);
+            optional_value_id(encoder, *dest);
+            two_values(encoder, *object, *value);
+            encoder.u32(*index);
+            encoder.u32(transition_shape.unwrap_or(u32::MAX));
         }
     }
     Ok(())
@@ -866,7 +897,15 @@ fn decode_instruction(
         }),
         13 => {
             let (dest, object, key) = decode_three(decoder)?;
-            Ok(Instruction::GetProp { dest, object, key })
+            let latch = decode_optional_value(decoder)?;
+            let template = decoder.u32()?;
+            Ok(Instruction::GetProp {
+                dest,
+                object,
+                key,
+                latch,
+                latch_template: (template != u32::MAX).then_some(ConstantId(template)),
+            })
         }
         14 => Ok(Instruction::SetProp {
             dest: next_value(decoder)?,
@@ -894,10 +933,12 @@ fn decode_instruction(
         }),
         18 => {
             let (dest, object, index) = decode_three(decoder)?;
+            let latch = decode_optional_value(decoder)?;
             Ok(Instruction::GetElem {
                 dest,
                 object,
                 index,
+                latch,
             })
         }
         19 => Ok(Instruction::SetElem {
@@ -1001,27 +1042,63 @@ fn decode_instruction(
                 values,
             })
         }
-        40 => {
-            let (dest, array) = decode_two(decoder)?;
-            Ok(Instruction::ElemShapeGuard {
+        40 | 41 | 42 => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),
+        43 => {
+            let (dest, value) = decode_two(decoder)?;
+            Ok(Instruction::GuardTag {
                 dest,
-                array,
-                template: ConstantId(decoder.u32()?),
+                value,
+                tag: decoder.u8()?,
             })
         }
-        41 => Ok(Instruction::GetElemGuarded {
-            dest: next_value(decoder)?,
-            object: next_value(decoder)?,
-            index: next_value(decoder)?,
-            guard: next_value(decoder)?,
-        }),
-        42 => Ok(Instruction::GetPropGuarded {
-            dest: next_value(decoder)?,
-            object: next_value(decoder)?,
-            key: next_value(decoder)?,
-            guard: next_value(decoder)?,
-            template: ConstantId(decoder.u32()?),
-        }),
+        44 => {
+            let (dest, object) = decode_two(decoder)?;
+            Ok(Instruction::GuardShape {
+                dest,
+                object,
+                shape_id: decoder.u32()?,
+            })
+        }
+        45 => {
+            let (dest, array) = decode_two(decoder)?;
+            let kind = decoder.u32()?;
+            let template = decoder.u32()?;
+            Ok(Instruction::GuardElementsKind {
+                dest,
+                array,
+                kind,
+                template: (template != u32::MAX).then_some(ConstantId(template)),
+            })
+        }
+        46 => {
+            let (dest, callee) = decode_two(decoder)?;
+            Ok(Instruction::GuardCallTarget {
+                dest,
+                callee,
+                function: FunctionId(decoder.u32()?),
+            })
+        }
+        47 => {
+            let (dest, object) = decode_two(decoder)?;
+            Ok(Instruction::LoadSlot {
+                dest,
+                object,
+                index: decoder.u32()?,
+            })
+        }
+        48 => {
+            let dest = decode_optional_value(decoder)?;
+            let (object, value) = decode_two(decoder)?;
+            let index = decoder.u32()?;
+            let transition = decoder.u32()?;
+            Ok(Instruction::StoreSlot {
+                dest,
+                object,
+                index,
+                value,
+                transition_shape: (transition != u32::MAX).then_some(transition),
+            })
+        }
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),
     }
 }
@@ -1070,6 +1147,19 @@ fn encode_terminator(
             value_id(encoder, *value);
         }
         Terminator::Unreachable => encoder.u16(5),
+        Terminator::Deopt { frames } => {
+            encoder.u16(6);
+            encoder.len(frames.len())?;
+            for frame in frames {
+                encoder.u32(frame.function.0);
+                encoder.u32(frame.block.0);
+                encoder.u32(frame.instruction_index);
+                encoder.len(frame.lives.len())?;
+                for live in &frame.lives {
+                    value_id(encoder, *live);
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1112,6 +1202,27 @@ fn decode_terminator(
             value: next_value(decoder)?,
         }),
         5 => Ok(Terminator::Unreachable),
+        6 => {
+            let frame_count = decoder.count(limits.max_blocks_per_function)?;
+            let mut frames = Vec::with_capacity(frame_count);
+            for _ in 0..frame_count {
+                let function = FunctionId(decoder.u32()?);
+                let block = BasicBlockId(decoder.u32()?);
+                let instruction_index = decoder.u32()?;
+                let live_count = decoder.count(limits.max_values_per_list)?;
+                let mut lives = Vec::with_capacity(live_count);
+                for _ in 0..live_count {
+                    lives.push(next_value(decoder)?);
+                }
+                frames.push(DeoptFrame {
+                    function,
+                    block,
+                    instruction_index,
+                    lives,
+                });
+            }
+            Ok(Terminator::Deopt { frames })
+        }
         _ => Err(ArtifactFormatError::UnknownTag("terminator", tag.into())),
     }
 }

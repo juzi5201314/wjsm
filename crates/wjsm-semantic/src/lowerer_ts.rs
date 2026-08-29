@@ -429,6 +429,8 @@ impl Lowerer {
                     dest: dispose_method,
                     object: val,
                     key: wk_sym,
+                    latch: None,
+                    latch_template: None,
                 },
             );
 

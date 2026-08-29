@@ -7,7 +7,7 @@
 | **wjsm** | 不依赖 V8 的 JavaScript/TypeScript 运行时。源码先编译为 verified semantic IR，再由 Cranelift 生成当前宿主的 generic native 执行。语言语义仍是动态的。 |
 | **AOT** | 在 wjsm 里只表示静态可见的模块在第一次执行前编成 generic native，没有字节码解释器当主路径。`.wjsm` 仍是 IR。不要理解成闭世界静态编译，也不表示运行时不再编译。 |
 | **generic native** | 把动态 JS 语义（装箱、类型检查、IC、异常）编进同一份机器码的入口形态。程序从这里开始跑。 |
-| **overlay** | 类型反馈稳定后，同一 `NativeCompiler` 按证明类型再编的热路径 native。miss 则 deopt 回 generic。这是运行时特化（JIT 形态），不是第二套 VM。 |
+| **overlay** | 反馈稳定后，同一 `NativeCompiler` 按 shape/tag/调用目标再编的热路径 native。守卫 miss 则精确 deopt 回 generic 对应指令。`WJSM_DISABLE_SPECIALIZATION=1` 关闭。不承诺一定快过 V8。 |
 | **JIT** | Just-in-Time，执行过程中再编译。wjsm 的 overlay、`eval` 和动态加载都属于运行时编译；项目禁止的是解释器或另一套执行后端，不是「运行时零编译」。 |
 | **NaN-boxing** | 用 IEEE 754 浮点 NaN 的低位编码非浮点值的 64 位表示。wjsm 用固定宽度 64 位值表示所有 JS 值，指针、整数和 double 打包在同一个位宽里。 |
 | **ManagedHeap** | wjsm 的统一托管堆。对象、数组、字符串、Promise 等都存在这里，由 GC 自动回收。每个 agent 拥有独立 heap，不跨 agent 共享。 |

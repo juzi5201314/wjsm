@@ -15,7 +15,8 @@
 | 0019 | native-executable 的 packed 应用合同 | Accepted；修正 0016 §5 与 0017 |
 | 0020 | ICU4X compiled_data 嵌入 rustc 链接的 stub | Accepted；Intl Phase 1 数据契约，Phase 2/3 已消费 |
 | 0021 | Latin-1 inline string | Accepted |
-| 0022 | 投机 typed 区、deopt 与 OSR | Accepted；修正 0014 overlay 合同。AOT 只覆盖 generic native 时机，overlay 是运行时特化 |
+| 0022 | 投机 typed 区、deopt 与 OSR | 部分由 0023 取代（Number-only / 循环头 deopt）；同一编译器与 generic 锚点仍有效 |
+| 0023 | 全语言投机 overlay、精确 deopt 与 IR 优化器 | Accepted；修正 0014 overlay 上限与 deopt 粒度 |
 
 ## 当前基线
 
@@ -29,5 +30,6 @@ Direct production chain 是 verified semantic IR → canonical portable `.wjsm` 
 - [ADR 0014](../../../../adr/0014-direct-cranelift-portable-artifact.md)
 - [ADR 0020](../../../../adr/0020-icu4x-baked-data.md)
 - [ADR 0022](../../../../adr/0022-speculative-typed-regions.md)
+- [ADR 0023](../../../../adr/0023-speculative-full-language-overlay.md)
 - [Direct Cranelift 后端](../backend/README.md)
 - [Owner 与单一事实来源](owners-and-sources-of-truth.md)
