@@ -421,7 +421,6 @@ module {
       %17 = const c67
       %19 = const c68
       %352 = const c0
-      %353 = load var $5.$env
       jump bb134
     bb4:
       %295 = const c119
@@ -1015,47 +1014,47 @@ module {
     bb132:
       unreachable
     bb133:
-      %21 = call builtin.iterator.from(%354)
+      %21 = call builtin.iterator.from(%353)
       store var $suspend_spill_5_0, %21
       %326 = load var $suspend_spill_5_0
       %22 = is_exception %326
       branch %22, bb7, bb6
     bb134:
-      %354 = new_object(capacity=4)
-      %355 = const c20
-      %356 = call builtin.symbol.well_known(%355)
-      %357 = is_exception %356
-      %363 = const c55
-      store var $1.$shared_env, %363
-      branch %357, bb136, bb135
+      %353 = new_object(capacity=4)
+      %354 = const c20
+      %355 = call builtin.symbol.well_known(%354)
+      %356 = is_exception %355
+      %362 = const c55
+      store var $1.$shared_env, %362
+      branch %356, bb136, bb135
     bb135:
-      %359 = call builtin.to_property_key(%356)
-      %360 = is_exception %359
-      branch %360, bb138, bb137
+      %358 = call builtin.to_property_key(%355)
+      %359 = is_exception %358
+      branch %359, bb138, bb137
     bb136:
-      %358 = call builtin.exception_value(%356)
+      %357 = call builtin.exception_value(%355)
       store var $1.$shared_env, %352
       store var $1.tag, %352
-      throw %358
+      throw %357
     bb137:
-      %362 = const c54
-      %364 = new_object(capacity=1)
-      set_proto %364, %353
-      store var $1.$shared_env, %364
-      %367 = const c56
-      %368 = set_prop %364, %367, %19
-      %369 = call builtin.create_closure(%362, %364)
-      %370 = const c57
-      call builtin.function.set_name(%369, %359, %370)
-      %371 = create_data_property %354, %359, %369
+      %361 = const c54
+      %363 = new_object(capacity=1)
+      set_proto %363, %16
+      store var $1.$shared_env, %363
+      %366 = const c56
+      %367 = set_prop %363, %366, %19
+      %368 = call builtin.create_closure(%361, %363)
+      %369 = const c57
+      call builtin.function.set_name(%368, %358, %369)
+      %370 = create_data_property %353, %358, %368
       store var $1.$shared_env, %352
       store var $1.tag, %352
       jump bb133
     bb138:
-      %361 = call builtin.exception_value(%359)
+      %360 = call builtin.exception_value(%358)
       store var $1.$shared_env, %352
       store var $1.tag, %352
-      throw %361
+      throw %360
 
   fn @g [needs_prototype] [js_name "g"] [js_length 0] [captures: $0.makeIter] [params: $16.$env, $16.$this] [entry=bb0]:
     bb0:
