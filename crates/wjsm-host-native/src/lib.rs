@@ -7868,6 +7868,7 @@ impl NativeRuntime {
             fetch_slots: self.state.fetch.live_slot_count(),
             stream_objects: self.state.streams.live_object_count(),
             stream_slots: self.state.streams.live_slot_count(),
+            intrinsic_tombstones: self.state.intrinsic_tombstones.len(),
         }
     }
 

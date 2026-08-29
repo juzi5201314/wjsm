@@ -41,6 +41,13 @@ impl NativeAgentState {
         self.callable_prototypes
             .retain(|candidate, _| *candidate != owner);
         self.non_extensible_callables.remove(&owner);
+        // 删除墓碑随 owner 死亡一并清除：闭包/bound/proxy 槽位复用后编码值
+        // 相同，残留墓碑会让新 callable 的 name/length 惰性物化被误禁
+        // （`delete f.name` 后 GC，复用槽位的 g 出现 hasOwn(g,"name")===false）。
+        // 永活 intrinsic（builtin native callable、全局对象、%Array.prototype%
+        // 等）不经此清扫路径，其墓碑不受影响。
+        self.intrinsic_tombstones
+            .retain(|(candidate, _)| *candidate != owner);
     }
 
     fn sweep_closures(&mut self, live: &HostLiveSet) {
