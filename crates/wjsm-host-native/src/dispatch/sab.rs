@@ -228,7 +228,10 @@ fn max_byte_length(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args
 }
 
 fn grow(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     // §25.2.6.4 步骤 2：品牌检查要求可增长 SAB——固定长度 SAB 与非 SAB
     // 同按 V8 incompatible receiver TypeError，且先于 ToIndex(newLength)。
@@ -270,7 +273,10 @@ fn grow(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
 }
 
 fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     let Some(entry) = state.shared_array_buffers.get(&handle).cloned() else {
         return super::buffers::incompatible_receiver(
@@ -321,4 +327,3 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     state.insert_shared_array_buffer(value::decode_handle(object), backing_id);
     object
 }
-

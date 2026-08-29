@@ -83,7 +83,10 @@ fn accessor(
 /// receiver TypeError）。V8 实测顺序：ToNumber 的用户转换副作用先行，
 /// detached TypeError 次之，数值越界的 RangeError 最后。
 fn resize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     let Some(buffer) = state.array_buffers.get(&handle) else {
         return incompatible_receiver(ctx, state, "ArrayBuffer.prototype.resize", args);
@@ -151,7 +154,10 @@ fn transfer(
     } else {
         "ArrayBuffer.prototype.transferToFixedLength"
     };
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     if !state.array_buffers.contains_key(&handle) {
         return incompatible_receiver(ctx, state, method, args);

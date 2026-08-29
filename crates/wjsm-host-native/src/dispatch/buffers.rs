@@ -104,7 +104,10 @@ pub(super) fn incompatible_receiver(
     method: &str,
     args: &[i64],
 ) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let message = format!(
         "Method {method} called on incompatible receiver {}",
         super::iterator_prototypes::render_incompatible_receiver(state, receiver)
@@ -187,8 +190,8 @@ pub(super) fn max_byte_length_option(
     let key = state
         .intern_text("maxByteLength".into(), value::TAG_STRING)
         .ok_or_else(|| fail_dispatch(ctx))?;
-    let encoded = super::runtime::get_property(ctx, state, options, key)
-        .map_err(|_| fail_dispatch(ctx))?;
+    let encoded =
+        super::runtime::get_property(ctx, state, options, key).map_err(|_| fail_dispatch(ctx))?;
     if value::is_exception(encoded) {
         return Err(encoded);
     }
@@ -420,7 +423,10 @@ fn array_buffer_slice(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     let Some(buffer) = state.array_buffers.get(&handle).cloned() else {
         return incompatible_receiver(ctx, state, "ArrayBuffer.prototype.slice", args);
@@ -528,7 +534,10 @@ fn data_view_constructor(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let buffer = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let buffer = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let buffer_handle = value::decode_handle(buffer);
     let shared = state
         .shared_array_buffers
@@ -581,8 +590,10 @@ fn data_view_constructor(
     // §25.3.2.1 步骤 8–9：byteLength 缺省取剩余长度（可变长 buffer 转为
     // length-tracking）；显式值经 ToIndex（可执行用户转换）后重读当前长度
     // 再校验 detach 与边界（步骤 12–14 的再检查）。
-    let length_tracking =
-        buffer_resizable && args.get(2).is_none_or(|encoded| value::is_undefined(*encoded));
+    let length_tracking = buffer_resizable
+        && args
+            .get(2)
+            .is_none_or(|encoded| value::is_undefined(*encoded));
     let length = match args.get(2) {
         None => total_length - offset,
         Some(encoded) if value::is_undefined(*encoded) => total_length - offset,
@@ -598,8 +609,7 @@ fn data_view_constructor(
                     return range_error(ctx, state, &message);
                 }
             };
-            let current_length = match data_view_source_length(ctx, state, buffer_handle, &shared)
-            {
+            let current_length = match data_view_source_length(ctx, state, buffer_handle, &shared) {
                 Ok(current_length) => current_length,
                 Err(exception) => return exception,
             };
@@ -1035,11 +1045,14 @@ pub(crate) fn from_view(
     length_tracking: bool,
 ) -> Option<i64> {
     let buffer_handle = value::decode_handle(backing);
-    let shared = if state.array_buffers.get(&buffer_handle).is_some_and(|buffer| {
-        offset
-            .checked_add(length)
-            .is_some_and(|end| end <= buffer.bytes.borrow().len())
-    }) {
+    let shared = if state
+        .array_buffers
+        .get(&buffer_handle)
+        .is_some_and(|buffer| {
+            offset
+                .checked_add(length)
+                .is_some_and(|end| end <= buffer.bytes.borrow().len())
+        }) {
         None
     } else {
         let shared = state.shared_array_buffers.get(&buffer_handle)?.clone();
