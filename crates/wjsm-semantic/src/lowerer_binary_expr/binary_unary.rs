@@ -685,11 +685,12 @@ impl Lowerer {
                         self.publish_expr_continuation(block, current_block);
                         return Ok(dest);
                     }
-                    // Web 平台全局是可配置的真实全局属性：typeof 经容忍读
+                    // 急切物化的全局（Web 平台全局与 SharedArrayBuffer /
+                    // Atomics）是可配置的真实全局属性：typeof 经容忍读
                     //（被 delete 后返回 "undefined" 而非 ReferenceError；
                     // 被改写后按新值分类）。
                     if !has_module_alias
-                        && wjsm_ir::intrinsic_sites::web_global_property(&name).is_some()
+                        && wjsm_ir::intrinsic_sites::eager_global_property(&name)
                         && self.scopes.lookup(&name).is_err()
                     {
                         let value = self.lower_script_global_read(block, &name, true)?;

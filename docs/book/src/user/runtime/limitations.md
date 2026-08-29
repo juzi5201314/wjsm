@@ -36,7 +36,9 @@ String.raw`a\nb${1}`                        // "a\\nb1"
 
 TypedArray 与 DataView 的原型方法可取值并经 `call` / `apply` / `bind` 复用，`name` / `length` 元数据、`Reflect.get` 与解构取值一致；各构造器的 `prototype` 对象（`Uint8Array.prototype.slice`、`DataView.prototype.getUint8` 等）同样可用。DataView 的 get/set 家族包含 `getBigInt64` / `getBigUint64` / `setBigInt64` / `setBigUint64`。
 
-TypedArray 实例的原型链按 §23.2 完整挂接：实例 → `Constructor.prototype` → `%TypedArray%.prototype` → `%Object.prototype%`，`instanceof` 与 `Object.getPrototypeOf` 沿链成立；`length` / `byteLength` / `byteOffset` 是 `%TypedArray%.prototype` 上的规范 accessor（getter 名为 `get length` 等，可跨元素类型经 `call` 复用，品牌检查失败按 V8 口径抛 TypeError），`Constructor.prototype` 与构造器自身携带 `BYTES_PER_ELEMENT`。
+TypedArray 实例的原型链按 §23.2 完整挂接：实例 → `Constructor.prototype` → `%TypedArray%.prototype` → `%Object.prototype%`，`instanceof` 与 `Object.getPrototypeOf` 沿链成立；`length` / `byteLength` / `byteOffset` 是 `%TypedArray%.prototype` 上的规范 accessor（getter 名为 `get length` 等，可跨元素类型经 `call` 复用，品牌检查失败按 V8 口径抛 TypeError），`Constructor.prototype` 与构造器自身携带 `BYTES_PER_ELEMENT`，静态链挂 `%TypedArray%` 抽象构造器（`Object.getPrototypeOf(Uint8Array).name === "TypedArray"`）。
+
+DataView 实例的原型链按 §25.3 挂接：实例 → `DataView.prototype` → `%Object.prototype%`，`constructor` / `@@toStringTag`（`[object DataView]`）与品牌一致；`buffer` / `byteLength` / `byteOffset` 是 `DataView.prototype` 上的规范 accessor getter（`get buffer` 等）。
 
 ```js
 const buf = new Uint8Array([1, 2, 3]);
@@ -45,9 +47,29 @@ buf instanceof Uint8Array;                             // true
 const shared = Object.getPrototypeOf(Uint8Array.prototype); // %TypedArray%.prototype
 Object.getOwnPropertyDescriptor(shared, "length").get.name;  // "get length"
 Uint8Array.prototype.slice.call(buf, 0, 1);            // Uint8Array(1) [1]（沿链继承）
+const view = new DataView(buf.buffer);
+Object.getPrototypeOf(view) === DataView.prototype;    // true
+Object.prototype.toString.call(view);                  // "[object DataView]"
 ```
 
-已知差异：`%TypedArray%` 抽象构造器本身不存在——`Object.getPrototypeOf(Uint8Array)` 不是 `TypedArray` 函数，`%TypedArray%.prototype` 上无自有 `buffer` 访问器；`map` / `filter` 返回普通数组而非同类型 TypedArray；DataView 实例的原型链仍未挂接到 `DataView.prototype`。
+已知差异：`%TypedArray%.prototype` 上无自有 `buffer` 访问器（实例 `buffer` 读取由宿主直接应答）；`map` / `filter` 返回普通数组而非同类型 TypedArray。
+
+## ArrayBuffer / SharedArrayBuffer / Atomics
+
+`ArrayBuffer.prototype` 与 `SharedArrayBuffer.prototype` 是真实固有原型对象：own `constructor`、`byteLength`（SharedArrayBuffer 另有 `growable` / `maxByteLength`）规范 accessor getter、`slice` / `grow` 方法与 `@@toStringTag` 品牌齐备，实例创建即接线 `[[Prototype]]`，`instanceof`、`Object.getPrototypeOf` 与 `Object.prototype.toString` 品牌一致；构造器的 `prototype` 自有属性三特性全 false。accessor / 方法在品牌检查失败时按 V8 口径抛 `TypeError`（`Method get ArrayBuffer.prototype.byteLength called on incompatible receiver #<Object>` 等），构造器与 `grow` 的非法长度按 V8 文案抛 `RangeError`。
+
+`SharedArrayBuffer` 构造器与 `Atomics` 命名空间对象是全局对象上真实的自有数据属性（{writable, enumerable: false, configurable}，与 Node 一致）：own descriptor 可见、赋值 / 删除 / `defineProperty` 全按普通属性语义生效，裸标识符读取按全局环境记录语义解析——删除后读取抛 `ReferenceError`，`typeof` 容忍返回 `"undefined"`。`Atomics` 的静态方法是命名空间对象上可写可配置不可枚举的自有数据属性，覆盖后调用点立即改走新值：
+
+```js
+const sab = new SharedArrayBuffer(8);
+Object.getPrototypeOf(sab) === SharedArrayBuffer.prototype; // true
+Object.prototype.toString.call(sab);                        // "[object SharedArrayBuffer]"
+Object.getOwnPropertyDescriptor(globalThis, "Atomics").writable; // true
+delete globalThis.SharedArrayBuffer;
+typeof SharedArrayBuffer;                                   // "undefined"
+```
+
+已知差异：`Atomics.pause`（ES2025 §25.4.11）在 wjsm 中存在而 Node v22 尚未提供；`ArrayBuffer` 侧 resizable 家族（`resize` / `transfer` / `maxByteLength`）、`ArrayBuffer.isView` 与构造器上的 `@@species` 访问器未实现，不占位。
 
 ## Node Buffer 原型链
 

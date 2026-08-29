@@ -22,6 +22,27 @@ use super::runtime::{fail_dispatch, range_error, to_number, type_error};
 use super::typedarray::{NativeTypedArray, TypedArrayKind};
 use crate::NativeAgentState;
 
+/// `Atomics` 命名空间对象上的静态方法清单（物化安装与 IntrinsicPristine
+/// 守卫共用同一 kind：`Builtin(_, false)`）。安装序对齐 V8/Node
+/// （load…notify），规范新增的 `pause`（§25.4.11）殿后——Node v22 尚未
+/// 提供该方法，对拍 fixture 需过滤。
+pub(crate) const NAMESPACE_METHODS: &[(&str, Builtin)] = &[
+    ("load", Builtin::AtomicsLoad),
+    ("store", Builtin::AtomicsStore),
+    ("add", Builtin::AtomicsAdd),
+    ("sub", Builtin::AtomicsSub),
+    ("and", Builtin::AtomicsAnd),
+    ("or", Builtin::AtomicsOr),
+    ("xor", Builtin::AtomicsXor),
+    ("exchange", Builtin::AtomicsExchange),
+    ("compareExchange", Builtin::AtomicsCompareExchange),
+    ("isLockFree", Builtin::AtomicsIsLockFree),
+    ("wait", Builtin::AtomicsWait),
+    ("waitAsync", Builtin::AtomicsWaitAsync),
+    ("notify", Builtin::AtomicsNotify),
+    ("pause", Builtin::AtomicsPause),
+];
+
 pub(super) fn dispatch_atomics(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,

@@ -110,7 +110,21 @@ pub(super) fn set_with_receiver(
             }
             ordinary_set_key(ctx, state, prototype, key, stored, receiver)
         }
-        CallableChainHit::Null | CallableChainHit::Implicit { .. } => {
+        CallableChainHit::Implicit { tail } => {
+            // 隐式父层 %Function.prototype% 的自有 name/length 不可写
+            // （§20.2.3）：own 层删除（墓碑）后写入按继承数据属性语义在
+            // 原型层拒绝，而不是在 receiver 上重建自有属性。
+            if (state.text_matches(key.to_value(), "name")
+                || state.text_matches(key.to_value(), "length"))
+                && let Some(prototype) =
+                    state.native_callable(crate::NativeCallableKind::FunctionPrototype)
+                && value::strip_gc_color(prototype) != tail
+            {
+                return set_with_receiver(ctx, state, prototype, key, stored, receiver);
+            }
+            assign_data_property_to_receiver(ctx, state, receiver, key, stored)
+        }
+        CallableChainHit::Null => {
             assign_data_property_to_receiver(ctx, state, receiver, key, stored)
         }
     }

@@ -1,0 +1,38 @@
+exit_code: 0
+--- stdout ---
+ab.byteLength.call({}) TypeError|Method get ArrayBuffer.prototype.byteLength called on incompatible receiver #<Object>
+ab.slice.call({}) TypeError|Method ArrayBuffer.prototype.slice called on incompatible receiver #<Object>
+sab.byteLength.call({}) TypeError|Method get SharedArrayBuffer.prototype.byteLength called on incompatible receiver #<Object>
+sab.growable.call({}) TypeError|Method get SharedArrayBuffer.prototype.growable called on incompatible receiver #<Object>
+sab.maxByteLength.call({}) TypeError|Method get SharedArrayBuffer.prototype.maxByteLength called on incompatible receiver #<Object>
+sab.grow.call({}) TypeError|Method SharedArrayBuffer.prototype.grow called on incompatible receiver #<Object>
+sab.slice.call({}) TypeError|Method SharedArrayBuffer.prototype.slice called on incompatible receiver #<Object>
+dv.buffer.call({}) TypeError|Method get DataView.prototype.buffer called on incompatible receiver #<Object>
+dv.byteLength.call({}) TypeError|Method get DataView.prototype.byteLength called on incompatible receiver #<Object>
+dv.byteOffset.call({}) TypeError|Method get DataView.prototype.byteOffset called on incompatible receiver #<Object>
+dv.getUint8.call({}) TypeError|Method DataView.prototype.getUint8 called on incompatible receiver #<Object>
+dv.setUint8.call({}) TypeError|Method DataView.prototype.setUint8 called on incompatible receiver #<Object>
+new ArrayBuffer(-1) RangeError|Invalid array buffer length
+new SharedArrayBuffer(-1) RangeError|Invalid array buffer length
+new SharedArrayBuffer(8,{maxByteLength:-1}) RangeError|Invalid array buffer max length
+new SharedArrayBuffer(8,{maxByteLength:4}) RangeError|Invalid array buffer max length
+new SharedArrayBuffer(8,{maxByteLength:undefined}) ok 8
+new DataView({}) TypeError|First argument to DataView constructor must be an ArrayBuffer
+new DataView() TypeError|First argument to DataView constructor must be an ArrayBuffer
+new DataView(ab,-1) RangeError|Start offset -1 is outside the bounds of the buffer
+new DataView(ab,9) RangeError|Start offset 9 is outside the bounds of the buffer
+new DataView(ab,0,-1) RangeError|Invalid DataView length -1
+new DataView(ab,0,9) RangeError|Invalid DataView length 9
+new DataView(ab,4,5) RangeError|Invalid DataView length 5
+dv.getUint8(8) RangeError|Offset is outside the bounds of the DataView
+dv.getFloat64(1) RangeError|Offset is outside the bounds of the DataView
+dv.setUint32(-1) RangeError|Offset is outside the bounds of the DataView
+sab.grow(-1) RangeError|SharedArrayBuffer.prototype.grow: Invalid length parameter
+sab.grow(16) RangeError|SharedArrayBuffer.prototype.grow: Invalid length parameter
+sab.grow(2) RangeError|SharedArrayBuffer.prototype.grow: Invalid length parameter
+nogrow.grow(8) TypeError|Method SharedArrayBuffer.prototype.grow called on incompatible receiver #<SharedArrayBuffer>
+new ArrayBuffer() ok 0
+new SharedArrayBuffer() ok 0
+new DataView(ab8) ok 8,0
+new DataView(ab8,4) ok 4,4
+--- stderr ---

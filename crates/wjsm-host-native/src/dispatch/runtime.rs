@@ -1552,7 +1552,23 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
     }
 }
 
-pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bool {
+/// 当前激活是否为对该 builtin 本体的 [[Construct]] 调用（`new Symbol()` /
+/// `Reflect.construct(Symbol, ..)` / 子类 super()）：new.target 已定义且
+/// callee 正是该 builtin 的 native callable。直连 CallBuiltin 站点（如
+/// BigInt 字面量物化）复用外层 JS 激活，其 callee 为用户函数，不会误判。
+pub(super) fn is_builtin_construct_call(
+    state: &NativeAgentState,
+    builtin: wjsm_ir::Builtin,
+) -> bool {
+    state.activations.last().is_some_and(|activation| {
+        !value::is_undefined(activation.new_target)
+            && state
+                .native_callable_builtin(activation.callee)
+                .is_some_and(|(callee_builtin, _)| callee_builtin == builtin)
+    })
+}
+
+pub(crate) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bool {
     // Proxy 的 [[Construct]] 在 target 可构造时存在（ProxyCreate 10.5.12）。
     if value::is_proxy(encoded) {
         return super::proxy::is_constructor_proxy(state, encoded);
@@ -1561,6 +1577,17 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
         return false;
     }
     match state.native_callable_kind(encoded) {
+        // builtin 值按 §7.2.4 分类：构造器白名单见 is_constructor_builtin。
+        Some(crate::NativeCallableKind::Builtin(builtin, _)) => {
+            crate::builtin_metadata::is_constructor_builtin(builtin)
+        }
+        // bound 函数的 [[Construct]] 存在当且仅当 target 可构造
+        // （§10.4.1.2 BoundFunctionCreate 步骤 7）。
+        Some(crate::NativeCallableKind::Bound(index)) => state
+            .bound_functions
+            .get(usize::try_from(index).unwrap_or(usize::MAX))
+            .and_then(|bound| bound.as_ref())
+            .is_some_and(|bound| is_constructor_value(state, bound.target)),
         Some(crate::NativeCallableKind::Intl(kind)) => super::intl::is_constructor(kind),
         Some(crate::NativeCallableKind::DateMethod(_)) => false,
         Some(crate::NativeCallableKind::FunctionPrototype) => false,
@@ -1586,6 +1613,41 @@ pub(super) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
             | crate::NativeCallableKind::IteratorHelperReturn
             | crate::NativeCallableKind::IteratorWrapNext
             | crate::NativeCallableKind::IteratorWrapReturn,
+        ) => false,
+        // ECMA 层可见的方法 / 迭代器 / 宿主函数值：无 [[Construct]]。
+        Some(
+            crate::NativeCallableKind::ArrayToString
+            | crate::NativeCallableKind::RegExpToString
+            | crate::NativeCallableKind::ErrorToString
+            | crate::NativeCallableKind::ArrayIterator(_)
+            | crate::NativeCallableKind::IteratorFamilyNext(_)
+            | crate::NativeCallableKind::ArgumentsStrictCallee
+            | crate::NativeCallableKind::BufferMethod(_)
+            | crate::NativeCallableKind::BufferStatic(_)
+            | crate::NativeCallableKind::BufferTranscode
+            | crate::NativeCallableKind::Fetch(_)
+            | crate::NativeCallableKind::CjsRequire(_)
+            | crate::NativeCallableKind::CjsResolve(_)
+            | crate::NativeCallableKind::CjsResolvePaths(_)
+            | crate::NativeCallableKind::ImportMetaResolve(_)
+            | crate::NativeCallableKind::PromiseResolve(_)
+            | crate::NativeCallableKind::PromiseReject(_)
+            | crate::NativeCallableKind::ProxyRevoke(_)
+            | crate::NativeCallableKind::ProcessExit
+            | crate::NativeCallableKind::ProcessWrite(_)
+            | crate::NativeCallableKind::ProcessStreamEnd(_)
+            | crate::NativeCallableKind::ProcessStreamReturnThis
+            | crate::NativeCallableKind::ProcessStdin(_)
+            | crate::NativeCallableKind::ProcessHrtime
+            | crate::NativeCallableKind::ProcessHrtimeBigInt
+            | crate::NativeCallableKind::ProcessUptime
+            | crate::NativeCallableKind::ProcessMemoryUsage
+            | crate::NativeCallableKind::ProcessCpuUsage
+            | crate::NativeCallableKind::ProcessCwd
+            | crate::NativeCallableKind::ProcessOn
+            | crate::NativeCallableKind::ProcessNextTick
+            | crate::NativeCallableKind::SetImmediate
+            | crate::NativeCallableKind::Gc,
         ) => false,
         Some(_) => true,
         None => state
@@ -2067,58 +2129,9 @@ pub(super) fn get_property_with_receiver(
             );
         }
     }
-    if state
-        .array_buffers
-        .contains_key(&value::decode_handle(object))
-        || state.data_views.contains_key(&value::decode_handle(object))
-    {
-        let property_name = state
-            .string_owned(key)
-            .and_then(|text| text.to_utf8())
-            .unwrap_or_default();
-        if state
-            .array_buffers
-            .contains_key(&value::decode_handle(object))
-            && property_name == "byteLength"
-        {
-            return Ok(super::buffers::dispatch_buffer(
-                ctx,
-                state,
-                wjsm_ir::Builtin::ArrayBufferProtoByteLength,
-                &[object],
-            )
-            .unwrap_or_else(|| fail_dispatch(ctx)));
-        }
-        if let Some(view) = state.data_views.get(&value::decode_handle(object)).cloned() {
-            return match property_name.as_str() {
-                "byteLength" => Ok(value::encode_f64(view.length as f64)),
-                "byteOffset" => Ok(value::encode_f64(view.offset as f64)),
-                "buffer" => Ok(value::encode_object_handle(view.buffer)),
-                _ => Ok(state
-                    .primitive_property(object, key)
-                    .unwrap_or_else(value::encode_undefined)),
-            };
-        }
-    }
-    if let Some(_sab) = state
-        .shared_array_buffers
-        .get(&value::decode_handle(object))
-    {
-        let property_name = state
-            .string_owned(key)
-            .and_then(|text| text.to_utf8())
-            .unwrap_or_default();
-        let builtin = match property_name.as_str() {
-            "byteLength" => Some(wjsm_ir::Builtin::SharedArrayBufferProtoByteLength),
-            "growable" => Some(wjsm_ir::Builtin::SharedArrayBufferProtoGrowable),
-            "maxByteLength" => Some(wjsm_ir::Builtin::SharedArrayBufferProtoMaxByteLength),
-            _ => None,
-        };
-        if let Some(builtin) = builtin {
-            return Ok(super::sab::dispatch_sab(ctx, state, builtin, &[object])
-                .unwrap_or_else(|| fail_dispatch(ctx)));
-        }
-    }
+    // ArrayBuffer / DataView / SharedArrayBuffer 实例无早退拦截：实例创建
+    // 即接线各自 prototype，byteLength 等访问器沿真实原型链以 receiver 为
+    // this 分派（brand 检查在 getter 内完成）。
     if value::is_proxy(object) {
         return Ok(super::proxy::get(ctx, state, object, key, receiver));
     }
@@ -2257,6 +2270,24 @@ pub(super) fn get_property_with_receiver(
             CallableChainHit::Implicit { tail } => {
                 if let Some(property) = state.primitive_property(tail, encoded_key) {
                     return Ok(property);
+                }
+                // 隐式链尾的父层是 %Function.prototype%（§20.2.3）：其自有
+                // name（""）与 length（+0）在 receiver own 层缺失（删除落
+                // 墓碑）后仍须继承可见，经真实 FunctionPrototype callable
+                // 解析以尊重其上的覆盖与删除；tail 为其自身时继续上行。
+                if (state.text_matches(encoded_key, "name")
+                    || state.text_matches(encoded_key, "length"))
+                    && let Some(prototype) =
+                        state.native_callable(crate::NativeCallableKind::FunctionPrototype)
+                    && value::strip_gc_color(prototype) != tail
+                {
+                    return get_property_with_receiver(
+                        ctx,
+                        state,
+                        prototype,
+                        encoded_key,
+                        receiver,
+                    );
                 }
                 // 隐式 %Function.prototype% 的自有 constructor（§20.2.3.1）。
                 if state.text_matches(encoded_key, "constructor") {
@@ -2750,6 +2781,16 @@ pub(super) fn has_property(
                     || state.text_matches(encoded_key, "constructor")
                 {
                     return Ok(true);
+                }
+                // 与 [[Get]] 同构：own 层删除后 name/length 沿隐式
+                // %Function.prototype% 的自有属性继续可见。
+                if (state.text_matches(encoded_key, "name")
+                    || state.text_matches(encoded_key, "length"))
+                    && let Some(prototype) =
+                        state.native_callable(crate::NativeCallableKind::FunctionPrototype)
+                    && value::strip_gc_color(prototype) != tail
+                {
+                    return has_property(ctx, state, prototype, encoded_key);
                 }
                 let Some(prototype) = state.object_prototype else {
                     return Ok(false);

@@ -102,6 +102,11 @@ fn proto_value_of(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
 }
 
 fn from_value(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    // §21.2.1.1 步骤 1：NewTarget 已定义时抛 TypeError（`new BigInt()`），
+    // 文案对齐 V8/Node；BigInt 字面量的直连站点复用外层激活，不受影响。
+    if super::runtime::is_builtin_construct_call(state, Builtin::BigIntFromLiteral) {
+        return type_error(ctx, state, "BigInt is not a constructor");
+    }
     let Some(input) = args.first().copied() else {
         return fail_dispatch(ctx);
     };

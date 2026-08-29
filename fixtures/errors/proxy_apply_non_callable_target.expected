@@ -1,4 +1,4 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-Runtime error: TypeError: Proxy target must be callable
+Runtime error: TypeError: proxy is not a function

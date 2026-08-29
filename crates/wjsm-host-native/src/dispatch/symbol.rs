@@ -2,7 +2,9 @@ use wjsm_host::RuntimeString;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{PrimitiveHint, fail_dispatch, render_value, to_primitive, type_error};
+use super::runtime::{
+    PrimitiveHint, fail_dispatch, is_builtin_construct_call, render_value, to_primitive, type_error,
+};
 use crate::NativeAgentState;
 
 pub(super) fn dispatch_symbol(
@@ -13,6 +15,11 @@ pub(super) fn dispatch_symbol(
 ) -> Option<i64> {
     Some(match builtin {
         Builtin::SymbolCreate => {
+            // §20.4.1.1 步骤 1：NewTarget 已定义时抛 TypeError（`new Symbol()`
+            // / 子类 super()），文案对齐 V8/Node。
+            if is_builtin_construct_call(state, Builtin::SymbolCreate) {
+                return Some(type_error(ctx, state, "Symbol is not a constructor"));
+            }
             let description = match args.first().copied() {
                 None => None,
                 Some(argument) if value::is_undefined(argument) => None,

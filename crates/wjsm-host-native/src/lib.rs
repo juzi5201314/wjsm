@@ -1278,6 +1278,17 @@ struct NativeAgentState {
     /// `BYTES_PER_ELEMENT`（§23.2.7），方法与访问器继承自
     /// %TypedArray%.prototype；DataView 的方法仍以数据属性直接安装。
     view_prototypes: HashMap<wjsm_ir::Builtin, i64>,
+    /// %ArrayBuffer.prototype%（§25.1.6）：own `constructor`、`byteLength`
+    /// 访问器、`slice` 与 @@toStringTag；实例创建即接线，懒创建缓存。
+    array_buffer_prototype: Option<i64>,
+    /// %SharedArrayBuffer.prototype%（§25.2.6）：own `constructor`、
+    /// `byteLength` / `growable` / `maxByteLength` 访问器、`grow` / `slice`
+    /// 与 @@toStringTag；实例创建即接线，懒创建缓存。
+    shared_array_buffer_prototype: Option<i64>,
+    /// `Atomics` 命名空间对象（§25.4）：静态方法与 @@toStringTag 为真实
+    /// 自有属性，全局对象创建时急切物化为自有数据属性；缓存供
+    /// IntrinsicPristine 守卫做规范值同一性比较。
+    atomics_object: Option<i64>,
     /// %TypedArray%.prototype（§23.2.3）：全部 TypedArray 构造器 `prototype`
     /// 的共享父原型，方法为自有数据属性，`length` / `byteLength` /
     /// `byteOffset` 为规范 accessor；懒创建缓存。
@@ -1503,6 +1514,9 @@ impl NativeAgentState {
             weak_map_prototype: None,
             weak_set_prototype: None,
             view_prototypes: HashMap::new(),
+            array_buffer_prototype: None,
+            shared_array_buffer_prototype: None,
+            atomics_object: None,
             typed_array_prototype: None,
             typed_array_constructor: None,
             buffer_prototype: None,
@@ -1788,6 +1802,9 @@ impl NativeAgentState {
         self.weak_map_prototype = None;
         self.weak_set_prototype = None;
         self.view_prototypes.clear();
+        self.array_buffer_prototype = None;
+        self.shared_array_buffer_prototype = None;
+        self.atomics_object = None;
         self.typed_array_prototype = None;
         self.typed_array_constructor = None;
         self.buffer_prototype = None;
@@ -2675,12 +2692,8 @@ impl NativeAgentState {
         if let Some(builtin) = dispatch::typedarray::typed_array_builtin(self, receiver, &key) {
             return self.native_callable(NativeCallableKind::Builtin(builtin, true));
         }
-        if let Some(builtin) = dispatch::buffers::buffer_builtin(self, receiver, &key) {
-            return self.native_callable(NativeCallableKind::Builtin(builtin, true));
-        }
-        if let Some(builtin) = dispatch::sab::sab_builtin(self, receiver, &key) {
-            return self.native_callable(NativeCallableKind::Builtin(builtin, true));
-        }
+        // ArrayBuffer / SharedArrayBuffer / DataView 实例不再旁挂合成：实例
+        // 创建即接线各自 prototype，方法与访问器沿真实原型链解析。
         if let Some(builtin) = dispatch::promise::promise_builtin(self, receiver, &key) {
             return self.native_callable(NativeCallableKind::Builtin(builtin, true));
         }
@@ -2785,6 +2798,15 @@ impl NativeAgentState {
     ) {
         let receiver = value::strip_gc_color(receiver);
         if value::is_callable(receiver) {
+            // name / length 是所有 callable own 层的惰性物化属性（§10.2.9
+            // SetFunctionName / §10.2.10 SetFunctionLength，configurable）：
+            // 删除即落墓碑，否则读取路径按元数据重新合成（复活）。
+            if self.text_matches(encoded_key, "name") || self.text_matches(encoded_key, "length") {
+                if let Some(key) = dispatch::runtime::property_key(self, encoded_key) {
+                    self.intrinsic_tombstones.insert((receiver, key));
+                }
+                return;
+            }
             // 仅 native callable 拥有 own 层静态合成；显式改过原型的
             // callable 不再走隐式链尾合成。
             if !value::is_native_callable(receiver)
@@ -3398,22 +3420,34 @@ impl NativeAgentState {
             )
             .ok()
     }
-    /// Web 平台全局真实自有属性的物化槽位：(键, 规范值, 属性特性)。
-    /// 值与惰性合成路径同源（`native_callable` 按 kind 记忆化，身份稳定），
-    /// 特性与 Node / WebIDL 一致——{writable, configurable}，`fetch` 方法
-    /// 额外 enumerable。启动快照恢复与 CreateGlobalObject 两条全局对象
+    /// 急切物化全局真实自有属性的物化槽位：(键, 规范值, 属性特性)。
+    /// Web 平台全局值与惰性合成路径同源（`native_callable` 按 kind 记忆化，
+    /// 身份稳定），特性与 Node / WebIDL 一致——{writable, configurable}，
+    /// `fetch` 方法额外 enumerable；ES 侧 `SharedArrayBuffer` 构造器与
+    /// `Atomics` 命名空间对象同为 {writable, configurable} 不可枚举
+    /// （Node v22 实测）。启动快照恢复与 CreateGlobalObject 两条全局对象
     /// 创建路径共用本表急切物化。
-    fn web_global_property_slots(&mut self) -> Option<Vec<(PropertyKey, u64, u32)>> {
+    fn eager_global_property_slots(&mut self) -> Option<Vec<(PropertyKey, u64, u32)>> {
         const WRITABLE: u32 = wjsm_ir::constants::FLAG_WRITABLE as u32;
         const ENUMERABLE: u32 = wjsm_ir::constants::FLAG_ENUMERABLE as u32;
         const CONFIGURABLE: u32 = wjsm_ir::constants::FLAG_CONFIGURABLE as u32;
-        let mut slots = Vec::with_capacity(wjsm_ir::intrinsic_sites::WEB_GLOBAL_PROPERTIES.len());
+        let mut slots =
+            Vec::with_capacity(wjsm_ir::intrinsic_sites::WEB_GLOBAL_PROPERTIES.len() + 2);
         for (name, builtin, enumerable) in wjsm_ir::intrinsic_sites::WEB_GLOBAL_PROPERTIES {
             let key = self.intern_property_string((*name).into())?;
             let stored = self.native_callable(NativeCallableKind::Builtin(*builtin, false))?;
             let flags = WRITABLE | CONFIGURABLE | if *enumerable { ENUMERABLE } else { 0 };
             slots.push((key, stored as u64, flags));
         }
+        let sab_key = self.intern_property_string("SharedArrayBuffer".into())?;
+        let sab_constructor = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::SharedArrayBufferConstructor,
+            false,
+        ))?;
+        slots.push((sab_key, sab_constructor as u64, WRITABLE | CONFIGURABLE));
+        let atomics_key = self.intern_property_string("Atomics".into())?;
+        let atomics = self.ensure_atomics_object()?;
+        slots.push((atomics_key, atomics as u64, WRITABLE | CONFIGURABLE));
         Some(slots)
     }
 
@@ -3462,6 +3496,12 @@ impl NativeAgentState {
         }
         if name == "Intl" {
             return dispatch::intl::ensure_intl_object(self);
+        }
+        // 急切物化的 ES 全局（realm 全局在 CreateGlobalObject 时已成真实自有
+        // 属性，读取不落到此处）；node:vm context 全局仍经本惰性合成取得
+        // 与 realm 同源的规范值。
+        if name == "Atomics" {
+            return self.ensure_atomics_object();
         }
         if name == "Iterator" {
             return dispatch::iterator_helpers::ensure_constructor(self);
@@ -3646,6 +3686,7 @@ impl NativeAgentState {
             "Reflect" => wjsm_ir::Builtin::ReflectGet,
             "RegExp" => return self.ensure_regexp_constructor(),
             "Set" => wjsm_ir::Builtin::SetConstructor,
+            "SharedArrayBuffer" => wjsm_ir::Builtin::SharedArrayBufferConstructor,
             "Symbol" => wjsm_ir::Builtin::SymbolCreate,
             "SyntaxError" => wjsm_ir::Builtin::SyntaxErrorConstructor,
             "TypeError" => wjsm_ir::Builtin::TypeErrorConstructor,
@@ -4169,6 +4210,11 @@ impl NativeAgentState {
             if !self.is_callable_value(proxy.target) {
                 return None;
             }
+            // Proxy 的 [[Construct]] 仅在 target 可构造时存在（§10.5.13）：
+            // construct 调用对非构造器 target 的 proxy 在门口拒绝。
+            if construct && !dispatch::runtime::is_constructor_value(self, callee) {
+                return None;
+            }
             let proxy_id = value::decode_proxy_handle(callee);
             let kind = if construct {
                 NativeCallableKind::ProxyConstruct(proxy_id)
@@ -4182,17 +4228,11 @@ impl NativeAgentState {
                 i64::try_from(native_callable_call as *const () as usize).ok()?,
             )
         } else if value::is_native_callable(callee) {
-            let kind = self
-                .native_callables
-                .get(usize::try_from(value::decode_native_callable_idx(callee)).ok()?)
-                .copied()?;
-            if construct
-                && match kind {
-                    NativeCallableKind::Intl(kind) => !dispatch::intl::is_constructor(kind),
-                    NativeCallableKind::DateMethod(_) => true,
-                    _ => false,
-                }
-            {
+            // IsConstructor 门（§7.2.4）：无 [[Construct]] 的 native callable
+            // 拒绝 construct 调用，经 prepare_rejected_call 落
+            // "X is not a constructor"。Symbol / BigInt 有 [[Construct]]
+            // （extends / newTarget 合法），构造期在各自 dispatch 自抛。
+            if construct && !dispatch::runtime::is_constructor_value(self, callee) {
                 return None;
             }
             (
@@ -4732,6 +4772,12 @@ impl NativeAgentState {
         if let Some(value) = self.callable_properties.get(&(callable, key)).copied() {
             return Some(value);
         }
+        // 删除墓碑先于一切惰性物化：`delete Math.max.name` 后 own 层禁止
+        // 复活（name/length 三特性 configurable，删除必须可观察）；显式
+        // defineProperty 重建的条目已在上方命中，墓碑不遮蔽重建值。
+        if self.intrinsic_tombstones.contains(&(callable, key)) {
+            return None;
+        }
         if self.text_matches(key.to_value(), "name") {
             let name = self.callable_js_name(callable)?;
             let stored = self.intern_text(name, value::TAG_STRING)?;
@@ -4820,8 +4866,32 @@ impl NativeAgentState {
         {
             let prototype = self.ensure_view_prototype(callable, builtin)?;
             self.callable_properties.insert((callable, key), prototype);
-            self.callable_property_flags
-                .insert((callable, key), FUNCTION_PROTOTYPE_FLAGS);
+            // §23.2.6.2 / §25.3.3.1：内建构造器 `prototype` 三特性全 false。
+            let flags = if builtin == wjsm_ir::Builtin::DataViewConstructor {
+                0
+            } else {
+                FUNCTION_PROTOTYPE_FLAGS
+            };
+            self.callable_property_flags.insert((callable, key), flags);
+            return Some(prototype);
+        }
+        // §25.1.5.2 / §25.2.5.1：ArrayBuffer.prototype 与
+        // SharedArrayBuffer.prototype 为三特性全 false 的数据属性。
+        if let Some((builtin, false)) = self.native_callable_builtin(callable)
+            && matches!(
+                builtin,
+                wjsm_ir::Builtin::ArrayBufferConstructor
+                    | wjsm_ir::Builtin::SharedArrayBufferConstructor
+            )
+            && self.text_matches(key.to_value(), "prototype")
+        {
+            let prototype = if builtin == wjsm_ir::Builtin::ArrayBufferConstructor {
+                self.ensure_array_buffer_prototype()?
+            } else {
+                self.ensure_shared_array_buffer_prototype()?
+            };
+            self.callable_properties.insert((callable, key), prototype);
+            self.callable_property_flags.insert((callable, key), 0);
             return Some(prototype);
         }
         // §23.2.6.1：TypedArray 构造器自有 BYTES_PER_ELEMENT，三特性全 false。
@@ -5073,6 +5143,18 @@ impl NativeAgentState {
             .ok()?;
         if builtin == wjsm_ir::Builtin::DataViewConstructor {
             dispatch::buffers::install_data_view_prototype_methods(self, prototype).ok()?;
+            // §25.3.4.1–3：buffer / byteLength / byteOffset 为规范 accessor
+            // getter，brand 检查在 getter 内完成。
+            for (name, getter) in [
+                ("buffer", wjsm_ir::Builtin::DataViewProtoBuffer),
+                ("byteLength", wjsm_ir::Builtin::DataViewProtoByteLength),
+                ("byteOffset", wjsm_ir::Builtin::DataViewProtoByteOffset),
+            ] {
+                self.install_prototype_getter(prototype, name, getter)?;
+            }
+            // §25.3.4.25：@@toStringTag 为 "DataView" 数据属性（仅可配置），
+            // Object.prototype.toString 对实例经原型链取得品牌。
+            self.install_prototype_to_string_tag(prototype, "DataView")?;
         } else {
             // 经 `实例.constructor` 取回构造器的路径也要看到静态继承的
             // from / of / @@species（§23.2.6）；与 global_constructor 幂等。
@@ -5100,6 +5182,184 @@ impl NativeAgentState {
         }
         self.view_prototypes.insert(builtin, prototype);
         Some(prototype)
+    }
+
+    /// %DataView.prototype%：DataView 实例创建前物化（先物化原型再分配
+    /// 实例，物化期间的分配不会悬空尚未入根的实例对象）。
+    pub(crate) fn ensure_data_view_prototype(&mut self) -> Option<i64> {
+        let constructor = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::DataViewConstructor,
+            false,
+        ))?;
+        self.ensure_view_prototype(constructor, wjsm_ir::Builtin::DataViewConstructor)
+    }
+
+    /// @@toStringTag 数据属性（{writable: false, enumerable: false,
+    /// configurable: true}，内建原型对象与 Atomics 命名空间共用形态）。
+    fn install_prototype_to_string_tag(&mut self, prototype: i64, tag: &str) -> Option<()> {
+        let tag_value = self.intern_text(tag.into(), value::TAG_STRING)?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                PropertyKey::symbol(wjsm_ir::wk_symbol::TO_STRING_TAG),
+                tag_value as u64,
+                wjsm_ir::constants::FLAG_CONFIGURABLE as u32,
+            )
+            .ok()
+    }
+
+    /// 规范 accessor（getter 为宿主内建、无 setter，{enumerable: false,
+    /// configurable: true}）：%ArrayBuffer.prototype%.byteLength 族共用。
+    fn install_prototype_getter(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        builtin: wjsm_ir::Builtin,
+    ) -> Option<()> {
+        let key = self.intern_property_string(name.into())?;
+        let getter = self.native_callable(NativeCallableKind::Builtin(builtin, true))?;
+        self.gc
+            .heap()
+            .define_accessor_property_with_flags(
+                value::decode_handle(prototype),
+                key,
+                getter as u64,
+                value::encode_undefined() as u64,
+                wjsm_ir::constants::FLAG_CONFIGURABLE as u32,
+            )
+            .ok()
+    }
+
+    /// %ArrayBuffer.prototype%（§25.1.6）懒物化：own `constructor`（可写
+    /// 可配置）、`byteLength` 访问器 getter、`slice` 方法与 @@toStringTag
+    /// （"ArrayBuffer"）；[[Prototype]] 为 %Object.prototype%（分配缺省）。
+    /// 同时给构造器安装 @@species 访问器（§25.1.5.3）。resizable / transfer
+    /// 家族未实现，不占位。
+    pub(crate) fn ensure_array_buffer_prototype(&mut self) -> Option<i64> {
+        if let Some(prototype) = self.array_buffer_prototype {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let constructor = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::ArrayBufferConstructor,
+            false,
+        ))?;
+        let prototype = self.allocate_object(4, false).ok()?;
+        // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会回收
+        // 尚未挂满成员的 prototype 对象。
+        self.array_buffer_prototype = Some(prototype);
+        self.define_prototype_constructor(prototype, constructor)?;
+        self.install_prototype_getter(
+            prototype,
+            "byteLength",
+            wjsm_ir::Builtin::ArrayBufferProtoByteLength,
+        )?;
+        self.define_prototype_method(prototype, "slice", wjsm_ir::Builtin::ArrayBufferProtoSlice)?;
+        self.install_prototype_to_string_tag(prototype, "ArrayBuffer")?;
+        self.install_species_accessor(constructor)?;
+        Some(prototype)
+    }
+
+    /// %SharedArrayBuffer.prototype%（§25.2.6）懒物化：own `constructor`、
+    /// `byteLength` / `growable` / `maxByteLength` 访问器 getter、`grow` /
+    /// `slice` 方法与 @@toStringTag（"SharedArrayBuffer"）；构造器附带
+    /// @@species 访问器（§25.2.5.2）。
+    pub(crate) fn ensure_shared_array_buffer_prototype(&mut self) -> Option<i64> {
+        if let Some(prototype) = self.shared_array_buffer_prototype {
+            return Some(prototype);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let constructor = self.native_callable(NativeCallableKind::Builtin(
+            wjsm_ir::Builtin::SharedArrayBufferConstructor,
+            false,
+        ))?;
+        let prototype = self.allocate_object(8, false).ok()?;
+        // 先登记再安装成员（同上：登记表是 GC 根）。
+        self.shared_array_buffer_prototype = Some(prototype);
+        self.define_prototype_constructor(prototype, constructor)?;
+        for (name, builtin) in [
+            ("byteLength", wjsm_ir::Builtin::SharedArrayBufferProtoByteLength),
+            ("growable", wjsm_ir::Builtin::SharedArrayBufferProtoGrowable),
+            (
+                "maxByteLength",
+                wjsm_ir::Builtin::SharedArrayBufferProtoMaxByteLength,
+            ),
+        ] {
+            self.install_prototype_getter(prototype, name, builtin)?;
+        }
+        self.define_prototype_method(prototype, "grow", wjsm_ir::Builtin::SharedArrayBufferProtoGrow)?;
+        self.define_prototype_method(
+            prototype,
+            "slice",
+            wjsm_ir::Builtin::SharedArrayBufferProtoSlice,
+        )?;
+        self.install_prototype_to_string_tag(prototype, "SharedArrayBuffer")?;
+        self.install_species_accessor(constructor)?;
+        Some(prototype)
+    }
+
+    /// 原型对象上的 `constructor` 自有数据属性（可写可配置不可枚举）。
+    fn define_prototype_constructor(&mut self, prototype: i64, constructor: i64) -> Option<()> {
+        let key = self.intern_property_string("constructor".into())?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                key,
+                constructor as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()
+    }
+
+    /// 原型对象上的内建方法自有数据属性（可写可配置不可枚举）。
+    fn define_prototype_method(
+        &mut self,
+        prototype: i64,
+        name: &str,
+        builtin: wjsm_ir::Builtin,
+    ) -> Option<()> {
+        let key = self.intern_property_string(name.into())?;
+        let method = self.native_callable(NativeCallableKind::Builtin(builtin, true))?;
+        self.gc
+            .heap()
+            .define_data_property(
+                value::decode_handle(prototype),
+                key,
+                method as u64,
+                BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+            )
+            .ok()
+    }
+
+    /// `Atomics` 命名空间对象（§25.4）懒物化：静态方法为可写可配置不可枚举
+    /// 数据属性（安装序对齐 V8/Node，规范新增的 `pause` 殿后），
+    /// @@toStringTag 为 "Atomics"；[[Prototype]] 为 %Object.prototype%
+    /// （分配缺省）。缓存值供 IntrinsicPristine 守卫做规范值同一性比较。
+    pub(crate) fn ensure_atomics_object(&mut self) -> Option<i64> {
+        if let Some(object) = self.atomics_object {
+            return Some(object);
+        }
+        self.ensure_intrinsic_prototypes().ok()?;
+        let object = self.allocate_object(16, false).ok()?;
+        // 先登记再安装成员（同上：登记表是 GC 根）。
+        self.atomics_object = Some(object);
+        for (name, builtin) in dispatch::atomics::NAMESPACE_METHODS {
+            let key = self.intern_property_string((*name).into())?;
+            let method = self.native_callable(NativeCallableKind::Builtin(*builtin, false))?;
+            self.gc
+                .heap()
+                .define_data_property(
+                    value::decode_handle(object),
+                    key,
+                    method as u64,
+                    BUILTIN_PROTOTYPE_PROPERTY_FLAGS,
+                )
+                .ok()?;
+        }
+        self.install_prototype_to_string_tag(object, "Atomics")?;
+        Some(object)
     }
 
     /// %TypedArray%.prototype（§23.2.3）：经 [`ensure_typed_array_intrinsics`]
@@ -7582,6 +7842,7 @@ impl NativeRuntime {
             fetch_slots: self.state.fetch.live_slot_count(),
             stream_objects: self.state.streams.live_object_count(),
             stream_slots: self.state.streams.live_slot_count(),
+            intrinsic_tombstones: self.state.intrinsic_tombstones.len(),
         }
     }
 

@@ -418,11 +418,8 @@ impl NativeRuntime {
             .invoke_callable(ctx, callback, value::encode_undefined(), &arguments);
     }
 
-    /// 在 agent 本地创建指向 cluster backing 的 SAB 对象。
+    /// 在 agent 本地创建指向 cluster backing 的 SAB 对象（接线 [[Prototype]]）。
     fn materialize_sab(&mut self, backing_id: u32) -> Option<i64> {
-        let object = self.state.allocate_object(1, false).ok()?;
-        self.state
-            .insert_shared_array_buffer(value::decode_handle(object), backing_id);
-        Some(object)
+        super::sab::materialize_from_backing(&mut self.state, backing_id)
     }
 }

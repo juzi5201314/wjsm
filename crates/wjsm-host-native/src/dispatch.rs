@@ -402,14 +402,9 @@ pub(crate) fn rejected_call_error(
     }
     // kCalledNonCallable/kNotConstructor 文案：源级站点按语义层静态渲染的
     // callee 表达式（V8 CallPrinter 同型，`o.foo is not a function`），
-    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。
-    let message = if value::is_proxy(callee) {
-        if construct {
-            "Proxy target must be a constructor".to_owned()
-        } else {
-            "Proxy target must be callable".to_owned()
-        }
-    } else {
+    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。Proxy
+    // callee 同样走 callsite 渲染（Node：`proxyObject is not a function`）。
+    let message = {
         let rendered = match &callsite {
             Some(text) => text.to_string(),
             None => runtime::render_value(state, callee),
@@ -515,7 +510,7 @@ pub(super) fn dispatch_builtin(
             streams::dispatch_streams => Builtin::ByteLengthQueuingStrategyConstructor | Builtin::CountQueuingStrategyConstructor | Builtin::ReadableStreamConstructor | Builtin::TransformStreamConstructor | Builtin::WritableStreamConstructor,
             fetch::dispatch_fetch => Builtin::AbortControllerConstructor | Builtin::Fetch | Builtin::HeadersConstructor | Builtin::RequestConstructor | Builtin::ResponseConstructor,
             events::dispatch_events => Builtin::AbortSignalConstructor | Builtin::EventConstructor | Builtin::EventTargetConstructor,
-            buffers::dispatch_buffer => Builtin::ArrayBufferConstructor | Builtin::ArrayBufferProtoByteLength | Builtin::ArrayBufferProtoSlice | Builtin::DataViewConstructor | Builtin::DataViewProtoGetFloat32 | Builtin::DataViewProtoGetFloat64 | Builtin::DataViewProtoGetInt16 | Builtin::DataViewProtoGetInt32 | Builtin::DataViewProtoGetInt8 | Builtin::DataViewProtoGetUint16 | Builtin::DataViewProtoGetUint32 | Builtin::DataViewProtoGetUint8 | Builtin::DataViewProtoSetFloat32 | Builtin::DataViewProtoSetFloat64 | Builtin::DataViewProtoSetInt16 | Builtin::DataViewProtoSetInt32 | Builtin::DataViewProtoSetInt8 | Builtin::DataViewProtoSetUint16 | Builtin::DataViewProtoSetUint32 | Builtin::DataViewProtoSetUint8 | Builtin::DataViewProtoGetBigInt64 | Builtin::DataViewProtoGetBigUint64 | Builtin::DataViewProtoSetBigInt64 | Builtin::DataViewProtoSetBigUint64,
+            buffers::dispatch_buffer => Builtin::ArrayBufferConstructor | Builtin::ArrayBufferProtoByteLength | Builtin::ArrayBufferProtoSlice | Builtin::DataViewConstructor | Builtin::DataViewProtoGetFloat32 | Builtin::DataViewProtoGetFloat64 | Builtin::DataViewProtoGetInt16 | Builtin::DataViewProtoGetInt32 | Builtin::DataViewProtoGetInt8 | Builtin::DataViewProtoGetUint16 | Builtin::DataViewProtoGetUint32 | Builtin::DataViewProtoGetUint8 | Builtin::DataViewProtoSetFloat32 | Builtin::DataViewProtoSetFloat64 | Builtin::DataViewProtoSetInt16 | Builtin::DataViewProtoSetInt32 | Builtin::DataViewProtoSetInt8 | Builtin::DataViewProtoSetUint16 | Builtin::DataViewProtoSetUint32 | Builtin::DataViewProtoSetUint8 | Builtin::DataViewProtoGetBigInt64 | Builtin::DataViewProtoGetBigUint64 | Builtin::DataViewProtoSetBigInt64 | Builtin::DataViewProtoSetBigUint64 | Builtin::DataViewProtoBuffer | Builtin::DataViewProtoByteLength | Builtin::DataViewProtoByteOffset,
             sab::dispatch_sab => Builtin::SharedArrayBufferConstructor | Builtin::SharedArrayBufferProtoByteLength | Builtin::SharedArrayBufferProtoGrow | Builtin::SharedArrayBufferProtoGrowable | Builtin::SharedArrayBufferProtoMaxByteLength | Builtin::SharedArrayBufferProtoSlice | Builtin::SharedArrayBufferSpecies,
             atomics::dispatch_atomics => Builtin::AtomicsAdd | Builtin::AtomicsAnd | Builtin::AtomicsCompareExchange | Builtin::AtomicsExchange | Builtin::AtomicsIsLockFree | Builtin::AtomicsLoad | Builtin::AtomicsNotify | Builtin::AtomicsOr | Builtin::AtomicsPause | Builtin::AtomicsStore | Builtin::AtomicsSub | Builtin::AtomicsWait | Builtin::AtomicsWaitAsync | Builtin::AtomicsXor,
             enumerator::dispatch_enumerator => Builtin::EnumeratorDone | Builtin::EnumeratorFrom | Builtin::EnumeratorKey | Builtin::EnumeratorNext,
