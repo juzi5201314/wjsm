@@ -71,7 +71,7 @@ impl NativeAgentState {
     /// 空全局对象，恢复后按共享槽位表急切物化。此时 TLAB 刚重置、堆近乎
     /// 为空，定义失败即为启动不变量被破坏。
     fn install_web_globals_on_restore(&mut self, global: i64) -> Result<(), NativeRuntimeError> {
-        let slots = self.web_global_property_slots().ok_or_else(|| {
+        let slots = self.eager_global_property_slots().ok_or_else(|| {
             NativeRuntimeError::Invariant("web global property slots are unavailable".into())
         })?;
         let handle = wjsm_ir::value::decode_object_handle(global);

@@ -1,0 +1,25 @@
+exit_code: 0
+--- stdout ---
+SharedArrayBuffer function true false true
+Atomics object true false true
+true
+true
+true true
+false false
+[object Atomics] Atomics
+0
+function true false true add 3
+5 5 7
+patched 7
+7 8
+function 3 Fake
+true 4
+from-getter from-getter
+true 8
+true undefined false
+ReferenceError Atomics is not defined
+true undefined
+ReferenceError SharedArrayBuffer is not defined
+ReferenceError SharedArrayBuffer is not defined
+true
+--- stderr ---

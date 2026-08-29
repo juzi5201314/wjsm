@@ -5,7 +5,7 @@ use wjsm_native_abi::NativeVmContext;
 
 use super::{
     buffers, collections, date, fail_dispatch, modules, node_buffer, node_perf_hooks, object,
-    regexp, runtime, typedarray,
+    regexp, runtime, sab, typedarray,
 };
 use crate::NativeAgentState;
 
@@ -165,10 +165,9 @@ pub(crate) fn deserialize(
             CloneNode::ArrayBuffer(bytes) => buffers::from_bytes(state, bytes.clone())
                 .ok_or_else(|| "DataCloneError: ArrayBuffer allocation failed".to_string())?,
             CloneNode::SharedArrayBuffer(backing_id) => {
-                let object = state
-                    .allocate_object(0, false)
-                    .map_err(|error| error.to_string())?;
-                state.insert_shared_array_buffer(value::decode_handle(object), *backing_id);
+                let object = sab::materialize_from_backing(state, *backing_id).ok_or_else(|| {
+                    "DataCloneError: SharedArrayBuffer allocation failed".to_string()
+                })?;
                 if !state
                     .shared_array_buffers
                     .contains_key(&value::decode_handle(object))

@@ -215,7 +215,7 @@ fn install_web_global_properties(
     global: i64,
 ) -> Option<()> {
     let handle = value::decode_handle(global);
-    for (key, stored, flags) in state.web_global_property_slots()? {
+    for (key, stored, flags) in state.eager_global_property_slots()? {
         match state
             .gc
             .heap()

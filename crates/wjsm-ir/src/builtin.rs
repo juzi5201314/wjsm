@@ -739,6 +739,12 @@ pub enum Builtin {
     /// `$builtin_main` 创建注册，用户段经本 builtin 取回同一对象而非重建。
     /// args: [module_id]。
     GetModuleNamespace,
+    /// `get DataView.prototype.buffer`（ES §25.3.4.1）：规范 accessor getter。
+    DataViewProtoBuffer,
+    /// `get DataView.prototype.byteLength`（ES §25.3.4.2）。
+    DataViewProtoByteLength,
+    /// `get DataView.prototype.byteOffset`（ES §25.3.4.3）。
+    DataViewProtoByteOffset,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -774,7 +780,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::GetModuleNamespace as u16
+        Self::DataViewProtoByteOffset as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1183,6 +1189,9 @@ impl Builtin {
             Self::DataViewProtoSetUint16 => "DataView.prototype.setUint16",
             Self::DataViewProtoSetInt8 => "DataView.prototype.setInt8",
             Self::DataViewProtoSetUint8 => "DataView.prototype.setUint8",
+            Self::DataViewProtoBuffer => "DataView.prototype.buffer",
+            Self::DataViewProtoByteLength => "DataView.prototype.byteLength",
+            Self::DataViewProtoByteOffset => "DataView.prototype.byteOffset",
             Self::Int8ArrayConstructor => "Int8Array",
             Self::Uint8ArrayConstructor => "Uint8Array",
             Self::Uint8ClampedArrayConstructor => "Uint8ClampedArray",

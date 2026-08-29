@@ -943,10 +943,11 @@ impl Lowerer {
                 let continue_block = self.lower_value_exception_branch(call_block, dest)?;
                 return Ok((dest, continue_block));
             }
-            // Web 平台全局构造器是全局对象上可配置的真实自有属性：`new`
-            // 快路径挂 GLOBAL_IDENT pristine 守卫，被赋值 / delete /
-            // defineProperty 改写后回退通用 Construct（spread 形状本就走
-            // 通用路径的 ReflectConstruct，callee 经属性语义解析，无需守卫）。
+            // 急切物化的全局构造器（Web 平台全局与 SharedArrayBuffer）是
+            // 全局对象上可配置的真实自有属性：`new` 快路径挂 GLOBAL_IDENT
+            // pristine 守卫，被赋值 / delete / defineProperty 改写后回退
+            // 通用 Construct（spread 形状本就走通用路径的 ReflectConstruct，
+            // callee 经属性语义解析，无需守卫）。
             if !self.global_intrinsic_shadowed(&ident.sym)
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)
                 && matches!(
@@ -961,6 +962,7 @@ impl Lowerer {
                         | Builtin::ReadableStreamConstructor
                         | Builtin::WritableStreamConstructor
                         | Builtin::TransformStreamConstructor
+                        | Builtin::SharedArrayBufferConstructor
                 )
                 && !new_expr
                     .args
@@ -1047,7 +1049,6 @@ impl Lowerer {
                         | Builtin::WeakSetConstructor
                         | Builtin::DateConstructor
                         | Builtin::ArrayBufferConstructor
-                        | Builtin::SharedArrayBufferConstructor
                         | Builtin::DataViewConstructor
                         | Builtin::Int8ArrayConstructor
                         | Builtin::Uint8ArrayConstructor
