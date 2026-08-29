@@ -1650,7 +1650,54 @@ pub(crate) fn is_constructor_value(state: &NativeAgentState, encoded: i64) -> bo
             | crate::NativeCallableKind::SetImmediate
             | crate::NativeCallableKind::Gc,
         ) => false,
-        Some(_) => true,
+        // Node 内建模块桥（globalThis.__wjsm_node_* 上的宿主方法）与
+        // test262 agent 桥：内部方法值，无 [[Construct]]。
+        Some(
+            crate::NativeCallableKind::NodeNet(_)
+            | crate::NativeCallableKind::NodeTls(_)
+            | crate::NativeCallableKind::NodeZlib(_)
+            | crate::NativeCallableKind::NodeFs(_)
+            | crate::NativeCallableKind::NodeCrypto(_)
+            | crate::NativeCallableKind::NodeDgram(_)
+            | crate::NativeCallableKind::NodeAsyncHooks(_)
+            | crate::NativeCallableKind::NodeOs(_)
+            | crate::NativeCallableKind::NodeTty(_)
+            | crate::NativeCallableKind::Idna(_)
+            | crate::NativeCallableKind::NodeVm(_)
+            | crate::NativeCallableKind::NodeChildProcess(_)
+            | crate::NativeCallableKind::NodePerfHooks(_)
+            | crate::NativeCallableKind::NodeWorkerThreads(_)
+            | crate::NativeCallableKind::Test262Agent(_),
+        ) => false,
+        // Streams / EventTarget 家族值全部是原型方法与访问器（构造器
+        // 本体以 Builtin 形态分类），无 [[Construct]]。
+        Some(crate::NativeCallableKind::Stream(_) | crate::NativeCallableKind::Events(_)) => false,
+        // WebEncoding 家族按变体分类：构造器本体与 atob / btoa（Node
+        // 口径）为构造器，原型方法与 getter 皆非。
+        Some(crate::NativeCallableKind::WebEncoding(kind)) => {
+            super::web_encoding::is_constructor(kind)
+        }
+        // Proxy 调用跳板等价于 proxy 本体：[[Construct]] 存在性沿
+        // target 链判定（§10.5.13）。
+        Some(
+            crate::NativeCallableKind::ProxyCall(index)
+            | crate::NativeCallableKind::ProxyConstruct(index),
+        ) => super::proxy::is_constructor_proxy(state, value::encode_proxy_handle(index)),
+        // 携带 [[Construct]] 的构造器本体：全局构造器、Node Timeout /
+        // Immediate（Node 里是普通函数声明）与 %TypedArray% / %Iterator%
+        // 抽象构造器（IsConstructor 为真，构造期自抛）。
+        Some(
+            crate::NativeCallableKind::ObjectConstructor
+            | crate::NativeCallableKind::ArrayConstructor
+            | crate::NativeCallableKind::RealmArrayConstructor(_)
+            | crate::NativeCallableKind::BufferConstructor
+            | crate::NativeCallableKind::AggregateErrorConstructor
+            | crate::NativeCallableKind::StringConstructor
+            | crate::NativeCallableKind::FunctionConstructor
+            | crate::NativeCallableKind::TimerConstructor(_)
+            | crate::NativeCallableKind::TypedArrayConstructor
+            | crate::NativeCallableKind::IteratorConstructor,
+        ) => true,
         None => state
             .callable_function(encoded)
             .is_some_and(|function| function.needs_prototype),

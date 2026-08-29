@@ -1,0 +1,38 @@
+exit_code: 0
+--- stdout ---
+TextDecoder.prototype.decode TypeError
+TextDecoder encoding getter TypeError
+TextEncoder#encode TypeError
+TextEncoder#encodeInto TypeError
+ReadableStream.prototype.getReader TypeError
+WritableStream#getWriter TypeError
+reader#read TypeError
+EventTarget.prototype.addEventListener TypeError
+EventTarget.prototype.removeEventListener TypeError
+EventTarget.prototype.dispatchEvent TypeError
+Event#stopPropagation TypeError
+AbortSignal#throwIfAborted TypeError
+TextDecoder constructor
+TextEncoder constructor
+atob constructor
+btoa constructor
+EventTarget constructor
+Event constructor
+ReadableStream constructor
+Iterator constructor
+%TypedArray% constructor
+Buffer constructor
+AggregateError constructor
+Timeout constructor
+Immediate constructor
+new decode TypeError: decode is not a constructor
+new getReader TypeError: getReader is not a constructor
+new addEventListener TypeError: addEventListener is not a constructor
+new bound decode TypeError: decode.bind(...) is not a constructor
+new proxy decode TypeError: (intermediate value) is not a constructor
+new (class extends decode) TypeError
+new bound TextDecoder ok
+new proxy EventTarget ok
+newTarget proxy TextDecoder ok
+"decode" 0
+--- stderr ---
