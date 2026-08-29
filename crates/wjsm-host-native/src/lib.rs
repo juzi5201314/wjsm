@@ -7432,6 +7432,14 @@ impl NativeRuntime {
             artifact.manifest(),
         )
         .map_err(NativeRuntimeError::Invariant)?;
+        // 拆分 image 共享同一 ModuleId 空间：builtin image 名下也注册 manifest
+        // 键，$builtin_main 内的命名空间注册 / 静态 DynamicImport 才能解析。
+        dispatch::modules::register_manifest(
+            &mut self.state,
+            builtin_image_id,
+            artifact.manifest(),
+        )
+        .map_err(NativeRuntimeError::Invariant)?;
         Ok((entry, user_image_id))
     }
 

@@ -1,17 +1,12 @@
 // node:readline 导出段（与 core.js concat 成完整模块）。
 // emitKeypressEvents 依赖终端逐键流，当前不提供（见兼容矩阵）。
-// promises 用命名导入拼装（Node 的 readline.promises 即 CJS exports 对象）；
-// builtin 之间的 `import * as ns` 会触发模块链接层 InternalInvariant，勿改回。
-import {
-  Interface as PromisesInterface,
-  Readline as PromisesReadline,
-  createInterface as promisesCreateInterface,
-} from 'readline/promises';
+// promises 用命名空间导入拼装（Node 的 readline.promises 即 CJS exports 对象）。
+import * as promisesNs from 'readline/promises';
 
 const promises = {
-  Interface: PromisesInterface,
-  Readline: PromisesReadline,
-  createInterface: promisesCreateInterface,
+  Interface: promisesNs.Interface,
+  Readline: promisesNs.Readline,
+  createInterface: promisesNs.createInterface,
 };
 
 export { Interface, promises };

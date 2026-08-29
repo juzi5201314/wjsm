@@ -75,6 +75,7 @@ fn minimal_builtin_segment() -> BuiltinSegment {
         export_map,
         module_export_names,
         module_scopes,
+        namespace_modules: BTreeSet::new(),
     }
 }
 
@@ -279,6 +280,7 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
         export_map: meta.export_map,
         module_export_names: segment_export_names,
         module_scopes: meta.module_scopes,
+        namespace_modules: meta.namespace_modules,
     };
 
     // 2) 用户模块 import 该段的导出。
@@ -329,6 +331,123 @@ fn seed_lower_round_trip_real_segment_shares_module_vars() {
     assert!(function_has_store(builtin_main, base_ir_name));
     assert!(function_has_load(main_fn, base_ir_name));
     assert!(!function_has_store(main_fn, base_ir_name));
+}
+
+/// 段内 `import * as`（builtin 之间命名空间导入）时，段入口已创建并注册
+/// canonical 命名空间对象；用户段对同一模块的 `import * as` 必须经
+/// GetModuleNamespace 取回同一对象——不重建（无 RegisterModuleNamespace）、
+/// 不重复安装 getter（无 FinalizeModuleNamespace）。
+#[test]
+fn seed_lower_fetches_builtin_namespace_instead_of_rebuilding() {
+    // 1) 段：seg_b `import * as nsA from './seg_a.js'` → 段 metadata 的
+    //    namespace_modules 含 ModuleId(1)。
+    let segment_source_a = "export const base = 10;\n";
+    let segment_source_b =
+        "import * as nsA from './seg_a.js';\nexport const viaNs = nsA.base + 1;\n";
+    let mut segment_import_map = HashMap::new();
+    segment_import_map.insert(
+        ModuleId(2),
+        vec![ImportBinding {
+            source_module: ModuleId(1),
+            names: vec![("nsA".to_string(), "*".to_string())],
+            specifier: "./seg_a.js".to_string(),
+        }],
+    );
+    let mut segment_export_names = HashMap::new();
+    segment_export_names.insert(ModuleId(1), BTreeSet::from(["base".to_string()]));
+    segment_export_names.insert(ModuleId(2), BTreeSet::from(["viaNs".to_string()]));
+
+    let (segment_program, meta) = lower_modules_with_debug_meta(
+        vec![
+            esm_input(1, "/__wjsm_builtin__/node/seg_a.mjs", segment_source_a),
+            esm_input(2, "/__wjsm_builtin__/node/seg_b.mjs", segment_source_b),
+        ],
+        ModuleLinking {
+            import_map: &segment_import_map,
+            export_names: &segment_export_names,
+            ..ModuleLinking::empty()
+        },
+        false,
+    )
+    .expect("segment lower should succeed");
+    assert!(
+        meta.namespace_modules.contains(&ModuleId(1)),
+        "段 metadata 应记录段内 `import * as` 来源模块: {:?}",
+        meta.namespace_modules
+    );
+
+    let entry_function_id =
+        FunctionId(u32::try_from(segment_program.functions().len() - 1).expect("函数数在 u32 内"));
+    let mut segment_program = segment_program;
+    segment_program
+        .function_mut(entry_function_id)
+        .expect("入口函数存在")
+        .set_name("$builtin_main");
+
+    let builtin = BuiltinSegment {
+        program: segment_program,
+        scope_count: u32::try_from(meta.scope_count).expect("scope 数在 u32 内"),
+        entry_function_id,
+        export_map: meta.export_map,
+        module_export_names: segment_export_names,
+        module_scopes: meta.module_scopes,
+        namespace_modules: meta.namespace_modules,
+    };
+
+    // 2) 用户模块也 `import * as` 同一段模块。
+    let mut user_import_map = HashMap::new();
+    user_import_map.insert(
+        ModuleId(0),
+        vec![ImportBinding {
+            source_module: ModuleId(1),
+            names: vec![("a".to_string(), "*".to_string())],
+            specifier: "node:seg_a".to_string(),
+        }],
+    );
+
+    let program = lower_modules_with_builtin_seed(
+        vec![esm_input(
+            0,
+            "/project/main.js",
+            "import * as a from 'node:seg_a';\nconsole.log(a.base);\n",
+        )],
+        ModuleLinking {
+            import_map: &user_import_map,
+            ..ModuleLinking::empty()
+        },
+        builtin,
+        false,
+    )
+    .expect("namespace seed lower should succeed");
+    program.verify().expect("merged program should verify");
+
+    // 3) 用户 $module_main：取回（GetModuleNamespace）而非重建/重注册/重收口。
+    let main_fn = program
+        .functions()
+        .iter()
+        .find(|function| function.name() == wjsm_ir::MODULE_ENTRY_IR_NAME)
+        .expect("应生成用户 $module_main");
+    let builtins_in_main: Vec<wjsm_ir::Builtin> = main_fn
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::CallBuiltin { builtin, .. } => Some(*builtin),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        builtins_in_main.contains(&wjsm_ir::Builtin::GetModuleNamespace),
+        "用户入口应经 GetModuleNamespace 取回段内 canonical 命名空间: {builtins_in_main:?}"
+    );
+    assert!(
+        !builtins_in_main.contains(&wjsm_ir::Builtin::RegisterModuleNamespace),
+        "用户入口不得重建/重注册段内命名空间: {builtins_in_main:?}"
+    );
+    assert!(
+        !builtins_in_main.contains(&wjsm_ir::Builtin::FinalizeModuleNamespace),
+        "取回的命名空间已由段收口，不得重复 Finalize: {builtins_in_main:?}"
+    );
 }
 
 #[test]

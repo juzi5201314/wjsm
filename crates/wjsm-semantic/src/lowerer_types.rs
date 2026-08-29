@@ -197,6 +197,10 @@ pub(crate) struct Lowerer {
     /// 来源）。每个模块只创建一个命名空间对象（§10.4.6.12 GetModuleNamespace
     /// 的缓存语义）：静态导入局部与动态 import 结果共享同一对象身份。
     pub(crate) namespace_object_modules: std::collections::HashSet<wjsm_ir::ModuleId>,
+    /// builtin 段（hydration 种子）已创建并注册命名空间对象的模块集合。
+    /// 用户段序幕对这些模块经 GetModuleNamespace 取回同一 canonical 对象，
+    /// 不再重建、不再安装 getter（§10.4.6.12 单一身份跨段成立）。
+    pub(crate) builtin_namespace_modules: std::collections::BTreeSet<wjsm_ir::ModuleId>,
     /// 每模块唯一命名空间对象的 ValueId：ModuleId → ValueId（在模块体执行前
     /// 创建并注册，来源模块体执行后安装 live binding getter 并收口为 exotic）。
     pub(crate) namespace_objects: std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
