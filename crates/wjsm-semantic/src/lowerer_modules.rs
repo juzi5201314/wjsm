@@ -80,6 +80,9 @@ pub struct LoweringMetadata {
     pub module_scopes: std::collections::HashMap<ModuleId, usize>,
     /// 本段 lower 结束时 ScopeTree 总作用域数（含 root）；供用户段做 scope 基址。
     pub scope_count: usize,
+    /// 本段入口已创建并注册命名空间对象的模块集合（`namespace_object_modules`
+    /// 最终快照，升序确定）。hydration 时用户段对这些模块取回同一对象而非重建。
+    pub namespace_modules: std::collections::BTreeSet<ModuleId>,
 }
 
 /// builtin 段（hydration 输入；由独立 lowerer 缓存为完整 Program 的 builtin 依赖闭包
@@ -101,6 +104,10 @@ pub struct BuiltinSegment {
         std::collections::HashMap<ModuleId, std::collections::BTreeSet<String>>,
     /// builtin 每模块顶层 scope id（值均 < `scope_count`）。
     pub module_scopes: std::collections::HashMap<ModuleId, usize>,
+    /// 段入口 `$builtin_main` 已创建并注册命名空间对象的模块集合（builtin 之间
+    /// `import * as` / 段内动态 import 目标）。用户段对这些模块经
+    /// GetModuleNamespace 取回同一对象。
+    pub namespace_modules: std::collections::BTreeSet<ModuleId>,
 }
 
 /// 将多个模块编译为单一的 IR Program（模块 bundling）
@@ -171,6 +178,7 @@ pub fn lower_modules_with_debug_meta(
         export_map: lowerer.export_map.clone(),
         module_scopes: lowerer.module_scopes.clone(),
         scope_count: lowerer.scopes.scope_count(),
+        namespace_modules: lowerer.namespace_object_modules.iter().copied().collect(),
     };
     Ok((lowerer.module, metadata))
 }
@@ -275,6 +283,7 @@ fn emit_builtin_entry_call(lowerer: &mut Lowerer, builtin: &BuiltinSegment) {
             callee,
             this_val,
             args: Vec::new(),
+            callsite: None,
         },
     ];
     let instructions = lowerer.current_function.blocks[entry_block_idx].instructions_mut();
@@ -652,6 +661,33 @@ fn create_namespace_objects(lowerer: &mut Lowerer, entry: BasicBlockId) {
     let mut namespace_modules: Vec<_> = lowerer.namespace_object_modules.iter().copied().collect();
     namespace_modules.sort_by_key(|id| id.0);
     for target_module_id in &namespace_modules {
+        // builtin 段（hydration 种子）已在 `$builtin_main` 创建并注册该模块的
+        // canonical 对象；入口块头部的段入口前缀调用先执行，这里按 ModuleId
+        // 取回同一对象（§10.4.6.12 单一身份），不重建、不重复注册。
+        if lowerer.builtin_namespace_modules.contains(target_module_id) {
+            let module_id_const = lowerer
+                .module
+                .add_constant(Constant::ModuleId(*target_module_id));
+            let module_id_val = lowerer.alloc_value();
+            lowerer.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: module_id_val,
+                    constant: module_id_const,
+                },
+            );
+            let ns_obj = lowerer.alloc_value();
+            lowerer.current_function.append_instruction(
+                entry,
+                Instruction::CallBuiltin {
+                    dest: Some(ns_obj),
+                    builtin: Builtin::GetModuleNamespace,
+                    args: vec![module_id_val],
+                },
+            );
+            lowerer.namespace_objects.insert(*target_module_id, ns_obj);
+            continue;
+        }
         let export_names_set = lowerer.module_export_names.get(target_module_id).cloned();
         let capacity = export_names_set.as_ref().map_or(0, |s| s.len()) + 1;
 
@@ -1213,6 +1249,11 @@ fn install_all_namespace_getters(
     let mut source_module_ids: Vec<ModuleId> = lowerer.namespace_objects.keys().copied().collect();
     source_module_ids.sort_by_key(|id| id.0);
     for module_id in source_module_ids {
+        // builtin 段取回的 canonical 对象已由 `$builtin_main` 安装 getter 并
+        // 收口为 exotic（不可扩展），跳过重复安装。
+        if lowerer.builtin_namespace_modules.contains(&module_id) {
+            continue;
+        }
         // 进入来源模块作用域：resolve_export_ir 的作用域回退解析须命中该
         // 模块自己的顶层绑定（builtin 段模块的占位作用域同样已登记）。
         let module_scope = lowerer.module_scopes.get(&module_id).copied();

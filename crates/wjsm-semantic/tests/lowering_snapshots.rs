@@ -909,6 +909,11 @@ fn issue373_loop_closure_capture_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn loop_body_mixed_capture_fixture_matches_ir_snapshot() {
+    assert_snapshot("loop_body_mixed_capture");
+}
+
+#[test]
 fn issue384_object_method_self_reference_fixture_matches_ir_snapshot() {
     assert_snapshot("issue384_object_method_self_reference");
 }

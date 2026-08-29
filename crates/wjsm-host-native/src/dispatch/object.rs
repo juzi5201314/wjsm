@@ -327,7 +327,12 @@ fn push_callable_own(
     {
         getter
     } else {
-        state.callable_properties.get(&(callable, key)).copied()?
+        // 键在 own 层缺失（如 name/length 已删除、惰性物化被墓碑拦截）：
+        // 跳过该键而非中止整个自有键枚举。
+        match state.callable_properties.get(&(callable, key)).copied() {
+            Some(stored) => stored,
+            None => return Some(()),
+        }
     };
     properties.push((super::runtime::encoded_property_key(key), stored));
     Some(())

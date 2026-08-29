@@ -764,7 +764,7 @@ module {
       %43 = call builtin.console.log(%40)
       jump bb7
     bb22:
-      %44 = call %14, this=%15, args=[%40]
+      %44 = call %14, this=%15, args=[%40], callsite="console.log"
       jump bb7
     bb23:
       return
@@ -781,7 +781,7 @@ module {
       %4 = call builtin.get_prototype_from_constructor(%2)
       set_proto %3, %4
       %5 = load var $48.message
-      %6 = construct_call %2, this=%3, args=[%5]
+      %6 = construct_call %2, this=%3, args=[%5], callsite="RangeError"
       %7 = is_exception %6
       branch %7, bb1, bb2
     bb1:
@@ -818,7 +818,7 @@ module {
       %4 = call builtin.get_prototype_from_constructor(%2)
       set_proto %3, %4
       %5 = load var $49.message
-      %6 = construct_call %2, this=%3, args=[%5]
+      %6 = construct_call %2, this=%3, args=[%5], callsite="Error"
       %7 = is_exception %6
       branch %7, bb1, bb2
     bb1:
@@ -875,7 +875,7 @@ module {
       %7 = call builtin.get_prototype_from_constructor(%5)
       set_proto %6, %7
       %8 = const c352
-      %9 = construct_call %5, this=%6, args=[%8]
+      %9 = construct_call %5, this=%6, args=[%8], callsite="RangeError"
       %10 = is_exception %9
       branch %10, bb1, bb2
     bb1:
@@ -916,7 +916,7 @@ module {
       %7 = call builtin.get_prototype_from_constructor(%5)
       set_proto %6, %7
       %8 = const c368
-      %9 = construct_call %5, this=%6, args=[%8]
+      %9 = construct_call %5, this=%6, args=[%8], callsite="RangeError"
       %10 = is_exception %9
       branch %10, bb1, bb2
     bb1:
@@ -1172,7 +1172,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c498
@@ -1330,7 +1330,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c536
@@ -1488,7 +1488,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c574
@@ -1517,7 +1517,7 @@ module {
       %52 = const c578
       %53 = get_prop %51, %52
       %54 = const c579
-      %55 = call %53, this=%50, args=[%54]
+      %55 = call %53, this=%50, args=[%54], callsite="throwRange"
       %56 = is_exception %55
       branch %56, bb19, bb18
     bb18:
@@ -1626,7 +1626,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_18 [js_name ""] [js_length 1] [captures: $0.caught] [params: $124.$env, $124.$this, $124.e] [entry=bb0]:
@@ -1741,7 +1741,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $26.e, %7
@@ -1759,7 +1759,7 @@ module {
       %1 = load var $env
       %2 = const c618
       %3 = get_prop %1, %2
-      %4 = call %3, this=%0
+      %4 = call %3, this=%0, callsite="asyncInstanceof"
       return %4
 
   fn @arrow_20 [direct_callable] [js_name ""] [js_length 0] [params: $126.$env, $126.$this] [entry=bb0]:
@@ -1803,7 +1803,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_21 [js_name ""] [js_length 1] [captures: $0.caught] [params: $127.$env, $127.$this, $127.e] [entry=bb0]:
@@ -1918,7 +1918,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $26.e, %7
@@ -1936,7 +1936,7 @@ module {
       %1 = load var $env
       %2 = const c644
       %3 = get_prop %1, %2
-      %4 = call %3, this=%0
+      %4 = call %3, this=%0, callsite="asyncRhsThrow"
       return %4
 
   fn @arrow_23 [direct_callable] [js_name ""] [js_length 0] [params: $129.$env, $129.$this] [entry=bb0]:
@@ -1980,7 +1980,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_24 [js_name ""] [js_length 1] [captures: $0.caught] [params: $130.$env, $130.$this, $130.e] [entry=bb0]:
@@ -2095,7 +2095,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $26.e, %7
@@ -2233,7 +2233,7 @@ module {
       %49 = call builtin.console.log(%46)
       jump bb10
     bb19:
-      %50 = call %36, this=%37, args=[%46]
+      %50 = call %36, this=%37, args=[%46], callsite="console.log"
       jump bb10
     bb20:
       jump bb2
@@ -2322,7 +2322,7 @@ module {
       %89 = call builtin.console.log(%86)
       jump bb33
     bb42:
-      %90 = call %76, this=%77, args=[%86]
+      %90 = call %76, this=%77, args=[%86], callsite="console.log"
       jump bb33
     bb43:
       jump bb25
@@ -2411,7 +2411,7 @@ module {
       %129 = call builtin.console.log(%126)
       jump bb56
     bb65:
-      %130 = call %116, this=%117, args=[%126]
+      %130 = call %116, this=%117, args=[%126], callsite="console.log"
       jump bb56
     bb66:
       jump bb48
@@ -2500,7 +2500,7 @@ module {
       %169 = call builtin.console.log(%166)
       jump bb79
     bb88:
-      %170 = call %156, this=%157, args=[%166]
+      %170 = call %156, this=%157, args=[%166], callsite="console.log"
       jump bb79
     bb89:
       jump bb71
@@ -2589,7 +2589,7 @@ module {
       %209 = call builtin.console.log(%206)
       jump bb102
     bb111:
-      %210 = call %196, this=%197, args=[%206]
+      %210 = call %196, this=%197, args=[%206], callsite="console.log"
       jump bb102
     bb112:
       jump bb94
@@ -2681,7 +2681,7 @@ module {
       %252 = call builtin.symbol.create(%251)
       jump bb131
     bb134:
-      %253 = call %249, this=%250, args=[%251]
+      %253 = call %249, this=%250, args=[%251], callsite="Symbol"
       jump bb131
     bb135:
       %257 = const c107
@@ -2717,7 +2717,7 @@ module {
       %266 = call builtin.console.log(%263)
       jump bb125
     bb144:
-      %267 = call %236, this=%237, args=[%263]
+      %267 = call %236, this=%237, args=[%263], callsite="console.log"
       jump bb125
     bb145:
       jump bb117
@@ -2810,7 +2810,7 @@ module {
       %306 = call builtin.console.log(%303)
       jump bb158
     bb167:
-      %307 = call %293, this=%294, args=[%303]
+      %307 = call %293, this=%294, args=[%303], callsite="console.log"
       jump bb158
     bb168:
       jump bb150
@@ -2875,7 +2875,7 @@ module {
       %339 = const c135
       %340 = const c123
       %341 = const c136
-      %342 = call %340, this=%339, args=[%341]
+      %342 = call %340, this=%339, args=[%341], callsite="throwRange"
       %343 = is_exception %342
       branch %343, bb184, bb183
     bb183:
@@ -2911,7 +2911,7 @@ module {
       %353 = call builtin.console.log(%350)
       jump bb181
     bb192:
-      %354 = call %335, this=%336, args=[%350]
+      %354 = call %335, this=%336, args=[%350], callsite="console.log"
       jump bb181
     bb193:
       jump bb173
@@ -2976,7 +2976,7 @@ module {
       %384 = const c148
       %385 = const c125
       %386 = const c149
-      %387 = call %385, this=%384, args=[%386]
+      %387 = call %385, this=%384, args=[%386], callsite="throwError"
       %388 = is_exception %387
       branch %388, bb209, bb208
     bb208:
@@ -3023,7 +3023,7 @@ module {
       %405 = call builtin.console.log(%402)
       jump bb206
     bb221:
-      %406 = call %381, this=%382, args=[%402]
+      %406 = call %381, this=%382, args=[%402], callsite="console.log"
       jump bb206
     bb222:
       jump bb198
@@ -3079,7 +3079,7 @@ module {
       %439 = call builtin.console.log(%436)
       jump bb232
     bb237:
-      %440 = call %432, this=%433, args=[%436]
+      %440 = call %432, this=%433, args=[%436], callsite="console.log"
       jump bb232
     bb238:
       jump bb240
@@ -3163,7 +3163,7 @@ module {
       %471 = call builtin.console.log(%468)
       jump bb249
     bb258:
-      %472 = call %458, this=%459, args=[%468]
+      %472 = call %458, this=%459, args=[%468], callsite="console.log"
       jump bb249
     bb259:
       jump bb241
@@ -3252,7 +3252,7 @@ module {
       %511 = call builtin.console.log(%508)
       jump bb272
     bb281:
-      %512 = call %498, this=%499, args=[%508]
+      %512 = call %498, this=%499, args=[%508], callsite="console.log"
       jump bb272
     bb282:
       jump bb264
@@ -3341,7 +3341,7 @@ module {
       %551 = call builtin.console.log(%548)
       jump bb295
     bb304:
-      %552 = call %538, this=%539, args=[%548]
+      %552 = call %538, this=%539, args=[%548], callsite="console.log"
       jump bb295
     bb305:
       jump bb287
@@ -3430,7 +3430,7 @@ module {
       %591 = call builtin.console.log(%588)
       jump bb318
     bb327:
-      %592 = call %578, this=%579, args=[%588]
+      %592 = call %578, this=%579, args=[%588], callsite="console.log"
       jump bb318
     bb328:
       jump bb310
@@ -3519,7 +3519,7 @@ module {
       %631 = call builtin.console.log(%628)
       jump bb341
     bb350:
-      %632 = call %618, this=%619, args=[%628]
+      %632 = call %618, this=%619, args=[%628], callsite="console.log"
       jump bb341
     bb351:
       jump bb333
@@ -3608,7 +3608,7 @@ module {
       %671 = call builtin.console.log(%668)
       jump bb364
     bb373:
-      %672 = call %658, this=%659, args=[%668]
+      %672 = call %658, this=%659, args=[%668], callsite="console.log"
       jump bb364
     bb374:
       jump bb356
@@ -3673,7 +3673,7 @@ module {
       %702 = const c242
       %703 = const c125
       %704 = const c243
-      %705 = call %703, this=%702, args=[%704]
+      %705 = call %703, this=%702, args=[%704], callsite="throwError"
       %706 = is_exception %705
       branch %706, bb390, bb389
     bb389:
@@ -3709,7 +3709,7 @@ module {
       %716 = call builtin.console.log(%713)
       jump bb387
     bb398:
-      %717 = call %698, this=%699, args=[%713]
+      %717 = call %698, this=%699, args=[%713], callsite="console.log"
       jump bb387
     bb399:
       jump bb379
@@ -3774,7 +3774,7 @@ module {
       %747 = const c255
       %748 = const c125
       %749 = const c256
-      %750 = call %748, this=%747, args=[%749]
+      %750 = call %748, this=%747, args=[%749], callsite="throwError"
       %751 = is_exception %750
       branch %751, bb415, bb414
     bb414:
@@ -3826,7 +3826,7 @@ module {
       %770 = call builtin.console.log(%767)
       jump bb412
     bb427:
-      %771 = call %744, this=%745, args=[%767]
+      %771 = call %744, this=%745, args=[%767], callsite="console.log"
       jump bb412
     bb428:
       jump bb404
@@ -3882,7 +3882,7 @@ module {
       %804 = call builtin.console.log(%801)
       jump bb438
     bb443:
-      %805 = call %797, this=%798, args=[%801]
+      %805 = call %797, this=%798, args=[%801], callsite="console.log"
       jump bb438
     bb444:
       %809 = const c269
@@ -3975,7 +3975,7 @@ module {
       %837 = call builtin.console.log(%834)
       jump bb455
     bb464:
-      %838 = call %824, this=%825, args=[%834]
+      %838 = call %824, this=%825, args=[%834], callsite="console.log"
       jump bb455
     bb465:
       jump bb447
@@ -4076,7 +4076,7 @@ module {
       %884 = call builtin.console.log(%881)
       jump bb480
     bb489:
-      %885 = call %871, this=%872, args=[%881]
+      %885 = call %871, this=%872, args=[%881], callsite="console.log"
       jump bb480
     bb490:
       jump bb472
@@ -4184,7 +4184,7 @@ module {
       %931 = call builtin.console.log(%928)
       jump bb505
     bb514:
-      %932 = call %918, this=%919, args=[%928]
+      %932 = call %918, this=%919, args=[%928], callsite="console.log"
       jump bb505
     bb515:
       jump bb497
@@ -4198,7 +4198,7 @@ module {
       unreachable
     bb519:
       %957 = const c314
-      %958 = call %954, this=%952, args=[%957]
+      %958 = call %954, this=%952, args=[%957], callsite="BoundBase.bind"
       %959 = is_exception %958
       branch %959, bb522, bb521
     bb520:
@@ -4287,7 +4287,7 @@ module {
       %988 = call builtin.console.log(%985)
       jump bb532
     bb541:
-      %989 = call %975, this=%976, args=[%985]
+      %989 = call %975, this=%976, args=[%985], callsite="console.log"
       jump bb532
     bb542:
       jump bb524
@@ -4350,7 +4350,7 @@ module {
       %1019 = new_object(capacity=4)
       %1020 = call builtin.get_prototype_from_constructor(%1018)
       set_proto %1019, %1020
-      %1021 = construct_call %1018, this=%1019
+      %1021 = construct_call %1018, this=%1019, callsite="BoundBase"
       %1022 = is_exception %1021
       branch %1022, bb557, bb558
     bb557:
@@ -4407,7 +4407,7 @@ module {
       %1038 = call builtin.console.log(%1035)
       jump bb555
     bb573:
-      %1039 = call %1015, this=%1016, args=[%1035]
+      %1039 = call %1015, this=%1016, args=[%1035], callsite="console.log"
       jump bb555
     bb574:
       jump bb547
@@ -4477,7 +4477,7 @@ module {
       %1069 = new_object(capacity=4)
       %1070 = call builtin.get_prototype_from_constructor(%1068)
       set_proto %1069, %1070
-      %1071 = construct_call %1068, this=%1069
+      %1071 = construct_call %1068, this=%1069, callsite="BoundBase"
       %1072 = is_exception %1071
       branch %1072, bb589, bb590
     bb589:
@@ -4512,7 +4512,7 @@ module {
       jump bb580
     bb598:
       %1084 = const c345
-      %1085 = call %1081, this=%1079, args=[%1084]
+      %1085 = call %1081, this=%1079, args=[%1084], callsite="BoundC.bind"
       %1086 = is_exception %1085
       branch %1086, bb601, bb600
     bb599:
@@ -4552,7 +4552,7 @@ module {
       %1096 = call builtin.console.log(%1093)
       jump bb587
     bb609:
-      %1097 = call %1065, this=%1066, args=[%1093]
+      %1097 = call %1065, this=%1066, args=[%1093], callsite="console.log"
       jump bb587
     bb610:
       jump bb579
@@ -4651,7 +4651,7 @@ module {
       %1144 = call builtin.console.log(%1141)
       jump bb625
     bb634:
-      %1145 = call %1131, this=%1132, args=[%1141]
+      %1145 = call %1131, this=%1132, args=[%1141], callsite="console.log"
       jump bb625
     bb635:
       jump bb617
@@ -4760,7 +4760,7 @@ module {
       %1195 = call builtin.console.log(%1192)
       jump bb652
     bb661:
-      %1196 = call %1182, this=%1183, args=[%1192]
+      %1196 = call %1182, this=%1183, args=[%1192], callsite="console.log"
       jump bb652
     bb662:
       jump bb644
@@ -4831,7 +4831,7 @@ module {
       %1236 = call builtin.console.log(%1233)
       jump bb672
     bb681:
-      %1237 = call %1222, this=%1223, args=[%1233]
+      %1237 = call %1222, this=%1223, args=[%1233], callsite="console.log"
       jump bb672
     bb682:
       %1241 = const c393
@@ -4901,7 +4901,7 @@ module {
       %1269 = call builtin.console.log(%1266)
       jump bb690
     bb699:
-      %1270 = call %1255, this=%1256, args=[%1266]
+      %1270 = call %1255, this=%1256, args=[%1266], callsite="console.log"
       jump bb690
     bb700:
       %1274 = const c403
@@ -4969,7 +4969,7 @@ module {
       %1301 = call builtin.console.log(%1298)
       jump bb708
     bb717:
-      %1302 = call %1288, this=%1289, args=[%1298]
+      %1302 = call %1288, this=%1289, args=[%1298], callsite="console.log"
       jump bb708
     bb718:
       %1306 = const c413
@@ -5039,7 +5039,7 @@ module {
       %1335 = call builtin.console.log(%1332)
       jump bb726
     bb735:
-      %1336 = call %1320, this=%1321, args=[%1332]
+      %1336 = call %1320, this=%1321, args=[%1332], callsite="console.log"
       jump bb726
     bb736:
       %1340 = const c422
@@ -5109,7 +5109,7 @@ module {
       %1369 = call builtin.console.log(%1366)
       jump bb744
     bb753:
-      %1370 = call %1354, this=%1355, args=[%1366]
+      %1370 = call %1354, this=%1355, args=[%1366], callsite="console.log"
       jump bb744
     bb754:
       %1374 = const c432
@@ -5179,7 +5179,7 @@ module {
       %1403 = call builtin.console.log(%1400)
       jump bb762
     bb771:
-      %1404 = call %1388, this=%1389, args=[%1400]
+      %1404 = call %1388, this=%1389, args=[%1400], callsite="console.log"
       jump bb762
     bb772:
       %1408 = const c469
@@ -5227,7 +5227,7 @@ module {
       %1428 = get_prop %1426, %1427
       %1429 = const c479
       %1430 = load var $0.gen
-      %1431 = call %1430, this=%1429
+      %1431 = call %1430, this=%1429, callsite="gen"
       %1432 = is_exception %1431
       branch %1432, bb783, bb782
     bb782:
@@ -5239,7 +5239,7 @@ module {
       %1433 = call builtin.exception_value(%1431)
       throw %1433
     bb784:
-      %1438 = call %1435, this=%1431
+      %1438 = call %1435, this=%1431, callsite="gen(...).next"
       %1439 = const c481
       %1440 = get_prop %1438, %1439
       %1441 = is_exception %1440
@@ -5248,7 +5248,7 @@ module {
       %1437 = call builtin.exception_value(%1435)
       throw %1437
     bb786:
-      %1443 = call %1428, this=%1425, args=[%1440]
+      %1443 = call %1428, this=%1425, args=[%1440], callsite="String"
       %1444 = is_exception %1443
       branch %1444, bb789, bb788
     bb787:
@@ -5263,7 +5263,7 @@ module {
       %1446 = call builtin.console.log(%1443)
       jump bb780
     bb791:
-      %1447 = call %1423, this=%1424, args=[%1443]
+      %1447 = call %1423, this=%1424, args=[%1443], callsite="console.log"
       jump bb780
     bb792:
       %1451 = const c519
@@ -5282,7 +5282,7 @@ module {
       store var $0.asyncRhsThrow, %1460
       %1461 = const c599
       %1462 = load var $0.asyncIn
-      %1463 = call %1462, this=%1461
+      %1463 = call %1462, this=%1461, callsite="asyncIn"
       %1464 = is_exception %1463
       branch %1464, bb795, bb794
     bb793:
@@ -5581,7 +5581,7 @@ module {
       %1627 = call builtin.console.log(%1624)
       jump bb829
     bb844:
-      %1628 = call %1598, this=%1599, args=[%1624]
+      %1628 = call %1598, this=%1599, args=[%1624], callsite="console.log"
       jump bb829
     bb845:
       store var $26.e, %1583
@@ -5698,7 +5698,7 @@ module {
       %1676 = call builtin.console.log(%1673)
       jump bb855
     bb870:
-      %1677 = call %1647, this=%1648, args=[%1673]
+      %1677 = call %1647, this=%1648, args=[%1673], callsite="console.log"
       jump bb855
     bb871:
       store var $26.e, %1632
@@ -5815,7 +5815,7 @@ module {
       %1725 = call builtin.console.log(%1722)
       jump bb881
     bb896:
-      %1726 = call %1696, this=%1697, args=[%1722]
+      %1726 = call %1696, this=%1697, args=[%1722], callsite="console.log"
       jump bb881
     bb897:
       store var $26.e, %1681
@@ -5932,7 +5932,7 @@ module {
       %1774 = call builtin.console.log(%1771)
       jump bb907
     bb922:
-      %1775 = call %1745, this=%1746, args=[%1771]
+      %1775 = call %1745, this=%1746, args=[%1771], callsite="console.log"
       jump bb907
     bb923:
       store var $26.e, %1730
@@ -6049,7 +6049,7 @@ module {
       %1823 = call builtin.console.log(%1820)
       jump bb933
     bb948:
-      %1824 = call %1794, this=%1795, args=[%1820]
+      %1824 = call %1794, this=%1795, args=[%1820], callsite="console.log"
       jump bb933
     bb949:
       store var $26.e, %1779
@@ -6166,7 +6166,7 @@ module {
       %1872 = call builtin.console.log(%1869)
       jump bb959
     bb974:
-      %1873 = call %1843, this=%1844, args=[%1869]
+      %1873 = call %1843, this=%1844, args=[%1869], callsite="console.log"
       jump bb959
     bb975:
       store var $26.e, %1828
@@ -6283,7 +6283,7 @@ module {
       %1921 = call builtin.console.log(%1918)
       jump bb985
     bb1000:
-      %1922 = call %1892, this=%1893, args=[%1918]
+      %1922 = call %1892, this=%1893, args=[%1918], callsite="console.log"
       jump bb985
     bb1001:
       store var $26.e, %1877
@@ -6400,7 +6400,7 @@ module {
       %1970 = call builtin.console.log(%1967)
       jump bb1011
     bb1026:
-      %1971 = call %1941, this=%1942, args=[%1967]
+      %1971 = call %1941, this=%1942, args=[%1967], callsite="console.log"
       jump bb1011
     bb1027:
       store var $26.e, %1926
@@ -6517,7 +6517,7 @@ module {
       %2019 = call builtin.console.log(%2016)
       jump bb1037
     bb1052:
-      %2020 = call %1990, this=%1991, args=[%2016]
+      %2020 = call %1990, this=%1991, args=[%2016], callsite="console.log"
       jump bb1037
     bb1053:
       store var $26.e, %1975
@@ -6634,7 +6634,7 @@ module {
       %2068 = call builtin.console.log(%2065)
       jump bb1063
     bb1078:
-      %2069 = call %2039, this=%2040, args=[%2065]
+      %2069 = call %2039, this=%2040, args=[%2065], callsite="console.log"
       jump bb1063
     bb1079:
       store var $26.e, %2024
@@ -6751,7 +6751,7 @@ module {
       %2117 = call builtin.console.log(%2114)
       jump bb1089
     bb1104:
-      %2118 = call %2088, this=%2089, args=[%2114]
+      %2118 = call %2088, this=%2089, args=[%2114], callsite="console.log"
       jump bb1089
     bb1105:
       store var $26.e, %2073
@@ -6868,7 +6868,7 @@ module {
       %2166 = call builtin.console.log(%2163)
       jump bb1115
     bb1130:
-      %2167 = call %2137, this=%2138, args=[%2163]
+      %2167 = call %2137, this=%2138, args=[%2163], callsite="console.log"
       jump bb1115
     bb1131:
       store var $26.e, %2122
@@ -6985,7 +6985,7 @@ module {
       %2215 = call builtin.console.log(%2212)
       jump bb1141
     bb1156:
-      %2216 = call %2186, this=%2187, args=[%2212]
+      %2216 = call %2186, this=%2187, args=[%2212], callsite="console.log"
       jump bb1141
     bb1157:
       store var $26.e, %2171
@@ -7102,7 +7102,7 @@ module {
       %2264 = call builtin.console.log(%2261)
       jump bb1167
     bb1182:
-      %2265 = call %2235, this=%2236, args=[%2261]
+      %2265 = call %2235, this=%2236, args=[%2261], callsite="console.log"
       jump bb1167
     bb1183:
       store var $26.e, %2220
@@ -7219,7 +7219,7 @@ module {
       %2313 = call builtin.console.log(%2310)
       jump bb1193
     bb1208:
-      %2314 = call %2284, this=%2285, args=[%2310]
+      %2314 = call %2284, this=%2285, args=[%2310], callsite="console.log"
       jump bb1193
     bb1209:
       store var $26.e, %2269
@@ -7336,7 +7336,7 @@ module {
       %2362 = call builtin.console.log(%2359)
       jump bb1219
     bb1234:
-      %2363 = call %2333, this=%2334, args=[%2359]
+      %2363 = call %2333, this=%2334, args=[%2359], callsite="console.log"
       jump bb1219
     bb1235:
       store var $26.e, %2318
@@ -7453,7 +7453,7 @@ module {
       %2411 = call builtin.console.log(%2408)
       jump bb1245
     bb1260:
-      %2412 = call %2382, this=%2383, args=[%2408]
+      %2412 = call %2382, this=%2383, args=[%2408], callsite="console.log"
       jump bb1245
     bb1261:
       store var $26.e, %2367
@@ -7570,7 +7570,7 @@ module {
       %2460 = call builtin.console.log(%2457)
       jump bb1271
     bb1286:
-      %2461 = call %2431, this=%2432, args=[%2457]
+      %2461 = call %2431, this=%2432, args=[%2457], callsite="console.log"
       jump bb1271
     bb1287:
       store var $26.e, %2416
@@ -7687,7 +7687,7 @@ module {
       %2509 = call builtin.console.log(%2506)
       jump bb1297
     bb1312:
-      %2510 = call %2480, this=%2481, args=[%2506]
+      %2510 = call %2480, this=%2481, args=[%2506], callsite="console.log"
       jump bb1297
     bb1313:
       store var $26.e, %2465
@@ -7804,7 +7804,7 @@ module {
       %2558 = call builtin.console.log(%2555)
       jump bb1323
     bb1338:
-      %2559 = call %2529, this=%2530, args=[%2555]
+      %2559 = call %2529, this=%2530, args=[%2555], callsite="console.log"
       jump bb1323
     bb1339:
       store var $26.e, %2514
@@ -7921,7 +7921,7 @@ module {
       %2607 = call builtin.console.log(%2604)
       jump bb1349
     bb1364:
-      %2608 = call %2578, this=%2579, args=[%2604]
+      %2608 = call %2578, this=%2579, args=[%2604], callsite="console.log"
       jump bb1349
     bb1365:
       store var $26.e, %2563
@@ -8038,7 +8038,7 @@ module {
       %2656 = call builtin.console.log(%2653)
       jump bb1375
     bb1390:
-      %2657 = call %2627, this=%2628, args=[%2653]
+      %2657 = call %2627, this=%2628, args=[%2653], callsite="console.log"
       jump bb1375
     bb1391:
       store var $26.e, %2612
@@ -8155,7 +8155,7 @@ module {
       %2705 = call builtin.console.log(%2702)
       jump bb1401
     bb1416:
-      %2706 = call %2676, this=%2677, args=[%2702]
+      %2706 = call %2676, this=%2677, args=[%2702], callsite="console.log"
       jump bb1401
     bb1417:
       store var $26.e, %2661
@@ -8272,7 +8272,7 @@ module {
       %2754 = call builtin.console.log(%2751)
       jump bb1427
     bb1442:
-      %2755 = call %2725, this=%2726, args=[%2751]
+      %2755 = call %2725, this=%2726, args=[%2751], callsite="console.log"
       jump bb1427
     bb1443:
       store var $26.e, %2710
@@ -8389,7 +8389,7 @@ module {
       %2803 = call builtin.console.log(%2800)
       jump bb1453
     bb1468:
-      %2804 = call %2774, this=%2775, args=[%2800]
+      %2804 = call %2774, this=%2775, args=[%2800], callsite="console.log"
       jump bb1453
     bb1469:
       store var $26.e, %2759

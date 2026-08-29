@@ -291,7 +291,7 @@ module {
       %30 = load var $4.$args.mapped
       %31 = const c50
       %32 = call builtin.mapped_arguments_binding_read(%30, %31)
-      %33 = call %29, this=%26, args=[%32]
+      %33 = call %29, this=%26, args=[%32], callsite="String"
       %34 = is_exception %33
       branch %34, bb12, bb11
     bb10:
@@ -313,7 +313,7 @@ module {
       %39 = call builtin.console.log(%36)
       jump bb7
     bb16:
-      %40 = call %17, this=%18, args=[%36]
+      %40 = call %17, this=%18, args=[%36], callsite="console.log"
       jump bb7
     bb17:
       %44 = const c52
@@ -422,7 +422,7 @@ module {
       %17 = const c67
       %18 = get_prop %16, %17
       %19 = const c68
-      %20 = call %18, this=%15, args=[%19]
+      %20 = call %18, this=%15, args=[%19], callsite="makeIter"
       %21 = call builtin.iterator.from(%20)
       store var $suspend_spill_5_0, %21
       %326 = load var $suspend_spill_5_0
@@ -488,7 +488,7 @@ module {
       %45 = call builtin.console.log(%44)
       jump bb14
     bb17:
-      %46 = call %42, this=%43, args=[%44]
+      %46 = call %42, this=%43, args=[%44], callsite="console.log"
       jump bb14
     bb18:
       %53 = load var $7.$abrupt_completion_1
@@ -574,7 +574,7 @@ module {
       %80 = call builtin.console.log(%79)
       jump bb32
     bb35:
-      %81 = call %77, this=%78, args=[%79]
+      %81 = call %77, this=%78, args=[%79], callsite="console.log"
       jump bb32
     bb36:
       %88 = load var $7.$abrupt_completion_2
@@ -686,7 +686,7 @@ module {
       %136 = call builtin.console.log(%135)
       jump bb55
     bb58:
-      %137 = call %133, this=%134, args=[%135]
+      %137 = call %133, this=%134, args=[%135], callsite="console.log"
       jump bb55
     bb59:
       %148 = load var $10.$abrupt_completion_4
@@ -768,7 +768,7 @@ module {
       %182 = call builtin.console.log(%181)
       jump bb73
     bb76:
-      %183 = call %179, this=%180, args=[%181]
+      %183 = call %179, this=%180, args=[%181], callsite="console.log"
       jump bb73
     bb77:
       %195 = load var $10.$abrupt_completion_3
@@ -862,7 +862,7 @@ module {
       %232 = call builtin.console.log(%231)
       jump bb93
     bb96:
-      %233 = call %229, this=%230, args=[%231]
+      %233 = call %229, this=%230, args=[%231], callsite="console.log"
       jump bb93
     bb97:
       %244 = load var $10.$abrupt_completion_6
@@ -944,7 +944,7 @@ module {
       %278 = call builtin.console.log(%277)
       jump bb111
     bb114:
-      %279 = call %275, this=%276, args=[%277]
+      %279 = call %275, this=%276, args=[%277], callsite="console.log"
       jump bb111
     bb115:
       %291 = load var $5.$generator
@@ -1006,7 +1006,7 @@ module {
       %316 = call builtin.console.log(%315)
       jump bb125
     bb128:
-      %317 = call %313, this=%314, args=[%315]
+      %317 = call %313, this=%314, args=[%315], callsite="console.log"
       jump bb125
     bb129:
       jump bb5
@@ -1105,7 +1105,7 @@ module {
       store var $0.g, %29
       %30 = const c143
       %31 = load var $0.g
-      %32 = call %31, this=%30
+      %32 = call %31, this=%30, callsite="g"
       %33 = is_exception %32
       branch %33, bb2, bb1
     bb1:
@@ -1187,7 +1187,7 @@ module {
       %70 = is_exception %69
       branch %70, bb20, bb19
     bb19:
-      %72 = call %69, this=%67
+      %72 = call %69, this=%67, callsite="it.next"
       %73 = is_exception %72
       branch %73, bb22, bb21
     bb20:
@@ -1202,7 +1202,7 @@ module {
       %75 = call builtin.JSON.stringify(%72)
       jump bb17
     bb24:
-      %76 = call %65, this=%66, args=[%72]
+      %76 = call %65, this=%66, args=[%72], callsite="JSON.stringify"
       jump bb17
     bb25:
       branch %37, bb27, bb28
@@ -1213,7 +1213,7 @@ module {
       %80 = call builtin.console.log(%77)
       jump bb9
     bb28:
-      %81 = call %49, this=%50, args=[%77]
+      %81 = call %49, this=%50, args=[%77], callsite="console.log"
       jump bb9
     bb29:
       %85 = const c159
@@ -1294,7 +1294,7 @@ module {
       branch %120, bb48, bb47
     bb47:
       %122 = const c174
-      %123 = call %119, this=%117, args=[%122]
+      %123 = call %119, this=%117, args=[%122], callsite="it.return"
       %124 = is_exception %123
       branch %124, bb50, bb49
     bb48:
@@ -1309,7 +1309,7 @@ module {
       %126 = call builtin.JSON.stringify(%123)
       jump bb45
     bb52:
-      %127 = call %115, this=%116, args=[%123]
+      %127 = call %115, this=%116, args=[%123], callsite="JSON.stringify"
       jump bb45
     bb53:
       branch %87, bb55, bb56
@@ -1320,7 +1320,7 @@ module {
       %131 = call builtin.console.log(%128)
       jump bb37
     bb56:
-      %132 = call %99, this=%100, args=[%128]
+      %132 = call %99, this=%100, args=[%128], callsite="console.log"
       jump bb37
     bb57:
       %136 = const c175
@@ -1400,7 +1400,7 @@ module {
       %171 = is_exception %170
       branch %171, bb76, bb75
     bb75:
-      %173 = call %170, this=%168
+      %173 = call %170, this=%168, callsite="it.next"
       %174 = is_exception %173
       branch %174, bb78, bb77
     bb76:
@@ -1415,7 +1415,7 @@ module {
       %176 = call builtin.JSON.stringify(%173)
       jump bb73
     bb80:
-      %177 = call %166, this=%167, args=[%173]
+      %177 = call %166, this=%167, args=[%173], callsite="JSON.stringify"
       jump bb73
     bb81:
       branch %138, bb83, bb84
@@ -1426,7 +1426,7 @@ module {
       %181 = call builtin.console.log(%178)
       jump bb65
     bb84:
-      %182 = call %150, this=%151, args=[%178]
+      %182 = call %150, this=%151, args=[%178], callsite="console.log"
       jump bb65
     bb85:
       return

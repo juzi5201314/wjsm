@@ -605,7 +605,7 @@ module {
       %47 = call builtin.console.log(%44)
       jump bb7
     bb18:
-      %48 = call %35, this=%36, args=[%44]
+      %48 = call %35, this=%36, args=[%44], callsite="console.log"
       jump bb7
     bb19:
       %52 = const c30
@@ -684,7 +684,7 @@ module {
       %82 = call builtin.console.log(%79)
       jump bb27
     bb40:
-      %83 = call %66, this=%67, args=[%79]
+      %83 = call %66, this=%67, args=[%79], callsite="console.log"
       jump bb27
     bb41:
       %87 = const c41
@@ -763,7 +763,7 @@ module {
       %117 = call builtin.console.log(%114)
       jump bb49
     bb62:
-      %118 = call %101, this=%102, args=[%114]
+      %118 = call %101, this=%102, args=[%114], callsite="console.log"
       jump bb49
     bb63:
       %122 = const c51
@@ -833,7 +833,7 @@ module {
       %147 = call builtin.exception_value(%145)
       throw %147
     bb80:
-      %152 = call %149, this=%145
+      %152 = call %149, this=%145, callsite="null?.a.b.c"
       %153 = is_exception %152
       branch %153, bb83, bb82
     bb81:
@@ -857,7 +857,7 @@ module {
       %159 = call builtin.console.log(%156)
       jump bb71
     bb88:
-      %160 = call %136, this=%137, args=[%156]
+      %160 = call %136, this=%137, args=[%156], callsite="console.log"
       jump bb71
     bb89:
       %164 = const c63
@@ -907,7 +907,7 @@ module {
       jump bb104
     bb101:
       %182 = const c71
-      %183 = call %180, this=%182
+      %183 = call %180, this=%182, callsite="null"
       %184 = is_exception %183
       branch %184, bb103, bb102
     bb102:
@@ -928,7 +928,7 @@ module {
       %190 = call builtin.console.log(%187)
       jump bb97
     bb108:
-      %191 = call %178, this=%179, args=[%187]
+      %191 = call %178, this=%179, args=[%187], callsite="console.log"
       jump bb97
     bb109:
       %195 = const c73
@@ -978,7 +978,7 @@ module {
       jump bb126
     bb121:
       %213 = const c81
-      %214 = call %211, this=%213
+      %214 = call %211, this=%213, callsite="null"
       %215 = is_exception %214
       branch %215, bb123, bb122
     bb122:
@@ -1007,7 +1007,7 @@ module {
       %225 = call builtin.console.log(%222)
       jump bb117
     bb130:
-      %226 = call %209, this=%210, args=[%222]
+      %226 = call %209, this=%210, args=[%222], callsite="console.log"
       jump bb117
     bb131:
       %230 = const c84
@@ -1089,7 +1089,7 @@ module {
       %261 = call builtin.console.log(%258)
       jump bb139
     bb153:
-      %262 = call %244, this=%245, args=[%258]
+      %262 = call %244, this=%245, args=[%258], callsite="console.log"
       jump bb139
     bb154:
       %266 = const c96
@@ -1177,7 +1177,7 @@ module {
       %302 = call builtin.console.log(%299)
       jump bb162
     bb176:
-      %303 = call %282, this=%283, args=[%299]
+      %303 = call %282, this=%283, args=[%299], callsite="console.log"
       jump bb162
     bb177:
       %307 = const c108
@@ -1248,7 +1248,7 @@ module {
       %333 = call builtin.console.log(%330)
       jump bb185
     bb196:
-      %334 = call %321, this=%322, args=[%330]
+      %334 = call %321, this=%322, args=[%330], callsite="console.log"
       jump bb185
     bb197:
       %338 = const c117
@@ -1344,7 +1344,7 @@ module {
       %383 = call builtin.console.log(%372, %382)
       jump bb205
     bb220:
-      %384 = call %361, this=%362, args=[%372, %382]
+      %384 = call %361, this=%362, args=[%372, %382], callsite="console.log"
       jump bb205
     bb221:
       %388 = const c136
@@ -1433,7 +1433,7 @@ module {
       %427 = call builtin.exception_value(%425)
       throw %427
     bb239:
-      %433 = call %425, this=%422, args=[%1180]
+      %433 = call %425, this=%422, args=[%1180], callsite="null?.f"
       %434 = is_exception %433
       branch %434, bb242, bb241
     bb240:
@@ -1472,7 +1472,7 @@ module {
       %448 = call builtin.console.log(%437, %447)
       jump bb232
     bb251:
-      %449 = call %420, this=%421, args=[%437, %447]
+      %449 = call %420, this=%421, args=[%437, %447], callsite="console.log"
       jump bb232
     bb252:
       %453 = const c158
@@ -1533,7 +1533,7 @@ module {
       %1173 = const c0
       jump bb650
     bb266:
-      %482 = call %473, this=%471, args=[%1173]
+      %482 = call %473, this=%471, args=[%1173], callsite="fns.f"
       %483 = is_exception %482
       branch %483, bb269, bb268
     bb267:
@@ -1572,7 +1572,7 @@ module {
       %497 = call builtin.console.log(%486, %496)
       jump bb260
     bb278:
-      %498 = call %469, this=%470, args=[%486, %496]
+      %498 = call %469, this=%470, args=[%486, %496], callsite="console.log"
       jump bb260
     bb279:
       %502 = new_object(capacity=4)
@@ -1773,7 +1773,7 @@ module {
       %599 = is_exception %598
       branch %599, bb326, bb325
     bb325:
-      %601 = call %598, this=%595
+      %601 = call %598, this=%595, callsite="obj?.m"
       %602 = is_exception %601
       branch %602, bb328, bb327
     bb326:
@@ -1822,7 +1822,7 @@ module {
       %624 = const c212
       jump bb342
     bb339:
-      %621 = call %617, this=%615
+      %621 = call %617, this=%615, callsite="obj.m"
       %622 = is_exception %621
       branch %622, bb341, bb340
     bb340:
@@ -1843,7 +1843,7 @@ module {
       %628 = call builtin.console.log(%564, %585, %605, %625)
       jump bb290
     bb346:
-      %629 = call %548, this=%549, args=[%564, %585, %605, %625]
+      %629 = call %548, this=%549, args=[%564, %585, %605, %625], callsite="console.log"
       jump bb290
     bb347:
       %633 = const c216
@@ -1900,7 +1900,7 @@ module {
       %655 = is_exception %654
       branch %655, bb361, bb360
     bb360:
-      %657 = call %654, this=%651
+      %657 = call %654, this=%651, callsite="chain?.a"
       %658 = is_exception %657
       branch %658, bb363, bb362
     bb361:
@@ -1932,7 +1932,7 @@ module {
       %668 = call builtin.console.log(%665)
       jump bb355
     bb370:
-      %669 = call %649, this=%650, args=[%665]
+      %669 = call %649, this=%650, args=[%665], callsite="console.log"
       jump bb355
     bb371:
       %673 = const c228
@@ -2020,7 +2020,7 @@ module {
       %708 = call builtin.console.log(%705)
       jump bb379
     bb392:
-      %709 = call %688, this=%689, args=[%705]
+      %709 = call %688, this=%689, args=[%705], callsite="console.log"
       jump bb379
     bb393:
       %713 = new_array(capacity=4)
@@ -2110,7 +2110,7 @@ module {
       %748 = call builtin.console.log(%745)
       jump bb401
     bb415:
-      %749 = call %731, this=%732, args=[%745]
+      %749 = call %731, this=%732, args=[%745], callsite="console.log"
       jump bb401
     bb416:
       %753 = const c255
@@ -2193,7 +2193,7 @@ module {
       branch %794, bb436, bb435
     bb435:
       %796 = load var $0.probe
-      %797 = call %793, this=%791, args=[%796]
+      %797 = call %793, this=%791, args=[%796], callsite="probe.read"
       %798 = is_exception %797
       branch %798, bb438, bb437
     bb436:
@@ -2210,7 +2210,7 @@ module {
       throw %799
     bb439:
       %805 = const c272
-      %806 = call %802, this=%800, args=[%805]
+      %806 = call %802, this=%800, args=[%805], callsite="probe.read"
       %807 = is_exception %806
       branch %807, bb442, bb441
     bb440:
@@ -2227,7 +2227,7 @@ module {
       throw %808
     bb443:
       %814 = load var $0.undefined
-      %815 = call %811, this=%809, args=[%814]
+      %815 = call %811, this=%809, args=[%814], callsite="probe.read"
       %816 = is_exception %815
       branch %816, bb446, bb445
     bb444:
@@ -2242,7 +2242,7 @@ module {
       %818 = call builtin.console.log(%797, %806, %815)
       jump bb433
     bb448:
-      %819 = call %789, this=%790, args=[%797, %806, %815]
+      %819 = call %789, this=%790, args=[%797, %806, %815], callsite="console.log"
       jump bb433
     bb449:
       %823 = const c276
@@ -2319,7 +2319,7 @@ module {
       %854 = call builtin.console.log(%851)
       jump bb457
     bb468:
-      %855 = call %840, this=%841, args=[%851]
+      %855 = call %840, this=%841, args=[%851], callsite="console.log"
       jump bb457
     bb469:
       jump bb471
@@ -2436,7 +2436,7 @@ module {
       %903 = call builtin.console.log(%893, %900)
       jump bb487
     bb496:
-      %904 = call %887, this=%888, args=[%893, %900]
+      %904 = call %887, this=%888, args=[%893, %900], callsite="console.log"
       jump bb487
     bb497:
       jump bb472
@@ -2521,7 +2521,7 @@ module {
       %944 = call builtin.console.log(%941)
       jump bb505
     bb521:
-      %945 = call %925, this=%926, args=[%941]
+      %945 = call %925, this=%926, args=[%941], callsite="console.log"
       jump bb505
     bb522:
       %949 = const c314
@@ -2588,7 +2588,7 @@ module {
       %974 = call builtin.console.log(%973)
       jump bb530
     bb539:
-      %975 = call %964, this=%965, args=[%973]
+      %975 = call %964, this=%965, args=[%973], callsite="console.log"
       jump bb530
     bb540:
       %979 = const c325
@@ -2671,7 +2671,7 @@ module {
       %1012 = call builtin.console.log(%1004, %1007)
       jump bb548
     bb561:
-      %1013 = call %995, this=%996, args=[%1004, %1007]
+      %1013 = call %995, this=%996, args=[%1004, %1007], callsite="console.log"
       jump bb548
     bb562:
       %1017 = const c336
@@ -2752,7 +2752,7 @@ module {
       %1049 = call builtin.console.log(%1048)
       jump bb570
     bb583:
-      %1050 = call %1031, this=%1032, args=[%1048]
+      %1050 = call %1031, this=%1032, args=[%1048], callsite="console.log"
       jump bb570
     bb584:
       %1054 = const c348
@@ -2865,7 +2865,7 @@ module {
       %1110 = call builtin.console.log(%1101, %1109)
       jump bb592
     bb609:
-      %1111 = call %1069, this=%1070, args=[%1101, %1109]
+      %1111 = call %1069, this=%1070, args=[%1101, %1109], callsite="console.log"
       jump bb592
     bb610:
       %1115 = const c370
@@ -2974,7 +2974,7 @@ module {
       %1157 = call builtin.console.log(%1141, %1154)
       jump bb618
     bb640:
-      %1158 = call %1129, this=%1130, args=[%1141, %1154]
+      %1158 = call %1129, this=%1130, args=[%1141, %1154], callsite="console.log"
       jump bb618
     bb641:
       return

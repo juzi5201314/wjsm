@@ -134,7 +134,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_1 [direct_callable] [js_name ""] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
@@ -178,7 +178,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -301,7 +301,7 @@ module {
       %56 = call builtin.promise.reject_static(%55, %54)
       jump bb15
     bb18:
-      %57 = call %52, this=%53, args=[%54]
+      %57 = call %52, this=%53, args=[%54], callsite="Promise.reject"
       jump bb15
     bb19:
       call builtin.array.push(%37, %58)
@@ -349,7 +349,7 @@ module {
       %79 = call builtin.promise.resolve_static(%78, %77)
       jump bb27
     bb30:
-      %80 = call %75, this=%76, args=[%77]
+      %80 = call %75, this=%76, args=[%77], callsite="Promise.resolve"
       jump bb27
     bb31:
       call builtin.array.push(%37, %81)
@@ -362,7 +362,7 @@ module {
       %85 = call builtin.promise.any(%84, %37)
       jump bb7
     bb34:
-      %86 = call %35, this=%36, args=[%37]
+      %86 = call %35, this=%36, args=[%37], callsite="Promise.any"
       jump bb7
     bb35:
       %90 = const c53
@@ -453,7 +453,7 @@ module {
       %130 = call builtin.promise.reject_static(%129, %128)
       jump bb53
     bb56:
-      %131 = call %126, this=%127, args=[%128]
+      %131 = call %126, this=%127, args=[%128], callsite="Promise.reject"
       jump bb53
     bb57:
       call builtin.array.push(%111, %132)
@@ -501,7 +501,7 @@ module {
       %153 = call builtin.promise.reject_static(%152, %151)
       jump bb65
     bb68:
-      %154 = call %149, this=%150, args=[%151]
+      %154 = call %149, this=%150, args=[%151], callsite="Promise.reject"
       jump bb65
     bb69:
       call builtin.array.push(%111, %155)
@@ -514,7 +514,7 @@ module {
       %159 = call builtin.promise.any(%158, %111)
       jump bb45
     bb72:
-      %160 = call %109, this=%110, args=[%111]
+      %160 = call %109, this=%110, args=[%111], callsite="Promise.any"
       jump bb45
     bb73:
       %164 = const c89

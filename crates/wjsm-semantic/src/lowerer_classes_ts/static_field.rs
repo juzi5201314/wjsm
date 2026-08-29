@@ -109,6 +109,7 @@ impl Lowerer {
                     callee: function_value,
                     this_val: field.ctor_dest,
                     args: vec![],
+                    callsite: None,
                 },
             );
             // DefineField 的 `? Call(initializer, receiver)`：初始化器抛出的

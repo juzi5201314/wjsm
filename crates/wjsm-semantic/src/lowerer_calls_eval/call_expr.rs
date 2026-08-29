@@ -195,6 +195,9 @@ impl Lowerer {
                     callee: resolve_fn,
                     this_val,
                     args,
+                    // 内部 desugar 调用（ImportMetaResolve 产物恒可调用），
+                    // 无源级 callee 表达式。
+                    callsite: None,
                 },
             );
         }
@@ -747,6 +750,14 @@ impl Lowerer {
                 args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
             }
             dest = self.alloc_value();
+            // 源级调用点：静态渲染 callee 表达式，宿主拒绝路径（callee 非
+            // callable）用它生成 `<expr> is not a function`（对齐 Node）。
+            let callsite = match &call.callee {
+                swc_ast::Callee::Expr(expr) => {
+                    Some(crate::callsite_render::render_call_callsite(expr))
+                }
+                _ => None,
+            };
             self.current_function.append_instruction(
                 call_block,
                 Instruction::Call {
@@ -754,6 +765,7 @@ impl Lowerer {
                     callee: callee_val,
                     this_val,
                     args,
+                    callsite,
                 },
             );
         }

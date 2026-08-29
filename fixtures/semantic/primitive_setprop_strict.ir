@@ -308,7 +308,7 @@ module {
       %59 = call builtin.console.log(%47, %50, %53, %56)
       jump bb12
     bb19:
-      %60 = call %45, this=%46, args=[%47, %50, %53, %56]
+      %60 = call %45, this=%46, args=[%47, %50, %53, %56], callsite="console.log"
       jump bb12
     bb20:
       jump bb2
@@ -392,7 +392,7 @@ module {
       %99 = call builtin.console.log(%87, %90, %93, %96)
       jump bb33
     bb40:
-      %100 = call %85, this=%86, args=[%87, %90, %93, %96]
+      %100 = call %85, this=%86, args=[%87, %90, %93, %96], callsite="console.log"
       jump bb33
     bb41:
       jump bb23
@@ -476,7 +476,7 @@ module {
       %139 = call builtin.console.log(%127, %130, %133, %136)
       jump bb54
     bb61:
-      %140 = call %125, this=%126, args=[%127, %130, %133, %136]
+      %140 = call %125, this=%126, args=[%127, %130, %133, %136], callsite="console.log"
       jump bb54
     bb62:
       jump bb44
@@ -562,7 +562,7 @@ module {
       %179 = call builtin.console.log(%167, %170, %173, %176)
       jump bb75
     bb82:
-      %180 = call %165, this=%166, args=[%167, %170, %173, %176]
+      %180 = call %165, this=%166, args=[%167, %170, %173, %176], callsite="console.log"
       jump bb75
     bb83:
       jump bb65
@@ -648,7 +648,7 @@ module {
       %220 = call builtin.console.log(%208, %211, %214, %217)
       jump bb96
     bb103:
-      %221 = call %206, this=%207, args=[%208, %211, %214, %217]
+      %221 = call %206, this=%207, args=[%208, %211, %214, %217], callsite="console.log"
       jump bb96
     bb104:
       jump bb86
@@ -735,7 +735,7 @@ module {
       %261 = call builtin.console.log(%249, %252, %255, %258)
       jump bb117
     bb124:
-      %262 = call %247, this=%248, args=[%249, %252, %255, %258]
+      %262 = call %247, this=%248, args=[%249, %252, %255, %258], callsite="console.log"
       jump bb117
     bb125:
       jump bb107
@@ -770,7 +770,7 @@ module {
       %279 = call builtin.symbol.create(%278)
       jump bb131
     bb134:
-      %280 = call %276, this=%277, args=[%278]
+      %280 = call %276, this=%277, args=[%278], callsite="Symbol"
       jump bb131
     bb135:
       store var $0.sym, %281
@@ -857,7 +857,7 @@ module {
       %319 = call builtin.console.log(%307, %310, %313, %316)
       jump bb148
     bb155:
-      %320 = call %305, this=%306, args=[%307, %310, %313, %316]
+      %320 = call %305, this=%306, args=[%307, %310, %313, %316], callsite="console.log"
       jump bb148
     bb156:
       jump bb138
@@ -943,7 +943,7 @@ module {
       %360 = call builtin.console.log(%348, %351, %354, %357)
       jump bb169
     bb176:
-      %361 = call %346, this=%347, args=[%348, %351, %354, %357]
+      %361 = call %346, this=%347, args=[%348, %351, %354, %357], callsite="console.log"
       jump bb169
     bb177:
       jump bb159
@@ -1027,7 +1027,7 @@ module {
       %401 = call builtin.console.log(%389, %392, %395, %398)
       jump bb190
     bb197:
-      %402 = call %387, this=%388, args=[%389, %392, %395, %398]
+      %402 = call %387, this=%388, args=[%389, %392, %395, %398], callsite="console.log"
       jump bb190
     bb198:
       jump bb180
@@ -1114,7 +1114,7 @@ module {
       %441 = call builtin.console.log(%429, %432, %435, %438)
       jump bb211
     bb218:
-      %442 = call %427, this=%428, args=[%429, %432, %435, %438]
+      %442 = call %427, this=%428, args=[%429, %432, %435, %438], callsite="console.log"
       jump bb211
     bb219:
       jump bb201
@@ -1162,7 +1162,7 @@ module {
       %470 = const c174
       %471 = get_prop %469, %470
       %472 = load var $0.big
-      %473 = call %471, this=%468, args=[%472]
+      %473 = call %471, this=%468, args=[%472], callsite="String"
       %474 = is_exception %473
       branch %474, bb230, bb229
     bb229:
@@ -1174,7 +1174,7 @@ module {
       %476 = call builtin.console.log(%462, %463, %464, %465, %467, %473)
       jump bb227
     bb232:
-      %477 = call %460, this=%461, args=[%462, %463, %464, %465, %467, %473]
+      %477 = call %460, this=%461, args=[%462, %463, %464, %465, %467, %473], callsite="console.log"
       jump bb227
     bb233:
       return

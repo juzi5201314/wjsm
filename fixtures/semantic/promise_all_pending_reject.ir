@@ -138,7 +138,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.reason] [entry=bb0]:
@@ -182,7 +182,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_4 [js_name ""] [js_length 0] [captures: $0.resolveA, $0.rejectB] [params: $5.$env, $5.$this] [entry=bb0]:
@@ -192,7 +192,7 @@ module {
       %2 = const c60
       %3 = get_prop %1, %2
       %4 = const c61
-      %5 = call %3, this=%0, args=[%4]
+      %5 = call %3, this=%0, args=[%4], callsite="resolveA"
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
@@ -201,7 +201,7 @@ module {
       %10 = const c63
       %11 = get_prop %9, %10
       %12 = const c64
-      %13 = call %11, this=%8, args=[%12]
+      %13 = call %11, this=%8, args=[%12], callsite="rejectB"
       %14 = is_exception %13
       branch %14, bb4, bb3
     bb2:
@@ -339,7 +339,7 @@ module {
       %69 = call builtin.promise.all(%68, %65)
       jump bb11
     bb14:
-      %70 = call %63, this=%64, args=[%65]
+      %70 = call %63, this=%64, args=[%65], callsite="Promise.all"
       jump bb11
     bb15:
       %74 = const c47
@@ -366,7 +366,7 @@ module {
       %87 = const c65
       %88 = load var $0.$shared_env
       %89 = call builtin.create_closure(%87, %88)
-      %90 = call %86, this=%83, args=[%89]
+      %90 = call %86, this=%83, args=[%89], callsite="queueMicrotask"
       %91 = is_exception %90
       branch %91, bb22, bb21
     bb20:

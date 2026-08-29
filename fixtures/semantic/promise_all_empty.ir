@@ -90,7 +90,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -178,7 +178,7 @@ module {
       %39 = call builtin.promise.all(%38, %37)
       jump bb7
     bb10:
-      %40 = call %35, this=%36, args=[%37]
+      %40 = call %35, this=%36, args=[%37], callsite="Promise.all"
       jump bb7
     bb11:
       %44 = const c36

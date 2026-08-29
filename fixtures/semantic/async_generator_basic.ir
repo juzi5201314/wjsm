@@ -242,7 +242,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
@@ -294,7 +294,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @arrow_4 [direct_callable] [js_name ""] [js_length 1] [params: $5.$env, $5.$this, $5.result] [entry=bb0]:
@@ -346,7 +346,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -397,7 +397,7 @@ module {
       store var $0.gen, %21
       %22 = const c46
       %23 = load var $0.gen
-      %24 = call %23, this=%22
+      %24 = call %23, this=%22, callsite="gen"
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:
@@ -411,7 +411,7 @@ module {
       %26 = call builtin.exception_value(%24)
       throw %26
     bb3:
-      %32 = call %29, this=%27
+      %32 = call %29, this=%27, callsite="g.next"
       %33 = is_exception %32
       branch %33, bb6, bb5
     bb4:
@@ -436,7 +436,7 @@ module {
       %39 = call builtin.exception_value(%37)
       throw %39
     bb9:
-      %45 = call %42, this=%40
+      %45 = call %42, this=%40, callsite="g.next"
       %46 = is_exception %45
       branch %46, bb12, bb11
     bb10:
@@ -461,7 +461,7 @@ module {
       %52 = call builtin.exception_value(%50)
       throw %52
     bb15:
-      %58 = call %55, this=%53
+      %58 = call %55, this=%53, callsite="g.next"
       %59 = is_exception %58
       branch %59, bb18, bb17
     bb16:

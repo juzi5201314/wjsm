@@ -56,6 +56,7 @@ impl Lowerer {
                     callee: callback_val,
                     this_val: undef_val,
                     args: vec![resolve_fn, reject_fn],
+                    callsite: None,
                 },
             );
         }

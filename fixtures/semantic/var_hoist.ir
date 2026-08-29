@@ -120,7 +120,7 @@ module {
       %40 = call builtin.console.log(%39)
       jump bb7
     bb10:
-      %41 = call %37, this=%38, args=[%39]
+      %41 = call %37, this=%38, args=[%39], callsite="console.log"
       jump bb7
     bb11:
       return

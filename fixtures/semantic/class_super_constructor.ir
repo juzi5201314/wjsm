@@ -227,7 +227,7 @@ module {
       %44 = call builtin.get_prototype_from_constructor(%42)
       set_proto %43, %44
       %45 = const c34
-      %46 = construct_call %42, this=%43, args=[%45]
+      %46 = construct_call %42, this=%43, args=[%45], callsite="Derived"
       %47 = is_exception %46
       branch %47, bb1, bb2
     bb1:
@@ -302,7 +302,7 @@ module {
       %75 = call builtin.console.log(%72)
       jump bb16
     bb21:
-      %76 = call %68, this=%69, args=[%72]
+      %76 = call %68, this=%69, args=[%72], callsite="console.log"
       jump bb16
     bb22:
       %80 = const c43
@@ -356,7 +356,7 @@ module {
       %101 = call builtin.console.log(%98)
       jump bb30
     bb35:
-      %102 = call %94, this=%95, args=[%98]
+      %102 = call %94, this=%95, args=[%98], callsite="console.log"
       jump bb30
     bb36:
       %106 = const c51
@@ -416,7 +416,7 @@ module {
       %129 = call builtin.console.log(%124)
       jump bb44
     bb51:
-      %130 = call %120, this=%121, args=[%124]
+      %130 = call %120, this=%121, args=[%124], callsite="console.log"
       jump bb44
     bb52:
       %134 = const c58
@@ -476,7 +476,7 @@ module {
       %157 = call builtin.console.log(%152)
       jump bb60
     bb67:
-      %158 = call %148, this=%149, args=[%152]
+      %158 = call %148, this=%149, args=[%152], callsite="console.log"
       jump bb60
     bb68:
       return

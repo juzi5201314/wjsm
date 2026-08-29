@@ -164,7 +164,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
     bb13:
       %26 = const c55
@@ -220,7 +220,7 @@ module {
       %49 = call builtin.console.log(%46)
       jump bb21
     bb26:
-      %50 = call %40, this=%41, args=[%46]
+      %50 = call %40, this=%41, args=[%46], callsite="console.log"
       jump bb21
     bb27:
       %54 = const c64
@@ -276,7 +276,7 @@ module {
       %77 = call builtin.console.log(%74)
       jump bb35
     bb40:
-      %78 = call %68, this=%69, args=[%74]
+      %78 = call %68, this=%69, args=[%74], callsite="console.log"
       jump bb35
     bb41:
       %82 = const c73
@@ -332,7 +332,7 @@ module {
       %105 = call builtin.console.log(%102)
       jump bb49
     bb54:
-      %106 = call %96, this=%97, args=[%102]
+      %106 = call %96, this=%97, args=[%102], callsite="console.log"
       jump bb49
     bb55:
       %110 = const c82
@@ -388,7 +388,7 @@ module {
       %133 = call builtin.console.log(%130)
       jump bb63
     bb68:
-      %134 = call %124, this=%125, args=[%130]
+      %134 = call %124, this=%125, args=[%130], callsite="console.log"
       jump bb63
     bb69:
       %138 = const c91
@@ -444,7 +444,7 @@ module {
       %161 = call builtin.console.log(%158)
       jump bb77
     bb82:
-      %162 = call %152, this=%153, args=[%158]
+      %162 = call %152, this=%153, args=[%158], callsite="console.log"
       jump bb77
     bb83:
       %166 = const c100
@@ -500,7 +500,7 @@ module {
       %189 = call builtin.console.log(%186)
       jump bb91
     bb96:
-      %190 = call %180, this=%181, args=[%186]
+      %190 = call %180, this=%181, args=[%186], callsite="console.log"
       jump bb91
     bb97:
       return
@@ -628,7 +628,7 @@ module {
       %56 = call builtin.promise.resolve_static(%55, %54)
       jump bb15
     bb18:
-      %57 = call %52, this=%53, args=[%54]
+      %57 = call %52, this=%53, args=[%54], callsite="Promise.resolve"
       jump bb15
     bb19:
       call builtin.array.push(%37, %58)
@@ -676,7 +676,7 @@ module {
       %79 = call builtin.promise.reject_static(%78, %77)
       jump bb27
     bb30:
-      %80 = call %75, this=%76, args=[%77]
+      %80 = call %75, this=%76, args=[%77], callsite="Promise.reject"
       jump bb27
     bb31:
       call builtin.array.push(%37, %81)
@@ -691,7 +691,7 @@ module {
       %86 = call builtin.promise.all_settled(%85, %37)
       jump bb7
     bb34:
-      %87 = call %35, this=%36, args=[%37]
+      %87 = call %35, this=%36, args=[%37], callsite="Promise.allSettled"
       jump bb7
     bb35:
       %91 = const c109

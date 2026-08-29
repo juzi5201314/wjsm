@@ -616,6 +616,9 @@ fn expand_site(module: &mut Module, cand: &Candidate, current_max_value: &mut [u
             callee: cand.cb,
             this_val,
             args: call_args,
+            // 内联展开的回调调用是 pass 合成站点，无源级 callee 表达式；
+            // 回调非 callable 的拒绝按值渲染回退。
+            callsite: None,
         });
         let is_exc = vg.fresh();
         b.push_instruction(Instruction::IsException {

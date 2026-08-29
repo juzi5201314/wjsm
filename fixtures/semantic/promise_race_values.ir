@@ -125,7 +125,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_1 [direct_callable] [js_name ""] [js_length 1] [params: $2.$env, $2.$this, $2.reason] [entry=bb0]:
@@ -169,7 +169,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -294,7 +294,7 @@ module {
       %57 = call builtin.promise.resolve_static(%56, %55)
       jump bb15
     bb18:
-      %58 = call %53, this=%54, args=[%55]
+      %58 = call %53, this=%54, args=[%55], callsite="Promise.resolve"
       jump bb15
     bb19:
       call builtin.array.push(%37, %59)
@@ -307,7 +307,7 @@ module {
       %63 = call builtin.promise.race(%62, %37)
       jump bb7
     bb22:
-      %64 = call %35, this=%36, args=[%37]
+      %64 = call %35, this=%36, args=[%37], callsite="Promise.race"
       jump bb7
     bb23:
       %68 = const c45
@@ -398,7 +398,7 @@ module {
       %108 = call builtin.promise.reject_static(%107, %106)
       jump bb41
     bb44:
-      %109 = call %104, this=%105, args=[%106]
+      %109 = call %104, this=%105, args=[%106], callsite="Promise.reject"
       jump bb41
     bb45:
       call builtin.array.push(%89, %110)
@@ -446,7 +446,7 @@ module {
       %131 = call builtin.promise.resolve_static(%130, %129)
       jump bb53
     bb56:
-      %132 = call %127, this=%128, args=[%129]
+      %132 = call %127, this=%128, args=[%129], callsite="Promise.resolve"
       jump bb53
     bb57:
       call builtin.array.push(%89, %133)
@@ -459,7 +459,7 @@ module {
       %137 = call builtin.promise.race(%136, %89)
       jump bb33
     bb60:
-      %138 = call %87, this=%88, args=[%89]
+      %138 = call %87, this=%88, args=[%89], callsite="Promise.race"
       jump bb33
     bb61:
       %142 = const c80

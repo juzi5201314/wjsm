@@ -128,7 +128,7 @@ module {
       %23 = phi [(bb10, %21), (bb8, %22)]
       return %23
     bb10:
-      %21 = call %15, this=%12, args=[%18]
+      %21 = call %15, this=%12, args=[%18], callsite="g2"
       jump bb9
     bb11:
       %20 = call builtin.exception_value(%18)
@@ -295,7 +295,7 @@ module {
       %55 = call builtin.console.log(%263)
       jump bb7
     bb12:
-      %56 = call %47, this=%48, args=[%263]
+      %56 = call %47, this=%48, args=[%263], callsite="console.log"
       jump bb7
     bb13:
       %60 = new_array(capacity=4)
@@ -373,7 +373,7 @@ module {
       %90 = load var $5.$iteration_env.2
       %91 = const c50
       %92 = set_prop %90, %91, %89
-      %93 = call %81, this=%79, args=[%89]
+      %93 = call %81, this=%79, args=[%89], callsite="fns.push"
       %94 = is_exception %93
       branch %94, bb27, bb26
     bb25:
@@ -434,7 +434,7 @@ module {
       %133 = is_exception %132
       branch %133, bb41, bb40
     bb40:
-      %135 = call %132, this=%130
+      %135 = call %132, this=%130, callsite="fns[0]"
       %136 = const c63
       %137 = get_elem %135, %136
       %138 = is_exception %137
@@ -468,7 +468,7 @@ module {
       %147 = call builtin.exception_value(%145)
       throw %147
     bb48:
-      %153 = call %150, this=%148
+      %153 = call %150, this=%148, callsite="fns[0]"
       %154 = const c66
       %155 = get_elem %153, %154
       %156 = is_exception %155
@@ -486,7 +486,7 @@ module {
       %157 = call builtin.exception_value(%155)
       throw %157
     bb52:
-      %163 = call %160, this=%158
+      %163 = call %160, this=%158, callsite="fns[1]"
       %164 = const c68
       %165 = get_elem %163, %164
       %166 = is_exception %165
@@ -511,7 +511,7 @@ module {
       %170 = call builtin.exception_value(%168)
       throw %170
     bb58:
-      %176 = call %173, this=%171
+      %176 = call %173, this=%171, callsite="fns[1]"
       %177 = const c70
       %178 = get_elem %176, %177
       %179 = is_exception %178
@@ -528,7 +528,7 @@ module {
       %181 = call builtin.console.log(%145, %168, %178)
       jump bb38
     bb63:
-      %182 = call %128, this=%129, args=[%145, %168, %178]
+      %182 = call %128, this=%129, args=[%145, %168, %178], callsite="console.log"
       jump bb38
     bb64:
       %188 = load var $0.$shared_env
@@ -591,7 +591,7 @@ module {
       %216 = call builtin.console.log(%215)
       jump bb74
     bb77:
-      %217 = call %213, this=%214, args=[%215]
+      %217 = call %213, this=%214, args=[%215], callsite="console.log"
       jump bb74
     bb78:
       return
@@ -676,7 +676,7 @@ module {
       store var $2.n, %239
       jump bb91
     bb102:
-      %261 = call %255, this=%252, args=[%258]
+      %261 = call %255, this=%252, args=[%258], callsite="g2"
       jump bb101
     bb103:
       unreachable

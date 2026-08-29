@@ -733,6 +733,12 @@ pub enum Builtin {
     SetProtoIsSupersetOf,
     /// `Set.prototype.isDisjointFrom`（ES §24.2.4.12）。
     SetProtoIsDisjointFrom,
+    /// 取回已注册的 canonical 模块命名空间对象（§10.4.6.12 GetModuleNamespace
+    /// 缓存）：按 (当前 image, ModuleId) 解析运行时模块键并读命名空间缓存。
+    /// builtin 段与用户段拆分 image 时，段内 `import * as` 的命名空间由
+    /// `$builtin_main` 创建注册，用户段经本 builtin 取回同一对象而非重建。
+    /// args: [module_id]。
+    GetModuleNamespace,
     /// `get DataView.prototype.buffer`（ES §25.3.4.1）：规范 accessor getter。
     DataViewProtoBuffer,
     /// `get DataView.prototype.byteLength`（ES §25.3.4.2）。
@@ -986,6 +992,7 @@ impl Builtin {
             Self::ImportMetaResolve => "import_meta.resolve",
             Self::RegisterModuleNamespace => "register_module_namespace",
             Self::FinalizeModuleNamespace => "finalize_module_namespace",
+            Self::GetModuleNamespace => "get_module_namespace",
             Self::CjsCreateRequire => "cjs.create_require",
             Self::CjsRegisterModule => "cjs.register_module",
             Self::JsxCreateElement => "jsx.create_element",

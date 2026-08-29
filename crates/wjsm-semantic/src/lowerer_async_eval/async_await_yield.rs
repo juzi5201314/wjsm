@@ -932,6 +932,11 @@ impl Lowerer {
                         callee: callee_val,
                         this_val,
                         args: arg_vals,
+                        // RegExp 名可被运行时改写为非构造器，文案按源级
+                        // `new` 站点 callee 表达式渲染。
+                        callsite: Some(crate::callsite_render::render_call_callsite(
+                            &new_expr.callee,
+                        )),
                     },
                 );
 
@@ -1174,6 +1179,11 @@ impl Lowerer {
                 callee: callee_val,
                 this_val: obj_val,
                 args: arg_vals,
+                // 源级 `new` 站点：callee 非构造器时宿主用它渲染
+                // `<expr> is not a constructor`（对齐 Node）。
+                callsite: Some(crate::callsite_render::render_call_callsite(
+                    &new_expr.callee,
+                )),
             },
         );
 

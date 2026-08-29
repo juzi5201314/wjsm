@@ -290,8 +290,22 @@ impl Lowerer {
         self.current_function
             .set_terminator(fast_end, Terminator::Jump { target: merge });
 
-        let (slow_result, slow_end) =
-            self.emit_intrinsic_slow_call(slow_call, callee_phi, this_phi, &plain_args, spread_array);
+        // 慢路径 callee 由 IntrinsicResolve 动态解析（被遮蔽/改写后的值），
+        // 非 callable 拒绝的文案按源级 callee 表达式渲染。
+        let callsite = match &call.callee {
+            swc_ast::Callee::Expr(expr) => {
+                Some(crate::callsite_render::render_call_callsite(expr))
+            }
+            _ => None,
+        };
+        let (slow_result, slow_end) = self.emit_intrinsic_slow_call(
+            slow_call,
+            callee_phi,
+            this_phi,
+            &plain_args,
+            spread_array,
+            callsite,
+        );
         self.current_function
             .set_terminator(slow_end, Terminator::Jump { target: merge });
 
@@ -436,6 +450,11 @@ impl Lowerer {
                 callee: callee_phi,
                 this_val: obj_val,
                 args: arg_vals,
+                // 慢路径构造器值被运行时改写后可能非构造器，文案按源级
+                // `new` 站点 callee 表达式渲染。
+                callsite: Some(crate::callsite_render::render_call_callsite(
+                    &new_expr.callee,
+                )),
             },
         );
         let (slow_result, slow_tail) =
@@ -518,6 +537,7 @@ impl Lowerer {
         this_val: ValueId,
         plain_args: &[ValueId],
         spread_array: Option<ValueId>,
+        callsite: Option<Box<str>>,
     ) -> (ValueId, BasicBlockId) {
         let dest = self.alloc_value();
         if let Some(array) = spread_array {
@@ -537,6 +557,7 @@ impl Lowerer {
                     callee,
                     this_val,
                     args: plain_args.to_vec(),
+                    callsite,
                 },
             );
         }
@@ -640,6 +661,9 @@ impl Lowerer {
                 callee: callee_phi,
                 this_val: receiver,
                 args: plain_args,
+                // 原型方法被运行时改写为非 callable 时按 `obj.method` 源级
+                // 表达式渲染。
+                callsite: Some(crate::callsite_render::render_member_callsite(member_expr)),
             },
         );
         self.current_function

@@ -188,7 +188,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -240,7 +240,7 @@ module {
       %22 = const c47
       %23 = load var $0.fn
       %24 = const c48
-      %25 = call %23, this=%22, args=[%24]
+      %25 = call %23, this=%22, args=[%24], callsite="fn"
       %26 = is_exception %25
       branch %26, bb2, bb1
     bb1:

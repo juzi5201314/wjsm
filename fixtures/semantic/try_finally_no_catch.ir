@@ -110,7 +110,7 @@ module {
       %25 = call builtin.get_prototype_from_constructor(%23)
       set_proto %24, %25
       %26 = const c21
-      %27 = construct_call %23, this=%24, args=[%26]
+      %27 = construct_call %23, this=%24, args=[%26], callsite="Error"
       %28 = is_exception %27
       branch %28, bb4, bb5
     bb2:
@@ -176,7 +176,7 @@ module {
       %50 = call builtin.console.log(%49)
       jump bb17
     bb20:
-      %51 = call %47, this=%48, args=[%49]
+      %51 = call %47, this=%48, args=[%49], callsite="console.log"
       jump bb17
     bb21:
       %56 = load var $1.$abrupt_completion_1
@@ -233,7 +233,7 @@ module {
       %76 = call builtin.console.log(%75)
       jump bb31
     bb34:
-      %77 = call %73, this=%74, args=[%75]
+      %77 = call %73, this=%74, args=[%75], callsite="console.log"
       jump bb31
     bb35:
       %82 = load var $1.$abrupt_completion_2
@@ -277,7 +277,7 @@ module {
       %100 = call builtin.console.log(%99)
       jump bb43
     bb46:
-      %101 = call %97, this=%98, args=[%99]
+      %101 = call %97, this=%98, args=[%99], callsite="console.log"
       jump bb43
     bb47:
       %106 = load var $1.$abrupt_completion_3

@@ -24,6 +24,20 @@ pub struct RuntimeEntryBundle {
     pub module_id_span: u32,
 }
 
+/// 一次 lower 的完整产物：`Program`、与其 ModuleId 布局共源的 manifest、
+/// 入口模块源码（inspect 路径的 artifact source_text 用）。
+struct LoweredBundleParts {
+    program: Program,
+    manifest: ModuleManifest,
+    entry_source: Option<std::sync::Arc<str>>,
+}
+
+fn entry_source_for_graph(graph: &ModuleGraph) -> Option<std::sync::Arc<str>> {
+    graph
+        .get_module(graph.entry_id())
+        .map(|module| std::sync::Arc::from(module.source.as_str()))
+}
+
 /// 模块 Bundler
 pub struct ModuleBundler {
     store: ModuleSourceStore,
@@ -81,8 +95,19 @@ impl ModuleBundler {
     /// 环境变量 `WJSM_NO_BUILTIN_CACHE` 非空时整体跳过缓存路径，直接走
     /// [`ModuleBundler::lower_bundle`]（调试/对比用）。
     pub fn lower_bundle_cached(&self, entry: &Path) -> Result<wjsm_ir::Program> {
+        Ok(self.lower_bundle_cached_parts(entry)?.program)
+    }
+
+    /// 同 [`ModuleBundler::lower_bundle_cached`]，另返回与 `Program` 的
+    /// ModuleId 布局一致的 manifest 与入口源码。
+    ///
+    /// manifest 必须与产出 `Program` 的同一图共源：缓存路径的合并布局是
+    /// builtin 闭包 id 0..B + 用户 id B..，与全新 plain 图（入口 id 0 起
+    /// 发现序分配）不同——错位的 manifest 会让运行时 (image, ModuleId) →
+    /// RuntimeModuleKey 解析到错误的模块键。
+    fn lower_bundle_cached_parts(&self, entry: &Path) -> Result<LoweredBundleParts> {
         if std::env::var_os("WJSM_NO_BUILTIN_CACHE").is_some() {
-            return self.lower_bundle(entry);
+            return self.lower_bundle_parts(entry);
         }
 
         // 1) 全图构建（现状），用于分片。
@@ -112,9 +137,9 @@ impl ModuleBundler {
             }
         }
 
-        // 3) 无 builtin 依赖 → 现状 lower（无缓存路径）。
+        // 3) 无 builtin 依赖 → 现状 lower（无缓存路径），manifest 与该图共源。
         if frontier.is_empty() {
-            return self.lower_bundle(entry);
+            return self.lower_graph_parts(&graph);
         }
 
         // 3.5) 用户程序含 top-level await（TLA）→ 回退现状 lower。
@@ -126,7 +151,7 @@ impl ModuleBundler {
                 && wjsm_semantic::program_has_top_level_await(&node.ast)
         });
         if user_tla {
-            return self.lower_bundle(entry);
+            return self.lower_graph_parts(&graph);
         }
 
         // 4) 缓存键 + 目录；磁盘缓存被禁用时构建段但不落盘。
@@ -203,41 +228,59 @@ impl ModuleBundler {
             });
         }
 
-        wjsm_semantic::lower_modules_with_builtin_seed(
+        let program = wjsm_semantic::lower_modules_with_builtin_seed(
             modules,
             link_result.as_linking(),
             segment.to_semantic_segment(),
             self.emit_debug_checks,
         )
-        .with_context(|| "Failed to lower user modules with builtin seed")
+        .with_context(|| "Failed to lower user modules with builtin seed")?;
+        // manifest 与合并布局共源：用户图含共享的 builtin canonical 节点
+        //（id 0..B）+ 用户模块（id B..），覆盖合并 Program 的全部 ModuleId。
+        let manifest = manifest_for_graph(&user_graph, &self.store, &self.options)?;
+        let entry_source = entry_source_for_graph(&user_graph);
+        Ok(LoweredBundleParts {
+            program,
+            manifest,
+            entry_source,
+        })
     }
 
     /// 将入口模块及其依赖 lower 为 IR（不执行 codegen）
     pub fn lower_bundle(&self, entry: &Path) -> Result<wjsm_ir::Program> {
+        Ok(self.lower_bundle_parts(entry)?.program)
+    }
+
+    fn lower_bundle_parts(&self, entry: &Path) -> Result<LoweredBundleParts> {
         let graph = ModuleGraph::build_with_store(entry, self.store.clone(), self.options.clone())
             .with_context(|| "Failed to build module graph")?;
+        self.lower_graph_parts(&graph)
+    }
 
-        lower_graph(&graph, &self.store, self.emit_debug_checks)
+    fn lower_graph_parts(&self, graph: &ModuleGraph) -> Result<LoweredBundleParts> {
+        let program = lower_graph(graph, &self.store, self.emit_debug_checks)?;
+        let manifest = manifest_for_graph(graph, &self.store, &self.options)?;
+        let entry_source = entry_source_for_graph(graph);
+        Ok(LoweredBundleParts {
+            program,
+            manifest,
+            entry_source,
+        })
     }
 
     /// 将入口模块及其依赖 lower 为 portable artifact 的完整 target-independent 输入。
     pub fn lower_artifact_input(&self, entry: &Path) -> Result<ArtifactBuildInput> {
-        let program = self.lower_bundle_cached(entry)?;
-        let graph = ModuleGraph::build_with_store(entry, self.store.clone(), self.options.clone())
-            .with_context(|| "Failed to build module graph")?;
-        let manifest = manifest_for_graph(&graph, &self.store, &self.options)?;
+        let parts = self.lower_bundle_cached_parts(entry)?;
         let mut input = ArtifactBuildInput::new(
-            program,
-            manifest,
+            parts.program,
+            parts.manifest,
             BuildOptions {
                 include_source_map: self.emit_debug_checks,
                 include_source_text: self.emit_debug_checks,
             },
         );
         if self.emit_debug_checks {
-            input.source_text = graph
-                .get_module(graph.entry_id())
-                .map(|module| std::sync::Arc::from(module.source.as_str()));
+            input.source_text = parts.entry_source;
         }
         Ok(input)
     }

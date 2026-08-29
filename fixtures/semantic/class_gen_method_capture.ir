@@ -601,7 +601,7 @@ module {
       %25 = call builtin.console.log(%16, %19, %24)
       jump bb7
     bb12:
-      %26 = call %14, this=%15, args=[%16, %19, %24]
+      %26 = call %14, this=%15, args=[%16, %19, %24], callsite="console.log"
       jump bb7
     bb13:
       return
@@ -716,7 +716,7 @@ module {
     bb9:
       unreachable
     bb10:
-      %64 = call %61, this=%50
+      %64 = call %61, this=%50, callsite="(intermediate value).bump"
       %65 = is_exception %64
       branch %65, bb13, bb12
     bb11:
@@ -768,7 +768,7 @@ module {
       %87 = is_exception %86
       branch %87, bb23, bb22
     bb22:
-      %89 = call %86, this=%84
+      %89 = call %86, this=%84, callsite="it.next"
       %90 = const c95
       %91 = get_prop %89, %90
       %92 = is_exception %91
@@ -801,7 +801,7 @@ module {
       %102 = call builtin.console.log(%83, %91, %101)
       jump bb20
     bb31:
-      %103 = call %81, this=%82, args=[%83, %91, %101]
+      %103 = call %81, this=%82, args=[%83, %91, %101], callsite="console.log"
       jump bb20
     bb32:
       %107 = load var $0.it
@@ -813,7 +813,7 @@ module {
       %106 = call builtin.exception_value(%104)
       throw %106
     bb34:
-      %112 = call %109, this=%107
+      %112 = call %109, this=%107, callsite="it.next"
       %113 = is_exception %112
       branch %113, bb37, bb36
     bb35:
@@ -879,7 +879,7 @@ module {
       %140 = call builtin.console.log(%131, %139)
       jump bb44
     bb51:
-      %141 = call %129, this=%130, args=[%131, %139]
+      %141 = call %129, this=%130, args=[%131, %139], callsite="console.log"
       jump bb44
     bb52:
       %145 = load var $0.Counter
@@ -891,7 +891,7 @@ module {
       %144 = call builtin.exception_value(%142)
       throw %144
     bb54:
-      %150 = call %147, this=%145
+      %150 = call %147, this=%145, callsite="Counter.staticBump"
       %151 = is_exception %150
       branch %151, bb57, bb56
     bb55:
@@ -906,7 +906,7 @@ module {
       %152 = call builtin.exception_value(%150)
       throw %152
     bb58:
-      %157 = call %154, this=%150
+      %157 = call %154, this=%150, callsite="Counter.staticBump(...).next"
       %158 = is_exception %157
       branch %158, bb61, bb60
     bb59:
@@ -972,7 +972,7 @@ module {
       %185 = call builtin.console.log(%176, %184)
       jump bb68
     bb75:
-      %186 = call %174, this=%175, args=[%176, %184]
+      %186 = call %174, this=%175, args=[%176, %184], callsite="console.log"
       jump bb68
     bb76:
       %190 = load var $0.$shared_env
@@ -989,7 +989,7 @@ module {
       %197 = new_object(capacity=4)
       %198 = call builtin.get_prototype_from_constructor(%196)
       set_proto %197, %198
-      %199 = construct_call %196, this=%197
+      %199 = construct_call %196, this=%197, callsite="Counter"
       %200 = is_exception %199
       branch %200, bb80, bb81
     bb79:
@@ -1023,7 +1023,7 @@ module {
       %206 = call builtin.exception_value(%202)
       throw %206
     bb89:
-      %211 = call %208, this=%202
+      %211 = call %208, this=%202, callsite="(intermediate value).bump"
       %212 = is_exception %211
       branch %212, bb92, bb91
     bb90:
@@ -1075,7 +1075,7 @@ module {
       %234 = is_exception %233
       branch %234, bb102, bb101
     bb101:
-      %236 = call %233, this=%231
+      %236 = call %233, this=%231, callsite="it2.next"
       %237 = const c133
       %238 = get_prop %236, %237
       %239 = is_exception %238
@@ -1108,7 +1108,7 @@ module {
       %249 = call builtin.console.log(%230, %238, %248)
       jump bb99
     bb110:
-      %250 = call %228, this=%229, args=[%230, %238, %248]
+      %250 = call %228, this=%229, args=[%230, %238, %248], callsite="console.log"
       jump bb99
     bb111:
       %254 = const c136
@@ -1156,7 +1156,7 @@ module {
     bb121:
       unreachable
     bb122:
-      %282 = call %279, this=%268
+      %282 = call %279, this=%268, callsite="(intermediate value).tick"
       %283 = is_exception %282
       branch %283, bb125, bb124
     bb123:
@@ -1171,7 +1171,7 @@ module {
       %284 = call builtin.exception_value(%282)
       throw %284
     bb126:
-      %289 = call %286, this=%282
+      %289 = call %286, this=%282, callsite="(intermediate value).tick(...).next"
       %290 = is_exception %289
       branch %290, bb129, bb128
     bb127:
@@ -1248,7 +1248,7 @@ module {
       %324 = call builtin.console.log(%315, %323)
       jump bb138
     bb145:
-      %325 = call %313, this=%314, args=[%315, %323]
+      %325 = call %313, this=%314, args=[%315, %323], callsite="console.log"
       jump bb138
     bb146:
       return

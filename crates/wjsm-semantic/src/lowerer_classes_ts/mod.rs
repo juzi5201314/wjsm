@@ -504,6 +504,7 @@ impl Lowerer {
                     callee: decorator,
                     this_val,
                     args: vec![class_value, context],
+                    callsite: None,
                 },
             );
             (block, class_value) =
@@ -550,6 +551,7 @@ impl Lowerer {
                     callee: decorator,
                     this_val,
                     args: vec![original, context],
+                    callsite: None,
                 },
             );
             (block, original) = self.emit_decorator_result_or_original(block, original, result);

@@ -536,6 +536,38 @@ pub(crate) fn feedback_site_count(program: &Program) -> u32 {
     allocate_feedback_slots(program).total_slots()
 }
 
+/// 反馈槽下标 → 源级 callsite 表达式渲染。只有语义层挂了 `callsite` 的
+/// `Call`/`ConstructCall` 站点有条目；宿主拒绝路径（callee 非 callable /
+/// 非构造器）按 `(image, slot)` 查文案。编号必须与
+/// [`allocate_feedback_slots`] 完全一致（同一遍历序、同一槽候选判定），
+/// 故实现共享 `instruction_owns_feedback_slot` 并保持相同的循环结构。
+pub(crate) fn callsites_by_feedback_slot(program: &Program) -> HashMap<u32, Box<str>> {
+    let mut callsites = HashMap::new();
+    let mut slot_index = 0_u32;
+    for function in program.functions() {
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if !instruction_owns_feedback_slot(instruction) {
+                    continue;
+                }
+                if let Instruction::Call {
+                    callsite: Some(text),
+                    ..
+                }
+                | Instruction::ConstructCall {
+                    callsite: Some(text),
+                    ..
+                } = instruction
+                {
+                    callsites.insert(slot_index, text.clone());
+                }
+                slot_index += 1;
+            }
+        }
+    }
+    callsites
+}
+
 pub(crate) fn compile_program(
     isa: cranelift_codegen::isa::OwnedTargetIsa,
     program: &Program,
@@ -3669,6 +3701,9 @@ fn lower_instruction(
             callee,
             this_val,
             args,
+            // callsite 只进宿主侧文案表（callsites_by_feedback_slot），
+            // 代码生成不消费。
+            callsite: _,
         } => {
             let direct_callee = tables
                 .constant_defs
@@ -3739,6 +3774,7 @@ fn lower_instruction(
             callee,
             this_val,
             args,
+            callsite: _,
         } => lower_call_instruction(
             cx,
             tables.slow_call_signature,
@@ -9065,6 +9101,7 @@ mod tests {
             callee: ValueId(1),
             this_val: ValueId(0),
             args: vec![ValueId(0)],
+            callsite: None,
         });
         caller_block.set_terminator(Terminator::Return {
             value: Some(ValueId(2)),
@@ -9126,6 +9163,7 @@ mod tests {
             callee: ValueId(1),
             this_val: ValueId(0),
             args: vec![ValueId(0)],
+            callsite: None,
         });
         caller_block.set_terminator(Terminator::Return { value: None });
         caller.push_block(caller_block);

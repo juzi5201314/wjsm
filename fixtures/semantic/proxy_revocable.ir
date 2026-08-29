@@ -155,7 +155,7 @@ module {
       %42 = call builtin.proxy.revocable(%40, %41)
       jump bb7
     bb10:
-      %43 = call %38, this=%39, args=[%40, %41]
+      %43 = call %38, this=%39, args=[%40, %41], callsite="Proxy.revocable"
       jump bb7
     bb11:
       %47 = const c30
@@ -243,12 +243,12 @@ module {
       %84 = call builtin.console.log(%81)
       jump bb27
     bb32:
-      %85 = call %77, this=%78, args=[%81]
+      %85 = call %77, this=%78, args=[%81], callsite="console.log"
       jump bb27
     bb33:
       %89 = const c44
       %90 = load var $0.revoke
-      %91 = call %90, this=%89
+      %91 = call %90, this=%89, callsite="revoke"
       %92 = is_exception %91
       branch %92, bb36, bb35
     bb34:
@@ -323,7 +323,7 @@ module {
       %117 = call builtin.console.log(%115, %116)
       jump bb48
     bb51:
-      %118 = call %113, this=%114, args=[%115, %116]
+      %118 = call %113, this=%114, args=[%115, %116], callsite="console.log"
       jump bb48
     bb52:
       jump bb38
@@ -367,7 +367,7 @@ module {
       %140 = call builtin.console.log(%139)
       jump bb60
     bb63:
-      %141 = call %137, this=%138, args=[%139]
+      %141 = call %137, this=%138, args=[%139], callsite="console.log"
       jump bb60
     bb64:
       jump bb38

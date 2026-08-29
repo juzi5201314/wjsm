@@ -469,7 +469,7 @@ module {
       %57 = call builtin.console.log(%41, %44, %49, %54)
       jump bb7
     bb16:
-      %58 = call %39, this=%40, args=[%41, %44, %49, %54]
+      %58 = call %39, this=%40, args=[%41, %44, %49, %54], callsite="console.log"
       jump bb7
     bb17:
       %62 = const c38
@@ -533,7 +533,7 @@ module {
       %89 = call builtin.console.log(%78, %81, %86)
       jump bb25
     bb32:
-      %90 = call %76, this=%77, args=[%78, %81, %86]
+      %90 = call %76, this=%77, args=[%78, %81, %86], callsite="console.log"
       jump bb25
     bb33:
       %94 = const c48
@@ -648,7 +648,7 @@ module {
       %144 = call builtin.object.keys(%143)
       jump bb57
     bb60:
-      %145 = call %141, this=%142, args=[%143]
+      %145 = call %141, this=%142, args=[%143], callsite="Object.keys"
       jump bb57
     bb61:
       branch %113, bb63, bb64
@@ -659,7 +659,7 @@ module {
       %149 = call builtin.JSON.stringify(%146)
       jump bb49
     bb64:
-      %150 = call %125, this=%126, args=[%146]
+      %150 = call %125, this=%126, args=[%146], callsite="JSON.stringify"
       jump bb49
     bb65:
       branch %96, bb67, bb68
@@ -670,7 +670,7 @@ module {
       %154 = call builtin.console.log(%110, %151)
       jump bb41
     bb68:
-      %155 = call %108, this=%109, args=[%110, %151]
+      %155 = call %108, this=%109, args=[%110, %151], callsite="console.log"
       jump bb41
     bb69:
       %159 = const c70
@@ -751,7 +751,7 @@ module {
       %193 = call builtin.JSON.stringify(%192)
       jump bb85
     bb88:
-      %194 = call %190, this=%191, args=[%192]
+      %194 = call %190, this=%191, args=[%192], callsite="JSON.stringify"
       jump bb85
     bb89:
       branch %161, bb91, bb92
@@ -762,7 +762,7 @@ module {
       %198 = call builtin.console.log(%175, %195)
       jump bb77
     bb92:
-      %199 = call %173, this=%174, args=[%175, %195]
+      %199 = call %173, this=%174, args=[%175, %195], callsite="console.log"
       jump bb77
     bb93:
       %203 = load var $0.long
@@ -886,7 +886,7 @@ module {
       %258 = call builtin.object.keys(%257)
       jump bb119
     bb122:
-      %259 = call %255, this=%256, args=[%257]
+      %259 = call %255, this=%256, args=[%257], callsite="Object.keys"
       jump bb119
     bb123:
       branch %227, bb125, bb126
@@ -897,7 +897,7 @@ module {
       %263 = call builtin.JSON.stringify(%260)
       jump bb111
     bb126:
-      %264 = call %239, this=%240, args=[%260]
+      %264 = call %239, this=%240, args=[%260], callsite="JSON.stringify"
       jump bb111
     bb127:
       branch %210, bb129, bb130
@@ -908,7 +908,7 @@ module {
       %268 = call builtin.console.log(%224, %265)
       jump bb103
     bb130:
-      %269 = call %222, this=%223, args=[%224, %265]
+      %269 = call %222, this=%223, args=[%224, %265], callsite="console.log"
       jump bb103
     bb131:
       %273 = const c108
@@ -972,7 +972,7 @@ module {
       %300 = call builtin.console.log(%289, %292, %297)
       jump bb139
     bb146:
-      %301 = call %287, this=%288, args=[%289, %292, %297]
+      %301 = call %287, this=%288, args=[%289, %292, %297], callsite="console.log"
       jump bb139
     bb147:
       %305 = const c121
@@ -1040,7 +1040,7 @@ module {
       %335 = call builtin.console.log(%324, %327, %332)
       jump bb155
     bb162:
-      %336 = call %322, this=%323, args=[%324, %327, %332]
+      %336 = call %322, this=%323, args=[%324, %327, %332], callsite="console.log"
       jump bb155
     bb163:
       %340 = const c133
@@ -1121,7 +1121,7 @@ module {
       %374 = call builtin.JSON.stringify(%373)
       jump bb179
     bb182:
-      %375 = call %371, this=%372, args=[%373]
+      %375 = call %371, this=%372, args=[%373], callsite="JSON.stringify"
       jump bb179
     bb183:
       branch %342, bb185, bb186
@@ -1132,7 +1132,7 @@ module {
       %379 = call builtin.console.log(%356, %376)
       jump bb171
     bb186:
-      %380 = call %354, this=%355, args=[%356, %376]
+      %380 = call %354, this=%355, args=[%356, %376], callsite="console.log"
       jump bb171
     bb187:
       %384 = const c148
@@ -1217,7 +1217,7 @@ module {
       %418 = call builtin.object.keys(%417)
       jump bb203
     bb206:
-      %419 = call %415, this=%416, args=[%417]
+      %419 = call %415, this=%416, args=[%417], callsite="Object.keys"
       jump bb203
     bb207:
       branch %386, bb209, bb210
@@ -1228,7 +1228,7 @@ module {
       %427 = call builtin.console.log(%400, %424)
       jump bb195
     bb210:
-      %428 = call %398, this=%399, args=[%400, %424]
+      %428 = call %398, this=%399, args=[%400, %424], callsite="console.log"
       jump bb195
     bb211:
       %432 = const c166
@@ -1306,7 +1306,7 @@ module {
       %468 = call builtin.console.log(%452, %455, %460, %465)
       jump bb219
     bb228:
-      %469 = call %450, this=%451, args=[%452, %455, %460, %465]
+      %469 = call %450, this=%451, args=[%452, %455, %460, %465], callsite="console.log"
       jump bb219
     bb229:
       %473 = const c180
@@ -1421,7 +1421,7 @@ module {
       %523 = call builtin.object.keys(%522)
       jump bb253
     bb256:
-      %524 = call %520, this=%521, args=[%522]
+      %524 = call %520, this=%521, args=[%522], callsite="Object.keys"
       jump bb253
     bb257:
       branch %492, bb259, bb260
@@ -1432,7 +1432,7 @@ module {
       %528 = call builtin.JSON.stringify(%525)
       jump bb245
     bb260:
-      %529 = call %504, this=%505, args=[%525]
+      %529 = call %504, this=%505, args=[%525], callsite="JSON.stringify"
       jump bb245
     bb261:
       branch %475, bb263, bb264
@@ -1443,7 +1443,7 @@ module {
       %533 = call builtin.console.log(%489, %530)
       jump bb237
     bb264:
-      %534 = call %487, this=%488, args=[%489, %530]
+      %534 = call %487, this=%488, args=[%489, %530], callsite="console.log"
       jump bb237
     bb265:
       %538 = const c202
@@ -1571,7 +1571,7 @@ module {
       %632 = call builtin.console.log(%610, %866, %862, %858)
       jump bb273
     bb282:
-      %633 = call %608, this=%609, args=[%610, %866, %862, %858]
+      %633 = call %608, this=%609, args=[%610, %866, %862, %858], callsite="console.log"
       jump bb273
     bb283:
       %637 = new_object(capacity=4)
@@ -1643,7 +1643,7 @@ module {
       %670 = call builtin.console.log(%659, %662, %667)
       jump bb291
     bb298:
-      %671 = call %657, this=%658, args=[%659, %662, %667]
+      %671 = call %657, this=%658, args=[%659, %662, %667], callsite="console.log"
       jump bb291
     bb299:
       %675 = const c268
@@ -1712,7 +1712,7 @@ module {
       %705 = call builtin.console.log(%699, %702)
       jump bb309
     bb314:
-      %706 = call %697, this=%698, args=[%699, %702]
+      %706 = call %697, this=%698, args=[%699, %702], callsite="console.log"
       jump bb309
     bb315:
       %710 = new_object(capacity=4)
@@ -1781,7 +1781,7 @@ module {
       %744 = call builtin.console.log(%738, %741)
       jump bb323
     bb328:
-      %745 = call %736, this=%737, args=[%738, %741]
+      %745 = call %736, this=%737, args=[%738, %741], callsite="console.log"
       jump bb323
     bb329:
       %749 = new_object(capacity=4)
@@ -1859,7 +1859,7 @@ module {
       %785 = call builtin.console.log(%774, %777, %782)
       jump bb339
     bb346:
-      %786 = call %772, this=%773, args=[%774, %777, %782]
+      %786 = call %772, this=%773, args=[%774, %777, %782], callsite="console.log"
       jump bb339
     bb347:
       %790 = const c314
@@ -1908,7 +1908,7 @@ module {
       %809 = call builtin.object.freeze(%808)
       jump bb355
     bb358:
-      %810 = call %806, this=%807, args=[%808]
+      %810 = call %806, this=%807, args=[%808], callsite="Object.freeze"
       jump bb355
     bb359:
       %814 = const c322
@@ -1995,7 +1995,7 @@ module {
       %850 = call builtin.console.log(%843, %846, %849)
       jump bb374
     bb379:
-      %851 = call %841, this=%842, args=[%843, %846, %849]
+      %851 = call %841, this=%842, args=[%843, %846, %849], callsite="console.log"
       jump bb374
     bb380:
       return

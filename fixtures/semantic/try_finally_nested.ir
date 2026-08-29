@@ -372,7 +372,7 @@ module {
       %54 = call builtin.console.log(%53)
       jump bb21
     bb24:
-      %55 = call %51, this=%52, args=[%53]
+      %55 = call %51, this=%52, args=[%53], callsite="console.log"
       jump bb21
     bb25:
       %60 = load var $3.$abrupt_completion_3
@@ -425,7 +425,7 @@ module {
       %83 = call builtin.console.log(%82)
       jump bb35
     bb38:
-      %84 = call %80, this=%81, args=[%82]
+      %84 = call %80, this=%81, args=[%82], callsite="console.log"
       jump bb35
     bb39:
       %89 = load var $3.$abrupt_completion_4
@@ -446,7 +446,7 @@ module {
       %94 = call builtin.console.log(%93)
       jump bb41
     bb44:
-      %95 = call %91, this=%92, args=[%93]
+      %95 = call %91, this=%92, args=[%93], callsite="console.log"
       jump bb41
     bb45:
       %124 = const c56
@@ -496,7 +496,7 @@ module {
       %116 = call builtin.console.log(%115)
       jump bb53
     bb56:
-      %117 = call %113, this=%114, args=[%115]
+      %117 = call %113, this=%114, args=[%115], callsite="console.log"
       jump bb53
     bb57:
       %122 = load var $3.$abrupt_completion_5
@@ -540,7 +540,7 @@ module {
       %141 = call builtin.console.log(%140)
       jump bb65
     bb68:
-      %142 = call %138, this=%139, args=[%140]
+      %142 = call %138, this=%139, args=[%140], callsite="console.log"
       jump bb65
     bb69:
       %147 = load var $2.$abrupt_completion_2
@@ -615,7 +615,7 @@ module {
       %178 = call builtin.console.log(%177)
       jump bb83
     bb86:
-      %179 = call %175, this=%176, args=[%177]
+      %179 = call %175, this=%176, args=[%177], callsite="console.log"
       jump bb83
     bb87:
       %184 = load var $8.$abrupt_completion_7
@@ -668,7 +668,7 @@ module {
       %207 = call builtin.console.log(%206)
       jump bb97
     bb100:
-      %208 = call %204, this=%205, args=[%206]
+      %208 = call %204, this=%205, args=[%206], callsite="console.log"
       jump bb97
     bb101:
       %213 = load var $8.$abrupt_completion_8
@@ -689,7 +689,7 @@ module {
       %218 = call builtin.console.log(%217)
       jump bb103
     bb106:
-      %219 = call %215, this=%216, args=[%217]
+      %219 = call %215, this=%216, args=[%217], callsite="console.log"
       jump bb103
     bb107:
       %248 = const c98
@@ -739,7 +739,7 @@ module {
       %240 = call builtin.console.log(%239)
       jump bb115
     bb118:
-      %241 = call %237, this=%238, args=[%239]
+      %241 = call %237, this=%238, args=[%239], callsite="console.log"
       jump bb115
     bb119:
       %246 = load var $8.$abrupt_completion_9
@@ -783,7 +783,7 @@ module {
       %265 = call builtin.console.log(%264)
       jump bb127
     bb130:
-      %266 = call %262, this=%263, args=[%264]
+      %266 = call %262, this=%263, args=[%264], callsite="console.log"
       jump bb127
     bb131:
       %271 = load var $2.$abrupt_completion_6
@@ -804,7 +804,7 @@ module {
       %276 = call builtin.console.log(%275)
       jump bb133
     bb136:
-      %277 = call %273, this=%274, args=[%275]
+      %277 = call %273, this=%274, args=[%275], callsite="console.log"
       jump bb133
     bb137:
       %400 = const c148
@@ -877,7 +877,7 @@ module {
       %306 = call builtin.console.log(%305)
       jump bb149
     bb152:
-      %307 = call %303, this=%304, args=[%305]
+      %307 = call %303, this=%304, args=[%305], callsite="console.log"
       jump bb149
     bb153:
       %312 = load var $13.$abrupt_completion_11
@@ -930,7 +930,7 @@ module {
       %335 = call builtin.console.log(%334)
       jump bb163
     bb166:
-      %336 = call %332, this=%333, args=[%334]
+      %336 = call %332, this=%333, args=[%334], callsite="console.log"
       jump bb163
     bb167:
       %341 = load var $13.$abrupt_completion_12
@@ -951,7 +951,7 @@ module {
       %346 = call builtin.console.log(%345)
       jump bb169
     bb172:
-      %347 = call %343, this=%344, args=[%345]
+      %347 = call %343, this=%344, args=[%345], callsite="console.log"
       jump bb169
     bb173:
       %376 = const c140
@@ -1001,7 +1001,7 @@ module {
       %368 = call builtin.console.log(%367)
       jump bb181
     bb184:
-      %369 = call %365, this=%366, args=[%367]
+      %369 = call %365, this=%366, args=[%367], callsite="console.log"
       jump bb181
     bb185:
       %374 = load var $13.$abrupt_completion_13
@@ -1045,7 +1045,7 @@ module {
       %393 = call builtin.console.log(%392)
       jump bb193
     bb196:
-      %394 = call %390, this=%391, args=[%392]
+      %394 = call %390, this=%391, args=[%392], callsite="console.log"
       jump bb193
     bb197:
       %399 = load var $2.$abrupt_completion_10
@@ -1111,7 +1111,7 @@ module {
       %426 = call builtin.console.log(%425)
       jump bb209
     bb212:
-      %427 = call %423, this=%424, args=[%425]
+      %427 = call %423, this=%424, args=[%425], callsite="console.log"
       jump bb209
     bb213:
       %432 = load var $18.$abrupt_completion_14
@@ -1164,7 +1164,7 @@ module {
       %455 = call builtin.console.log(%454)
       jump bb223
     bb226:
-      %456 = call %452, this=%453, args=[%454]
+      %456 = call %452, this=%453, args=[%454], callsite="console.log"
       jump bb223
     bb227:
       %461 = load var $18.$abrupt_completion_15
@@ -1185,7 +1185,7 @@ module {
       %466 = call builtin.console.log(%465)
       jump bb229
     bb232:
-      %467 = call %463, this=%464, args=[%465]
+      %467 = call %463, this=%464, args=[%465], callsite="console.log"
       jump bb229
     bb233:
       %495 = const c181
@@ -1235,7 +1235,7 @@ module {
       %488 = call builtin.console.log(%487)
       jump bb241
     bb244:
-      %489 = call %485, this=%486, args=[%487]
+      %489 = call %485, this=%486, args=[%487], callsite="console.log"
       jump bb241
     bb245:
       %494 = load var $18.$abrupt_completion_16
@@ -1279,7 +1279,7 @@ module {
       %512 = call builtin.console.log(%511)
       jump bb253
     bb256:
-      %513 = call %509, this=%510, args=[%511]
+      %513 = call %509, this=%510, args=[%511], callsite="console.log"
       jump bb253
     bb257:
       return %400

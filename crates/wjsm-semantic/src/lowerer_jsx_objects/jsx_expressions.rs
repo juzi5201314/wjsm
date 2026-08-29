@@ -425,7 +425,8 @@ impl Lowerer {
             let expr_val = self.lower_call_operand_then_continue(expr, &mut current)?;
             args.push(expr_val);
         }
-        // 6. 发出 Call 指令
+        // 6. 发出 Call 指令。tagged template 是源级调用点：tag 非 callable
+        //    时文案按 tag 表达式渲染（V8 中 tagged template 即 Call 节点）。
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             current,
@@ -434,6 +435,9 @@ impl Lowerer {
                 callee: callee_val,
                 this_val,
                 args,
+                callsite: Some(crate::callsite_render::render_call_callsite(
+                    &tagged_tpl.tag,
+                )),
             },
         );
         if current != block {

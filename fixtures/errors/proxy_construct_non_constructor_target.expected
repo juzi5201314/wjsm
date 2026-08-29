@@ -1,4 +1,4 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-Runtime error: TypeError: Proxy target must be a constructor
+Runtime error: TypeError: ProxyObject is not a constructor

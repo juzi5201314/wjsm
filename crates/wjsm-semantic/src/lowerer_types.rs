@@ -13,6 +13,30 @@ pub(crate) struct IterationEnvFrame {
     pub(crate) bindings: Vec<CapturedBinding>,
     pub(crate) ir_name: String,
     pub(crate) parent_ir_name: String,
+    /// 循环体块作用域捕获的动态归属：Some(水位线) 时，声明于水位线之后创建
+    /// 的作用域（帧在栈期间即本循环体内）且名字命中 `body_capture_names` 的
+    /// 词法绑定按迭代路由到本帧 env。None（具名函数表达式 funcEnv / 类名
+    /// classEnv 帧）只按显式 `bindings` 匹配。
+    pub(crate) body_scope_watermark: Option<usize>,
+    /// 循环体内嵌套函数引用且体内有词法声明的名字集（按名保守匹配：同名
+    /// 误中只会把未捕获绑定也经 env 读写，语义不变）。
+    pub(crate) body_capture_names: std::collections::HashSet<String>,
+}
+
+impl IterationEnvFrame {
+    /// 绑定是否归属本帧：循环头按迭代绑定为显式列表；循环体词法绑定按
+    /// 「作用域晚于帧创建 + 名字命中捕获集」动态判定（体内声明的作用域 id
+    /// 必然大于等于水位线，外层绑定必然小于，天然互斥）。
+    pub(crate) fn owns_binding(&self, binding: &CapturedBinding) -> bool {
+        if self.bindings.contains(binding) {
+            return true;
+        }
+        let (Some(watermark), Some(scope_id)) = (self.body_scope_watermark, binding.scope_id)
+        else {
+            return false;
+        };
+        scope_id >= watermark && self.body_capture_names.contains(&binding.name)
+    }
 }
 
 /// async / async generator 方法族的 super 绑定来源。
@@ -173,6 +197,10 @@ pub(crate) struct Lowerer {
     /// 来源）。每个模块只创建一个命名空间对象（§10.4.6.12 GetModuleNamespace
     /// 的缓存语义）：静态导入局部与动态 import 结果共享同一对象身份。
     pub(crate) namespace_object_modules: std::collections::HashSet<wjsm_ir::ModuleId>,
+    /// builtin 段（hydration 种子）已创建并注册命名空间对象的模块集合。
+    /// 用户段序幕对这些模块经 GetModuleNamespace 取回同一 canonical 对象，
+    /// 不再重建、不再安装 getter（§10.4.6.12 单一身份跨段成立）。
+    pub(crate) builtin_namespace_modules: std::collections::BTreeSet<wjsm_ir::ModuleId>,
     /// 每模块唯一命名空间对象的 ValueId：ModuleId → ValueId（在模块体执行前
     /// 创建并注册，来源模块体执行后安装 live binding getter 并收口为 exotic）。
     pub(crate) namespace_objects: std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,

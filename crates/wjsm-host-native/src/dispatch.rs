@@ -381,6 +381,9 @@ pub(crate) fn rejected_call_error(
     callee: i64,
     construct: bool,
 ) -> i64 {
+    // 无条件取走 pending callsite：栈溢出/Proxy 分支也必须消费，避免陈旧
+    // 文案泄漏到后续无关的拒绝站点。
+    let callsite = state.pending_callsite.take();
     if ctx.pending_exception_kind == PendingExceptionKind::StackOverflow {
         ctx.pending_exception_kind = PendingExceptionKind::None;
         let message = "Maximum call stack size exceeded".to_owned();
@@ -397,19 +400,20 @@ pub(crate) fn rejected_call_error(
             .create_exception(error)
             .unwrap_or_else(|| fail_dispatch(ctx));
     }
-    let message = if value::is_proxy(callee) {
+    // kCalledNonCallable/kNotConstructor 文案：源级站点按语义层静态渲染的
+    // callee 表达式（V8 CallPrinter 同型，`o.foo is not a function`），
+    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。Proxy
+    // callee 同样走 callsite 渲染（Node：`proxyObject is not a function`）。
+    let message = {
+        let rendered = match &callsite {
+            Some(text) => text.to_string(),
+            None => runtime::render_value(state, callee),
+        };
         if construct {
-            "Proxy target must be a constructor".to_owned()
+            format!("{rendered} is not a constructor")
         } else {
-            "Proxy target must be callable".to_owned()
+            format!("{rendered} is not a function")
         }
-    } else if construct {
-        format!(
-            "{} is not a constructor",
-            runtime::render_value(state, callee)
-        )
-    } else {
-        format!("{} is not a function", runtime::render_value(state, callee))
     };
     modules::named_error_object(state, "TypeError", message)
         .and_then(|error| state.create_exception(error))
@@ -497,7 +501,7 @@ pub(super) fn dispatch_builtin(
         builtin, (ctx, state, args) {
             fail_dispatch(ctx)
         } => {
-            modules::dispatch_module => Builtin::CjsCreateRequire | Builtin::CjsRegisterModule | Builtin::DynamicImport | Builtin::DynamicImportRuntime | Builtin::ImportMetaResolve | Builtin::RegisterModuleNamespace | Builtin::FinalizeModuleNamespace,
+            modules::dispatch_module => Builtin::CjsCreateRequire | Builtin::CjsRegisterModule | Builtin::DynamicImport | Builtin::DynamicImportRuntime | Builtin::ImportMetaResolve | Builtin::RegisterModuleNamespace | Builtin::FinalizeModuleNamespace | Builtin::GetModuleNamespace,
             bigint::dispatch_bigint => Builtin::BigIntAdd | Builtin::BigIntBitAnd | Builtin::BigIntBitNot | Builtin::BigIntBitOr | Builtin::BigIntBitXor | Builtin::BigIntCmp | Builtin::BigIntDiv | Builtin::BigIntEq | Builtin::BigIntFromLiteral | Builtin::BigIntMod | Builtin::BigIntMul | Builtin::BigIntNeg | Builtin::BigIntPow | Builtin::BigIntProtoToString | Builtin::BigIntProtoValueOf | Builtin::BigIntShl | Builtin::BigIntShr | Builtin::BigIntSub,
             typedarray::dispatch_typed_array => Builtin::BigInt64ArrayConstructor | Builtin::BigUint64ArrayConstructor | Builtin::Float32ArrayConstructor | Builtin::Float64ArrayConstructor | Builtin::Int16ArrayConstructor | Builtin::Int32ArrayConstructor | Builtin::Int8ArrayConstructor | Builtin::TypedArrayProtoAt | Builtin::TypedArrayProtoByteLength | Builtin::TypedArrayProtoByteOffset | Builtin::TypedArrayProtoCopyWithin | Builtin::TypedArrayProtoEntries | Builtin::TypedArrayProtoEvery | Builtin::TypedArrayProtoFill | Builtin::TypedArrayProtoFilter | Builtin::TypedArrayProtoFind | Builtin::TypedArrayProtoFindIndex | Builtin::TypedArrayProtoForEach | Builtin::TypedArrayProtoIncludes | Builtin::TypedArrayProtoIndexOf | Builtin::TypedArrayProtoJoin | Builtin::TypedArrayProtoKeys | Builtin::TypedArrayProtoLastIndexOf | Builtin::TypedArrayProtoLength | Builtin::TypedArrayProtoMap | Builtin::TypedArrayProtoReduce | Builtin::TypedArrayProtoReduceRight | Builtin::TypedArrayProtoReverse | Builtin::TypedArrayProtoSet | Builtin::TypedArrayProtoSlice | Builtin::TypedArrayProtoSome | Builtin::TypedArrayProtoSort | Builtin::TypedArrayProtoSubarray | Builtin::TypedArrayProtoToString | Builtin::TypedArrayProtoValues | Builtin::Uint16ArrayConstructor | Builtin::Uint32ArrayConstructor | Builtin::Uint8ArrayConstructor | Builtin::Uint8ClampedArrayConstructor,
             promise::dispatch_promise => Builtin::AsyncFunctionResume | Builtin::AsyncFunctionStart | Builtin::AsyncFunctionSuspend | Builtin::ContinuationCreate | Builtin::ContinuationLoadVar | Builtin::ContinuationSaveVar | Builtin::DrainMicrotasks | Builtin::IsPromise | Builtin::PromiseAll | Builtin::PromiseAllSettled | Builtin::PromiseAny | Builtin::PromiseCatch | Builtin::PromiseCreate | Builtin::PromiseCreateRejectFunction | Builtin::PromiseCreateResolveFunction | Builtin::PromiseFinally | Builtin::PromiseInstanceReject | Builtin::PromiseInstanceResolve | Builtin::PromiseRace | Builtin::PromiseRejectStatic | Builtin::PromiseResolveStatic | Builtin::PromiseThen | Builtin::PromiseWithResolvers | Builtin::QueueMicrotask,

@@ -152,7 +152,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_1 [direct_callable] [js_name ""] [js_length 1] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
@@ -196,7 +196,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_2 [direct_callable] [js_name ""] [js_length 1] [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
@@ -240,7 +240,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
@@ -284,7 +284,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_4 [direct_callable] [js_name ""] [js_length 1] [params: $5.$env, $5.$this, $5.v] [entry=bb0]:
@@ -328,7 +328,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -416,7 +416,7 @@ module {
       %39 = call builtin.promise.resolve_static(%38, %37)
       jump bb7
     bb10:
-      %40 = call %35, this=%36, args=[%37]
+      %40 = call %35, this=%36, args=[%37], callsite="Promise.resolve"
       jump bb7
     bb11:
       %44 = const c36
@@ -472,7 +472,7 @@ module {
       %67 = call builtin.promise.resolve_static(%66, %65)
       jump bb21
     bb24:
-      %68 = call %63, this=%64, args=[%65]
+      %68 = call %63, this=%64, args=[%65], callsite="Promise.resolve"
       jump bb21
     bb25:
       %72 = const c54
@@ -528,7 +528,7 @@ module {
       %95 = call builtin.promise.resolve_static(%94, %93)
       jump bb35
     bb38:
-      %96 = call %91, this=%92, args=[%93]
+      %96 = call %91, this=%92, args=[%93], callsite="Promise.resolve"
       jump bb35
     bb39:
       %100 = const c72
@@ -584,7 +584,7 @@ module {
       %123 = call builtin.promise.resolve_static(%122, %121)
       jump bb49
     bb52:
-      %124 = call %119, this=%120, args=[%121]
+      %124 = call %119, this=%120, args=[%121], callsite="Promise.resolve"
       jump bb49
     bb53:
       %128 = const c90
@@ -640,7 +640,7 @@ module {
       %151 = call builtin.promise.resolve_static(%150, %149)
       jump bb63
     bb66:
-      %152 = call %147, this=%148, args=[%149]
+      %152 = call %147, this=%148, args=[%149], callsite="Promise.resolve"
       jump bb63
     bb67:
       %156 = const c107

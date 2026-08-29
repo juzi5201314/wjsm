@@ -1,0 +1,23 @@
+exit_code: 0
+--- stdout ---
+Math.max TypeError: Math.max is not a constructor
+JSON.parse TypeError: JSON.parse is not a constructor
+parseInt TypeError: parseInt is not a constructor
+array values TypeError: [].map is not a constructor
+console.log TypeError: console.log is not a constructor
+Symbol TypeError: Symbol is not a constructor
+BigInt TypeError: BigInt is not a constructor
+Function.prototype TypeError: Function.prototype is not a constructor
+string iterator TypeError: ""[Symbol.iterator] is not a constructor
+bound non-constructor TypeError: Math.max.bind(...) is not a constructor
+bound constructor ok
+Reflect.construct TypeError: function max() { [native code] } is not a constructor
+proxy non-constructor target TypeError: (intermediate value) is not a constructor
+proxy constructor target ok
+Map ok
+Promise ok
+RegExp ok
+extends Symbol ok
+newTarget Symbol ok
+bigint symbol true symbol
+--- stderr ---

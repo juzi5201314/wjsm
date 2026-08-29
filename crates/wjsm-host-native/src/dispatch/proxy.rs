@@ -1208,7 +1208,22 @@ fn reflect_construct(ctx: &mut NativeVmContext, state: &mut NativeAgentState, ar
     };
     let new_target = rest.first().copied().unwrap_or(*target);
     if !is_constructor_value(state, *target) || !is_constructor_value(state, new_target) {
-        return super::runtime::type_error(ctx, state, "value is not a constructor");
+        // 文案对齐 V8/Node：callable 按 Function.prototype.toString 形态渲染
+        // （"function max() { [native code] } is not a constructor"）。
+        let culprit = if is_constructor_value(state, *target) {
+            new_target
+        } else {
+            *target
+        };
+        let rendered = if value::is_callable(culprit) {
+            state
+                .callable_to_string_source(culprit)
+                .unwrap_or_else(|| super::runtime::render_value(state, culprit))
+        } else {
+            super::runtime::render_value(state, culprit)
+        };
+        let message = format!("{rendered} is not a constructor");
+        return super::runtime::type_error(ctx, state, &message);
     }
     let Some(arguments) = array_arguments(state, *arguments) else {
         return fail_dispatch(ctx);

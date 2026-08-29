@@ -327,6 +327,7 @@ mod tests {
             callee: ValueId(1),
             this_val: ValueId(0),
             args: vec![ValueId(0), ValueId(0)],
+            callsite: None,
         });
         caller_block.set_terminator(Terminator::Return {
             value: Some(ValueId(2)),
@@ -400,6 +401,7 @@ mod tests {
             callee: ValueId(0),
             this_val: ValueId(0),
             args: vec![ValueId(0)],
+            callsite: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(1)),

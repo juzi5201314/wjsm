@@ -517,6 +517,7 @@ pub(super) fn dispatch_module(
     Some(match builtin {
         Builtin::RegisterModuleNamespace => register_namespace(ctx, state, args),
         Builtin::FinalizeModuleNamespace => finalize_namespace(ctx, state, args),
+        Builtin::GetModuleNamespace => get_registered_namespace(ctx, state, args),
         Builtin::DynamicImport => static_dynamic_import(ctx, state, args),
         Builtin::DynamicImportRuntime => runtime_dynamic_import(ctx, state, args),
         Builtin::ImportMetaResolve => create_import_meta_resolve(ctx, state, args),
@@ -611,6 +612,34 @@ fn register_namespace(
     };
     state.runtime_modules.namespaces.insert(key, *namespace);
     value::encode_undefined()
+}
+
+/// GetModuleNamespace：取回已注册的 canonical 命名空间对象（§10.4.6.12
+/// GetModuleNamespace 缓存）。builtin 段与用户段拆分 image 时，段内
+/// `import * as` 的命名空间由先执行的 `$builtin_main` 创建并注册，用户段
+/// 序幕经此取回同一对象，保证跨段单一身份。
+fn get_registered_namespace(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    let [module_id] = args else {
+        return fail_dispatch(ctx);
+    };
+    let Some(module_id) = decode_module_id(*module_id) else {
+        return fail_dispatch(ctx);
+    };
+    let Some(key) = state
+        .runtime_modules
+        .module_keys
+        .get(&(state.current_image_id, module_id))
+    else {
+        return fail_dispatch(ctx);
+    };
+    let Some(namespace) = state.runtime_modules.namespaces.get(key).copied() else {
+        return fail_dispatch(ctx);
+    };
+    namespace
 }
 
 /// FinalizeModuleNamespace：把命名空间对象收口为 Module Namespace Exotic
@@ -1356,7 +1385,11 @@ pub(crate) fn set_named_property(
         .map_err(|error| ModuleLoadFailure::Message(error.to_string()))
 }
 
-fn register_manifest(
+/// 把 manifest 的 (ModuleId → RuntimeModuleKey) 映射注册到指定 image 名下。
+/// builtin/用户段拆分 image 共享同一 ModuleId 空间：两个 image 都需要注册，
+/// `$builtin_main` 内的 RegisterModuleNamespace / 静态 DynamicImport 才能以
+/// (builtin image, ModuleId) 解析到键。
+pub(crate) fn register_manifest(
     state: &mut NativeAgentState,
     image_id: u64,
     manifest: &ModuleManifest,

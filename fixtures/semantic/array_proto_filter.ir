@@ -135,7 +135,7 @@ module {
     bb6:
       jump bb13
     bb7:
-      %43 = call %36, this=%26, args=[%39]
+      %43 = call %36, this=%26, args=[%39], callsite="a.filter"
       jump bb8
     bb8:
       %44 = phi [(bb9, %40), (bb7, %43)]

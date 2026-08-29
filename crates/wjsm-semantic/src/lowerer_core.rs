@@ -107,6 +107,7 @@ impl Lowerer {
             module_metadata: std::collections::HashMap::new(),
             dynamic_import_targets: std::collections::HashMap::new(),
             namespace_object_modules: std::collections::HashSet::new(),
+            builtin_namespace_modules: std::collections::BTreeSet::new(),
             namespace_objects: std::collections::HashMap::new(),
             dynamic_import_specifier_map: std::collections::HashMap::new(),
             module_export_names: std::collections::HashMap::new(),
@@ -287,6 +288,7 @@ impl Lowerer {
         self.export_map.extend(builtin.export_map.clone());
         self.module_export_names
             .extend(builtin.module_export_names.clone());
+        self.builtin_namespace_modules = builtin.namespace_modules.clone();
         for (module_id, scope_id) in &builtin.module_scopes {
             debug_assert!(
                 matches!(usize::try_from(builtin.scope_count), Ok(count)
