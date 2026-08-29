@@ -186,6 +186,7 @@ pub(crate) fn lower_function(
         }
         let mut imported_function_decls: HashMap<FunctionId, ir::FuncRef> = HashMap::new();
         let mut tables = InstructionTables {
+            has_env_layout: !ir_function.env_layout_keys().is_empty(),
             constants,
             function_index,
             barrier_thunks: &barrier_thunks,

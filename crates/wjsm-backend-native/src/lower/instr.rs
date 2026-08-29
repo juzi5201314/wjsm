@@ -880,7 +880,7 @@ pub(crate) fn lower_instruction(
             *transition_shape,
         ),
         Instruction::LoadEnvSlot { dest, env, slot, key } => {
-            lower_load_env_slot(cx, *dest, *env, *slot, *key)
+            lower_load_env_slot(cx, tables, tables.has_env_layout, *dest, *env, *slot, *key)
         }
         Instruction::StoreEnvSlot {
             dest,
@@ -889,7 +889,16 @@ pub(crate) fn lower_instruction(
             value,
             key,
             strict,
-        } => lower_store_env_slot(cx, *dest, *env, *slot, *value, *key, *strict),
+        } => lower_store_env_slot(
+            cx,
+            tables.has_env_layout,
+            *dest,
+            *env,
+            *slot,
+            *value,
+            *key,
+            *strict,
+        ),
         Instruction::DebugCheck { line, col } => {
             let function = cx
                 .builder
