@@ -112,7 +112,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
     bb11:
       return
@@ -207,7 +207,7 @@ module {
       %40 = call builtin.promise.with_resolvers(%38, %39)
       jump bb7
     bb10:
-      %41 = call %36, this=%37
+      %41 = call %36, this=%37, callsite="Promise.withResolvers"
       jump bb7
     bb11:
       store var $0.obj, %42
@@ -263,7 +263,7 @@ module {
       %67 = call builtin.console.log(%66)
       jump bb19
     bb24:
-      %68 = call %59, this=%60, args=[%66]
+      %68 = call %59, this=%60, args=[%66], callsite="console.log"
       jump bb19
     bb25:
       %72 = const c38
@@ -318,7 +318,7 @@ module {
       %94 = call builtin.console.log(%93)
       jump bb33
     bb38:
-      %95 = call %86, this=%87, args=[%93]
+      %95 = call %86, this=%87, args=[%93], callsite="console.log"
       jump bb33
     bb39:
       %99 = const c46
@@ -373,7 +373,7 @@ module {
       %121 = call builtin.console.log(%120)
       jump bb47
     bb52:
-      %122 = call %113, this=%114, args=[%120]
+      %122 = call %113, this=%114, args=[%120], callsite="console.log"
       jump bb47
     bb53:
       %126 = load var $0.obj
@@ -386,7 +386,7 @@ module {
       throw %125
     bb55:
       %131 = const c55
-      %132 = call %128, this=%126, args=[%131]
+      %132 = call %128, this=%126, args=[%131], callsite="obj.resolve"
       %133 = is_exception %132
       branch %133, bb58, bb57
     bb56:

@@ -378,7 +378,7 @@ module {
       %40 = call builtin.JSON.stringify(%19)
       jump bb7
     bb18:
-      %41 = call %17, this=%18, args=[%19]
+      %41 = call %17, this=%18, args=[%19], callsite="JSON.stringify"
       jump bb7
 
   fn @arrow_1 [direct_callable] [js_name ""] [js_length 2] [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
@@ -920,7 +920,7 @@ module {
       %51 = call builtin.console.log(%38, %48)
       jump bb7
     bb14:
-      %52 = call %36, this=%37, args=[%38, %48]
+      %52 = call %36, this=%37, args=[%38, %48], callsite="console.log"
       jump bb7
     bb15:
       %56 = const c44
@@ -988,7 +988,7 @@ module {
       %85 = call builtin.console.log(%72, %82)
       jump bb23
     bb30:
-      %86 = call %70, this=%71, args=[%72, %82]
+      %86 = call %70, this=%71, args=[%72, %82], callsite="console.log"
       jump bb23
     bb31:
       %90 = new_object(capacity=4)
@@ -1071,7 +1071,7 @@ module {
       %129 = call builtin.console.log(%113, %126)
       jump bb39
     bb48:
-      %130 = call %111, this=%112, args=[%113, %126]
+      %130 = call %111, this=%112, args=[%113, %126], callsite="console.log"
       jump bb39
     bb49:
       %134 = const c76
@@ -1156,7 +1156,7 @@ module {
       %174 = call builtin.console.log(%158, %171)
       jump bb57
     bb66:
-      %175 = call %156, this=%157, args=[%158, %171]
+      %175 = call %156, this=%157, args=[%158, %171], callsite="console.log"
       jump bb57
     bb67:
       %179 = const c91
@@ -1262,7 +1262,7 @@ module {
       %225 = call builtin.console.log(%195, %222)
       jump bb75
     bb92:
-      %226 = call %193, this=%194, args=[%195, %222]
+      %226 = call %193, this=%194, args=[%195, %222], callsite="console.log"
       jump bb75
     bb93:
       %230 = const c109
@@ -1332,7 +1332,7 @@ module {
       %260 = call builtin.console.log(%246, %257)
       jump bb101
     bb108:
-      %261 = call %244, this=%245, args=[%246, %257]
+      %261 = call %244, this=%245, args=[%246, %257], callsite="console.log"
       jump bb101
     bb109:
       %265 = const c121
@@ -1410,7 +1410,7 @@ module {
       %299 = call builtin.console.log(%281, %296)
       jump bb117
     bb126:
-      %300 = call %279, this=%280, args=[%281, %296]
+      %300 = call %279, this=%280, args=[%281, %296], callsite="console.log"
       jump bb117
     bb127:
       %304 = const c133
@@ -1480,7 +1480,7 @@ module {
       %334 = call builtin.console.log(%320, %331)
       jump bb135
     bb142:
-      %335 = call %318, this=%319, args=[%320, %331]
+      %335 = call %318, this=%319, args=[%320, %331], callsite="console.log"
       jump bb135
     bb143:
       %339 = const c145
@@ -1544,7 +1544,7 @@ module {
       %366 = call builtin.console.log(%355, %363)
       jump bb151
     bb158:
-      %367 = call %353, this=%354, args=[%355, %363]
+      %367 = call %353, this=%354, args=[%355, %363], callsite="console.log"
       jump bb151
     bb159:
       %371 = const c155
@@ -1619,7 +1619,7 @@ module {
       %403 = call builtin.console.log(%387, %400)
       jump bb167
     bb176:
-      %404 = call %385, this=%386, args=[%387, %400]
+      %404 = call %385, this=%386, args=[%387, %400], callsite="console.log"
       jump bb167
     bb177:
       %408 = const c191
@@ -1667,7 +1667,7 @@ module {
       %428 = new_array(capacity=4)
       %429 = const c201
       %430 = load var $0.values
-      %431 = call %430, this=%429
+      %431 = call %430, this=%429, callsite="values"
       %432 = is_exception %431
       branch %432, bb188, bb187
     bb187:
@@ -1693,7 +1693,7 @@ module {
       %440 = call builtin.console.log(%425, %437)
       jump bb185
     bb194:
-      %441 = call %423, this=%424, args=[%425, %437]
+      %441 = call %423, this=%424, args=[%425, %437], callsite="console.log"
       jump bb185
     bb195:
       %445 = new_object(capacity=4)
@@ -1778,7 +1778,7 @@ module {
       %483 = call builtin.console.log(%472, %480)
       jump bb207
     bb214:
-      %484 = call %470, this=%471, args=[%472, %480]
+      %484 = call %470, this=%471, args=[%472, %480], callsite="console.log"
       jump bb207
     bb215:
       %488 = new_array(capacity=4)
@@ -1861,7 +1861,7 @@ module {
       %526 = call builtin.console.log(%515, %523)
       jump bb225
     bb232:
-      %527 = call %513, this=%514, args=[%515, %523]
+      %527 = call %513, this=%514, args=[%515, %523], callsite="console.log"
       jump bb225
     bb233:
       %531 = const c270
@@ -1935,7 +1935,7 @@ module {
       set_proto %570, %571
       %572 = const c289
       %573 = const c290
-      %574 = construct_call %569, this=%570, args=[%572, %573]
+      %574 = construct_call %569, this=%570, args=[%572, %573], callsite="Derived"
       %575 = is_exception %574
       branch %575, bb243, bb244
     bb243:
@@ -1968,7 +1968,7 @@ module {
       %584 = call builtin.console.log(%568, %581)
       jump bb241
     bb253:
-      %585 = call %566, this=%567, args=[%568, %581]
+      %585 = call %566, this=%567, args=[%568, %581], callsite="console.log"
       jump bb241
     bb254:
       return

@@ -123,6 +123,7 @@ pub fn licm_disabled_by_env() -> bool {
     passes::licm::licm_disabled_by_env()
 }
 
+mod callsite_render;
 mod lowerer_arrows;
 mod lowerer_assignments;
 mod lowerer_async_eval;

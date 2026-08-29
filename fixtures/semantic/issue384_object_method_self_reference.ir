@@ -258,7 +258,7 @@ module {
       %12 = is_exception %11
       branch %12, bb2, bb1
     bb1:
-      %14 = call %6, this=%3, args=[%11]
+      %14 = call %6, this=%3, args=[%11], callsite="action"
       %15 = is_exception %14
       branch %15, bb4, bb3
     bb2:
@@ -453,7 +453,7 @@ module {
       %18 = call builtin.console.log(%17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%17]
+      %19 = call %14, this=%15, args=[%17], callsite="console.log"
       jump bb7
 
   fn @$0.self [js_name "get self"] [js_length 0] [captures: $0.mutable] [params: $9.$env, $9.$this] [entry=bb0]:
@@ -687,7 +687,7 @@ module {
       branch %76, bb6, bb5
     bb5:
       %78 = const c87
-      %79 = call %75, this=%73, args=[%78]
+      %79 = call %75, this=%73, args=[%78], callsite="set.forEach"
       %80 = is_exception %79
       branch %80, bb8, bb7
     bb6:
@@ -752,7 +752,7 @@ module {
       %108 = is_exception %107
       branch %108, bb22, bb21
     bb21:
-      %110 = call %107, this=%105
+      %110 = call %107, this=%105, callsite="set.method"
       %111 = is_exception %110
       branch %111, bb24, bb23
     bb22:
@@ -790,7 +790,7 @@ module {
       %124 = call builtin.console.log(%121)
       jump bb15
     bb32:
-      %125 = call %96, this=%97, args=[%121]
+      %125 = call %96, this=%97, args=[%121], callsite="console.log"
       jump bb15
     bb33:
       %129 = const c100
@@ -882,7 +882,7 @@ module {
       %168 = call builtin.console.log(%165)
       jump bb41
     bb56:
-      %169 = call %143, this=%144, args=[%165]
+      %169 = call %143, this=%144, args=[%165], callsite="console.log"
       jump bb41
     bb57:
       %173 = load var $0.$shared_env
@@ -991,7 +991,7 @@ module {
       %221 = call builtin.console.log(%218)
       jump bb75
     bb84:
-      %222 = call %207, this=%208, args=[%218]
+      %222 = call %207, this=%208, args=[%218], callsite="console.log"
       jump bb75
     bb85:
       %226 = const c127
@@ -1052,7 +1052,7 @@ module {
       %252 = is_exception %251
       branch %252, bb100, bb99
     bb99:
-      %254 = call %251, this=%249
+      %254 = call %251, this=%249, callsite="set.nested"
       %255 = is_exception %254
       branch %255, bb102, bb101
     bb100:
@@ -1067,7 +1067,7 @@ module {
       %256 = call builtin.exception_value(%254)
       throw %256
     bb103:
-      %261 = call %258, this=%254
+      %261 = call %258, this=%254, callsite="set.nested(...).method"
       %262 = is_exception %261
       branch %262, bb106, bb105
     bb104:
@@ -1105,7 +1105,7 @@ module {
       %275 = call builtin.console.log(%272)
       jump bb93
     bb114:
-      %276 = call %240, this=%241, args=[%272]
+      %276 = call %240, this=%241, args=[%272], callsite="console.log"
       jump bb93
     bb115:
       %280 = const c140
@@ -1166,7 +1166,7 @@ module {
       %306 = is_exception %305
       branch %306, bb130, bb129
     bb129:
-      %308 = call %305, this=%303
+      %308 = call %305, this=%303, callsite="set.nested"
       %309 = const c150
       %310 = get_prop %308, %309
       %311 = is_exception %310
@@ -1206,7 +1206,7 @@ module {
       %324 = call builtin.console.log(%321)
       jump bb123
     bb140:
-      %325 = call %294, this=%295, args=[%321]
+      %325 = call %294, this=%295, args=[%321], callsite="console.log"
       jump bb123
     bb141:
       %329 = new_object(capacity=4)
@@ -1319,7 +1319,7 @@ module {
       %387 = call builtin.console.log(%384)
       jump bb149
     bb164:
-      %388 = call %362, this=%363, args=[%384]
+      %388 = call %362, this=%363, args=[%384], callsite="console.log"
       jump bb149
     bb165:
       %392 = new_object(capacity=4)
@@ -1364,7 +1364,7 @@ module {
       branch %416, bb172, bb171
     bb171:
       %418 = load var $0.replacement
-      %419 = call %415, this=%413, args=[%418]
+      %419 = call %415, this=%413, args=[%418], callsite="assignOwner.assign"
       %420 = is_exception %419
       branch %420, bb174, bb173
     bb172:
@@ -1431,7 +1431,7 @@ module {
       %448 = call builtin.console.log(%447)
       jump bb181
     bb188:
-      %449 = call %436, this=%437, args=[%447]
+      %449 = call %436, this=%437, args=[%447], callsite="console.log"
       jump bb181
     bb189:
       %453 = new_object(capacity=4)
@@ -1506,7 +1506,7 @@ module {
       %491 = is_exception %490
       branch %491, bb204, bb203
     bb203:
-      %493 = call %490, this=%488
+      %493 = call %490, this=%488, callsite="updateOwner.update"
       %494 = is_exception %493
       branch %494, bb206, bb205
     bb204:
@@ -1529,7 +1529,7 @@ module {
       %500 = call builtin.console.log(%497)
       jump bb201
     bb210:
-      %501 = call %486, this=%487, args=[%497]
+      %501 = call %486, this=%487, args=[%497], callsite="console.log"
       jump bb201
     bb211:
       %505 = const c227
@@ -1592,7 +1592,7 @@ module {
       %531 = call builtin.console.log(%530)
       jump bb219
     bb226:
-      %532 = call %519, this=%520, args=[%530]
+      %532 = call %519, this=%520, args=[%530], callsite="console.log"
       jump bb219
     bb227:
       return

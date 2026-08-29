@@ -476,7 +476,7 @@ module {
       %16 = load var $3.$closure_env
       %17 = const c54
       %18 = get_prop %16, %17
-      %19 = call %18, this=%15
+      %19 = call %18, this=%15, callsite="inner"
       %20 = is_exception %19
       branch %20, bb4, bb3
     bb3:
@@ -611,7 +611,7 @@ module {
       %75 = call builtin.console.log(%73, %74)
       jump bb24
     bb27:
-      %76 = call %71, this=%72, args=[%73, %74]
+      %76 = call %71, this=%72, args=[%73, %74], callsite="console.log"
       jump bb24
     bb28:
       %81 = new_array(capacity=4)
@@ -964,7 +964,7 @@ module {
       %31 = call builtin.get_prototype_from_constructor(%29)
       set_proto %30, %31
       %32 = const c139
-      %33 = construct_call %29, this=%30, args=[%32]
+      %33 = construct_call %29, this=%30, args=[%32], callsite="RangeError"
       %34 = is_exception %33
       branch %34, bb8, bb9
     bb6:
@@ -1069,7 +1069,7 @@ module {
       %16 = load var $7.$closure_env
       %17 = const c159
       %18 = get_prop %16, %17
-      %19 = call %18, this=%15
+      %19 = call %18, this=%15, callsite="throwing"
       %20 = is_exception %19
       branch %20, bb7, bb6
     bb4:
@@ -1231,7 +1231,7 @@ module {
       %85 = call builtin.console.log(%70, %75, %81)
       jump bb27
     bb34:
-      %86 = call %68, this=%69, args=[%70, %75, %81]
+      %86 = call %68, this=%69, args=[%70, %75, %81], callsite="console.log"
       jump bb27
     bb35:
       %91 = const c177
@@ -1322,7 +1322,7 @@ module {
       %12 = load var $13.$closure_env
       %13 = const c206
       %14 = get_prop %12, %13
-      %15 = call %14, this=%11
+      %15 = call %14, this=%11, callsite="outer"
       %16 = is_exception %15
       branch %16, bb4, bb3
     bb3:
@@ -1352,7 +1352,7 @@ module {
       %78 = call builtin.intrinsic_pristine(%76, %77)
       branch %78, bb31, bb32
     bb8:
-      %27 = call %23, this=%21
+      %27 = call %23, this=%21, callsite="iterator.next"
       %28 = is_exception %27
       branch %28, bb11, bb10
     bb9:
@@ -1454,7 +1454,7 @@ module {
       %70 = call builtin.console.log(%63, %66)
       jump bb23
     bb28:
-      %71 = call %61, this=%62, args=[%63, %66]
+      %71 = call %61, this=%62, args=[%63, %66], callsite="console.log"
       jump bb23
     bb29:
       jump bb5
@@ -1514,14 +1514,14 @@ module {
       %101 = call builtin.console.log(%94, %97)
       jump bb37
     bb42:
-      %102 = call %92, this=%93, args=[%94, %97]
+      %102 = call %92, this=%93, args=[%94, %97], callsite="console.log"
       jump bb37
     bb43:
       %107 = const c231
       %108 = load var $13.$closure_env
       %109 = const c232
       %110 = get_prop %108, %109
-      %111 = call %110, this=%107
+      %111 = call %110, this=%107, callsite="catching"
       %112 = const c233
       %113 = call builtin.async_iterator.from(%111, %112)
       store var $15.$for_await_iter.0, %113
@@ -1559,7 +1559,7 @@ module {
       %174 = load var $13.$closure_env
       %175 = const c247
       %176 = get_prop %174, %175
-      %177 = call %176, this=%173
+      %177 = call %176, this=%173, callsite="outer"
       %178 = is_exception %177
       branch %178, bb73, bb72
     bb49:
@@ -1639,7 +1639,7 @@ module {
       %157 = call builtin.console.log(%155, %156)
       jump bb62
     bb65:
-      %158 = call %153, this=%154, args=[%155, %156]
+      %158 = call %153, this=%154, args=[%155, %156], callsite="console.log"
       jump bb62
     bb66:
       jump bb45
@@ -1718,7 +1718,7 @@ module {
       %203 = is_exception %202
       branch %203, bb83, bb82
     bb82:
-      %206 = call %202, this=%200
+      %206 = call %202, this=%200, callsite="aborted.next"
       %207 = is_exception %206
       branch %207, bb85, bb84
     bb83:
@@ -1800,7 +1800,7 @@ module {
       %337 = load var $suspend_spill_13_1
       %338 = load var $suspend_spill_13_2
       %340 = load var $suspend_spill_13_3
-      %224 = call %337, this=%338, args=[%340, %219]
+      %224 = call %337, this=%338, args=[%340, %219], callsite="console.log"
       jump bb80
     bb93:
       %229 = load var $13.aborted
@@ -1815,7 +1815,7 @@ module {
       return
     bb95:
       %235 = const c261
-      %236 = call %231, this=%229, args=[%235]
+      %236 = call %231, this=%229, args=[%235], callsite="aborted.return"
       %237 = is_exception %236
       branch %237, bb98, bb97
     bb96:
@@ -1920,7 +1920,7 @@ module {
       %279 = call builtin.console.log(%266, %269, %275)
       jump bb108
     bb115:
-      %280 = call %264, this=%265, args=[%266, %269, %275]
+      %280 = call %264, this=%265, args=[%266, %269, %275], callsite="console.log"
       jump bb108
     bb116:
       %285 = const c274
@@ -1978,7 +1978,7 @@ module {
       %307 = is_exception %306
       branch %307, bb127, bb126
     bb126:
-      %310 = call %306, this=%304
+      %310 = call %306, this=%304, callsite="aborted.next"
       %311 = is_exception %310
       branch %311, bb129, bb128
     bb127:
@@ -2054,7 +2054,7 @@ module {
       %343 = load var $suspend_spill_13_5
       %344 = load var $suspend_spill_13_6
       %346 = load var $suspend_spill_13_7
-      %328 = call %343, this=%344, args=[%346, %323]
+      %328 = call %343, this=%344, args=[%346, %323], callsite="console.log"
       jump bb124
     bb137:
       %333 = const c286
@@ -2170,7 +2170,7 @@ module {
       %42 = const c330
       %43 = set_prop %24, %42, %41
       %44 = call builtin.create_closure(%37, %24)
-      %45 = call %44, this=%36
+      %45 = call %44, this=%36, callsite="(intermediate value)(intermediate value)(intermediate value)(intermediate value)(intermediate value)(intermediate value)(intermediate value)(intermediate value)(intermediate value)(intermediate value)"
       %46 = is_exception %45
       branch %46, bb2, bb1
     bb1:

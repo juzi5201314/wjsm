@@ -131,7 +131,7 @@ module {
     bb12:
       store var $sroa.$0.p.name, %21
       store var $sroa.$0.p.age, %22
-      %46 = call %38, this=%39, args=[%21]
+      %46 = call %38, this=%39, args=[%21], callsite="console.log"
       jump bb7
     bb13:
       store var $sroa.$0.p.name, %21

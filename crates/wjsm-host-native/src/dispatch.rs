@@ -380,6 +380,9 @@ pub(crate) fn rejected_call_error(
     callee: i64,
     construct: bool,
 ) -> i64 {
+    // 无条件取走 pending callsite：栈溢出/Proxy 分支也必须消费，避免陈旧
+    // 文案泄漏到后续无关的拒绝站点。
+    let callsite = state.pending_callsite.take();
     if ctx.pending_exception_kind == PendingExceptionKind::StackOverflow {
         ctx.pending_exception_kind = PendingExceptionKind::None;
         let message = "Maximum call stack size exceeded".to_owned();
@@ -396,19 +399,25 @@ pub(crate) fn rejected_call_error(
             .create_exception(error)
             .unwrap_or_else(|| fail_dispatch(ctx));
     }
+    // kCalledNonCallable/kNotConstructor 文案：源级站点按语义层静态渲染的
+    // callee 表达式（V8 CallPrinter 同型，`o.foo is not a function`），
+    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。
     let message = if value::is_proxy(callee) {
         if construct {
             "Proxy target must be a constructor".to_owned()
         } else {
             "Proxy target must be callable".to_owned()
         }
-    } else if construct {
-        format!(
-            "{} is not a constructor",
-            runtime::render_value(state, callee)
-        )
     } else {
-        format!("{} is not a function", runtime::render_value(state, callee))
+        let rendered = match &callsite {
+            Some(text) => text.to_string(),
+            None => runtime::render_value(state, callee),
+        };
+        if construct {
+            format!("{rendered} is not a constructor")
+        } else {
+            format!("{rendered} is not a function")
+        }
     };
     modules::named_error_object(state, "TypeError", message)
         .and_then(|error| state.create_exception(error))

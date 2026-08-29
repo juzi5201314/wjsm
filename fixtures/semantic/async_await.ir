@@ -142,7 +142,7 @@ module {
       %35 = call builtin.promise.resolve_static(%34, %33)
       jump bb9
     bb12:
-      %36 = call %31, this=%32, args=[%33]
+      %36 = call %31, this=%32, args=[%33], callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c36
@@ -211,7 +211,7 @@ module {
       %68 = call builtin.console.log(%67)
       jump bb24
     bb27:
-      %69 = call %65, this=%66, args=[%67]
+      %69 = call %65, this=%66, args=[%67], callsite="console.log"
       jump bb24
     bb28:
       %74 = const c45
@@ -309,7 +309,7 @@ module {
       store var $0.greet, %21
       %22 = const c64
       %23 = load var $0.greet
-      %24 = call %23, this=%22
+      %24 = call %23, this=%22, callsite="greet"
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:

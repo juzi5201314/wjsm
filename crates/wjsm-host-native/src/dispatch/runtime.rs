@@ -503,6 +503,7 @@ pub(super) fn dispatch_runtime(
                         .copied()
                         .unwrap_or_else(value::encode_undefined),
                     false,
+                    feedback_slot,
                 )
             }),
         NativeRuntimeOp::PrepareConstruct => state
@@ -514,6 +515,7 @@ pub(super) fn dispatch_runtime(
                         .copied()
                         .unwrap_or_else(value::encode_undefined),
                     true,
+                    feedback_slot,
                 )
             }),
         NativeRuntimeOp::PrepareSuperCall | NativeRuntimeOp::PrepareSuperCallForward => state
@@ -530,6 +532,7 @@ pub(super) fn dispatch_runtime(
                         .copied()
                         .unwrap_or_else(value::encode_undefined),
                     true,
+                    feedback_slot,
                 )
             }),
         NativeRuntimeOp::FinishCall => state.finish_call(ctx).unwrap_or_else(|| fail_dispatch(ctx)),

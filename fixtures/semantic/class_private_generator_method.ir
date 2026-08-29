@@ -957,7 +957,7 @@ module {
       %23 = stricteq %19, %22
       branch %23, bb6, bb5
     bb8:
-      %36 = call %31, this=%29
+      %36 = call %31, this=%29, callsite="this[#inner]"
       %37 = is_exception %36
       branch %37, bb11, bb10
     bb9:
@@ -1344,7 +1344,7 @@ module {
       %47 = call builtin.promise.resolve_static(%46, %45)
       jump bb14
     bb17:
-      %48 = call %43, this=%44, args=[%45]
+      %48 = call %43, this=%44, args=[%45], callsite="Promise.resolve"
       jump bb14
     bb18:
       %54 = const c185
@@ -1581,7 +1581,7 @@ module {
       branch %4, bb2, bb1
     bb1:
       %6 = load var $17.step
-      %7 = call %3, this=%1, args=[%6]
+      %7 = call %3, this=%1, args=[%6], callsite="this[#gen]"
       %8 = is_exception %7
       branch %8, bb4, bb3
     bb2:
@@ -1611,7 +1611,7 @@ module {
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = call %5, this=%3
+      %8 = call %5, this=%3, callsite="Seq[#sgen]"
       %9 = is_exception %8
       branch %9, bb4, bb3
     bb2:
@@ -1639,7 +1639,7 @@ module {
       %4 = is_exception %3
       branch %4, bb2, bb1
     bb1:
-      %6 = call %3, this=%1
+      %6 = call %3, this=%1, callsite="this[#outer]"
       %7 = is_exception %6
       branch %7, bb4, bb3
     bb2:
@@ -1670,7 +1670,7 @@ module {
       %6 = const c266
       %7 = const c267
       %8 = const c268
-      %9 = call %3, this=%1, args=[%6, %7, %8]
+      %9 = call %3, this=%1, args=[%6, %7, %8], callsite="this[#viaArguments]"
       %10 = is_exception %9
       branch %10, bb4, bb3
     bb2:
@@ -1725,7 +1725,7 @@ module {
       %18 = is_exception %17
       branch %18, bb4, bb3
     bb3:
-      %21 = call %17, this=%15
+      %21 = call %17, this=%15, callsite="this[#agen]"
       %22 = is_exception %21
       branch %22, bb6, bb5
     bb4:
@@ -1748,7 +1748,7 @@ module {
       promise_reject %24, %23
       return
     bb7:
-      %32 = call %28, this=%26
+      %32 = call %28, this=%26, callsite="it.next"
       %33 = is_exception %32
       branch %33, bb10, bb9
     bb8:
@@ -1834,7 +1834,7 @@ module {
       promise_reject %59, %58
       return
     bb21:
-      %66 = call %62, this=%60
+      %66 = call %62, this=%60, callsite="it.next"
       %67 = is_exception %66
       branch %67, bb24, bb23
     bb22:
@@ -1964,7 +1964,7 @@ module {
       %20 = is_exception %19
       branch %20, bb4, bb3
     bb3:
-      %23 = call %19, this=%17
+      %23 = call %19, this=%17, callsite="Seq[#sagen]"
       %24 = is_exception %23
       branch %24, bb6, bb5
     bb4:
@@ -1987,7 +1987,7 @@ module {
       promise_reject %26, %25
       return
     bb7:
-      %34 = call %30, this=%28
+      %34 = call %30, this=%28, callsite="it.next"
       %35 = is_exception %34
       branch %35, bb10, bb9
     bb8:
@@ -2071,7 +2071,7 @@ module {
       promise_reject %59, %58
       return
     bb21:
-      %66 = call %56, this=%54, args=[%62]
+      %66 = call %56, this=%54, args=[%62], callsite="parts.push"
       %67 = is_exception %66
       branch %67, bb24, bb23
     bb22:
@@ -2091,7 +2091,7 @@ module {
       promise_reject %69, %68
       return
     bb25:
-      %76 = call %72, this=%70
+      %76 = call %72, this=%70, callsite="it.next"
       %77 = is_exception %76
       branch %77, bb28, bb27
     bb26:
@@ -2147,7 +2147,7 @@ module {
       return
     bb34:
       %97 = const c338
-      %98 = call %93, this=%91, args=[%97]
+      %98 = call %93, this=%91, args=[%97], callsite="parts.join"
       %99 = is_exception %98
       branch %99, bb37, bb36
     bb35:
@@ -2226,7 +2226,7 @@ module {
       branch %16, bb9, bb8
     bb4:
       %5 = const c368
-      %6 = call %2, this=%0, args=[%5]
+      %6 = call %2, this=%0, args=[%5], callsite="target[#gen]"
       %7 = is_exception %6
       branch %7, bb7, bb6
     bb5:
@@ -2303,7 +2303,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
 
   fn @arrow_25 [direct_callable] [js_name ""] [js_length 1] [params: $33.$env, $33.$this, $33.joined] [entry=bb0]:
@@ -2348,7 +2348,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
 
   fn @$module_main [entry=bb0]:
@@ -2557,7 +2557,7 @@ module {
       branch %132, bb19, bb18
     bb18:
       %134 = const c387
-      %135 = call %131, this=%129, args=[%134]
+      %135 = call %131, this=%129, args=[%134], callsite="seq.collect"
       %136 = is_exception %135
       branch %136, bb21, bb20
     bb19:
@@ -2573,7 +2573,7 @@ module {
       throw %137
     bb22:
       %142 = const c389
-      %143 = call %139, this=%135, args=[%142]
+      %143 = call %139, this=%135, args=[%142], callsite="seq.collect(...).join"
       %144 = is_exception %143
       branch %144, bb25, bb24
     bb23:
@@ -2604,7 +2604,7 @@ module {
       %154 = call builtin.console.log(%128, %143, %153)
       jump bb16
     bb31:
-      %155 = call %126, this=%127, args=[%128, %143, %153]
+      %155 = call %126, this=%127, args=[%128, %143, %153], callsite="console.log"
       jump bb16
     bb32:
       %159 = const c392
@@ -2652,7 +2652,7 @@ module {
       branch %179, bb43, bb42
     bb42:
       %181 = const c401
-      %182 = call %178, this=%176, args=[%181]
+      %182 = call %178, this=%176, args=[%181], callsite="seq.collect"
       %183 = is_exception %182
       branch %183, bb45, bb44
     bb43:
@@ -2668,7 +2668,7 @@ module {
       throw %184
     bb46:
       %189 = const c403
-      %190 = call %186, this=%182, args=[%189]
+      %190 = call %186, this=%182, args=[%189], callsite="seq.collect(...).join"
       %191 = is_exception %190
       branch %191, bb49, bb48
     bb47:
@@ -2699,7 +2699,7 @@ module {
       %201 = call builtin.console.log(%175, %190, %200)
       jump bb40
     bb55:
-      %202 = call %173, this=%174, args=[%175, %190, %200]
+      %202 = call %173, this=%174, args=[%175, %190, %200], callsite="console.log"
       jump bb40
     bb56:
       %206 = const c406
@@ -2746,7 +2746,7 @@ module {
       %226 = is_exception %225
       branch %226, bb67, bb66
     bb66:
-      %228 = call %225, this=%223
+      %228 = call %225, this=%223, callsite="Seq.collectStatic"
       %229 = is_exception %228
       branch %229, bb69, bb68
     bb67:
@@ -2762,7 +2762,7 @@ module {
       throw %230
     bb70:
       %235 = const c416
-      %236 = call %232, this=%228, args=[%235]
+      %236 = call %232, this=%228, args=[%235], callsite="Seq.collectStatic(...).join"
       %237 = is_exception %236
       branch %237, bb73, bb72
     bb71:
@@ -2777,7 +2777,7 @@ module {
       %239 = call builtin.console.log(%222, %236)
       jump bb64
     bb75:
-      %240 = call %220, this=%221, args=[%222, %236]
+      %240 = call %220, this=%221, args=[%222, %236], callsite="console.log"
       jump bb64
     bb76:
       %244 = const c417
@@ -2824,7 +2824,7 @@ module {
       %264 = is_exception %263
       branch %264, bb87, bb86
     bb86:
-      %266 = call %263, this=%261
+      %266 = call %263, this=%261, callsite="seq.delegated"
       %267 = is_exception %266
       branch %267, bb89, bb88
     bb87:
@@ -2840,7 +2840,7 @@ module {
       throw %268
     bb90:
       %273 = const c427
-      %274 = call %270, this=%266, args=[%273]
+      %274 = call %270, this=%266, args=[%273], callsite="seq.delegated(...).join"
       %275 = is_exception %274
       branch %275, bb93, bb92
     bb91:
@@ -2855,7 +2855,7 @@ module {
       %277 = call builtin.console.log(%260, %274)
       jump bb84
     bb95:
-      %278 = call %258, this=%259, args=[%260, %274]
+      %278 = call %258, this=%259, args=[%260, %274], callsite="console.log"
       jump bb84
     bb96:
       %282 = const c428
@@ -2902,7 +2902,7 @@ module {
       %302 = is_exception %301
       branch %302, bb107, bb106
     bb106:
-      %304 = call %301, this=%299
+      %304 = call %301, this=%299, callsite="seq.argInfo"
       %305 = is_exception %304
       branch %305, bb109, bb108
     bb107:
@@ -2918,7 +2918,7 @@ module {
       throw %306
     bb110:
       %311 = const c438
-      %312 = call %308, this=%304, args=[%311]
+      %312 = call %308, this=%304, args=[%311], callsite="seq.argInfo(...).join"
       %313 = is_exception %312
       branch %313, bb113, bb112
     bb111:
@@ -2933,7 +2933,7 @@ module {
       %315 = call builtin.console.log(%298, %312)
       jump bb104
     bb115:
-      %316 = call %296, this=%297, args=[%298, %312]
+      %316 = call %296, this=%297, args=[%298, %312], callsite="console.log"
       jump bb104
     bb116:
       %320 = const c439
@@ -2981,7 +2981,7 @@ module {
       branch %340, bb127, bb126
     bb126:
       %342 = load var $0.seq
-      %343 = call %339, this=%337, args=[%342]
+      %343 = call %339, this=%337, args=[%342], callsite="Seq.tryCall"
       %344 = is_exception %343
       branch %344, bb129, bb128
     bb127:
@@ -2998,7 +2998,7 @@ module {
       throw %345
     bb130:
       %351 = init_object_literal(c449)
-      %352 = call %348, this=%346, args=[%351]
+      %352 = call %348, this=%346, args=[%351], callsite="Seq.tryCall"
       %353 = is_exception %352
       branch %353, bb133, bb132
     bb131:
@@ -3013,7 +3013,7 @@ module {
       %355 = call builtin.console.log(%336, %343, %352)
       jump bb124
     bb135:
-      %356 = call %334, this=%335, args=[%336, %343, %352]
+      %356 = call %334, this=%335, args=[%336, %343, %352], callsite="console.log"
       jump bb124
     bb136:
       %360 = load var $0.seq
@@ -3025,7 +3025,7 @@ module {
       %359 = call builtin.exception_value(%357)
       throw %359
     bb138:
-      %365 = call %362, this=%360
+      %365 = call %362, this=%360, callsite="seq.sum"
       %366 = is_exception %365
       branch %366, bb141, bb140
     bb139:
@@ -3050,7 +3050,7 @@ module {
       %372 = call builtin.exception_value(%370)
       throw %372
     bb144:
-      %378 = call %375, this=%373
+      %378 = call %375, this=%373, callsite="Seq.joinStatic"
       %379 = is_exception %378
       branch %379, bb147, bb146
     bb145:

@@ -147,6 +147,13 @@ impl Lowerer {
                 args.push(self.lower_call_operand_then_continue(&arg.expr, &mut call_block)?);
             }
             dest = self.alloc_value();
+            // with 作用域裸名调用同为源级调用点，callsite 渲染与普通调用一致。
+            let callsite = match &call.callee {
+                swc_ast::Callee::Expr(expr) => {
+                    Some(crate::callsite_render::render_call_callsite(expr))
+                }
+                _ => None,
+            };
             self.current_function.append_instruction(
                 call_block,
                 Instruction::Call {
@@ -154,6 +161,7 @@ impl Lowerer {
                     callee,
                     this_val,
                     args,
+                    callsite,
                 },
             );
         }

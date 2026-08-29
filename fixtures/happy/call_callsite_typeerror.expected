@@ -1,0 +1,61 @@
+exit_code: 0
+--- stdout ---
+member-dot TypeError o.foo is not a function
+member-dot-num TypeError o.num is not a function
+member-dot-null TypeError o.nul is not a function
+member-str-key TypeError o.bar is not a function
+member-num-key TypeError o[1] is not a function
+member-folded-key TypeError o[3] is not a function
+member-dyn-key TypeError o[dynKey] is not a function
+member-sym-key TypeError o[sym] is not a function
+member-deep TypeError o.nested.deep is not a function
+member-space-key TypeError o.a b is not a function
+ident-undefined TypeError und is not a function
+ident-null TypeError nil is not a function
+lit-number TypeError 1 is not a function
+lit-folded-add TypeError 3 is not a function
+lit-string TypeError "str" is not a function
+lit-template TypeError "tpl" is not a function
+lit-negative TypeError -1 is not a function
+lit-not TypeError true is not a function
+lit-exp TypeError 1e+21 is not a function
+lit-tiny TypeError 1e-7 is not a function
+lit-bigint TypeError (intermediate value) is not a function
+nary-add TypeError (a + b + c) is not a function
+nary-mixed TypeError ((a - b) + c) is not a function
+logical-and TypeError (a && b) is not a function
+seq TypeError (a , b) is not a function
+cond TypeError (intermediate value)(intermediate value)(intermediate value) is not a function
+assign TypeError dynKey is not a function
+unary-typeof TypeError (typeof a) is not a function
+update-prefix TypeError (++a) is not a function
+update-postfix TypeError (a++) is not a function
+array-lit TypeError [a,b] is not a function
+object-lit TypeError {(intermediate value)} is not a function
+template-sub TypeError a is not a function
+call-result-member TypeError mk(...).m is not a function
+call-result-call TypeError mkFn(...) is not a function
+paren-deep TypeError o.foo is not a function
+optchain-call TypeError o.num is not a function
+optchain-member TypeError o?.num is not a function
+optchain-deep TypeError o.nested?.deep is not a function
+optchain-paren TypeError (intermediate value) is not a function
+tagged TypeError tag is not a function
+tagged-member TypeError o.num is not a function
+getter-result TypeError withGetter.g is not a function
+construct-ident TypeError und is not a constructor
+construct-number TypeError five is not a constructor
+construct-member TypeError o.C is not a constructor
+construct-member-num TypeError o.num is not a constructor
+construct-folded TypeError 2 is not a constructor
+construct-method TypeError inst.constructor.missing is not a constructor
+intrinsic-global TypeError parseInt is not a function
+intrinsic-static TypeError Object.keys is not a function
+intrinsic-proto TypeError [1].map is not a function
+intrinsic-construct TypeError RegExp is not a constructor
+with-ident TypeError wfn is not a function
+private-member TypeError this[#secret] is not a function
+super-member TypeError (intermediate value).absent is not a function
+async-member TypeError o.missing is not a function
+async-construct TypeError o.MissingCtor is not a constructor
+--- stderr ---

@@ -290,7 +290,7 @@ module {
       %30 = load var $3.$closure_env
       %31 = const c53
       %32 = get_prop %30, %31
-      %33 = call %32, this=%29
+      %33 = call %32, this=%29, callsite="inner"
       %34 = is_exception %33
       branch %34, bb9, bb8
     bb6:
@@ -601,7 +601,7 @@ module {
       store var $0.outer, %29
       %30 = const c84
       %31 = load var $0.outer
-      %32 = call %31, this=%30
+      %32 = call %31, this=%30, callsite="outer"
       %33 = is_exception %32
       branch %33, bb2, bb1
     bb1:
@@ -615,7 +615,7 @@ module {
       %34 = call builtin.exception_value(%32)
       throw %34
     bb3:
-      %40 = call %37, this=%35
+      %40 = call %37, this=%35, callsite="g.next"
       %41 = is_exception %40
       branch %41, bb6, bb5
     bb4:
@@ -684,7 +684,7 @@ module {
       %70 = call builtin.console.log(%59, %62, %67)
       jump bb13
     bb20:
-      %71 = call %57, this=%58, args=[%59, %62, %67]
+      %71 = call %57, this=%58, args=[%59, %62, %67], callsite="console.log"
       jump bb13
     bb21:
       %75 = load var $0.g
@@ -696,7 +696,7 @@ module {
       %74 = call builtin.exception_value(%72)
       throw %74
     bb23:
-      %80 = call %77, this=%75
+      %80 = call %77, this=%75, callsite="g.next"
       store var $0.r, %80
       %81 = is_exception %80
       branch %81, bb26, bb25
@@ -765,7 +765,7 @@ module {
       %110 = call builtin.console.log(%99, %102, %107)
       jump bb33
     bb40:
-      %111 = call %97, this=%98, args=[%99, %102, %107]
+      %111 = call %97, this=%98, args=[%99, %102, %107], callsite="console.log"
       jump bb33
     bb41:
       %115 = load var $0.g
@@ -777,7 +777,7 @@ module {
       %114 = call builtin.exception_value(%112)
       throw %114
     bb43:
-      %120 = call %117, this=%115
+      %120 = call %117, this=%115, callsite="g.next"
       store var $0.r, %120
       %121 = is_exception %120
       branch %121, bb46, bb45
@@ -846,7 +846,7 @@ module {
       %150 = call builtin.console.log(%139, %142, %147)
       jump bb53
     bb60:
-      %151 = call %137, this=%138, args=[%139, %142, %147]
+      %151 = call %137, this=%138, args=[%139, %142, %147], callsite="console.log"
       jump bb53
     bb61:
       %155 = load var $0.g
@@ -858,7 +858,7 @@ module {
       %154 = call builtin.exception_value(%152)
       throw %154
     bb63:
-      %160 = call %157, this=%155
+      %160 = call %157, this=%155, callsite="g.next"
       store var $0.r, %160
       %161 = is_exception %160
       branch %161, bb66, bb65
@@ -927,7 +927,7 @@ module {
       %190 = call builtin.console.log(%179, %182, %187)
       jump bb73
     bb80:
-      %191 = call %177, this=%178, args=[%179, %182, %187]
+      %191 = call %177, this=%178, args=[%179, %182, %187], callsite="console.log"
       jump bb73
     bb81:
       %195 = load var $0.g
@@ -939,7 +939,7 @@ module {
       %194 = call builtin.exception_value(%192)
       throw %194
     bb83:
-      %200 = call %197, this=%195
+      %200 = call %197, this=%195, callsite="g.next"
       store var $0.r, %200
       %201 = is_exception %200
       branch %201, bb86, bb85
@@ -1008,7 +1008,7 @@ module {
       %230 = call builtin.console.log(%219, %222, %227)
       jump bb93
     bb100:
-      %231 = call %217, this=%218, args=[%219, %222, %227]
+      %231 = call %217, this=%218, args=[%219, %222, %227], callsite="console.log"
       jump bb93
     bb101:
       %235 = load var $0.g
@@ -1020,7 +1020,7 @@ module {
       %234 = call builtin.exception_value(%232)
       throw %234
     bb103:
-      %240 = call %237, this=%235
+      %240 = call %237, this=%235, callsite="g.next"
       store var $0.r, %240
       %241 = is_exception %240
       branch %241, bb106, bb105
@@ -1089,7 +1089,7 @@ module {
       %270 = call builtin.console.log(%259, %262, %267)
       jump bb113
     bb120:
-      %271 = call %257, this=%258, args=[%259, %262, %267]
+      %271 = call %257, this=%258, args=[%259, %262, %267], callsite="console.log"
       jump bb113
     bb121:
       return

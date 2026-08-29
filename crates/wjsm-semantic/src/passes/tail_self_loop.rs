@@ -168,6 +168,7 @@ fn collect_tail_sites(
             callee,
             this_val,
             args,
+            ..
         } = &block.instructions()[index]
         else {
             continue;
@@ -401,6 +402,7 @@ mod tests {
             callee: ValueId(0),
             this_val: ValueId(1),
             args,
+            callsite: None,
         });
         block.set_terminator(Terminator::Return { value: Some(dest) });
         block
@@ -481,6 +483,7 @@ mod tests {
                     callee: ValueId(base),
                     this_val: ValueId(base + 1),
                     args: vec![ValueId(base + 2)],
+                    callsite: None,
                 });
                 block.set_terminator(Terminator::Return {
                     value: Some(ValueId(base + 3)),
@@ -533,6 +536,7 @@ mod tests {
             callee: ValueId(2),
             this_val: ValueId(3),
             args: vec![ValueId(4)],
+            callsite: None,
         });
         block.set_terminator(Terminator::Return {
             value: Some(ValueId(5)),

@@ -475,7 +475,7 @@ module {
       %41 = call builtin.console.log(%32, %38)
       jump bb16
     bb23:
-      %42 = call %30, this=%31, args=[%32, %38]
+      %42 = call %30, this=%31, args=[%32, %38], callsite="console.log"
       jump bb16
     bb24:
       %46 = load var $5.$this
@@ -832,7 +832,7 @@ module {
       %63 = call builtin.console.log(%40, %46, %52, %60)
       jump bb20
     bb33:
-      %64 = call %38, this=%39, args=[%40, %46, %52, %60]
+      %64 = call %38, this=%39, args=[%40, %46, %52, %60], callsite="console.log"
       jump bb20
     bb34:
       %68 = load var $17.$this
@@ -1034,7 +1034,7 @@ module {
       %79 = call builtin.console.log(%62, %68, %76)
       jump bb36
     bb47:
-      %80 = call %60, this=%61, args=[%62, %68, %76]
+      %80 = call %60, this=%61, args=[%62, %68, %76], callsite="console.log"
       jump bb36
     bb48:
       %84 = load var $19.$this
@@ -1581,7 +1581,7 @@ module {
       %29 = call builtin.console.log(%28)
       jump bb15
     bb18:
-      %30 = call %26, this=%27, args=[%28]
+      %30 = call %26, this=%27, args=[%28], callsite="console.log"
       jump bb15
     bb19:
       %35 = load var $40.$abrupt_completion_1
@@ -1644,7 +1644,7 @@ module {
       %57 = call builtin.console.log(%56)
       jump bb31
     bb34:
-      %58 = call %54, this=%55, args=[%56]
+      %58 = call %54, this=%55, args=[%56], callsite="console.log"
       jump bb31
     bb35:
       %63 = load var $40.$abrupt_completion_2
@@ -1688,7 +1688,7 @@ module {
       %82 = call builtin.console.log(%81)
       jump bb43
     bb46:
-      %83 = call %79, this=%80, args=[%81]
+      %83 = call %79, this=%80, args=[%81], callsite="console.log"
       jump bb43
     bb47:
       %87 = call builtin.is_js_object(%64)
@@ -1857,7 +1857,7 @@ module {
       %60 = new_object(capacity=4)
       %61 = call builtin.get_prototype_from_constructor(%59)
       set_proto %60, %61
-      %62 = construct_call %59, this=%60
+      %62 = construct_call %59, this=%60, callsite="ExplicitCtor"
       %63 = is_exception %62
       branch %63, bb9, bb10
     bb9:
@@ -1890,7 +1890,7 @@ module {
       %72 = call builtin.console.log(%58, %69)
       jump bb7
     bb19:
-      %73 = call %56, this=%57, args=[%58, %69]
+      %73 = call %56, this=%57, args=[%58, %69], callsite="console.log"
       jump bb7
     bb20:
       %77 = const c51
@@ -1952,7 +1952,7 @@ module {
       %108 = new_object(capacity=4)
       %109 = call builtin.get_prototype_from_constructor(%107)
       set_proto %108, %109
-      %110 = construct_call %107, this=%108
+      %110 = construct_call %107, this=%108, callsite="ImplicitCtor"
       %111 = is_exception %110
       branch %111, bb30, bb31
     bb30:
@@ -1985,7 +1985,7 @@ module {
       %120 = call builtin.console.log(%106, %117)
       jump bb28
     bb40:
-      %121 = call %104, this=%105, args=[%106, %117]
+      %121 = call %104, this=%105, args=[%106, %117], callsite="console.log"
       jump bb28
     bb41:
       %125 = const c72
@@ -2012,7 +2012,7 @@ module {
       %142 = new_object(capacity=4)
       %143 = call builtin.get_prototype_from_constructor(%141)
       set_proto %142, %143
-      %144 = construct_call %141, this=%142
+      %144 = construct_call %141, this=%142, callsite="WithFields"
       %145 = is_exception %144
       branch %145, bb43, bb44
     bb42:
@@ -2129,7 +2129,7 @@ module {
       throw %194
     bb70:
       %199 = load var $0.withFields
-      %200 = call %196, this=%192, args=[%199]
+      %200 = call %196, this=%192, args=[%199], callsite="WithFields.prototype.readSecret.call"
       %201 = is_exception %200
       branch %201, bb73, bb72
     bb71:
@@ -2144,7 +2144,7 @@ module {
       %203 = call builtin.console.log(%168, %171, %176, %185, %200)
       jump bb58
     bb75:
-      %204 = call %166, this=%167, args=[%168, %171, %176, %185, %200]
+      %204 = call %166, this=%167, args=[%168, %171, %176, %185, %200], callsite="console.log"
       jump bb58
     bb76:
       %208 = const c95
@@ -2225,7 +2225,7 @@ module {
       %242 = call builtin.object.get_prototype_of(%241)
       jump bb92
     bb95:
-      %243 = call %239, this=%240, args=[%241]
+      %243 = call %239, this=%240, args=[%241], callsite="Object.getPrototypeOf"
       jump bb92
     bb96:
       %247 = load var $0.$global
@@ -2254,7 +2254,7 @@ module {
       %257 = call builtin.console.log(%224, %254)
       jump bb84
     bb103:
-      %258 = call %222, this=%223, args=[%224, %254]
+      %258 = call %222, this=%223, args=[%224, %254], callsite="console.log"
       jump bb84
     bb104:
       %262 = const c113
@@ -2291,7 +2291,7 @@ module {
       %287 = new_object(capacity=4)
       %288 = call builtin.get_prototype_from_constructor(%286)
       set_proto %287, %288
-      %289 = construct_call %286, this=%287
+      %289 = construct_call %286, this=%287, callsite="KeepsInstance"
       %290 = is_exception %289
       branch %290, bb106, bb107
     bb105:
@@ -2371,7 +2371,7 @@ module {
       %318 = call builtin.exception_value(%316)
       throw %318
     bb125:
-      %324 = call %321, this=%319
+      %324 = call %321, this=%319, callsite="kept.protoMethod"
       %325 = is_exception %324
       branch %325, bb128, bb127
     bb126:
@@ -2386,7 +2386,7 @@ module {
       %327 = call builtin.console.log(%313, %316, %324)
       jump bb121
     bb130:
-      %328 = call %311, this=%312, args=[%313, %316, %324]
+      %328 = call %311, this=%312, args=[%313, %316, %324], callsite="console.log"
       jump bb121
     bb131:
       %332 = const c152
@@ -2410,7 +2410,7 @@ module {
       %346 = new_object(capacity=4)
       %347 = call builtin.get_prototype_from_constructor(%345)
       set_proto %346, %347
-      %348 = construct_call %345, this=%346
+      %348 = construct_call %345, this=%346, callsite="ExprPosition"
       %349 = is_exception %348
       branch %349, bb133, bb134
     bb132:
@@ -2458,7 +2458,7 @@ module {
       %371 = call builtin.get_prototype_from_constructor(%369)
       set_proto %370, %371
       %372 = const c179
-      %373 = construct_call %369, this=%370, args=[%372]
+      %373 = construct_call %369, this=%370, args=[%372], callsite="BranchSuper"
       %374 = is_exception %373
       branch %374, bb142, bb143
     bb141:
@@ -2489,7 +2489,7 @@ module {
       %383 = call builtin.get_prototype_from_constructor(%381)
       set_proto %382, %383
       %384 = const c180
-      %385 = construct_call %381, this=%382, args=[%384]
+      %385 = construct_call %381, this=%382, args=[%384], callsite="BranchSuper"
       %386 = is_exception %385
       branch %386, bb151, bb152
     bb150:
@@ -2536,7 +2536,7 @@ module {
       %407 = new_object(capacity=4)
       %408 = call builtin.get_prototype_from_constructor(%406)
       set_proto %407, %408
-      %409 = construct_call %406, this=%407
+      %409 = construct_call %406, this=%407, callsite="ReturnSuper"
       %410 = is_exception %409
       branch %410, bb160, bb161
     bb159:
@@ -2624,7 +2624,7 @@ module {
       %444 = call builtin.console.log(%433, %436, %441)
       jump bb175
     bb182:
-      %445 = call %431, this=%432, args=[%433, %436, %441]
+      %445 = call %431, this=%432, args=[%433, %436, %441], callsite="console.log"
       jump bb175
     bb183:
       %449 = const c207
@@ -2648,7 +2648,7 @@ module {
       %463 = new_object(capacity=4)
       %464 = call builtin.get_prototype_from_constructor(%462)
       set_proto %463, %464
-      %465 = construct_call %462, this=%463
+      %465 = construct_call %462, this=%463, callsite="ReturnsObject"
       %466 = is_exception %465
       branch %466, bb185, bb186
     bb184:
@@ -2736,7 +2736,7 @@ module {
       %500 = call builtin.console.log(%489, %492, %497)
       jump bb200
     bb207:
-      %501 = call %487, this=%488, args=[%489, %492, %497]
+      %501 = call %487, this=%488, args=[%489, %492, %497], callsite="console.log"
       jump bb200
     bb208:
       %505 = const c227
@@ -2804,7 +2804,7 @@ module {
       %541 = new_object(capacity=4)
       %542 = call builtin.get_prototype_from_constructor(%540)
       set_proto %541, %542
-      %543 = construct_call %540, this=%541
+      %543 = construct_call %540, this=%541, callsite="ReturnsUndefined"
       %544 = is_exception %543
       branch %544, bb218, bb219
     bb218:
@@ -2837,7 +2837,7 @@ module {
       %553 = call builtin.console.log(%539, %550)
       jump bb216
     bb228:
-      %554 = call %537, this=%538, args=[%539, %550]
+      %554 = call %537, this=%538, args=[%539, %550], callsite="console.log"
       jump bb216
     bb229:
       %558 = const c246
@@ -2878,7 +2878,7 @@ module {
       %585 = new_object(capacity=4)
       %586 = call builtin.get_prototype_from_constructor(%584)
       set_proto %585, %586
-      %587 = construct_call %584, this=%585
+      %587 = construct_call %584, this=%585, callsite="TopLevel"
       %588 = is_exception %587
       branch %588, bb231, bb232
     bb230:
@@ -2975,7 +2975,7 @@ module {
       %627 = call builtin.console.log(%611, %614, %619, %624)
       jump bb246
     bb255:
-      %628 = call %609, this=%610, args=[%611, %614, %619, %624]
+      %628 = call %609, this=%610, args=[%611, %614, %619, %624], callsite="console.log"
       jump bb246
     bb256:
       %632 = const c272
@@ -3047,7 +3047,7 @@ module {
       %671 = new_object(capacity=4)
       %672 = call builtin.get_prototype_from_constructor(%670)
       set_proto %671, %672
-      %673 = construct_call %670, this=%671
+      %673 = construct_call %670, this=%671, callsite="SpreadSuper"
       %674 = is_exception %673
       branch %674, bb266, bb267
     bb266:
@@ -3080,7 +3080,7 @@ module {
       %683 = call builtin.console.log(%669, %680)
       jump bb264
     bb276:
-      %684 = call %667, this=%668, args=[%669, %680]
+      %684 = call %667, this=%668, args=[%669, %680], callsite="console.log"
       jump bb264
     bb277:
       %688 = const c297
@@ -3144,7 +3144,7 @@ module {
       %719 = call builtin.reflect.construct(%717, %718)
       jump bb285
     bb288:
-      %720 = call %715, this=%716, args=[%717, %718]
+      %720 = call %715, this=%716, args=[%717, %718], callsite="Reflect.construct"
       jump bb285
     bb289:
       store var $0.reflected, %721
@@ -3209,7 +3209,7 @@ module {
       %751 = call builtin.console.log(%740, %743, %748)
       jump bb297
     bb304:
-      %752 = call %738, this=%739, args=[%740, %743, %748]
+      %752 = call %738, this=%739, args=[%740, %743, %748], callsite="console.log"
       jump bb297
     bb305:
       %756 = const c356
@@ -3238,7 +3238,7 @@ module {
       %770 = new_object(capacity=4)
       %771 = call builtin.get_prototype_from_constructor(%769)
       set_proto %770, %771
-      %772 = construct_call %769, this=%770
+      %772 = construct_call %769, this=%770, callsite="ReturnsPrimitive"
       %773 = is_exception %772
       branch %773, bb310, bb311
     bb308:
@@ -3329,7 +3329,7 @@ module {
       %807 = call builtin.console.log(%797, %802)
       jump bb325
     bb332:
-      %808 = call %795, this=%796, args=[%797, %802]
+      %808 = call %795, this=%796, args=[%797, %802], callsite="console.log"
       jump bb325
     bb333:
       jump bb308

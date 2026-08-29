@@ -49,7 +49,7 @@ module {
       %0 = const c21
       %1 = load var $1.resolve
       %2 = const c22
-      %3 = call %1, this=%0, args=[%2]
+      %3 = call %1, this=%0, args=[%2], callsite="resolve"
       return %3
 
   fn @arrow_1 [direct_callable] [js_name ""] [js_length 1] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
@@ -93,7 +93,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -184,7 +184,7 @@ module {
       %41 = call builtin.promise.resolve_static(%40, %39)
       jump bb7
     bb10:
-      %42 = call %37, this=%38, args=[%39]
+      %42 = call %37, this=%38, args=[%39], callsite="Promise.resolve"
       jump bb7
     bb11:
       %46 = const c39
