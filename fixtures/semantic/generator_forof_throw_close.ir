@@ -388,17 +388,12 @@ module {
     bb2:
       jump bb3
     bb3:
-      %15 = const c63
       %16 = load var $6.$closure_env
       %17 = const c64
-      %18 = get_prop %16, %17
       %19 = const c65
-      %20 = call %18, this=%15, args=[%19], callsite="makeIter"
-      %21 = call builtin.iterator.from(%20)
-      store var $suspend_spill_6_0, %21
-      %326 = load var $suspend_spill_6_0
-      %22 = is_exception %326
-      branch %22, bb7, bb6
+      %352 = const c0
+      %353 = load var $6.$env
+      jump bb134
     bb4:
       %295 = const c116
       %296 = const c117
@@ -990,6 +985,48 @@ module {
       return
     bb132:
       unreachable
+    bb133:
+      %21 = call builtin.iterator.from(%354)
+      store var $suspend_spill_6_0, %21
+      %326 = load var $suspend_spill_6_0
+      %22 = is_exception %326
+      branch %22, bb7, bb6
+    bb134:
+      %354 = new_object(capacity=4)
+      %355 = const c20
+      %356 = call builtin.symbol.well_known(%355)
+      %357 = is_exception %356
+      %363 = const c52
+      store var $2.$shared_env, %363
+      branch %357, bb136, bb135
+    bb135:
+      %359 = call builtin.to_property_key(%356)
+      %360 = is_exception %359
+      branch %360, bb138, bb137
+    bb136:
+      %358 = call builtin.exception_value(%356)
+      store var $2.$shared_env, %352
+      store var $2.tag, %352
+      throw %358
+    bb137:
+      %362 = const c51
+      %364 = new_object(capacity=1)
+      set_proto %364, %353
+      store var $2.$shared_env, %364
+      %367 = const c53
+      %368 = set_prop %364, %367, %19
+      %369 = call builtin.create_closure(%362, %364)
+      %370 = const c54
+      call builtin.function.set_name(%369, %359, %370)
+      %371 = create_data_property %354, %359, %369
+      store var $2.$shared_env, %352
+      store var $2.tag, %352
+      jump bb133
+    bb138:
+      %361 = call builtin.exception_value(%359)
+      store var $2.$shared_env, %352
+      store var $2.tag, %352
+      throw %361
 
   fn @g [needs_prototype] [js_name "g"] [js_length 0] [captures: $0.makeIter] [params: $17.$env, $17.$this] [entry=bb0]:
     bb0:

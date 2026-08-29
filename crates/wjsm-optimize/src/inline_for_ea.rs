@@ -368,6 +368,29 @@ pub(crate) fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap
     load_reaching
 }
 
+/// callee 是否即为调用点的 `create_closure` 结果（IIFE / 工厂即时求值）。
+/// 与「先 store 再 load 的存储闭包」区分：后者由后端直调，不应再内联体。
+fn is_immediate_create_closure_invoke(
+    defs: &HashMap<ValueId, Instruction>,
+    load_reaching: &HashMap<ValueId, ValueId>,
+    callee: ValueId,
+) -> bool {
+    let mut current = callee;
+    while let Some(reaching) = load_reaching.get(&current) {
+        if *reaching == current {
+            break;
+        }
+        current = *reaching;
+    }
+    matches!(
+        defs.get(&current),
+        Some(Instruction::CallBuiltin {
+            builtin: Builtin::CreateClosure,
+            ..
+        })
+    )
+}
+
 fn resolve_callee_id(
     module: &Module,
     caller: &wjsm_ir::Function,
@@ -508,7 +531,16 @@ fn static_inline_round(module: &mut Module) -> bool {
                     continue;
                 }
                 if closure_env.is_some() && should_backend_direct_closure_call(module, callee_id) {
-                    continue;
+                    // 存储闭包（load → 单次 store create_closure）留给后端直调；
+                    // 即时 create_closure+invoke（IIFE / factory 返回值）仍允许内联，
+                    // 以保留 callee_dead_slot_names 对 WeakRef/FinalizationRegistry 的清槽。
+                    if !is_immediate_create_closure_invoke(
+                        &per_func_defs[func_idx],
+                        &per_func_load_reaching[func_idx],
+                        *callee,
+                    ) {
+                        continue;
+                    }
                 }
                 // 类构造器的 [[Call]]（无 new）必须在运行时抛 TypeError
                 //（ES §10.2.1 步骤 2）：保留动态调用，不得内联函数体。
