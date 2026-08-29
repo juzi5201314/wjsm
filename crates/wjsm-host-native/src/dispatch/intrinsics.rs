@@ -112,12 +112,24 @@ fn expected_canonical(state: &mut NativeAgentState, builtin: Builtin, method: bo
     state.native_callable(kind)
 }
 
+/// 急切物化且规范值为堆对象（无 builtin 形态）的全局名 → 规范对象。
+/// 目前仅 `Atomics` 命名空间；全局对象存在时该对象必已随
+/// CreateGlobalObject 物化。
+fn eager_container_canonical(state: &NativeAgentState, name: &str) -> Option<i64> {
+    match name {
+        "Atomics" => state.atomics_object,
+        _ => None,
+    }
+}
+
 /// 全局名未被运行时触碰：无全局词法绑定（间接 eval 注入的 let/const）、
 /// 无删除墓碑，且全局对象自有槽要么缺失、要么仍是持有站点规范值的数据
-/// 属性（Web 全局在 CreateGlobalObject 时急切物化为真实自有属性，槽位
-/// 存在本身不构成用户修改；`site_builtin` 为 None 的调用方——静态成员
-/// 容器名——无法给出规范值，槽位存在一律保守判 false）。全局对象尚未
-/// 创建或名字从未驻留时不存在任何用户可达的修改通道，恒 pristine。
+/// 属性（Web 全局与 SharedArrayBuffer / Atomics 在 CreateGlobalObject 时
+/// 急切物化为真实自有属性，槽位存在本身不构成用户修改；`site_builtin`
+/// 为 None 的调用方——静态成员容器名——规范值经
+/// `eager_container_canonical` 反查，查不到则槽位存在一律保守判 false）。
+/// 全局对象尚未创建或名字从未驻留时不存在任何用户可达的修改通道，
+/// 恒 pristine。
 fn global_ident_pristine(
     state: &mut NativeAgentState,
     name: &str,
@@ -145,9 +157,11 @@ fn global_ident_pristine(
         if slot.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
             return false;
         }
-        let Some(expected) =
-            site_builtin.and_then(|builtin| expected_canonical(state, builtin, false))
-        else {
+        let expected = match site_builtin {
+            Some(builtin) => expected_canonical(state, builtin, false),
+            None => eager_container_canonical(state, name),
+        };
+        let Some(expected) = expected else {
             return false;
         };
         return value::strip_gc_color(slot.value as i64) == value::strip_gc_color(expected);
@@ -175,10 +189,19 @@ fn static_member_pristine(
     let Some(container_encoded) = existing_name_value(state, container_name) else {
         return true;
     };
-    let Some(container) = state.global_property(global, container_encoded) else {
-        // 容器名不经全局惰性合成（如 Atomics）：既然全局名未被触碰，
-        // 也就不存在任何用户可达的属性修改通道，快路径保持引擎规范行为。
-        return true;
+    let container = match state.global_property(global, container_encoded) {
+        Some(container) => container,
+        None => {
+            // 全局惰性合成不认领的容器名有两类：急切物化容器（Atomics——
+            // 自有槽存在使 global_property 让位于普通属性协议，前面的
+            // global_ident_pristine 已验证槽仍持规范值，直接以规范对象
+            // 继续查成员槽）；其余名字既然全局名未被触碰，也就不存在
+            // 任何用户可达的属性修改通道，快路径保持引擎规范行为。
+            match eager_container_canonical(state, container_name) {
+                Some(container) => container,
+                None => return true,
+            }
+        }
     };
     // 属性名从未驻留 ⇒ 该键下无 side table 覆盖 / 自有槽 / 墓碑（堆对象
     // 容器物化时即驻留全部方法名，名字缺失同样证明无修改）。

@@ -54,13 +54,37 @@ pub(super) fn dispatch_buffer(
         Builtin::DataViewProtoSetBigInt64 | Builtin::DataViewProtoSetBigUint64 => {
             data_view_set_bigint(ctx, state, args)
         }
+        Builtin::DataViewProtoBuffer
+        | Builtin::DataViewProtoByteLength
+        | Builtin::DataViewProtoByteOffset => data_view_accessor(ctx, state, builtin, args),
         _ => return None,
     })
 }
 
-/// DataView.prototype 的方法名 → Builtin 映射，实例取值（`buffer_builtin`）与
-/// `DataView.prototype` 对象安装（`install_data_view_prototype_methods`）共用，
-/// 避免两处清单漂移。
+/// `get DataView.prototype.buffer` / `byteLength` / `byteOffset`
+/// （§25.3.4.1–3）：receiver 必须携带 [[DataView]] 品牌（side table 有条目）。
+fn data_view_accessor(
+    ctx: &mut NativeVmContext,
+    state: &NativeAgentState,
+    builtin: Builtin,
+    args: &[i64],
+) -> i64 {
+    let Some(view) = args
+        .first()
+        .and_then(|object| state.data_views.get(&value::decode_handle(*object)))
+    else {
+        return fail_dispatch(ctx);
+    };
+    match builtin {
+        Builtin::DataViewProtoBuffer => value::encode_object_handle(view.buffer),
+        Builtin::DataViewProtoByteLength => value::encode_f64(view.length as f64),
+        Builtin::DataViewProtoByteOffset => value::encode_f64(view.offset as f64),
+        _ => fail_dispatch(ctx),
+    }
+}
+
+/// DataView.prototype 的方法名 → Builtin 映射，
+/// `install_data_view_prototype_methods` 按此安装原型方法。
 pub(crate) const DATA_VIEW_PROTO_METHODS: &[(&str, Builtin)] = &[
     ("getBigInt64", Builtin::DataViewProtoGetBigInt64),
     ("getBigUint64", Builtin::DataViewProtoGetBigUint64),
@@ -110,37 +134,43 @@ pub(crate) fn install_data_view_prototype_methods(
     Ok(())
 }
 
-pub(crate) fn buffer_builtin(
-    state: &NativeAgentState,
-    receiver: i64,
-    key: &str,
-) -> Option<Builtin> {
-    let handle = value::decode_handle(receiver);
-    if state.array_buffers.contains_key(&handle) {
-        return Some(match key {
-            "byteLength" => Builtin::ArrayBufferProtoByteLength,
-            "slice" => Builtin::ArrayBufferProtoSlice,
-            _ => return None,
-        });
-    }
-    if state.data_views.contains_key(&handle) {
-        return DATA_VIEW_PROTO_METHODS
-            .iter()
-            .find(|(name, _)| *name == key)
-            .map(|(_, builtin)| *builtin);
-    }
-    None
+/// 从既有共享字节创建 ArrayBuffer 实例：先物化 %ArrayBuffer.prototype% 再
+/// 分配实例（物化期间的分配不会悬空尚未入根的实例对象），创建即接线
+/// [[Prototype]]（§25.1.5.1 OrdinaryCreateFromConstructor）。
+pub(crate) fn from_shared_bytes(
+    state: &mut NativeAgentState,
+    bytes: Rc<RefCell<Vec<u8>>>,
+) -> Option<i64> {
+    let prototype = state.ensure_array_buffer_prototype()?;
+    let object = state.allocate_object(1, false).ok()?;
+    state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .ok()?;
+    state
+        .array_buffers
+        .insert(value::decode_handle(object), NativeArrayBuffer { bytes });
+    Some(object)
 }
 
 pub(crate) fn allocate_array_buffer(state: &mut NativeAgentState, length: usize) -> Option<i64> {
-    let object = state.allocate_object(1, false).ok()?;
-    state.array_buffers.insert(
-        value::decode_handle(object),
-        NativeArrayBuffer {
-            bytes: Rc::new(RefCell::new(vec![0; length])),
-        },
-    );
-    Some(object)
+    from_shared_bytes(state, Rc::new(RefCell::new(vec![0; length])))
+}
+
+/// `ToIndex(length)` 的既有近似（完整 ToIndex 语义之外的输入走 fail）：
+/// 实参缺失或 undefined 按规范取 0（`new ArrayBuffer()` 合法）。
+fn byte_length_argument(state: &NativeAgentState, encoded: Option<i64>) -> Option<usize> {
+    let Some(encoded) = encoded else {
+        return Some(0);
+    };
+    if value::is_undefined(encoded) {
+        return Some(0);
+    }
+    to_number(state, encoded).and_then(|number| number.to_usize())
 }
 
 fn array_buffer_constructor(
@@ -148,11 +178,7 @@ fn array_buffer_constructor(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(length) = args
-        .first()
-        .and_then(|encoded| to_number(state, *encoded))
-        .and_then(|number| number.to_usize())
-    else {
+    let Some(length) = byte_length_argument(state, args.first().copied()) else {
         return fail_dispatch(ctx);
     };
     allocate_array_buffer(state, length).unwrap_or_else(|| fail_dispatch(ctx))
@@ -191,9 +217,24 @@ fn array_buffer_slice(
         relative_index(state, Some(*encoded), length)
     });
     let bytes = buffer.bytes.borrow()[start.min(end)..end.min(length)].to_vec();
+    // 先物化原型再分配实例（同 `from_shared_bytes`），此处保留 GC 重试分配。
+    let Some(prototype) = state.ensure_array_buffer_prototype() else {
+        return fail_dispatch(ctx);
+    };
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
+    if state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
     state.array_buffers.insert(
         value::decode_handle(object),
         NativeArrayBuffer {
@@ -233,9 +274,26 @@ fn data_view_constructor(
     if offset.saturating_add(length) > total_length {
         return fail_dispatch(ctx);
     }
+    // 先物化 %DataView.prototype% 再分配实例：创建即接线 [[Prototype]]，
+    // instanceof / constructor / @@toStringTag 品牌沿真实原型链成立
+    // （§25.3.2.1 OrdinaryCreateFromConstructor）。
+    let Some(prototype) = state.ensure_data_view_prototype() else {
+        return fail_dispatch(ctx);
+    };
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
+    if state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
     state.data_views.insert(
         value::decode_handle(object),
         NativeDataView {
@@ -551,14 +609,7 @@ pub(crate) fn array_buffer_bytes(state: &NativeAgentState, encoded: i64) -> Opti
 }
 
 pub(crate) fn from_bytes(state: &mut NativeAgentState, bytes: Vec<u8>) -> Option<i64> {
-    let object = state.allocate_object(1, false).ok()?;
-    state.array_buffers.insert(
-        value::decode_handle(object),
-        NativeArrayBuffer {
-            bytes: Rc::new(RefCell::new(bytes)),
-        },
-    );
-    Some(object)
+    from_shared_bytes(state, Rc::new(RefCell::new(bytes)))
 }
 
 pub(crate) fn detach(state: &mut NativeAgentState, handle: u32) {
@@ -588,32 +639,35 @@ pub(crate) fn from_view(
     length: usize,
 ) -> Option<i64> {
     let buffer_handle = value::decode_handle(backing);
-    if let Some(buffer) = state.array_buffers.get(&buffer_handle).cloned() {
-        if offset.checked_add(length)? > buffer.bytes.borrow().len() {
+    let shared = if state.array_buffers.get(&buffer_handle).is_some_and(|buffer| {
+        offset
+            .checked_add(length)
+            .is_some_and(|end| end <= buffer.bytes.borrow().len())
+    }) {
+        None
+    } else {
+        let shared = state.shared_array_buffers.get(&buffer_handle)?.clone();
+        if offset.checked_add(length)? > shared.backing.bytes.lock().ok()?.len() {
             return None;
         }
-        let object = state.allocate_object(1, false).ok()?;
-        state.data_views.insert(
-            value::decode_handle(object),
-            NativeDataView {
-                buffer: buffer_handle,
-                shared: None,
-                offset,
-                length,
-            },
-        );
-        return Some(object);
-    }
-    let shared = state.shared_array_buffers.get(&buffer_handle)?.clone();
-    if offset.checked_add(length)? > shared.backing.bytes.lock().ok()?.len() {
-        return None;
-    }
+        Some(shared.backing.bytes)
+    };
+    // 先物化原型再分配实例（同 `data_view_constructor`）。
+    let prototype = state.ensure_data_view_prototype()?;
     let object = state.allocate_object(1, false).ok()?;
+    state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .ok()?;
     state.data_views.insert(
         value::decode_handle(object),
         NativeDataView {
             buffer: buffer_handle,
-            shared: Some(shared.backing.bytes),
+            shared,
             offset,
             length,
         },

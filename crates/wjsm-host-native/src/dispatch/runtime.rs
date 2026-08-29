@@ -2064,58 +2064,9 @@ pub(super) fn get_property_with_receiver(
             );
         }
     }
-    if state
-        .array_buffers
-        .contains_key(&value::decode_handle(object))
-        || state.data_views.contains_key(&value::decode_handle(object))
-    {
-        let property_name = state
-            .string_owned(key)
-            .and_then(|text| text.to_utf8())
-            .unwrap_or_default();
-        if state
-            .array_buffers
-            .contains_key(&value::decode_handle(object))
-            && property_name == "byteLength"
-        {
-            return Ok(super::buffers::dispatch_buffer(
-                ctx,
-                state,
-                wjsm_ir::Builtin::ArrayBufferProtoByteLength,
-                &[object],
-            )
-            .unwrap_or_else(|| fail_dispatch(ctx)));
-        }
-        if let Some(view) = state.data_views.get(&value::decode_handle(object)).cloned() {
-            return match property_name.as_str() {
-                "byteLength" => Ok(value::encode_f64(view.length as f64)),
-                "byteOffset" => Ok(value::encode_f64(view.offset as f64)),
-                "buffer" => Ok(value::encode_object_handle(view.buffer)),
-                _ => Ok(state
-                    .primitive_property(object, key)
-                    .unwrap_or_else(value::encode_undefined)),
-            };
-        }
-    }
-    if let Some(_sab) = state
-        .shared_array_buffers
-        .get(&value::decode_handle(object))
-    {
-        let property_name = state
-            .string_owned(key)
-            .and_then(|text| text.to_utf8())
-            .unwrap_or_default();
-        let builtin = match property_name.as_str() {
-            "byteLength" => Some(wjsm_ir::Builtin::SharedArrayBufferProtoByteLength),
-            "growable" => Some(wjsm_ir::Builtin::SharedArrayBufferProtoGrowable),
-            "maxByteLength" => Some(wjsm_ir::Builtin::SharedArrayBufferProtoMaxByteLength),
-            _ => None,
-        };
-        if let Some(builtin) = builtin {
-            return Ok(super::sab::dispatch_sab(ctx, state, builtin, &[object])
-                .unwrap_or_else(|| fail_dispatch(ctx)));
-        }
-    }
+    // ArrayBuffer / DataView / SharedArrayBuffer 实例无早退拦截：实例创建
+    // 即接线各自 prototype，byteLength 等访问器沿真实原型链以 receiver 为
+    // this 分派（brand 检查在 getter 内完成）。
     if value::is_proxy(object) {
         return Ok(super::proxy::get(ctx, state, object, key, receiver));
     }

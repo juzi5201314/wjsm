@@ -7,7 +7,6 @@ use num_traits::ToPrimitive;
 use wjsm_ir::value;
 use wjsm_native_abi::NativeVmContext;
 
-use super::buffers::NativeArrayBuffer;
 use super::modules;
 use super::runtime::{fail_dispatch, render_value, to_number, to_string_coerced};
 use super::typedarray::{NativeTypedArray, TypedArrayKind};
@@ -995,13 +994,9 @@ fn to_json(ctx: &mut NativeVmContext, state: &mut NativeAgentState, receiver: i6
 
 fn create(state: &mut NativeAgentState, bytes: Vec<u8>) -> Option<i64> {
     let bytes = Rc::new(RefCell::new(bytes));
-    let array_buffer = state.allocate_object(1, false).ok()?;
-    state.array_buffers.insert(
-        value::decode_handle(array_buffer),
-        NativeArrayBuffer {
-            bytes: Rc::clone(&bytes),
-        },
-    );
+    // `buf.buffer` 暴露的底层 ArrayBuffer 与 `new ArrayBuffer` 同形态
+    //（[[Prototype]] 接线 %ArrayBuffer.prototype%）。
+    let array_buffer = super::buffers::from_shared_bytes(state, Rc::clone(&bytes))?;
     let length = bytes.borrow().len();
     create_view(state, bytes, array_buffer, 0, length)
 }

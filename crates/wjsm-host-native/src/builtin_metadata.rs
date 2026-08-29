@@ -408,8 +408,12 @@ fn date_regexp_metadata(builtin: Builtin) -> Option<(&'static str, u32)> {
 fn binary_data_metadata(builtin: Builtin) -> Option<(&'static str, u32)> {
     Some(match builtin {
         Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
+        Builtin::ArrayBufferProtoByteLength => ("get byteLength", 0),
         Builtin::ArrayBufferProtoSlice => ("slice", 2),
         Builtin::SharedArrayBufferConstructor => ("SharedArrayBuffer", 1),
+        Builtin::SharedArrayBufferProtoByteLength => ("get byteLength", 0),
+        Builtin::SharedArrayBufferProtoGrowable => ("get growable", 0),
+        Builtin::SharedArrayBufferProtoMaxByteLength => ("get maxByteLength", 0),
         Builtin::SharedArrayBufferProtoGrow => ("grow", 1),
         Builtin::SharedArrayBufferProtoSlice => ("slice", 2),
         Builtin::DataViewConstructor => ("DataView", 1),
@@ -433,6 +437,9 @@ fn binary_data_metadata(builtin: Builtin) -> Option<(&'static str, u32)> {
         Builtin::DataViewProtoGetBigUint64 => ("getBigUint64", 1),
         Builtin::DataViewProtoSetBigInt64 => ("setBigInt64", 2),
         Builtin::DataViewProtoSetBigUint64 => ("setBigUint64", 2),
+        Builtin::DataViewProtoBuffer => ("get buffer", 0),
+        Builtin::DataViewProtoByteLength => ("get byteLength", 0),
+        Builtin::DataViewProtoByteOffset => ("get byteOffset", 0),
         Builtin::Int8ArrayConstructor => ("Int8Array", 3),
         Builtin::Uint8ArrayConstructor => ("Uint8Array", 3),
         Builtin::Uint8ClampedArrayConstructor => ("Uint8ClampedArray", 3),

@@ -73,22 +73,6 @@ impl NativeSharedArrayBuffer {
     }
 }
 
-pub(crate) fn sab_builtin(state: &NativeAgentState, receiver: i64, key: &str) -> Option<Builtin> {
-    let handle = value::decode_handle(receiver);
-    if !state.shared_array_buffers.contains_key(&handle) {
-        return None;
-    }
-    Some(match key {
-        "byteLength" => Builtin::SharedArrayBufferProtoByteLength,
-        "grow" => Builtin::SharedArrayBufferProtoGrow,
-        "growable" => Builtin::SharedArrayBufferProtoGrowable,
-        "maxByteLength" => Builtin::SharedArrayBufferProtoMaxByteLength,
-        "slice" => Builtin::SharedArrayBufferProtoSlice,
-        "constructor" => Builtin::SharedArrayBufferConstructor,
-        _ => return None,
-    })
-}
-
 pub(super) fn dispatch_sab(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -110,14 +94,19 @@ pub(super) fn dispatch_sab(
     })
 }
 
-/// `new SharedArrayBuffer(length)` 或 `new SharedArrayBuffer(length, { maxByteLength })`。
+/// `new SharedArrayBuffer(length)` 或 `new SharedArrayBuffer(length, { maxByteLength })`；
+/// 实参缺失或 undefined 时 ToIndex 取 0（§25.2.4.1）。
 fn constructor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(length) = args
-        .first()
-        .and_then(|encoded| to_number(state, *encoded))
-        .and_then(|number| number.to_usize())
-    else {
-        return fail_dispatch(ctx);
+    let length = match args.first() {
+        None => 0,
+        Some(encoded) if value::is_undefined(*encoded) => 0,
+        Some(encoded) => {
+            let Some(length) = to_number(state, *encoded).and_then(|number| number.to_usize())
+            else {
+                return fail_dispatch(ctx);
+            };
+            length
+        }
     };
     let max_byte_length = args
         .get(1)
@@ -135,12 +124,55 @@ fn constructor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     {
         return fail_dispatch(ctx);
     }
-    let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
+    let Some(object) = allocate_shared_array_buffer(ctx, state, length, max_byte_length) else {
         return fail_dispatch(ctx);
     };
+    object
+}
+
+/// 在 agent 本地物化指向既有 cluster backing 的 SAB 对象（结构化克隆 /
+/// test262 agent 消息传递）：与构造器同样先物化原型再分配、创建即接线
+/// [[Prototype]]。backing 不存在时 side table 不落条目，由调用方检查。
+pub(crate) fn materialize_from_backing(
+    state: &mut NativeAgentState,
+    backing_id: u32,
+) -> Option<i64> {
+    let prototype = state.ensure_shared_array_buffer_prototype()?;
+    let object = state.allocate_object(1, false).ok()?;
+    state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .ok()?;
+    state.insert_shared_array_buffer(value::decode_handle(object), backing_id);
+    Some(object)
+}
+
+/// 分配挂好 [[Prototype]] 的 SharedArrayBuffer 实例：先物化
+/// %SharedArrayBuffer.prototype% 再分配实例（物化期间的分配不会悬空尚未
+/// 入根的实例对象），创建即接线原型（§25.2.3.1 AllocateSharedArrayBuffer）。
+fn allocate_shared_array_buffer(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    length: usize,
+    max_byte_length: Option<usize>,
+) -> Option<i64> {
+    let prototype = state.ensure_shared_array_buffer_prototype()?;
+    let object = state.allocate_object_with_gc_retry(ctx, 1, false).ok()?;
+    state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .ok()?;
     let backing_id = state.allocate_sab_backing(length, max_byte_length);
     state.insert_shared_array_buffer(value::decode_handle(object), backing_id);
-    object
+    Some(object)
 }
 
 fn byte_length(ctx: &mut NativeVmContext, state: &NativeAgentState, args: &[i64]) -> i64 {
@@ -228,9 +260,24 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
         relative_index(state, Some(*encoded), length)
     });
     let bytes = entry.slice(start, end);
+    // 先物化原型再分配实例（同 `allocate_shared_array_buffer`）。
+    let Some(prototype) = state.ensure_shared_array_buffer_prototype() else {
+        return fail_dispatch(ctx);
+    };
     let Ok(object) = state.allocate_object_with_gc_retry(ctx, 1, false) else {
         return fail_dispatch(ctx);
     };
+    if state
+        .gc
+        .heap()
+        .set_prototype(
+            value::decode_handle(object),
+            value::decode_handle(prototype),
+        )
+        .is_err()
+    {
+        return fail_dispatch(ctx);
+    }
     let backing_id = state.allocate_sab_backing_from_bytes(bytes);
     state.insert_shared_array_buffer(value::decode_handle(object), backing_id);
     object

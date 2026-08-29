@@ -109,6 +109,20 @@ pub fn web_global_property(name: &str) -> Option<(Builtin, bool)> {
         .map(|(_, builtin, enumerable)| (*builtin, *enumerable))
 }
 
+/// ES 侧急切物化的全局自有数据属性：`SharedArrayBuffer` 构造器与 `Atomics`
+/// 命名空间在 Node 中都是全局对象上 {writable, configurable, 不可枚举} 的
+/// 真实自有属性。`SharedArrayBuffer` 的规范值是构造器 builtin（GLOBAL_IDENT
+/// 站点表可反查）；`Atomics` 的规范值是宿主物化的命名空间堆对象（无
+/// builtin 形态），槽位值由宿主装配。
+pub const ES_EAGER_GLOBAL_PROPERTIES: &[&str] = &["SharedArrayBuffer", "Atomics"];
+
+/// 全局名是否为急切物化的真实自有属性（Web 平台全局 + ES 侧
+/// SharedArrayBuffer / Atomics）。语义层据此把裸标识符读取路由到全局环境
+/// 记录语义（GlobalEnvGet：删除后 ReferenceError，typeof 容忍读）。
+pub fn eager_global_property(name: &str) -> bool {
+    web_global_property(name).is_some() || ES_EAGER_GLOBAL_PROPERTIES.contains(&name)
+}
+
 /// 内建容器静态成员调用（`String.raw(...)`）的站点表：
 /// (容器全局名, 属性名) → 快路径 builtin。
 pub const STATIC_MEMBER_SITES: &[(&str, &str, Builtin)] = &[
@@ -482,6 +496,31 @@ mod tests {
             assert_eq!(global_ident_builtin(name), Some(*builtin));
             assert_eq!(global_ident_name(*builtin), Some(*name));
         }
+    }
+
+    /// ES 侧急切物化名与 GLOBAL_IDENT 站点表对齐：`new SharedArrayBuffer`
+    /// 守卫按 (GLOBAL_IDENT, wire_id) 反查名字；`Atomics` 只作 STATIC_MEMBER
+    /// 容器名（命名空间对象无构造快路径），不得进 GLOBAL_IDENT 表。
+    #[test]
+    fn es_eager_globals_align_with_site_tables() {
+        assert!(eager_global_property("SharedArrayBuffer"));
+        assert!(eager_global_property("Atomics"));
+        assert!(eager_global_property("fetch"));
+        assert!(!eager_global_property("Math"));
+        assert_eq!(
+            global_ident_builtin("SharedArrayBuffer"),
+            Some(Builtin::SharedArrayBufferConstructor)
+        );
+        assert_eq!(
+            global_ident_name(Builtin::SharedArrayBufferConstructor),
+            Some("SharedArrayBuffer")
+        );
+        assert_eq!(global_ident_builtin("Atomics"), None);
+        assert!(
+            STATIC_MEMBER_SITES
+                .iter()
+                .any(|(object, _, _)| *object == "Atomics")
+        );
     }
 
     /// 站点名字全部为 ASCII：宿主可直接按字节构造 UTF-16 码元做非驻留探测。
