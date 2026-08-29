@@ -73,6 +73,10 @@ pub(crate) struct BuiltinSegmentCacheFile {
     /// `(module_id, 导出名列表)`：与 lowerer 内部 `module_export_names` 同源
     /// （`analyze_module_links` 的 `export_names`），按 module_id 升序。
     pub module_export_names: Vec<(u32, Vec<String>)>,
+    /// 段入口 `$builtin_main` 已创建并注册命名空间对象的模块（builtin 之间
+    /// `import * as` / 段内动态 import 目标），按 module_id 升序。hydration 时
+    /// 用户段对这些模块经 GetModuleNamespace 取回同一 canonical 对象。
+    pub namespace_modules: Vec<u32>,
 }
 
 /// 计算 builtin 段缓存键：
@@ -283,6 +287,11 @@ pub(crate) fn build_builtin_segment(
 
     let scope_count = u32::try_from(metadata.scope_count)
         .with_context(|| format!("builtin 段作用域总数 {} 超出 u32", metadata.scope_count))?;
+    let namespace_modules: Vec<u32> = metadata
+        .namespace_modules
+        .iter()
+        .map(|module_id| module_id.0)
+        .collect();
 
     Ok(BuiltinSegmentCacheFile {
         cache_abi_hash: BUILTIN_CACHE_ABI_HASH,
@@ -292,6 +301,7 @@ pub(crate) fn build_builtin_segment(
         entry_function_id,
         export_map,
         module_export_names,
+        namespace_modules,
     })
 }
 
@@ -355,6 +365,11 @@ impl BuiltinSegmentCacheFile {
                 .iter()
                 .map(|record| (ModuleId(record.module_id), record.scope_id))
                 .collect::<HashMap<_, _>>(),
+            namespace_modules: self
+                .namespace_modules
+                .iter()
+                .map(|module_id| ModuleId(*module_id))
+                .collect::<BTreeSet<_>>(),
         }
     }
 }
@@ -431,6 +446,7 @@ mod tests {
             entry_function_id,
             export_map: vec![((0, "readFile".to_string()), "$0.readFile".to_string())],
             module_export_names: vec![(0, vec!["readFile".to_string()])],
+            namespace_modules: Vec::new(),
         };
 
         let dir = std::env::temp_dir()
