@@ -696,6 +696,7 @@ pub(crate) fn lower_instruction(
             *index,
             *value,
             *strict,
+            tables.speculative,
         ),
         Instruction::GetSuperBase { dest } => {
             let result = cx.call(NativeRuntimeOp::GetSuperBase.id(), &[], None)?;

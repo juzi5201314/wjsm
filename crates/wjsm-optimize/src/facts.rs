@@ -15,6 +15,7 @@ pub struct SpeculativeFacts {
     pub get_props: Vec<PropFact>,
     pub set_props: Vec<PropFact>,
     pub get_elems: Vec<ElemFact>,
+    pub set_elems: Vec<ElemFact>,
     pub calls: Vec<CallFact>,
     pub binaries: Vec<BinaryFact>,
 }
@@ -41,6 +42,8 @@ pub struct ElemFact {
     pub elements_kind: u32,
     pub shape_id: u32,
     pub first_kind: Option<u32>,
+    /// `Some` 表示宿主 TypedArray 视图；kind 为 `TypedArrayKind` 判别值。
+    pub typed_kind: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -79,6 +82,12 @@ impl SpeculativeFacts {
 
     pub fn elem_at(&self, block: BasicBlockId, instruction_index: u32) -> Option<&ElemFact> {
         self.get_elems
+            .iter()
+            .find(|fact| fact.block == block && fact.instruction_index == instruction_index)
+    }
+
+    pub fn set_elem_at(&self, block: BasicBlockId, instruction_index: u32) -> Option<&ElemFact> {
+        self.set_elems
             .iter()
             .find(|fact| fact.block == block && fact.instruction_index == instruction_index)
     }

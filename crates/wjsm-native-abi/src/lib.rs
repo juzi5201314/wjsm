@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 22;
+pub const NATIVE_ABI_VERSION: u32 = 23;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -497,6 +497,10 @@ pub enum NativeRuntimeOp {
     /// 严格模式代码里的 [[Delete]]：与 [`Self::DeleteProp`] 同参，
     /// deleteStatus 为 false 时抛 TypeError 而非返回 false（§13.5.5.9 步骤 5.d）。
     DeletePropStrict = 0x1_0518,
+    /// overlay TypedArray 元素读：`[object, index]`，非视图返回 uninitialized。
+    TypedArrayGetElem = 0x1_0519,
+    /// overlay TypedArray 元素写：`[object, index, value]`，非视图返回 uninitialized。
+    TypedArraySetElem = 0x1_051a,
 }
 
 impl NativeRuntimeOp {
@@ -552,6 +556,8 @@ impl NativeRuntimeOp {
             0x1_0516 => Some(Self::SetElemStrict),
             0x1_0517 => Some(Self::SetPropIcStrict),
             0x1_0518 => Some(Self::DeletePropStrict),
+            0x1_0519 => Some(Self::TypedArrayGetElem),
+            0x1_051a => Some(Self::TypedArraySetElem),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
@@ -997,6 +1003,9 @@ pub fn native_abi_hash() -> [u8; 32] {
             NativeRuntimeOp::InitPromise,
             NativeRuntimeOp::InitObjectLiteral,
             NativeRuntimeOp::GuardElementsKind,
+            NativeRuntimeOp::DeletePropStrict,
+            NativeRuntimeOp::TypedArrayGetElem,
+            NativeRuntimeOp::TypedArraySetElem,
             NativeRuntimeOp::PrepareConstruct,
             NativeRuntimeOp::FinishCall,
             NativeRuntimeOp::LoadArgument,

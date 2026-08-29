@@ -294,6 +294,8 @@ pub const FEEDBACK_SLOT_POLY_KEY_OFFSET: u32 = 60;
 pub const FEEDBACK_SLOT_FLAGS_OFFSET: u32 = 76;
 pub const FEEDBACK_POLY_MEGAMORPHIC: u32 = 5;
 pub const FEEDBACK_FLAG_OWN_DATA: u32 = 1;
+/// GetElem/SetElem 接收者是 TypedArray 视图。
+pub const FEEDBACK_FLAG_TYPED_ARRAY: u32 = 1 << 1;
 /// 目标与 tag 签名连续相同达到该次数后，宿主把该调用点列为特化编译候选。
 pub const FEEDBACK_STABLE_THRESHOLD: u32 = 100;
 /// 单个调用点最多观察的实际参数 tag 数；超出部分不进入签名。

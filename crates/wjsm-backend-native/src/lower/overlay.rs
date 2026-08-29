@@ -61,7 +61,13 @@ fn resolve_object_addr(
         tag,
         i64::try_from(value::TAG_OBJECT).expect("object tag fits i64"),
     );
-    let tag_ok = cx.builder.ins().band(is_boxed, is_obj);
+    let is_array = cx.builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_ARRAY).expect("array tag fits i64"),
+    );
+    let tag_ok = cx.builder.ins().bor(is_obj, is_array);
+    let tag_ok = cx.builder.ins().band(is_boxed, tag_ok);
     let handle_idx = cx.builder.ins().band_imm_u(object, i64::from(u32::MAX));
     let entry_offset = cx.builder.ins().ishl_imm_u(handle_idx, 3);
     let entry_addr = cx.builder.ins().iadd(cx.ht_base, entry_offset);

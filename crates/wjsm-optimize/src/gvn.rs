@@ -1,4 +1,4 @@
-//! 块内公共子表达式：相同 Const / LoadSlot / GuardShape 复用 dest。
+//! 块内公共子表达式：相同 Const / LoadSlot / GuardShape / GuardElementsKind / GuardTag 复用 dest。
 
 use std::collections::HashMap;
 
@@ -20,6 +20,8 @@ fn gvn_function(function: &mut Function) {
         let mut consts: HashMap<u32, ValueId> = HashMap::new();
         let mut slots: HashMap<(ValueId, u32), ValueId> = HashMap::new();
         let mut shapes: HashMap<(ValueId, u32), ValueId> = HashMap::new();
+        let mut kinds: HashMap<(ValueId, u32), ValueId> = HashMap::new();
+        let mut tags: HashMap<(ValueId, u8), ValueId> = HashMap::new();
         let instructions = function.blocks()[block_index].instructions().to_vec();
         let mut kept = Vec::with_capacity(instructions.len());
         for mut instruction in instructions {
@@ -53,6 +55,25 @@ fn gvn_function(function: &mut Function) {
                         continue;
                     }
                     shapes.insert((*object, *shape_id), *dest);
+                }
+                Instruction::GuardElementsKind {
+                    dest,
+                    array,
+                    kind,
+                    template: None,
+                } => {
+                    if let Some(existing) = kinds.get(&(*array, *kind)) {
+                        aliases.insert(*dest, *existing);
+                        continue;
+                    }
+                    kinds.insert((*array, *kind), *dest);
+                }
+                Instruction::GuardTag { dest, value, tag } => {
+                    if let Some(existing) = tags.get(&(*value, *tag)) {
+                        aliases.insert(*dest, *existing);
+                        continue;
+                    }
+                    tags.insert((*value, *tag), *dest);
                 }
                 Instruction::StoreSlot { object, index, .. } => {
                     slots.remove(&(*object, *index));

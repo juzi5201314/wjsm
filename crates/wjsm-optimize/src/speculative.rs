@@ -329,6 +329,44 @@ fn rewrite_block(
                 );
                 return;
             }
+            Instruction::SetElem {
+                dest,
+                object,
+                value,
+                ..
+            } if facts
+                .set_elem_at(block_id, instruction_index as u32)
+                .is_some() =>
+            {
+                let fact = *facts
+                    .set_elem_at(block_id, instruction_index as u32)
+                    .expect("set elem fact");
+                split_set_elem(
+                    function,
+                    function_id,
+                    deopt_map,
+                    slot_map,
+                    block_index,
+                    *dest,
+                    *object,
+                    *value,
+                    &fact,
+                    next_value,
+                    instruction_index as u32,
+                );
+                rewrite_block(
+                    function,
+                    function_id,
+                    facts,
+                    deopt_map,
+                    slot_map,
+                    block_id,
+                    next_value,
+                    call_consts,
+                    net_instructions,
+                );
+                return;
+            }
             _ => {}
         }
     }
@@ -424,6 +462,20 @@ fn split_get_elem(
     let Instruction::GetElem { index, .. } = all[generic_instruction as usize] else {
         return;
     };
+    let guard = if fact.typed_kind.is_some() {
+        Instruction::GuardTag {
+            dest: ValueId(*next_value),
+            value: object,
+            tag: 0x08,
+        }
+    } else {
+        Instruction::GuardElementsKind {
+            dest: ValueId(*next_value),
+            array: object,
+            kind: fact.elements_kind,
+            template: None,
+        }
+    };
     split_access(
         function,
         function_id,
@@ -433,17 +485,64 @@ fn split_get_elem(
         generic_instruction as usize,
         generic_instruction,
         object,
-        Instruction::GuardElementsKind {
-            dest: ValueId(*next_value),
-            array: object,
-            kind: fact.elements_kind,
-            template: None,
-        },
+        guard,
         Instruction::GetElem {
             dest,
             object,
             index,
             latch: None,
+        },
+        next_value,
+    );
+}
+
+fn split_set_elem(
+    function: &mut Function,
+    function_id: FunctionId,
+    deopt_map: &mut DeoptMap,
+    slot_map: &mut SlotMap,
+    block_index: usize,
+    dest: ValueId,
+    object: ValueId,
+    value: ValueId,
+    fact: &ElemFact,
+    next_value: &mut u32,
+    generic_instruction: u32,
+) {
+    let all = function.blocks()[block_index].instructions().to_vec();
+    let Instruction::SetElem { index, strict, .. } = all[generic_instruction as usize] else {
+        return;
+    };
+    let guard = if fact.typed_kind.is_some() {
+        Instruction::GuardTag {
+            dest: ValueId(*next_value),
+            value: object,
+            tag: 0x08,
+        }
+    } else {
+        Instruction::GuardElementsKind {
+            dest: ValueId(*next_value),
+            array: object,
+            kind: fact.elements_kind,
+            template: None,
+        }
+    };
+    split_access(
+        function,
+        function_id,
+        deopt_map,
+        slot_map,
+        block_index,
+        generic_instruction as usize,
+        generic_instruction,
+        object,
+        guard,
+        Instruction::SetElem {
+            dest,
+            object,
+            index,
+            value,
+            strict,
         },
         next_value,
     );

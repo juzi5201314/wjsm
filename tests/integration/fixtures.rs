@@ -10,6 +10,38 @@ use std::process::Command;
 use std::os::unix::ffi::OsStringExt;
 
 #[test]
+fn overlay_hot_loop_matches_disabled_specialization() -> Result<()> {
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("happy")
+        .join("overlay_monomorphic_getprop.js");
+    let enabled = Command::new(resolve_binary_path())
+        .arg("run")
+        .arg(&entry)
+        .output()?;
+    let disabled = Command::new(resolve_binary_path())
+        .env("WJSM_DISABLE_SPECIALIZATION", "1")
+        .arg("run")
+        .arg(&entry)
+        .output()?;
+    let enabled_out = normalized_stdout(&enabled);
+    let disabled_out = normalized_stdout(&disabled);
+    assert!(
+        enabled.status.success(),
+        "overlay enabled stderr: {}",
+        normalized_stderr(&enabled)
+    );
+    assert!(
+        disabled.status.success(),
+        "overlay disabled stderr: {}",
+        normalized_stderr(&disabled)
+    );
+    assert_eq!(enabled_out, disabled_out);
+    assert_eq!(enabled_out, "120\n");
+    Ok(())
+}
+
+#[test]
 fn modules_respects_explicit_root_flag() -> Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")

@@ -92,7 +92,7 @@ PortableArtifact::decode(bytes, &ArtifactLimits::default())
 
 overlay 的循环头类型守卫对 typed 活跃值恒真，直接省略；它们进入 `store_resume_lives` 时按 boxed 规范化，deopt / OSR 对端读到的仍是合法 NaN-Box 值。
 
-`NativeCompiler::compile_specialized_function` 接受已验证 `Program`、目标函数、变量槽快照、参数 tag 与纯整数 `SpeculativeFacts`。worker 克隆 `Program` 后跑 `optimize(Speculative)`，用同一 `NativeCompiler` 编 overlay。wrapper 保持 `NativeSlowEntry` ABI。守卫 miss 调用 `DeoptToGeneric`，按 `DeoptFrame` 在 generic 指令边界恢复 live；generic 热循环头在 `osr_entry` 非零时 OSR 进入 overlay `osr_map` 同位块。overlay 热路径把单态 GetProp 编成 shape 比较加槽 load，不再经 `NativeRuntimeOp::GetProp` dispatcher。
+`NativeCompiler::compile_specialized_function` 接受已验证 `Program`、目标函数、变量槽快照、参数 tag 与纯整数 `SpeculativeFacts`。worker 克隆 `Program` 后跑 `optimize(Speculative)`，用同一 `NativeCompiler` 编 overlay。wrapper 保持 `NativeSlowEntry` ABI。守卫 miss 调用 `DeoptToGeneric`，按 `DeoptFrame` 在 generic 指令边界恢复 live；generic 热循环头在 `osr_entry` 非零时 OSR 进入 overlay `osr_map` 同位块。overlay 热路径把单态 GetProp 编成 shape 比较加槽 load，不再经 `NativeRuntimeOp::GetProp` dispatcher。TypedArray 走 `TypedArrayGetElem`/`TypedArraySetElem`；第 5 态 megamorphic 不编 overlay。反馈槽 `NativeFeedbackSlot` 80 字节，ABI 版本见 `NATIVE_ABI_VERSION`。
 
 ## 3. Native image 与 cache
 

@@ -14,6 +14,7 @@ mod licm_elem_guard;
 mod licm_facts;
 mod liveness;
 mod object_literal_read_fold;
+mod peel;
 mod speculative;
 mod speculative_poly;
 
@@ -91,6 +92,7 @@ pub fn optimize_sound(program: &mut Program) {
 pub fn optimize_speculative(program: &mut Program, facts: &SpeculativeFacts) -> OptimizedUnit {
     let mut deopt_map = DeoptMap::default();
     let mut slot_map = SlotMap::default();
+    peel::peel_first_iteration(program, facts);
     speculative::rewrite_speculative(program, facts, &mut deopt_map, &mut slot_map);
     inline_for_ea::run(program);
     let class_seeds = wjsm_ir::value_class::FunctionSeeds {

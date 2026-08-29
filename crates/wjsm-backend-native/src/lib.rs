@@ -262,6 +262,7 @@ impl NativeCompiler {
             get_props: Vec::new(),
             set_props: Vec::new(),
             get_elems: Vec::new(),
+            set_elems: Vec::new(),
             calls: Vec::new(),
             binaries: Vec::new(),
         });

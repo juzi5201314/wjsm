@@ -218,7 +218,31 @@ pub(crate) fn lower_string_element(
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
     if speculative {
+        let typed = cx.call(
+            NativeRuntimeOp::TypedArrayGetElem.id(),
+            &[object, encoded_index],
+            None,
+        )?;
+        let uninit = cx
+            .builder
+            .ins()
+            .iconst(types::I64, value::encode_uninitialized());
+        let is_miss = cx
+            .builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::Equal, typed, uninit);
+        let typed_hit = cx.builder.create_block();
+        let typed_miss = cx.builder.create_block();
+        cx.builder
+            .ins()
+            .brif(is_miss, typed_miss, &[], typed_hit, &[]);
+        cx.builder.switch_to_block(typed_miss);
+        cx.builder.seal_block(typed_miss);
         emit_deopt_to_generic(cx, cx.current_block, &[object_id, index_id])?;
+        cx.builder.switch_to_block(typed_hit);
+        cx.builder.seal_block(typed_hit);
+        define_value_boxed(cx.builder, cx.variables, dest, typed)?;
+        cx.builder.ins().jump(merge_block, &[]);
         cx.builder.switch_to_block(merge_block);
         cx.builder.seal_block(merge_block);
         return Ok(());
@@ -369,7 +393,11 @@ pub(crate) fn lower_set_elem(
     index: ValueId,
     stored: ValueId,
     strict: bool,
+    speculative: bool,
 ) -> Result<()> {
+    let object_id = object;
+    let index_id = index;
+    let stored_id = stored;
     let object_val = use_value_boxed(cx.builder, cx.variables, object)?;
     let encoded_index = use_value_boxed(cx.builder, cx.variables, index)?;
     let stored_val = use_value_boxed(cx.builder, cx.variables, stored)?;
@@ -413,6 +441,36 @@ pub(crate) fn lower_set_elem(
 
     cx.builder.switch_to_block(miss_block);
     cx.builder.seal_block(miss_block);
+    if speculative {
+        let typed = cx.call(
+            NativeRuntimeOp::TypedArraySetElem.id(),
+            &[object_val, encoded_index, stored_val],
+            None,
+        )?;
+        let uninit = cx
+            .builder
+            .ins()
+            .iconst(types::I64, value::encode_uninitialized());
+        let is_miss = cx
+            .builder
+            .ins()
+            .icmp(ir::condcodes::IntCC::Equal, typed, uninit);
+        let typed_hit = cx.builder.create_block();
+        let typed_miss = cx.builder.create_block();
+        cx.builder
+            .ins()
+            .brif(is_miss, typed_miss, &[], typed_hit, &[]);
+        cx.builder.switch_to_block(typed_miss);
+        cx.builder.seal_block(typed_miss);
+        emit_deopt_to_generic(cx, cx.current_block, &[object_id, index_id, stored_id])?;
+        cx.builder.switch_to_block(typed_hit);
+        cx.builder.seal_block(typed_hit);
+        define_value_boxed(cx.builder, cx.variables, dest, typed)?;
+        cx.builder.ins().jump(merge_block, &[]);
+        cx.builder.switch_to_block(merge_block);
+        cx.builder.seal_block(merge_block);
+        return Ok(());
+    }
     let set_elem_op = if strict {
         NativeRuntimeOp::SetElemStrict
     } else {

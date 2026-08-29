@@ -37,6 +37,22 @@ impl TypedArrayKind {
         }
     }
 
+    pub(crate) fn as_code(self) -> u8 {
+        match self {
+            Self::Int8 => 0,
+            Self::Uint8 => 1,
+            Self::Uint8Clamped => 2,
+            Self::Int16 => 3,
+            Self::Uint16 => 4,
+            Self::Int32 => 5,
+            Self::Uint32 => 6,
+            Self::Float32 => 7,
+            Self::Float64 => 8,
+            Self::BigInt64 => 9,
+            Self::BigUint64 => 10,
+        }
+    }
+
     pub(crate) fn is_bigint(self) -> bool {
         matches!(self, Self::BigInt64 | Self::BigUint64)
     }

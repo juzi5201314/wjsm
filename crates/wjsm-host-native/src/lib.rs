@@ -3870,13 +3870,13 @@ impl NativeAgentState {
         Some(encode_feedback_tag_signature(&tags[..arguments.len()]))
     }
 
-    fn load_feedback_slot(slot: ValidatedFeedbackSlot) -> NativeFeedbackSlot {
+    pub(crate) fn load_feedback_slot(slot: ValidatedFeedbackSlot) -> NativeFeedbackSlot {
         // SAFETY: `ValidatedFeedbackSlot` 只能由当前 image 反馈区的范围与槽边界校验创建；
         // 使用 unaligned 访问，不依赖 `Box<[u8]>` 的静态对齐类型。
         unsafe { slot.slot().read_unaligned() }
     }
 
-    fn store_feedback_slot(slot: ValidatedFeedbackSlot, value: NativeFeedbackSlot) {
+    pub(crate) fn store_feedback_slot(slot: ValidatedFeedbackSlot, value: NativeFeedbackSlot) {
         // SAFETY: 与 `load_feedback_slot` 相同，且 owner thread 是反馈区唯一写入者。
         unsafe { slot.slot().write_unaligned(value) };
     }
@@ -4029,6 +4029,7 @@ impl NativeAgentState {
             get_props: Vec::new(),
             set_props: Vec::new(),
             get_elems: Vec::new(),
+            set_elems: Vec::new(),
             calls: Vec::new(),
             binaries: Vec::new(),
         };
@@ -4089,12 +4090,25 @@ impl NativeAgentState {
                     });
                 }
                 wjsm_ir::Instruction::GetElem { .. } => {
+                    let typed = slot.flags & wjsm_ir::constants::FEEDBACK_FLAG_TYPED_ARRAY != 0;
                     facts.get_elems.push(wjsm_optimize::ElemFact {
                         block,
                         instruction_index,
                         elements_kind: slot.slot_or_kind,
                         shape_id: slot.shape_id,
-                        first_kind: (slot.poly_key[3] != 0).then_some(slot.poly_key[3]),
+                        first_kind: (slot.poly_key[3] != 0).then_some(slot.poly_key[3] - 1),
+                        typed_kind: typed.then_some(slot.slot_or_kind as u8),
+                    });
+                }
+                wjsm_ir::Instruction::SetElem { .. } => {
+                    let typed = slot.flags & wjsm_ir::constants::FEEDBACK_FLAG_TYPED_ARRAY != 0;
+                    facts.set_elems.push(wjsm_optimize::ElemFact {
+                        block,
+                        instruction_index,
+                        elements_kind: slot.slot_or_kind,
+                        shape_id: slot.shape_id,
+                        first_kind: (slot.poly_key[3] != 0).then_some(slot.poly_key[3] - 1),
+                        typed_kind: typed.then_some(slot.slot_or_kind as u8),
                     });
                 }
                 wjsm_ir::Instruction::Call { .. } | wjsm_ir::Instruction::ConstructCall { .. }
@@ -4358,6 +4372,7 @@ impl NativeAgentState {
                     get_props: Vec::new(),
                     set_props: Vec::new(),
                     get_elems: Vec::new(),
+                    set_elems: Vec::new(),
                     calls: Vec::new(),
                     binaries: Vec::new(),
                 },

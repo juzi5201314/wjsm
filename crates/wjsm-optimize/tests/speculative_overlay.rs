@@ -2,7 +2,8 @@ use wjsm_ir::{
     BasicBlock, BasicBlockId, Function, FunctionId, Instruction, Program, Terminator, ValueId,
 };
 use wjsm_optimize::{
-    DeoptMap, PropFact, SlotMap, SpeculativeFacts, optimize_speculative, rewrite_speculative,
+    DeoptMap, ElemFact, PropFact, SlotMap, SpeculativeFacts, optimize_speculative,
+    rewrite_speculative,
 };
 
 fn empty_facts(function: FunctionId) -> SpeculativeFacts {
@@ -13,6 +14,7 @@ fn empty_facts(function: FunctionId) -> SpeculativeFacts {
         get_props: Vec::new(),
         set_props: Vec::new(),
         get_elems: Vec::new(),
+        set_elems: Vec::new(),
         calls: Vec::new(),
         binaries: Vec::new(),
     }
@@ -235,5 +237,156 @@ fn polymorphic_getprop_emits_shape_jumptable() {
             .blocks()
             .iter()
             .any(|block| matches!(block.terminator(), Terminator::Deopt { .. }))
+    );
+}
+
+#[test]
+fn megamorphic_getprop_stays_generic() {
+    let mut program = Program::new();
+    let key = program.add_constant(wjsm_ir::Constant::String("x".into()));
+    let mut function = Function::new("hot", BasicBlockId(0));
+    function.set_params(vec!["$env".into(), "$this".into(), "o".into()]);
+    let mut block = BasicBlock::new(BasicBlockId(0));
+    block.push_instruction(Instruction::LoadVar {
+        dest: ValueId(0),
+        name: "o".into(),
+    });
+    block.push_instruction(Instruction::Const {
+        dest: ValueId(1),
+        constant: key,
+    });
+    block.push_instruction(Instruction::GetProp {
+        dest: ValueId(2),
+        object: ValueId(0),
+        key: ValueId(1),
+        latch: None,
+        latch_template: None,
+    });
+    block.set_terminator(Terminator::Return {
+        value: Some(ValueId(2)),
+    });
+    function.push_block(block);
+    program.push_function(function);
+
+    let mut facts = empty_facts(FunctionId(0));
+    facts.get_props.push(PropFact {
+        block: BasicBlockId(0),
+        instruction_index: 2,
+        shape_id: 7,
+        slot_index: 0,
+        proto_generation: 0,
+        expected_proto: 0,
+        own_data: true,
+        poly_len: 5,
+        poly_shapes: [7, 8, 9, 10],
+        poly_slots: [0, 0, 0, 0],
+        transition_shape: None,
+    });
+    let mut deopt_map = DeoptMap::default();
+    let mut slot_map = SlotMap::default();
+    rewrite_speculative(&mut program, &facts, &mut deopt_map, &mut slot_map);
+    let has_get_prop = program.functions()[0].blocks().iter().any(|block| {
+        block
+            .instructions()
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::GetProp { .. }))
+    });
+    let has_guard = program.functions()[0].blocks().iter().any(|block| {
+        block
+            .instructions()
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::GuardShape { .. }))
+    });
+    assert!(has_get_prop);
+    assert!(!has_guard);
+}
+
+#[test]
+fn peels_loop_when_first_kind_differs_from_steady_kind() {
+    let mut program = Program::new();
+    let mut function = Function::new("hot", BasicBlockId(0));
+    function.set_params(vec!["$env".into(), "$this".into(), "a".into()]);
+    let mut preheader = BasicBlock::new(BasicBlockId(0));
+    preheader.push_instruction(Instruction::LoadVar {
+        dest: ValueId(0),
+        name: "a".into(),
+    });
+    preheader.push_instruction(Instruction::Const {
+        dest: ValueId(1),
+        constant: program.add_constant(wjsm_ir::Constant::Number(0.0)),
+    });
+    preheader.set_terminator(Terminator::Jump {
+        target: BasicBlockId(1),
+    });
+    let mut header = BasicBlock::new(BasicBlockId(1));
+    header.push_instruction(Instruction::Phi {
+        dest: ValueId(2),
+        sources: vec![
+            wjsm_ir::PhiSource {
+                predecessor: BasicBlockId(0),
+                value: ValueId(1),
+            },
+            wjsm_ir::PhiSource {
+                predecessor: BasicBlockId(1),
+                value: ValueId(5),
+            },
+        ],
+    });
+    header.push_instruction(Instruction::GetElem {
+        dest: ValueId(3),
+        object: ValueId(0),
+        index: ValueId(2),
+        latch: None,
+    });
+    header.push_instruction(Instruction::Const {
+        dest: ValueId(4),
+        constant: program.add_constant(wjsm_ir::Constant::Number(1.0)),
+    });
+    header.push_instruction(Instruction::Binary {
+        dest: ValueId(5),
+        op: wjsm_ir::BinaryOp::Add,
+        lhs: ValueId(2),
+        rhs: ValueId(4),
+    });
+    header.push_instruction(Instruction::Const {
+        dest: ValueId(6),
+        constant: program.add_constant(wjsm_ir::Constant::Number(4.0)),
+    });
+    header.push_instruction(Instruction::Compare {
+        dest: ValueId(7),
+        op: wjsm_ir::CompareOp::Lt,
+        lhs: ValueId(5),
+        rhs: ValueId(6),
+    });
+    header.set_terminator(Terminator::Branch {
+        condition: ValueId(7),
+        true_block: BasicBlockId(1),
+        false_block: BasicBlockId(2),
+    });
+    let mut exit = BasicBlock::new(BasicBlockId(2));
+    exit.set_terminator(Terminator::Return {
+        value: Some(ValueId(3)),
+    });
+    function.push_block(preheader);
+    function.push_block(header);
+    function.push_block(exit);
+    program.push_function(function);
+
+    let mut facts = empty_facts(FunctionId(0));
+    facts.get_elems.push(ElemFact {
+        block: BasicBlockId(1),
+        instruction_index: 1,
+        elements_kind: wjsm_ir::constants::ARRAY_KIND_PACKED_NUMBER,
+        shape_id: 0,
+        first_kind: Some(wjsm_ir::constants::ARRAY_KIND_PACKED),
+        typed_kind: None,
+    });
+    let unit = optimize_speculative(&mut program, &facts);
+    unit.program
+        .verify()
+        .expect("peeled overlay IR must verify");
+    assert!(
+        unit.program.functions()[0].blocks().len() > 3,
+        "peel must clone the loop header"
     );
 }

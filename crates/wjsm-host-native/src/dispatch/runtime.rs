@@ -420,6 +420,45 @@ pub(super) fn dispatch_runtime(
             }
             value::encode_undefined()
         }
+        NativeRuntimeOp::TypedArrayGetElem => {
+            let [object, index] = args else {
+                return fail_dispatch(ctx);
+            };
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*index) {
+                return *index;
+            }
+            let Some(index) = array_index(state, *index) else {
+                return value::encode_uninitialized();
+            };
+            match super::typedarray::get_element_intern(state, *object, index as usize) {
+                Some(stored) => stored,
+                None => value::encode_uninitialized(),
+            }
+        }
+        NativeRuntimeOp::TypedArraySetElem => {
+            let [object, index, stored] = args else {
+                return fail_dispatch(ctx);
+            };
+            if value::is_exception(*object) {
+                return *object;
+            }
+            if value::is_exception(*index) {
+                return *index;
+            }
+            if value::is_exception(*stored) {
+                return *stored;
+            }
+            let Some(index) = array_index(state, *index) else {
+                return value::encode_uninitialized();
+            };
+            match super::typedarray::set_element(state, *object, index as usize, *stored) {
+                Some(written) => written,
+                None => value::encode_uninitialized(),
+            }
+        }
         NativeRuntimeOp::GetSuperBase => super_base(state).unwrap_or_else(value::encode_undefined),
         NativeRuntimeOp::GetSuperConstructor => {
             super_constructor(state).unwrap_or_else(value::encode_undefined)
@@ -451,12 +490,18 @@ pub(super) fn dispatch_runtime(
                 && let Some(stored) =
                     super::typedarray::get_element_intern(state, *object, index as usize)
             {
+                if let Some(feedback) = feedback_slot {
+                    record_elem_kind_feedback(state, feedback, *object);
+                }
                 return stored;
             }
             if value::is_array(*object)
                 && let Some(index) = array_index(state, *index)
             {
                 let handle = value::decode_handle(*object);
+                if let Some(feedback) = feedback_slot {
+                    record_elem_kind_feedback(state, feedback, *object);
+                }
                 if state.gc.heap().array_kind(handle).ok()
                     != Some(wjsm_ir::constants::ARRAY_KIND_DICTIONARY)
                 {
@@ -1963,6 +2008,28 @@ pub(super) fn ordinary_set_key(
         }
     }
     assign_data_property_to_receiver(ctx, state, receiver, key, stored)
+}
+
+fn record_elem_kind_feedback(
+    state: &NativeAgentState,
+    feedback: ValidatedFeedbackSlot,
+    object: i64,
+) {
+    let mut slot = NativeAgentState::load_feedback_slot(feedback);
+    if let Some(array) = state.typed_arrays.get(&value::decode_handle(object)) {
+        slot.flags |= wjsm_ir::constants::FEEDBACK_FLAG_TYPED_ARRAY;
+        slot.slot_or_kind = u32::from(array.kind.as_code());
+    } else if value::is_array(object) {
+        let handle = value::decode_handle(object);
+        if let Ok(kind) = state.gc.heap().array_kind(handle) {
+            slot.slot_or_kind = kind;
+            if slot.poly_key[3] == 0 {
+                slot.poly_key[3] = kind.saturating_add(1);
+            }
+        }
+        slot.flags &= !wjsm_ir::constants::FEEDBACK_FLAG_TYPED_ARRAY;
+    }
+    NativeAgentState::store_feedback_slot(feedback, slot);
 }
 
 fn record_poly_shape(slot: &mut NativeFeedbackSlot, shape_id: u32) {

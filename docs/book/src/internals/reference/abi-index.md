@@ -1,6 +1,6 @@
 # Native ABI 索引
 
-这一章汇总 generated code 与 `NativeRuntime` 之间的 ABI。契约定义在 `wjsm-native-abi`；状态与 thunk 实现在 `wjsm-host-native`。当前版本常量：`NATIVE_ABI_VERSION = 22`。
+这一章汇总 generated code 与 `NativeRuntime` 之间的 ABI。契约定义在 `wjsm-native-abi`；状态与 thunk 实现在 `wjsm-host-native`。当前版本常量：`NATIVE_ABI_VERSION = 23`。
 
 ## NativeVmContext
 
