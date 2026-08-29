@@ -206,8 +206,11 @@ fn revocable(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i6
     result
 }
 
+/// [[Construct]] 存在性在 ProxyCreate（§10.5.14）时按 target 确定，revoke
+/// 只清空 [[ProxyTarget]]/[[ProxyHandler]] 的可用性、不移除内部方法：
+/// IsConstructor(revokedProxy) 仍为 true，调用期才抛 revoked TypeError。
 pub(super) fn is_constructor_proxy(state: &NativeAgentState, encoded: i64) -> bool {
-    entry(state, encoded).is_some_and(|proxy| is_constructor_value(state, proxy.target))
+    raw_entry(state, encoded).is_some_and(|proxy| is_constructor_value(state, proxy.target))
 }
 
 /// IsArray（§7.2.2）步骤 3 的 Proxy 穿透：沿 [[ProxyTarget]] 链解包判定；
@@ -226,6 +229,12 @@ pub(super) fn is_array_target(state: &NativeAgentState, encoded: i64) -> Option<
 }
 
 fn entry(state: &NativeAgentState, encoded: i64) -> Option<NativeProxy> {
+    raw_entry(state, encoded).filter(|entry| !entry.revoked)
+}
+
+/// 含 revoked 的原始记录：只用于创建时即确定、revoke 后不消失的能力判定
+/// （[[Construct]] 存在性）与需要区分 revoked 文案的入口。
+fn raw_entry(state: &NativeAgentState, encoded: i64) -> Option<NativeProxy> {
     if !value::is_proxy(encoded) {
         return None;
     }
@@ -234,7 +243,6 @@ fn entry(state: &NativeAgentState, encoded: i64) -> Option<NativeProxy> {
         .and_then(|handle| state.proxies.get(handle))
         .and_then(|proxy| proxy.as_ref())
         .copied()
-        .filter(|entry| !entry.revoked)
 }
 
 fn require_entry(
@@ -1126,10 +1134,18 @@ pub(crate) fn call(
     this_value: i64,
     arguments: &[i64],
 ) -> i64 {
-    let entry = match require_entry(ctx, state, proxy) {
-        Ok(entry) => entry,
-        Err(exception) => return exception,
+    // §10.5.12 步骤 1–2：handler 为 null（revoked）抛 TypeError，文案对齐
+    // V8（含内部方法名 'apply'）。
+    let Some(entry) = raw_entry(state, proxy) else {
+        return fail_dispatch(ctx);
     };
+    if entry.revoked {
+        return super::runtime::type_error(
+            ctx,
+            state,
+            "Cannot perform 'apply' on a proxy that has been revoked",
+        );
+    }
     let Some(args_array) = state
         .allocate_array_values_with_gc_retry(ctx, arguments)
         .ok()
@@ -1159,10 +1175,18 @@ pub(crate) fn construct(
     arguments: &[i64],
     new_target: i64,
 ) -> i64 {
-    let entry = match require_entry(ctx, state, proxy) {
-        Ok(entry) => entry,
-        Err(exception) => return exception,
+    // §10.5.13 步骤 1–2：handler 为 null（revoked）抛 TypeError，文案对齐
+    // V8（含内部方法名 'construct'）。
+    let Some(entry) = raw_entry(state, proxy) else {
+        return fail_dispatch(ctx);
     };
+    if entry.revoked {
+        return super::runtime::type_error(
+            ctx,
+            state,
+            "Cannot perform 'construct' on a proxy that has been revoked",
+        );
+    }
     let Some(args_array) = state
         .allocate_array_values_with_gc_retry(ctx, arguments)
         .ok()

@@ -7359,6 +7359,13 @@ unsafe extern "C" fn native_callable_call(
         NativeCallableKind::Builtin(wjsm_ir::Builtin::PromiseCreate, _) => {
             dispatch::promise::construct(ctx, state, this_value, &arguments)
         }
+        NativeCallableKind::Builtin(wjsm_ir::Builtin::ArrayFromAsync, _) => {
+            // §23.1.2.1 步骤 1：动态调用（属性取值后调用 / call / apply）
+            // 的 this 即 C，generic factory 语义（IsConstructor(C) 时
+            // Construct(C[, len])）由宿主状态机协商；直接内在站点仍走
+            // dispatch_builtin（C 恒为 %Array%，快路径）。
+            dispatch::array_from_async::from_async_with_this(ctx, state, this_value, &arguments)
+        }
         NativeCallableKind::Builtin(builtin, with_receiver) => {
             let mut call_args = Vec::with_capacity(arguments.len() + usize::from(with_receiver));
             if with_receiver {

@@ -314,12 +314,13 @@ fn construct_species(
 }
 
 /// CreateDataPropertyOrThrow(A, ToString(𝔽(index)), value)（§7.3.7）：
-/// map/filter/flatMap 结果的元素写入协议。可信真数组（非字典 kind、length
+/// map/filter/flatMap 与 Array.fromAsync 通用结果目标的元素写入协议。
+/// 可信真数组（非字典 kind、length
 /// 可写、下标在 ECMA array index 范围）直写元素槽——set_element 自动填洞与
 /// 提升 length，等价于自有数据属性创建；其余（species 构造出的普通对象 /
 /// callable / Proxy / 字典化或冻结数组）退回完整 [[DefineOwnProperty]]，
 /// 不可扩展与 defineProperty trap 拒绝升级 TypeError。
-fn create_data_property_index(
+pub(super) fn create_data_property_index(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     target: i64,

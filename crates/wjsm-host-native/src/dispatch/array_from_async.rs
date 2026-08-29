@@ -12,6 +12,12 @@
 //!   AsyncIteratorClose 再以原错误拒绝（V8 形态，比提案文本激进）；
 //! - close 期间 return 侧自身出错时按 AsyncIteratorClose（§7.4.10）吞掉
 //!   并以原错误拒绝，不复刻 V8 让结果 promise 永不结算的缺陷（v8:13321）。
+//!
+//! generic factory 语义（步骤 1 的 this 即 C）：动态调用（call / apply /
+//! 属性取值后调用）经 [`from_async_with_this`] 携带 this；IsConstructor(C)
+//! 为真时 A 来自 Construct(C)（可迭代路径）/ Construct(C, «𝔽(len)»)
+//! （array-like 路径），元素写入走 CreateDataPropertyOrThrow、收尾
+//! Set(A, "length", 𝔽(k), true)；非构造器回退宿主普通数组快路径。
 
 use std::collections::{HashMap, VecDeque};
 
@@ -35,8 +41,9 @@ enum FromAsyncSource {
     Async { iterator: i64, next: i64 },
     /// CreateAsyncFromSyncIterator 包裹的同步迭代器记录（next 建包时取定）。
     Sync { iterator: i64, next: i64 },
-    /// array-like 回退（步骤 i）：对象 + LengthOfArrayLike。
-    ArrayLike { object: i64, length: u32 },
+    /// array-like 回退（步骤 i）：对象 + LengthOfArrayLike（ToLength 上限
+    /// 2^53-1；仅 ArrayCreate 回退路径受 2^32-1 约束）。
+    ArrayLike { object: i64, length: u64 },
 }
 
 /// 在飞 fromAsync 操作：一个结果 promise 对应一条记录，结算即移除。
@@ -47,10 +54,13 @@ pub(crate) struct FromAsyncOperation {
     /// mapfn（入口已验证可调用）。
     map: Option<i64>,
     this_arg: i64,
-    /// 结果数组 A（迭代器路径追加式，array-like 路径预填洞）。
+    /// 结果目标 A（快路径为宿主普通数组，generic 路径为 Construct(C) 结果）。
     array: i64,
+    /// A 来自 Construct(C)：写入走 CreateDataPropertyOrThrow（失败在可迭代
+    /// 路径先 close），结算前执行 Set(A, "length", 𝔽(k), true)。
+    generic: bool,
     /// 当前下标 k。
-    index: u32,
+    index: u64,
 }
 
 /// Await 续点相位：reaction 触发后从这里恢复状态机。
@@ -74,12 +84,34 @@ pub(crate) enum FromAsyncPhase {
     CloseThenReject { error: i64 },
 }
 
-/// `Array.fromAsync(asyncItems[, mapfn[, thisArg]])` 宿主入口：同步段
-/// （mapfn 检查、迭代器协商、首个 next / Get）在本调用内执行，其余由
-/// promise reaction 驱动；闭包内任何异常拒绝结果 promise 而非同步抛出。
+/// `Array.fromAsync(asyncItems[, mapfn[, thisArg]])` 直接内在站点入口：
+/// C 恒为 %Array%，Construct(%Array%) 与 ArrayCreate 不可区分，走快路径。
 pub(super) fn from_async(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
+    args: &[i64],
+) -> i64 {
+    from_async_entry(ctx, state, None, args)
+}
+
+/// 动态调用入口（属性取值后调用 / call / apply / Reflect.apply）：this 即
+/// 规范步骤 1 的 C，构造器语义由状态机按 IsConstructor(C) 协商。
+pub(crate) fn from_async_with_this(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    this_value: i64,
+    args: &[i64],
+) -> i64 {
+    from_async_entry(ctx, state, Some(this_value), args)
+}
+
+/// 宿主入口共同段：同步段（mapfn 检查、迭代器协商、A 创建、首个 next /
+/// Get）在本调用内执行，其余由 promise reaction 驱动；闭包内任何异常拒绝
+/// 结果 promise 而非同步抛出。
+fn from_async_entry(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    factory: Option<i64>,
     args: &[i64],
 ) -> i64 {
     let items = args
@@ -97,9 +129,10 @@ pub(super) fn from_async(
     let roots_base = state.temporary_roots.len();
     state.temporary_roots.push(result);
     state.temporary_roots.push(items);
+    state.temporary_roots.extend(factory);
     state.temporary_roots.extend(map);
     state.temporary_roots.push(this_arg);
-    if let Err(exception) = start(ctx, state, result, items, map, this_arg) {
+    if let Err(exception) = start(ctx, state, result, factory, items, map, this_arg) {
         settle_promise(state, value::decode_handle(result), exception, true);
     }
     state.temporary_roots.truncate(roots_base);
@@ -111,6 +144,7 @@ fn start(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     result: i64,
+    factory: Option<i64>,
     items: i64,
     map: Option<i64>,
     this_arg: i64,
@@ -132,12 +166,20 @@ fn start(
         Some(method) => iterator_record(ctx, state, items, method, true)?,
         None => match get_iteration_method(ctx, state, items, wjsm_ir::wk_symbol::ITERATOR)? {
             Some(method) => iterator_record(ctx, state, items, method, false)?,
-            None => return start_array_like(ctx, state, result, items, map, this_arg),
+            None => return start_array_like(ctx, state, result, factory, items, map, this_arg),
         },
     };
-    // h.i–iii：A = ArrayCreate(0)，k = 0，踏出首个 kGetIteratorStep。
-    let Ok(array) = state.allocate_array_values_with_gc_retry(ctx, &[]) else {
-        return Err(fail_dispatch(ctx));
+    // h.i–iii：A = Construct(C)（C 为构造器）或 ArrayCreate(0)，k = 0，
+    // 踏出首个 kGetIteratorStep。构造异常拒绝结果 promise 且不 close 迭代器
+    // （Node v22 实测：迭代器已建，return 不被调用）。
+    let (array, generic) = match construct_factory(ctx, state, factory, &[])? {
+        Some(array) => (array, true),
+        None => {
+            let Ok(array) = state.allocate_array_values_with_gc_retry(ctx, &[]) else {
+                return Err(fail_dispatch(ctx));
+            };
+            (array, false)
+        }
     };
     state.temporary_roots.push(array);
     let id = register(
@@ -148,11 +190,35 @@ fn start(
             map,
             this_arg,
             array,
+            generic,
             index: 0,
         },
     );
     step_iterator(ctx, state, id);
     Ok(())
+}
+
+/// 步骤 h.i / i.iv：IsConstructor(C) 为真时 Construct(C, args)
+/// （§7.3.15，newTarget = C；Proxy constructor 走 [[Construct]] trap，
+/// bound 构造器沿 target 链）。返回 None 表示无 C 或 C 非构造器（回退
+/// ArrayCreate），构造异常以 Err 拒绝结果 promise。
+fn construct_factory(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    factory: Option<i64>,
+    arguments: &[i64],
+) -> Result<Option<i64>, i64> {
+    let Some(constructor) = factory else {
+        return Ok(None);
+    };
+    if !super::runtime::is_constructor_value(state, constructor) {
+        return Ok(None);
+    }
+    let array = super::runtime::construct_value(ctx, state, constructor, arguments, constructor);
+    if value::is_exception(array) {
+        return Err(array);
+    }
+    Ok(Some(array))
 }
 
 /// GetMethod(items, @@asyncIterator / @@iterator)（步骤 c–d）：nullish 基座
@@ -225,12 +291,14 @@ fn iterator_record(
     })
 }
 
-/// array-like 回退（步骤 i）：LengthOfArrayLike 后按 Construct(%Array%, len)
-/// 语义预建洞数组（长度超上限按 V8 报 RangeError）。
+/// array-like 回退（步骤 i）：LengthOfArrayLike 后 C 为构造器时
+/// Construct(C, «𝔽(len)»)（len 不设 2^32 上限，Node 同），否则按
+/// ArrayCreate(len) 预建洞数组（长度超上限按 V8 报 RangeError）。
 fn start_array_like(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     result: i64,
+    factory: Option<i64>,
     items: i64,
     map: Option<i64>,
     this_arg: i64,
@@ -243,14 +311,21 @@ fn start_array_like(
     } else {
         number.trunc().min(9_007_199_254_740_991.0)
     };
-    if length > f64::from(u32::MAX) {
-        return Err(range_error(ctx, state, "Invalid array length"));
-    }
-    let array = allocate_hole_array(ctx, state, length as u32)?;
+    let constructed =
+        construct_factory(ctx, state, factory, &[value::encode_f64(length)])?;
+    let (array, generic) = match constructed {
+        Some(array) => (array, true),
+        None => {
+            if length > f64::from(u32::MAX) {
+                return Err(range_error(ctx, state, "Invalid array length"));
+            }
+            (allocate_hole_array(ctx, state, length as u32)?, false)
+        }
+    };
     state.temporary_roots.push(array);
     let source = FromAsyncSource::ArrayLike {
         object: items,
-        length: length as u32,
+        length: length as u64,
     };
     let id = register(
         state,
@@ -260,6 +335,7 @@ fn start_array_like(
             map,
             this_arg,
             array,
+            generic,
             index: 0,
         },
     );
@@ -360,7 +436,7 @@ pub(crate) fn run_reaction(
         FromAsyncPhase::SyncNextValue { .. } if rejected => {
             close_and_reject(ctx, state, id, settled)
         }
-        FromAsyncPhase::SyncNextValue { done: true } => resolve_operation(state, id),
+        FromAsyncPhase::SyncNextValue { done: true } => resolve_operation(ctx, state, id),
         FromAsyncPhase::SyncNextValue { done: false } => {
             continue_with_value(ctx, state, id, settled)
         }
@@ -502,7 +578,7 @@ fn handle_next_result(
     state.temporary_roots.truncate(roots_base);
     match outcome {
         Err(error) => close_and_reject(ctx, state, id, error),
-        Ok(None) => resolve_operation(state, id),
+        Ok(None) => resolve_operation(ctx, state, id),
         Ok(Some(next_value)) => continue_with_value(ctx, state, id, next_value),
     }
 }
@@ -527,7 +603,7 @@ fn continue_with_value(
             ctx,
             map,
             this_arg,
-            &[next_value, value::encode_f64(f64::from(index))],
+            &[next_value, value::encode_f64(index as f64)],
         )
         .unwrap_or_else(|| fail_dispatch(ctx));
     if value::is_exception(mapped) {
@@ -537,8 +613,9 @@ fn continue_with_value(
     await_with(ctx, state, id, FromAsyncPhase::Mapped, mapped);
 }
 
-/// 步骤 h.iv.11–13：CreateDataPropertyOrThrow(A, Pk)（宿主追加式数组不可失败，
-/// 分配失败除外），k++ 后回到 kGetIteratorStep。
+/// 步骤 h.iv.11–13：CreateDataPropertyOrThrow(A, Pk)（宿主追加式数组仅
+/// 分配可失败；generic 目标 define 失败按步骤 h.iv.12 先 AsyncIteratorClose
+/// 再以该错误拒绝），k++ 后回到 kGetIteratorStep。
 fn define_and_advance(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -548,9 +625,21 @@ fn define_and_advance(
     let Some(operation) = state.array_from_async.get(&id) else {
         return;
     };
-    let handle = value::decode_handle(operation.array);
-    if super::array_callbacks::push_element_with_gc_retry(ctx, state, handle, mapped as u64)
-        .is_err()
+    let (array, index, generic) = (operation.array, operation.index, operation.generic);
+    if generic {
+        if let Err(exception) =
+            super::array_callbacks::create_data_property_index(ctx, state, array, index, mapped)
+        {
+            close_and_reject(ctx, state, id, exception);
+            return;
+        }
+    } else if super::array_callbacks::push_element_with_gc_retry(
+        ctx,
+        state,
+        value::decode_handle(array),
+        mapped as u64,
+    )
+    .is_err()
     {
         let failure = fail_dispatch(ctx);
         reject_operation(state, id, failure);
@@ -572,7 +661,7 @@ fn array_like_step(ctx: &mut NativeVmContext, state: &mut NativeAgentState, id: 
     };
     let index = operation.index;
     if index >= length {
-        resolve_operation(state, id);
+        resolve_operation(ctx, state, id);
         return;
     }
     let Some(key) = state.intern_text(index.to_string(), value::TAG_STRING) else {
@@ -610,7 +699,7 @@ fn array_like_continue(
             ctx,
             map,
             this_arg,
-            &[stored, value::encode_f64(f64::from(index))],
+            &[stored, value::encode_f64(index as f64)],
         )
         .unwrap_or_else(|| fail_dispatch(ctx));
     if value::is_exception(mapped) {
@@ -620,7 +709,8 @@ fn array_like_continue(
     await_with(ctx, state, id, FromAsyncPhase::ArrayLikeMapped, mapped);
 }
 
-/// 步骤 i.vii.6–7：CreateDataPropertyOrThrow(A, Pk) 写入预填洞数组后推进。
+/// 步骤 i.vii.6–7：CreateDataPropertyOrThrow(A, Pk) 写入后推进（generic
+/// 目标 define 失败直接拒绝——array-like 路径无迭代器可 close）。
 fn array_like_define(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
@@ -630,10 +720,23 @@ fn array_like_define(
     let Some(operation) = state.array_from_async.get(&id) else {
         return;
     };
-    let handle = value::decode_handle(operation.array);
-    let index = operation.index;
-    if super::array_callbacks::set_element_with_gc_retry(ctx, state, handle, index, mapped as u64)
-        .is_err()
+    let (array, index, generic) = (operation.array, operation.index, operation.generic);
+    if generic {
+        if let Err(exception) =
+            super::array_callbacks::create_data_property_index(ctx, state, array, index, mapped)
+        {
+            reject_operation(state, id, exception);
+            return;
+        }
+    } else if super::array_callbacks::set_element_with_gc_retry(
+        ctx,
+        state,
+        value::decode_handle(array),
+        // 预填洞回退路径长度 ≤ 2^32-1（超限已按 RangeError 拒绝）。
+        index as u32,
+        mapped as u64,
+    )
+    .is_err()
     {
         let failure = fail_dispatch(ctx);
         reject_operation(state, id, failure);
@@ -753,8 +856,23 @@ fn sync_close_step(
     SyncClose::Unwrap(unwrapped)
 }
 
-/// kDoneAndResolvePromise：追加式 / 预填数组的 length 已就位，直接结算 A。
-fn resolve_operation(state: &mut NativeAgentState, id: u32) {
+/// kDoneAndResolvePromise：generic 目标先 Set(A, "length", 𝔽(k), true)
+/// （步骤 h.iv.7.a / i.viii；setter 抛错在可迭代路径先 close 再拒绝——
+/// Node v22 实测 done 后 return 仍被调用），追加式 / 预填数组 length 已
+/// 就位直接结算 A。
+fn resolve_operation(ctx: &mut NativeVmContext, state: &mut NativeAgentState, id: u32) {
+    let Some(operation) = state.array_from_async.get(&id) else {
+        return;
+    };
+    if operation.generic {
+        let (array, length) = (operation.array, operation.index);
+        if let Err(exception) = set_length_property(ctx, state, array, length) {
+            // 操作仍在表内：close_and_reject 按来源决定是否先关闭迭代器
+            // （array-like 来源直接拒绝）。
+            close_and_reject(ctx, state, id, exception);
+            return;
+        }
+    }
     let Some(operation) = state.array_from_async.remove(&id) else {
         return;
     };
@@ -764,6 +882,27 @@ fn resolve_operation(state: &mut NativeAgentState, id: u32) {
         operation.array,
         false,
     );
+}
+
+/// Set(A, "length", 𝔽(n), true)（§7.3.4）：按 A 形态走完整 [[Set]]，写
+/// 失败按 throw 语义升级 TypeError（文案与 V8 一致）。
+fn set_length_property(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    target: i64,
+    length: u64,
+) -> Result<(), i64> {
+    let Some(key) = state.intern_text("length".into(), value::TAG_STRING) else {
+        return Err(fail_dispatch(ctx));
+    };
+    let stored = value::encode_f64(length as f64);
+    match super::runtime::set_property_completion(ctx, state, target, key, stored) {
+        Err(exception) => Err(exception),
+        Ok(super::property_write::SetCompletion::Written) => Ok(()),
+        Ok(super::property_write::SetCompletion::Failed(failure)) => Err(
+            super::property_write::strict_set_failure_error(ctx, state, target, key, failure),
+        ),
+    }
 }
 
 /// kRejectPromise：结果 promise 以 error 拒绝并移除操作记录。

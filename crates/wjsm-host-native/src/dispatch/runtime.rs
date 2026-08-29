@@ -880,7 +880,7 @@ fn define_data_property_or_out_of_memory(
 /// 完整命名属性 [[Set]] 语义：proxy / 数组 length / regexp lastIndex /
 /// 数组命名属性 / callable 命名属性 / 普通对象 `ordinary_set`。
 /// 基元接收者（含 null/undefined）由调用方先行短路。
-fn set_property_completion(
+pub(super) fn set_property_completion(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     object: i64,
