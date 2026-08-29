@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use cranelift_codegen::ir::{self, InstBuilder, types};
 use cranelift_frontend::FunctionBuilder;
 use wjsm_ir::{Instruction, ValueId, constants, value};
+use wjsm_ir::FunctionId;
 use wjsm_native_abi::NativeRuntimeOp;
 
 pub(crate) fn lower_function(
@@ -258,7 +259,12 @@ pub(crate) fn lower_function(
                 }
                 cx.current_instruction = instruction_index as u32;
                 if is_header && instruction_index == first_non_phi {
-                    let lives = wjsm_ir::typed_cfg::loop_header_live_phis(ir_function, block.id());
+                    let lives = wjsm_optimize::live_values_at(
+                        program,
+                        FunctionId(function_index),
+                        block.id(),
+                        instruction_index,
+                    );
                     if input.specialized_tags.is_some() {
                         emit_overlay_header_guards(&mut cx, &tables, block.id(), &lives)?;
                     } else {
