@@ -1,6 +1,7 @@
 //! Sound / Speculative IR→IR 优化入口。
 
 mod cfg_fold;
+mod closure_direct_call;
 mod dce;
 mod escape_scalar;
 mod escape_scalar_record;
@@ -20,6 +21,9 @@ mod speculative_poly;
 
 use wjsm_ir::{BasicBlockId, FunctionId, Program};
 
+pub use closure_direct_call::{
+    ResolvedClosureCall, resolve_stored_closure_call, should_backend_direct_closure_call,
+};
 pub use facts::{
     BinaryFact, CallFact, ElemFact, INLINE_MAX_CALLEE_INSTRUCTIONS, INLINE_MAX_DEPTH,
     INLINE_MAX_NET_GROWTH, POLY_MAX, PropFact, SpeculativeFacts,

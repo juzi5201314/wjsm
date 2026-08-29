@@ -24,6 +24,9 @@ use wjsm_ir::{
 };
 
 use super::cfg_fold::{self, terminator_successors};
+use crate::closure_direct_call::{
+    resolve_function_ref_callee, should_backend_direct_closure_call,
+};
 use crate::ir_walk::{instr_uses, instruction_dest, terminator_uses};
 
 /// 计算函数内最大的 ValueId。
@@ -260,7 +263,7 @@ enum ReachSlot {
     Unknown,
 }
 
-fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
+pub(crate) fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
     let mut load_reaching: HashMap<ValueId, ValueId> = HashMap::new();
 
     // 名字先统一编号成下标：旧实现的 out/in 集是 String 键 HashMap，每轮
@@ -366,11 +369,20 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
 }
 
 fn resolve_callee_id(
+    module: &Module,
+    caller: &wjsm_ir::Function,
     defs: &HashMap<ValueId, Instruction>,
     constants: &[Constant],
     load_reaching: &HashMap<ValueId, ValueId>,
     callee: &ValueId,
 ) -> Option<(FunctionId, Option<ValueId>)> {
+    let defs_ref: HashMap<ValueId, &Instruction> = defs.iter().map(|(k, v)| (*k, v)).collect();
+    if let Some(function_id) =
+        resolve_function_ref_callee(module, caller, &defs_ref, load_reaching, callee)
+    {
+        return Some((function_id, None));
+    }
+
     let mut current = *callee;
     while let Some(reaching) = load_reaching.get(&current) {
         if *reaching == current {
@@ -476,6 +488,8 @@ fn static_inline_round(module: &mut Module) -> bool {
                     _ => continue,
                 };
                 let (callee_id, closure_env) = match resolve_callee_id(
+                    module,
+                    function,
                     &per_func_defs[func_idx],
                     &constants_snapshot,
                     &per_func_load_reaching[func_idx],
@@ -488,10 +502,12 @@ fn static_inline_round(module: &mut Module) -> bool {
                 if callee_idx >= per_func_info.len() {
                     continue;
                 }
-                let (direct_callable, has_eval, num_blocks, is_class_ctor) =
+                let (_direct_callable, has_eval, num_blocks, is_class_ctor) =
                     per_func_info[callee_idx];
-                let can_call = direct_callable || closure_env.is_some();
-                if !can_call || has_eval || num_blocks == 0 || callee_idx == func_idx {
+                if has_eval || num_blocks == 0 || callee_idx == func_idx {
+                    continue;
+                }
+                if closure_env.is_some() && should_backend_direct_closure_call(module, callee_id) {
                     continue;
                 }
                 // 类构造器的 [[Call]]（无 new）必须在运行时抛 TypeError
@@ -614,7 +630,24 @@ fn inline_static_candidate(
 
     let current_max = current_max_value[func_idx];
     let undefined_dest = ValueId(current_max + 1);
-    let value_offset = current_max + 2;
+    let caller = &module.functions()[func_idx];
+    let caller_env_name = caller
+        .params()
+        .first()
+        .filter(|name| is_env_name(name))
+        .cloned();
+    let needs_caller_lex_env = candidate.closure_env.is_none() && caller_env_name.is_some();
+    let caller_lex_env_dest = if needs_caller_lex_env {
+        ValueId(current_max + 2)
+    } else {
+        undefined_dest
+    };
+    let value_offset = if needs_caller_lex_env {
+        current_max + 3
+    } else {
+        current_max + 2
+    };
+    let callee_lex_env = candidate.closure_env.unwrap_or(caller_lex_env_dest);
 
     // ── 分裂调用块 ──
     // B_pre 保留调用前指令 + undefined 常量，终止器暂置 Jump(克隆入口)；
@@ -674,8 +707,7 @@ fn inline_static_candidate(
                     continue;
                 }
                 if is_env_name(name) {
-                    let env_val = candidate.closure_env.unwrap_or(undefined_dest);
-                    param_subst.push((mapped_dest, env_val));
+                    param_subst.push((mapped_dest, callee_lex_env));
                     continue;
                 }
                 if let Some((param_idx, _)) = callee_params
@@ -776,7 +808,11 @@ fn inline_static_candidate(
             clone_max = clone_max.max(used.0);
         }
     }
-    current_max_value[func_idx] = undefined_dest.0.max(clone_max);
+    current_max_value[func_idx] = if needs_caller_lex_env {
+        caller_lex_env_dest.0.max(clone_max)
+    } else {
+        undefined_dest.0.max(clone_max)
+    };
 
     // ── 重写 B_pre：调用前指令 + undefined 常量 + 注入的形参初始值；
     //    终止器 = Jump(克隆入口)。 ──
@@ -790,6 +826,12 @@ fn inline_static_candidate(
             dest: undefined_dest,
             constant: undefined_id,
         });
+        if needs_caller_lex_env {
+            b_pre.push_instruction(Instruction::LoadVar {
+                dest: caller_lex_env_dest,
+                name: caller_env_name.expect("caller env name checked above"),
+            });
+        }
         for (name, value) in &inject_subst {
             b_pre.push_instruction(Instruction::StoreVar {
                 name: name.clone(),
