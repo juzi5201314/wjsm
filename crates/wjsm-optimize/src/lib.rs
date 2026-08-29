@@ -3,6 +3,7 @@
 mod cfg_fold;
 mod closure_direct_call;
 mod dce;
+mod env_owner_fold;
 mod escape_scalar;
 mod escape_scalar_record;
 pub mod facts;

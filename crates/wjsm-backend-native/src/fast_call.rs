@@ -25,15 +25,26 @@ pub(crate) fn js_param_count(function: &Function) -> usize {
     function.params().len().saturating_sub(2)
 }
 
-pub(crate) fn is_fast_call_eligible(function: &Function) -> bool {
-    if !function.direct_callable() {
-        return false;
-    }
+/// 是否编译寄存器 fast body（含带捕获闭包内层函数）。
+pub(crate) fn is_fast_body_eligible(function: &Function) -> bool {
     let name = function.name();
     if name.ends_with("$async") || name.ends_with("$asyncgen") {
         return false;
     }
-    js_param_count(function) <= MAX_FAST_JS_PARAMS
+    if function.is_class_constructor() {
+        return false;
+    }
+    if function.has_eval() {
+        return false;
+    }
+    if js_param_count(function) > MAX_FAST_JS_PARAMS {
+        return false;
+    }
+    function.direct_callable() || !function.captured_names().is_empty()
+}
+
+pub(crate) fn is_fast_call_eligible(function: &Function) -> bool {
+    is_fast_body_eligible(function)
 }
 
 pub(crate) fn fast_entry_signature(call_conv: CallConv, js_params: usize) -> Signature {
@@ -188,22 +199,26 @@ mod tests {
         function
     }
 
+    fn captured_function(name: &str) -> Function {
+        let mut function = function_with_js_params(0, false, name);
+        function.set_captured_names(vec!["$1.x".into()]);
+        function
+    }
+
+    #[test]
+    fn captured_inner_functions_get_fast_body() {
+        assert!(is_fast_body_eligible(&captured_function("increment")));
+        let mut no_capture = function_with_js_params(0, false, "needs_env");
+        no_capture.set_captured_names(vec![]);
+        assert!(!is_fast_body_eligible(&no_capture));
+    }
+
     #[test]
     fn eligibility_requires_direct_callable_and_arity() {
-        assert!(is_fast_call_eligible(&function_with_js_params(
-            4, true, "ok"
-        )));
-        assert!(!is_fast_call_eligible(&function_with_js_params(
-            5, true, "wide"
-        )));
-        assert!(!is_fast_call_eligible(&function_with_js_params(
-            1, false, "indirect"
-        )));
-        assert!(!is_fast_call_eligible(&function_with_js_params(
-            1,
-            true,
-            "work$async"
-        )));
+        assert!(is_fast_call_eligible(&function_with_js_params(4, true, "ok")));
+        assert!(!is_fast_call_eligible(&function_with_js_params(5, true, "wide")));
+        assert!(!is_fast_call_eligible(&function_with_js_params(1, false, "indirect")));
+        assert!(!is_fast_call_eligible(&function_with_js_params(1, true, "work$async")));
     }
 
     #[test]
