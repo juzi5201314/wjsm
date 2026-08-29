@@ -30,6 +30,37 @@ pub(crate) enum WebEncodingCallable {
     TextEncoderEncodeInto,
 }
 
+/// WebEncoding 家族值的 IsConstructor 分类（§7.2.4）：TextDecoder /
+/// TextEncoder 本体是构造器；atob / btoa 在 Node 里是普通函数声明、
+/// 保有 [[Construct]]（与浏览器 WebIDL 口径不同，wjsm 对齐 Node）；
+/// 原型方法（decode / encode / encodeInto）与访问器 getter 无
+/// [[Construct]]。
+pub(crate) fn is_constructor(kind: WebEncodingCallable) -> bool {
+    matches!(
+        kind,
+        WebEncodingCallable::Atob
+            | WebEncodingCallable::Btoa
+            | WebEncodingCallable::TextDecoderConstructor
+            | WebEncodingCallable::TextEncoderConstructor
+    )
+}
+
+/// WebEncoding 家族函数的 JS 可见 `(name, length)`（与 Node v22 实测一致）。
+pub(crate) fn metadata(callable: WebEncodingCallable) -> Option<(&'static str, u32)> {
+    Some(match callable {
+        WebEncodingCallable::Atob => ("atob", 1),
+        WebEncodingCallable::Btoa => ("btoa", 1),
+        WebEncodingCallable::TextDecoderConstructor => ("TextDecoder", 0),
+        WebEncodingCallable::TextDecoderDecode => ("decode", 0),
+        WebEncodingCallable::TextDecoderEncodingGet => ("get encoding", 0),
+        WebEncodingCallable::TextDecoderFatalGet => ("get fatal", 0),
+        WebEncodingCallable::TextDecoderIgnoreBomGet => ("get ignoreBOM", 0),
+        WebEncodingCallable::TextEncoderConstructor => ("TextEncoder", 0),
+        WebEncodingCallable::TextEncoderEncode => ("encode", 0),
+        WebEncodingCallable::TextEncoderEncodeInto => ("encodeInto", 2),
+    })
+}
+
 /// TextDecoder 实例槽：编码、选项与 incremental decoder。
 pub(crate) struct TextDecoderSlot {
     encoding: &'static Encoding,
