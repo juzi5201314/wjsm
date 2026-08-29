@@ -1,1 +1,4 @@
-200 1000
+exit_code: 0
+--- stdout ---
+200 200
+--- stderr ---
