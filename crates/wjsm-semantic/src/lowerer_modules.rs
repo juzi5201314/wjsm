@@ -664,10 +664,7 @@ fn create_namespace_objects(lowerer: &mut Lowerer, entry: BasicBlockId) {
         // builtin 段（hydration 种子）已在 `$builtin_main` 创建并注册该模块的
         // canonical 对象；入口块头部的段入口前缀调用先执行，这里按 ModuleId
         // 取回同一对象（§10.4.6.12 单一身份），不重建、不重复注册。
-        if lowerer
-            .builtin_namespace_modules
-            .contains(target_module_id)
-        {
+        if lowerer.builtin_namespace_modules.contains(target_module_id) {
             let module_id_const = lowerer
                 .module
                 .add_constant(Constant::ModuleId(*target_module_id));
