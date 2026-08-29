@@ -46,6 +46,8 @@ pub(super) fn dispatch_string(
         Builtin::StringTrimEnd => string_trim(ctx, state, args, false, true),
         Builtin::StringTrimStart => string_trim(ctx, state, args, true, false),
         Builtin::StringToString | Builtin::StringValueOf => this_string_value(ctx, state, args),
+        Builtin::StringIsWellFormed => string_well_formed(ctx, state, args, false),
+        Builtin::StringToWellFormed => string_well_formed(ctx, state, args, true),
         Builtin::StringFromCharCode => string_from_char_code(ctx, state, args),
         Builtin::StringFromCodePoint => string_from_code_point(ctx, state, args),
         Builtin::StringRaw => string_raw(ctx, state, args),
@@ -191,6 +193,58 @@ fn string_normalize(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     match wjsm_builtins::string_methods::normalize_runtime_string_by_form(&text, &form) {
         Ok(normalized) => intern(ctx, state, normalized),
         Err(message) => range_error(ctx, state, message),
+    }
+}
+
+/// `String.prototype.isWellFormed` / `toWellFormed`（ES §22.1.3.10 /
+/// §22.1.3.33）：RequireObjectCoercible(this) 后 ToString(this)（对象经
+/// ToPrimitive 触达用户 toString / valueOf / @@toPrimitive），再按
+/// IsStringWellFormedUnicode 判定或把孤立代理项替换为 U+FFFD。
+fn string_well_formed(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    to_well_formed: bool,
+) -> i64 {
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_null(receiver) || value::is_undefined(receiver) {
+        let method = if to_well_formed {
+            "toWellFormed"
+        } else {
+            "isWellFormed"
+        };
+        return type_error(
+            ctx,
+            state,
+            &format!("String.prototype.{method} called on null or undefined"),
+        );
+    }
+    let primitive = match to_primitive(ctx, state, receiver, PrimitiveHint::String) {
+        Ok(primitive) => primitive,
+        Err(exception) => return exception,
+    };
+    if value::is_symbol(primitive) {
+        return type_error(ctx, state, "Cannot convert a Symbol value to a string");
+    }
+    let text = if value::is_string(primitive) {
+        let Some(text) = state.string_owned(primitive) else {
+            return fail_dispatch(ctx);
+        };
+        text
+    } else {
+        RuntimeString::from(render_value(state, primitive))
+    };
+    if to_well_formed {
+        intern(
+            ctx,
+            state,
+            wjsm_builtins::string_methods::to_well_formed_units(&text),
+        )
+    } else {
+        value::encode_bool(wjsm_builtins::string_methods::is_well_formed_units(&text))
     }
 }
 

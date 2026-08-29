@@ -1,0 +1,35 @@
+exit_code: 0
+--- stdout ---
+TypeError Set.prototype.union argument must be an object
+TypeError Set.prototype.union argument must be an object
+TypeError Set.prototype.intersection argument must be an object
+TypeError The .size property is NaN
+TypeError The .size property is NaN
+RangeError '-1' is an invalid size
+RangeError '-Infinity' is an invalid size
+Error sizeboom
+OK Set([1])
+TypeError string "has" is not a function
+TypeError string "keys" is not a function
+TypeError Result of the keys method is not an object
+TypeError string "next" is not a function
+TypeError Iterator result 5 is not an object
+TypeError Result of the keys method is not an object
+Error nextboom
+TypeError Method Set.prototype.union called on incompatible receiver [object Array]
+TypeError Method Set.prototype.union called on incompatible receiver #<Object>
+TypeError Method Set.prototype.union called on incompatible receiver #<Map>
+TypeError Method Set.prototype.union called on incompatible receiver #<WeakMap>
+TypeError Method Set.prototype.union called on incompatible receiver #<Promise>
+TypeError Method Set.prototype.union called on incompatible receiver 7
+TypeError Method Set.prototype.union called on incompatible receiver x
+TypeError Method Set.prototype.union called on incompatible receiver null
+TypeError Method Set.prototype.intersection called on incompatible receiver undefined
+TypeError Method Set.prototype.difference called on incompatible receiver [object Array]
+TypeError Method Set.prototype.symmetricDifference called on incompatible receiver [object Array]
+TypeError Method Set.prototype.isSubsetOf called on incompatible receiver [object Array]
+TypeError Method Set.prototype.isSupersetOf called on incompatible receiver [object Array]
+TypeError Method Set.prototype.isDisjointFrom called on incompatible receiver [object Array]
+false ["closed"]
+false ["closed"]
+--- stderr ---

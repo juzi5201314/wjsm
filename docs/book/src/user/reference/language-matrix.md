@@ -52,9 +52,9 @@
 
 | 功能 | 状态 | 说明 |
 | --- | --- | --- |
-| `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性；`toLocaleString` 委托元素的 locale 方法 |
-| `String` 方法 | 可用 | `String.prototype` 方法是真实不可枚举属性，可取值经 `call`/`apply`/`bind` 传递；`String.raw` 已实现；Annex B HTML 方法族、`substr`、`isWellFormed`/`toWellFormed`、`trimLeft`/`trimRight` 未实现 |
-| `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 同构造器与跨构造器的 `instanceof` 返回布尔；其他构造器的 `instanceof` 边界仍以 fixture/test262 覆盖为准 |
+| `Object`、`Array`、`Function` | 可用 | `Array.prototype` 方法是真实属性；`Array.fromAsync` 已实现（tick 序对齐 V8）；`toLocaleString` 委托元素的 locale 方法 |
+| `String` 方法 | 可用 | `String.prototype` 方法是真实不可枚举属性，可取值经 `call`/`apply`/`bind` 传递；`String.raw`、`isWellFormed`/`toWellFormed` 已实现；Annex B HTML 方法族、`substr`、`trimLeft`/`trimRight` 未实现 |
+| `Map` / `Set` / `WeakMap` / `WeakSet` | 可用 | 同构造器与跨构造器的 `instanceof` 返回布尔；`Set.prototype` 含 ES2025 集合运算（`union`/`intersection`/`difference`/`symmetricDifference`/`isSubsetOf`/`isSupersetOf`/`isDisjointFrom`）；其他构造器的 `instanceof` 边界仍以 fixture/test262 覆盖为准 |
 | `Promise` 及组合子 | 可用 | 含 `allSettled`、`withResolvers` |
 | `Proxy` / `Reflect` | 可用 | |
 | `Number` | 可用 | `toLocaleString` 委托 `Intl.NumberFormat` |

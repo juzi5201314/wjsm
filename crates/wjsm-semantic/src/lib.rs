@@ -291,6 +291,7 @@ fn is_string_returning_proto_method(name: &str) -> bool {
             | "concat"
             | "charAt"
             | "normalize"
+            | "toWellFormed"
             | "toString"
             | "valueOf"
     )

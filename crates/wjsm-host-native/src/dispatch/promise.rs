@@ -64,6 +64,11 @@ pub(crate) enum NativePromiseReaction {
         original_rejected: bool,
     },
     Stream(super::streams::StreamReaction),
+    /// `Array.fromAsync` 状态机的 Await 续点（§23.1.2.1 / §6.2.9.3）。
+    ArrayFromAsync {
+        operation: u32,
+        phase: super::array_from_async::FromAsyncPhase,
+    },
 }
 
 #[derive(Clone)]
@@ -180,11 +185,18 @@ pub(crate) fn observe(
     promise: u32,
     reaction: super::streams::StreamReaction,
 ) {
+    observe_reaction(state, promise, NativePromiseReaction::Stream(reaction));
+}
+
+/// 宿主原生 reaction 版 PerformPromiseThen：pending 挂 reaction 表，已结算
+/// 直接入微任务队列；宿主消费者自身即 handler，promise 记为已处理。
+pub(crate) fn observe_reaction(
+    state: &mut NativeAgentState,
+    promise: u32,
+    reaction: NativePromiseReaction,
+) {
     let context = super::node_async_hooks::capture_context(state);
-    let reaction = NativeScheduledReaction {
-        reaction: NativePromiseReaction::Stream(reaction),
-        context,
-    };
+    let reaction = NativeScheduledReaction { reaction, context };
     mark_promise_handled(state, promise);
     match state.promises.get(&promise).map(|promise| promise.state) {
         Some(PromiseState::Pending) => state
@@ -222,6 +234,22 @@ fn enqueue_microtask_with_context(
     state
         .microtasks
         .push_back(NativeScheduledMicrotask { task, context });
+}
+
+/// 宿主状态机把原生续点连同结算值直接排入微任务队列（等价于对已结算
+/// promise 的 PerformPromiseThen，用于模拟中间 promise 的既定 1-tick 跳）。
+pub(crate) fn enqueue_reaction_microtask(
+    state: &mut NativeAgentState,
+    reaction: NativePromiseReaction,
+    value: i64,
+    rejected: bool,
+) {
+    let context = super::node_async_hooks::capture_context(state);
+    enqueue_microtask_with_context(
+        state,
+        NativeMicrotask::PromiseReaction { reaction, value, rejected },
+        context,
+    );
 }
 #[derive(Clone)]
 pub(crate) struct NativeContinuation {
@@ -793,6 +821,16 @@ fn static_resolve(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args:
         .or_else(|| args.first())
         .copied()
         .unwrap_or_else(value::encode_undefined);
+    promise_resolve_value(ctx, state, input)
+}
+
+/// PromiseResolve(%Promise%, value)（§27.2.4.7.1）：宿主 promise 原样返回，
+/// 其余值（含 thenable）装入新 promise 解析。Await（§6.2.9.3）步骤 2 复用。
+pub(crate) fn promise_resolve_value(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    input: i64,
+) -> i64 {
     if value::is_object(input) && state.promises.contains_key(&value::decode_handle(input)) {
         return input;
     }
@@ -1253,6 +1291,9 @@ fn run_reaction(
         }
         NativePromiseReaction::Stream(reaction) => {
             super::streams::run_reaction(ctx, state, reaction, value, rejected)
+        }
+        NativePromiseReaction::ArrayFromAsync { operation, phase } => {
+            super::array_from_async::run_reaction(ctx, state, operation, phase, value, rejected)
         }
     }
 }

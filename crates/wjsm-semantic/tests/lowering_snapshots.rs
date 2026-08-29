@@ -1140,6 +1140,33 @@ fn dataview_bigint_methods_lower_to_call_builtin() {
     }
 }
 
+#[test]
+fn es2023_builtins_lower_to_call_builtin() {
+    // ES2023+ 收尾内建的静态直连：字符串良构方法、Array.fromAsync 与
+    // Set 七个集合运算须落各自专用 CallBuiltin，不走通用属性调用。
+    let source = "const s = new Set([1]);\nconst o = new Set([2]);\nconsole.log(\"x\".isWellFormed(), \"x\".toWellFormed());\nArray.fromAsync([1]);\nconsole.log(s.union(o), s.intersection(o), s.difference(o), s.symmetricDifference(o), s.isSubsetOf(o), s.isSupersetOf(o), s.isDisjointFrom(o));\n";
+    let module = parse_module(source).expect("parse should succeed");
+    let program = lower_module(module, false).expect("lowering should succeed");
+    let text = program.dump_text();
+    for marker in [
+        "string.is_well_formed",
+        "string.to_well_formed",
+        "array.from_async",
+        "Set.prototype.union",
+        "Set.prototype.intersection",
+        "Set.prototype.difference",
+        "Set.prototype.symmetricDifference",
+        "Set.prototype.isSubsetOf",
+        "Set.prototype.isSupersetOf",
+        "Set.prototype.isDisjointFrom",
+    ] {
+        assert!(
+            text.contains(marker),
+            "expected `{marker}` CallBuiltin in IR:\n{text}"
+        );
+    }
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));

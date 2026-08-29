@@ -1,3 +1,5 @@
+mod set_ops;
+
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
@@ -31,6 +33,15 @@ pub(super) fn dispatch_collection(
         Builtin::MapSetValues => iterator(ctx, state, args, crate::NativeIteratorKind::Values),
         Builtin::MapSetEntries => iterator(ctx, state, args, crate::NativeIteratorKind::Entries),
         Builtin::MapSetFirstKey => first_key(ctx, state, args),
+        Builtin::SetProtoUnion
+        | Builtin::SetProtoIntersection
+        | Builtin::SetProtoDifference
+        | Builtin::SetProtoSymmetricDifference
+        | Builtin::SetProtoIsSubsetOf
+        | Builtin::SetProtoIsSupersetOf
+        | Builtin::SetProtoIsDisjointFrom => {
+            return set_ops::dispatch_set_ops(ctx, state, builtin, args);
+        }
         _ => return None,
     })
 }
@@ -66,11 +77,20 @@ pub(crate) fn property(
             "add" => CollectionProperty::Method(Builtin::SetProtoAdd),
             "clear" => CollectionProperty::Method(Builtin::MapSetClear),
             "delete" => CollectionProperty::Method(Builtin::SetProtoDelete),
+            "difference" => CollectionProperty::Method(Builtin::SetProtoDifference),
             "entries" => CollectionProperty::Method(Builtin::MapSetEntries),
             "forEach" => CollectionProperty::Method(Builtin::MapSetForEach),
             "has" => CollectionProperty::Method(Builtin::SetProtoHas),
+            "intersection" => CollectionProperty::Method(Builtin::SetProtoIntersection),
+            "isDisjointFrom" => CollectionProperty::Method(Builtin::SetProtoIsDisjointFrom),
+            "isSubsetOf" => CollectionProperty::Method(Builtin::SetProtoIsSubsetOf),
+            "isSupersetOf" => CollectionProperty::Method(Builtin::SetProtoIsSupersetOf),
             "keys" | "values" => CollectionProperty::Method(Builtin::MapSetValues),
             "size" => CollectionProperty::Value(value::encode_f64(values.len() as f64)),
+            "symmetricDifference" => {
+                CollectionProperty::Method(Builtin::SetProtoSymmetricDifference)
+            }
+            "union" => CollectionProperty::Method(Builtin::SetProtoUnion),
             _ => return None,
         });
     }
@@ -83,6 +103,7 @@ pub(crate) fn install_prototype_methods(
     is_set: bool,
 ) -> Result<(), ()> {
     let methods: &[(&str, Builtin)] = if is_set {
+        // Node v22 自有属性序（union 起为 ES2025 集合运算方法）。
         &[
             ("add", Builtin::SetProtoAdd),
             ("clear", Builtin::MapSetClear),
@@ -92,6 +113,13 @@ pub(crate) fn install_prototype_methods(
             ("has", Builtin::SetProtoHas),
             ("keys", Builtin::MapSetValues),
             ("values", Builtin::MapSetValues),
+            ("union", Builtin::SetProtoUnion),
+            ("intersection", Builtin::SetProtoIntersection),
+            ("difference", Builtin::SetProtoDifference),
+            ("symmetricDifference", Builtin::SetProtoSymmetricDifference),
+            ("isSubsetOf", Builtin::SetProtoIsSubsetOf),
+            ("isSupersetOf", Builtin::SetProtoIsSupersetOf),
+            ("isDisjointFrom", Builtin::SetProtoIsDisjointFrom),
         ]
     } else {
         &[
