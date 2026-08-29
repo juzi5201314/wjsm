@@ -36,11 +36,15 @@ enum CloneBacking {
         node: u32,
         offset: usize,
         length: usize,
+        /// 视图为 length-tracking（resizable buffer 的 auto 长度视图），
+        /// 反序列化后仍随克隆出的 buffer 长度重算。
+        length_tracking: bool,
     },
     SharedArrayBuffer {
         node: u32,
         offset: usize,
         length: usize,
+        length_tracking: bool,
     },
 }
 
@@ -50,7 +54,12 @@ enum CloneNode {
     Array(Vec<CloneValue>),
     Object(Vec<(String, CloneValue)>),
     Histogram(node_perf_hooks::HistogramTransfer),
-    ArrayBuffer(Vec<u8>),
+    ArrayBuffer {
+        bytes: Vec<u8>,
+        /// resizable buffer 克隆保留 [[ArrayBufferMaxByteLength]]（HTML
+        /// 序列化算法对 resizable AB 的要求）。
+        max_byte_length: Option<usize>,
+    },
     SharedArrayBuffer(u32),
     Date(f64),
     RegExp {
@@ -162,8 +171,15 @@ pub(crate) fn deserialize(
             CloneNode::Histogram(histogram) => {
                 node_perf_hooks::materialize_histogram(state, histogram.clone())?
             }
-            CloneNode::ArrayBuffer(bytes) => buffers::from_bytes(state, bytes.clone())
-                .ok_or_else(|| "DataCloneError: ArrayBuffer allocation failed".to_string())?,
+            CloneNode::ArrayBuffer {
+                bytes,
+                max_byte_length,
+            } => buffers::from_shared_bytes_with_max(
+                state,
+                std::rc::Rc::new(std::cell::RefCell::new(bytes.clone())),
+                *max_byte_length,
+            )
+            .ok_or_else(|| "DataCloneError: ArrayBuffer allocation failed".to_string())?,
             CloneNode::SharedArrayBuffer(backing_id) => {
                 let object = sab::materialize_from_backing(state, *backing_id).ok_or_else(|| {
                     "DataCloneError: SharedArrayBuffer allocation failed".to_string()
@@ -210,25 +226,25 @@ pub(crate) fn deserialize(
         }
         objects[index] = Some(match node {
             CloneNode::TypedArray { kind, backing } => {
-                let (buffer, offset, length) = resolve_backing(backing, &objects)?;
+                let (buffer, offset, length, tracking) = resolve_backing(backing, &objects)?;
                 match backing {
                     CloneBacking::ArrayBuffer { .. } => {
-                        typedarray::from_buffer(state, *kind, buffer, offset, length)
+                        typedarray::from_buffer(state, *kind, buffer, offset, length, tracking)
                     }
-                    CloneBacking::SharedArrayBuffer { .. } => {
-                        typedarray::from_shared_buffer(state, *kind, buffer, offset, length)
-                    }
+                    CloneBacking::SharedArrayBuffer { .. } => typedarray::from_shared_buffer(
+                        state, *kind, buffer, offset, length, tracking,
+                    ),
                     CloneBacking::Values(_) => None,
                 }
                 .ok_or_else(|| "DataCloneError: typed array allocation failed".to_string())?
             }
             CloneNode::DataView { backing } => {
-                let (buffer, offset, length) = resolve_backing(backing, &objects)?;
-                buffers::from_view(state, buffer, offset, length)
+                let (buffer, offset, length, tracking) = resolve_backing(backing, &objects)?;
+                buffers::from_view(state, buffer, offset, length, tracking)
                     .ok_or_else(|| "DataCloneError: DataView allocation failed".to_string())?
             }
             CloneNode::Buffer { backing } => {
-                let (buffer, offset, length) = resolve_backing(backing, &objects)?;
+                let (buffer, offset, length, _) = resolve_backing(backing, &objects)?;
                 node_buffer::from_array_buffer_view(state, buffer, offset, length)
                     .ok_or_else(|| "DataCloneError: Buffer allocation failed".to_string())?
             }
@@ -289,7 +305,7 @@ pub(crate) fn deserialize(
             }
             CloneNode::Pending
             | CloneNode::Histogram(_)
-            | CloneNode::ArrayBuffer(_)
+            | CloneNode::ArrayBuffer { .. }
             | CloneNode::SharedArrayBuffer(_)
             | CloneNode::Date(_)
             | CloneNode::RegExp { .. }
@@ -498,7 +514,18 @@ fn serialize_node(
         });
     }
     if let Some(bytes) = buffers::array_buffer_bytes(state, encoded) {
-        return Ok(CloneNode::ArrayBuffer(bytes));
+        let (max_byte_length, detached) =
+            buffers::array_buffer_clone_meta(state, encoded).unwrap_or((None, false));
+        // HTML 序列化算法：detached buffer 不可克隆（Node/V8 同文案）。
+        if detached {
+            return Err(
+                "DataCloneError: An ArrayBuffer is detached and could not be cloned.".into(),
+            );
+        }
+        return Ok(CloneNode::ArrayBuffer {
+            bytes,
+            max_byte_length,
+        });
     }
     if let Some((milliseconds, _)) = date::parts(state, encoded) {
         return Ok(CloneNode::Date(milliseconds));
@@ -509,9 +536,11 @@ fn serialize_node(
             backing: serialize_typed_backing(state, view, nodes, seen, pending)?,
         });
     }
-    if let Some((backing, offset, length)) = buffers::data_view_parts(state, encoded) {
+    if let Some((backing, offset, length, tracking)) = buffers::data_view_parts(state, encoded) {
         return Ok(CloneNode::DataView {
-            backing: serialize_view_backing(state, backing, offset, length, nodes, seen, pending)?,
+            backing: serialize_view_backing(
+                state, backing, offset, length, tracking, nodes, seen, pending,
+            )?,
         });
     }
     if let Some(entries) = collections::map_entries(state, encoded) {
@@ -561,7 +590,7 @@ fn serialize_buffer_backing(
     let (buffer, offset, length) = node_buffer::parts(state, encoded)
         .ok_or_else(|| "DataCloneError: invalid Buffer".to_string())?;
     let backing = serialize_buffer_reference(state, buffer, nodes, seen, pending)?;
-    Ok(backing.map_offset(offset, length))
+    Ok(backing.map_offset(offset, length, false))
 }
 
 fn serialize_typed_backing(
@@ -581,14 +610,16 @@ fn serialize_typed_backing(
             buffer,
             offset,
             length,
+            length_tracking,
         } => serialize_buffer_reference(state, buffer, nodes, seen, pending)
-            .map(|backing| backing.map_offset(offset, length)),
+            .map(|backing| backing.map_offset(offset, length, length_tracking)),
         typedarray::CloneView::SharedArrayBuffer {
             object,
             offset,
             length,
+            length_tracking,
         } => serialize_buffer_reference(state, object, nodes, seen, pending)
-            .map(|backing| backing.map_shared_offset(offset, length)),
+            .map(|backing| backing.map_shared_offset(offset, length, length_tracking)),
     }
 }
 
@@ -597,6 +628,7 @@ fn serialize_view_backing(
     backing: buffers::ViewBacking,
     offset: usize,
     length: usize,
+    length_tracking: bool,
     nodes: &mut Vec<CloneNode>,
     seen: &mut HashMap<i64, u32>,
     pending: &mut Vec<(u32, i64)>,
@@ -611,11 +643,13 @@ fn serialize_view_backing(
             node,
             offset,
             length,
+            length_tracking,
         },
         CloneBacking::SharedArrayBuffer { node, .. } => CloneBacking::SharedArrayBuffer {
             node,
             offset,
             length,
+            length_tracking,
         },
         CloneBacking::Values(_) => {
             return Err("DataCloneError: invalid view backing".into());
@@ -643,12 +677,14 @@ fn serialize_buffer_reference(
             node,
             offset: 0,
             length: 0,
+            length_tracking: false,
         })
     } else {
         Ok(CloneBacking::ArrayBuffer {
             node,
             offset: 0,
             length: 0,
+            length_tracking: false,
         })
     }
 }
@@ -656,21 +692,23 @@ fn serialize_buffer_reference(
 fn resolve_backing(
     backing: &CloneBacking,
     objects: &[Option<i64>],
-) -> Result<(i64, usize, usize), String> {
+) -> Result<(i64, usize, usize, bool), String> {
     match backing {
         CloneBacking::ArrayBuffer {
             node,
             offset,
             length,
+            length_tracking,
         }
         | CloneBacking::SharedArrayBuffer {
             node,
             offset,
             length,
+            length_tracking,
         } => objects
             .get(*node as usize)
             .and_then(|object| *object)
-            .map(|object| (object, *offset, *length))
+            .map(|object| (object, *offset, *length, *length_tracking))
             .ok_or_else(|| "DataCloneError: invalid view backing reference".into()),
         CloneBacking::Values(_) => Err("DataCloneError: view has no backing".into()),
     }
@@ -701,29 +739,32 @@ fn deserialize_value(
 }
 
 impl CloneBacking {
-    fn map_offset(self, offset: usize, length: usize) -> Self {
+    fn map_offset(self, offset: usize, length: usize, length_tracking: bool) -> Self {
         match self {
             Self::ArrayBuffer { node, .. } => Self::ArrayBuffer {
                 node,
                 offset,
                 length,
+                length_tracking,
             },
             Self::SharedArrayBuffer { node, .. } => Self::SharedArrayBuffer {
                 node,
                 offset,
                 length,
+                length_tracking,
             },
             Self::Values(values) => Self::Values(values),
         }
     }
 
-    fn map_shared_offset(self, offset: usize, length: usize) -> Self {
+    fn map_shared_offset(self, offset: usize, length: usize, length_tracking: bool) -> Self {
         match self {
             Self::ArrayBuffer { node, .. } | Self::SharedArrayBuffer { node, .. } => {
                 Self::SharedArrayBuffer {
                     node,
                     offset,
                     length,
+                    length_tracking,
                 }
             }
             Self::Values(values) => Self::Values(values),

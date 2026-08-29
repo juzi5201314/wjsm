@@ -1032,6 +1032,7 @@ fn create_view(
             is_shared: false,
             offset,
             length,
+            length_tracking: false,
         },
     );
     state.buffers.insert(
