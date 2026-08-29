@@ -583,6 +583,7 @@ fn root_values(
     queue.extend(state.weak_set_prototype);
     queue.extend(state.view_prototypes.values().copied());
     queue.extend(state.typed_array_prototype);
+    queue.extend(state.buffer_prototype);
     queue.extend(state.web_prototypes.values().copied());
     queue.extend(state.console_object);
     queue.extend(state.intl.object);
@@ -938,6 +939,8 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         .runtime_modules
         .visit_gc_roots(|root| queue.push_back(root));
     queue.extend(state.fatal_exception);
+    // process.stdin 对象与监听器 callable 是宿主侧持有的 JS 值。
+    state.process_stdin.extend_gc_roots(queue);
     state.node_perf_hooks.extend_gc_roots(queue);
     super::streams::extend_gc_roots(&state.streams, queue);
     super::fetch::extend_gc_roots(&state.fetch, queue);

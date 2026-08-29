@@ -357,13 +357,26 @@ impl Lowerer {
         let iterable = self.lower_expr(&for_of.right, block)?;
         block = self.resolve_store_block(block);
 
+        // 第二实参是 for-await 语法位置标记：V8 的 GetIterator(async) desugar
+        // 本身直调 @@iterator 属性值（缺失即 kCalledNonCallable），仅 for-of
+        // subject 位置经 CallPrinter hint 把模板改写成 kNotAsyncIterable；
+        // async yield* 位置不带该标记，保持直调文案。
+        let hint_const = self.module.add_constant(Constant::Bool(true));
+        let hint_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: hint_val,
+                constant: hint_const,
+            },
+        );
         let iter_handle = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {
                 dest: Some(iter_handle),
                 builtin: Builtin::AsyncIteratorFrom,
-                args: vec![iterable],
+                args: vec![iterable, hint_val],
             },
         );
         let iter_binding = format!("$for_await_iter.{}", self.next_temp);

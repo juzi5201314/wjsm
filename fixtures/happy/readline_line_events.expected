@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+terminal false prompt "P> "
+prompt-after-set "Q> "
+line "crlf"
+line "lf"
+line "lone"
+line "tail-no-newline"
+close
+--- stderr ---

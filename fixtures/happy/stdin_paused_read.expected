@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+first null
+readable
+read3 "abc"
+read3 "def"
+readable
+read3 "gh"
+end
+close
+--- stderr ---

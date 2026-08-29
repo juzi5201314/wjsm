@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+sync 0 undefined function
+paused-before false
+once-data true "alpha\nbeta\n"
+data 11 "alpha\nbeta\n"
+end false
+close
+--- stderr ---

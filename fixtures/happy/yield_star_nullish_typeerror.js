@@ -1,7 +1,7 @@
 // yield* 委托的 GetIterator（§27.5.3.7 步骤 1，经 §7.4.3）必抛矩阵：nullish /
 // 无 @@iterator / 方法非可调用 / 迭代器方法返回非对象都必须抛 TypeError，
 // 而非把异常哨兵当普通值静默完成委托。sync 形态与 async 形态（@@asyncIterator
-// 键）的文案与 Node v22 逐字节一致；唯一例外见文末 async 非可迭代块的注释。
+// 键）的文案与 Node v22 逐字节一致。
 
 function probe(label, generator) {
   try {
@@ -68,6 +68,11 @@ async function aprobe(label, generator) {
   await aprobe("async-noncallable", async function* () {
     yield* { [Symbol.asyncIterator]: 1 };
   });
+  // @@asyncIterator 缺失时 V8 desugar 直调 @@iterator 属性值且不做 GetMethod
+  // 归约：null 方法按被调值渲染 kCalledNonCallable（object null）。
+  await aprobe("async-sync-null-method", async function* () {
+    yield* { [Symbol.iterator]: null };
+  });
   await aprobe("async-nonobject", async function* () {
     yield* {
       [Symbol.asyncIterator]() {
@@ -83,11 +88,10 @@ async function aprobe(label, generator) {
     };
   });
 
-  // GetIterator(value, async) 两个迭代器方法皆缺（§7.4.3 步骤 1.b.ii）：wjsm
-  // 按 V8 kNotAsyncIterable 回退形态渲染（「object is not async iterable」）；
-  // V8 的 async yield* desugar 直接调用 undefined 方法，Node 实际输出
-  // 「undefined is not a function」。TypeError 类型与抛出时机一致，仅 callsite
-  // 文案形态不同。
+  // GetIterator(value, async) 两个迭代器方法皆缺（§7.4.3 步骤 1.b.ii）：V8 的
+  // async yield* desugar 直接调用 undefined 方法（kCalledNonCallable），Node
+  // 输出「undefined is not a function」，与源值类型无关；kNotAsyncIterable
+  // 模板改写仅发生在 for-await 语法位置。
   await aprobe("async-object", async function* () {
     yield* {};
   });

@@ -54,48 +54,48 @@ module {
     c51 = number(6)
     c52 = functionref(@1)
     c53 = undefined
-    c54 = undefined
-    c55 = string("done")
-    c56 = string("value")
-    c57 = number(1)
-    c58 = number(0)
-    c59 = number(1)
-    c60 = number(0)
-    c61 = number(1)
-    c62 = number(0)
-    c63 = undefined
+    c54 = bool(true)
+    c55 = undefined
+    c56 = string("done")
+    c57 = string("value")
+    c58 = number(1)
+    c59 = number(0)
+    c60 = number(1)
+    c61 = number(0)
+    c62 = number(1)
+    c63 = number(0)
     c64 = undefined
-    c65 = number(1)
-    c66 = number(0)
-    c67 = number(1)
-    c68 = number(0)
-    c69 = number(1)
-    c70 = number(0)
-    c71 = undefined
-    c72 = string("done")
-    c73 = undefined
-    c74 = number(7)
+    c65 = undefined
+    c66 = number(1)
+    c67 = number(0)
+    c68 = number(1)
+    c69 = number(0)
+    c70 = number(1)
+    c71 = number(0)
+    c72 = undefined
+    c73 = string("done")
+    c74 = undefined
     c75 = number(7)
-    c76 = number(0)
-    c77 = number(1)
-    c78 = number(0)
-    c79 = functionref(@2)
-    c80 = number(8)
-    c81 = number(0)
+    c76 = number(7)
+    c77 = number(0)
+    c78 = number(1)
+    c79 = number(0)
+    c80 = functionref(@2)
+    c81 = number(8)
     c82 = number(0)
-    c83 = number(1)
-    c84 = bool(false)
-    c85 = number(2)
-    c86 = number(3)
-    c87 = undefined
-    c88 = number(4)
-    c89 = number(6)
-    c90 = number(0)
-    c91 = undefined
-    c92 = bool(false)
-    c93 = functionref(@3)
-    c94 = undefined
-    c95 = bool(true)
+    c83 = number(0)
+    c84 = number(1)
+    c85 = bool(false)
+    c86 = number(2)
+    c87 = number(3)
+    c88 = undefined
+    c89 = number(4)
+    c90 = number(6)
+    c91 = number(0)
+    c92 = undefined
+    c93 = bool(false)
+    c94 = functionref(@3)
+    c95 = undefined
 
   fn @gen$asyncgen [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
@@ -234,194 +234,195 @@ module {
     bb1:
       %14 = const c26
       store var $1.$shared_env, %14
-      %111 = load var $1.$state
-      switch %111 [case c76 -> bb2, case c77 -> bb7], default bb42, exit bb43
+      %112 = load var $1.$state
+      switch %112 [case c77 -> bb2, case c78 -> bb7], default bb42, exit bb43
     bb2:
       %15 = const c52
       store var $1.gen, %15
       %16 = const c53
       %17 = load var $1.gen
       %18 = call %17, this=%16
-      %19 = call builtin.async_iterator.from(%18)
-      store var $4.$for_await_iter.0, %19
+      %19 = const c54
+      %20 = call builtin.async_iterator.from(%18, %19)
+      store var $4.$for_await_iter.0, %20
       jump bb3
     bb3:
-      %20 = load var $4.$for_await_iter.0
-      %21 = call builtin.iterator.next(%20)
-      %23 = const c54
-      %22 = call builtin.promise.resolve_static(%23, %21)
-      %105 = load var $1.$env
-      %106 = const c74
-      %107 = load var $4.$for_await_iter.0
-      call builtin.continuation.save_var(%105, %106, %107)
-      suspend %22, state=1
+      %21 = load var $4.$for_await_iter.0
+      %22 = call builtin.iterator.next(%21)
+      %24 = const c55
+      %23 = call builtin.promise.resolve_static(%24, %22)
+      %106 = load var $1.$env
+      %107 = const c75
+      %108 = load var $4.$for_await_iter.0
+      call builtin.continuation.save_var(%106, %107, %108)
+      suspend %23, state=1
       jump bb8
     bb4:
-      %31 = load var $4.$for_await_iter.0
-      %32 = load var $1.$resume_val
-      %33 = const c56
-      %34 = get_prop %32, %33
-      store var $4.value, %34
-      %35 = const c57
+      %32 = load var $4.$for_await_iter.0
+      %33 = load var $1.$resume_val
+      %34 = const c57
+      %35 = get_prop %33, %34
+      store var $4.value, %35
       %36 = const c58
-      %37 = call builtin.intrinsic_pristine(%35, %36)
-      branch %37, bb10, bb11
+      %37 = const c59
+      %38 = call builtin.intrinsic_pristine(%36, %37)
+      branch %38, bb10, bb11
     bb5:
       unreachable
     bb6:
-      %78 = const c65
       %79 = const c66
-      %80 = call builtin.intrinsic_pristine(%78, %79)
-      branch %80, bb30, bb31
+      %80 = const c67
+      %81 = call builtin.intrinsic_pristine(%79, %80)
+      branch %81, bb30, bb31
     bb7:
-      %108 = load var $1.$env
-      %109 = const c75
-      %110 = call builtin.continuation.load_var(%108, %109)
-      store var $4.$for_await_iter.0, %110
-      %24 = load var $1.$resume_val
-      %25 = load var $1.$is_rejected
-      branch %25, bb9, bb8
+      %109 = load var $1.$env
+      %110 = const c76
+      %111 = call builtin.continuation.load_var(%109, %110)
+      store var $4.$for_await_iter.0, %111
+      %25 = load var $1.$resume_val
+      %26 = load var $1.$is_rejected
+      branch %26, bb9, bb8
     bb8:
-      %27 = load var $1.$resume_val
-      %28 = const c55
-      %29 = get_prop %27, %28
-      %30 = not %29
-      branch %30, bb4, bb6
+      %28 = load var $1.$resume_val
+      %29 = const c56
+      %30 = get_prop %28, %29
+      %31 = not %30
+      branch %31, bb4, bb6
     bb9:
-      %26 = load var $1.$promise
-      promise_reject %26, %24
+      %27 = load var $1.$promise
+      promise_reject %27, %25
       return
     bb10:
-      %58 = const c63
+      %59 = const c64
       jump bb21
     bb11:
-      %38 = const c59
       %39 = const c60
-      %40 = call builtin.intrinsic_resolve(%38, %39)
-      %41 = is_exception %40
-      branch %41, bb13, bb12
+      %40 = const c61
+      %41 = call builtin.intrinsic_resolve(%39, %40)
+      %42 = is_exception %41
+      branch %42, bb13, bb12
     bb12:
-      %48 = const c61
       %49 = const c62
-      %50 = call builtin.intrinsic_resolve(%48, %49, %40)
-      %51 = is_exception %50
-      branch %51, bb17, bb16
+      %50 = const c63
+      %51 = call builtin.intrinsic_resolve(%49, %50, %41)
+      %52 = is_exception %51
+      branch %52, bb17, bb16
     bb13:
-      %42 = call builtin.exception_value(%40)
-      %43 = call builtin.iterator.close_throw(%31, %42)
-      %44 = is_exception %43
-      branch %44, bb15, bb14
+      %43 = call builtin.exception_value(%41)
+      %44 = call builtin.iterator.close_throw(%32, %43)
+      %45 = is_exception %44
+      branch %45, bb15, bb14
     bb14:
-      %47 = load var $1.$promise
-      promise_reject %47, %42
+      %48 = load var $1.$promise
+      promise_reject %48, %43
       return
     bb15:
-      %45 = call builtin.exception_value(%43)
-      %46 = load var $1.$promise
-      promise_reject %46, %45
+      %46 = call builtin.exception_value(%44)
+      %47 = load var $1.$promise
+      promise_reject %47, %46
       return
     bb16:
       jump bb21
     bb17:
-      %52 = call builtin.exception_value(%50)
-      %53 = call builtin.iterator.close_throw(%31, %52)
-      %54 = is_exception %53
-      branch %54, bb19, bb18
+      %53 = call builtin.exception_value(%51)
+      %54 = call builtin.iterator.close_throw(%32, %53)
+      %55 = is_exception %54
+      branch %55, bb19, bb18
     bb18:
-      %57 = load var $1.$promise
-      promise_reject %57, %52
+      %58 = load var $1.$promise
+      promise_reject %58, %53
       return
     bb19:
-      %55 = call builtin.exception_value(%53)
-      %56 = load var $1.$promise
-      promise_reject %56, %55
+      %56 = call builtin.exception_value(%54)
+      %57 = load var $1.$promise
+      promise_reject %57, %56
       return
     bb20:
-      %64 = phi [(bb22, %62), (bb23, %63)]
-      %65 = is_exception %64
-      branch %65, bb25, bb24
+      %65 = phi [(bb22, %63), (bb23, %64)]
+      %66 = is_exception %65
+      branch %66, bb25, bb24
     bb21:
-      %59 = phi [(bb10, %58), (bb16, %50)]
-      %60 = phi [(bb10, %58), (bb16, %40)]
-      %61 = load var $4.value
-      branch %37, bb22, bb23
+      %60 = phi [(bb10, %59), (bb16, %51)]
+      %61 = phi [(bb10, %59), (bb16, %41)]
+      %62 = load var $4.value
+      branch %38, bb22, bb23
     bb22:
-      %62 = call builtin.console.log(%61)
+      %63 = call builtin.console.log(%62)
       jump bb20
     bb23:
-      %63 = call %59, this=%60, args=[%61]
+      %64 = call %60, this=%61, args=[%62]
       jump bb20
     bb24:
       jump bb3
     bb25:
-      %66 = call builtin.exception_value(%64)
-      %67 = call builtin.iterator.close_throw(%31, %66)
-      %68 = is_exception %67
-      branch %68, bb27, bb26
+      %67 = call builtin.exception_value(%65)
+      %68 = call builtin.iterator.close_throw(%32, %67)
+      %69 = is_exception %68
+      branch %69, bb27, bb26
     bb26:
-      %71 = load var $1.$promise
-      promise_reject %71, %66
+      %72 = load var $1.$promise
+      promise_reject %72, %67
       return
     bb27:
-      %69 = call builtin.exception_value(%67)
-      %70 = load var $1.$promise
-      promise_reject %70, %69
+      %70 = call builtin.exception_value(%68)
+      %71 = load var $1.$promise
+      promise_reject %71, %70
       return
     bb28:
       unreachable
     bb29:
       unreachable
     bb30:
-      %93 = const c71
+      %94 = const c72
       jump bb37
     bb31:
-      %81 = const c67
       %82 = const c68
-      %83 = call builtin.intrinsic_resolve(%81, %82)
-      %84 = is_exception %83
-      branch %84, bb33, bb32
+      %83 = const c69
+      %84 = call builtin.intrinsic_resolve(%82, %83)
+      %85 = is_exception %84
+      branch %85, bb33, bb32
     bb32:
-      %87 = const c69
       %88 = const c70
-      %89 = call builtin.intrinsic_resolve(%87, %88, %83)
-      %90 = is_exception %89
-      branch %90, bb35, bb34
+      %89 = const c71
+      %90 = call builtin.intrinsic_resolve(%88, %89, %84)
+      %91 = is_exception %90
+      branch %91, bb35, bb34
     bb33:
-      %85 = call builtin.exception_value(%83)
-      %86 = load var $1.$promise
-      promise_reject %86, %85
+      %86 = call builtin.exception_value(%84)
+      %87 = load var $1.$promise
+      promise_reject %87, %86
       return
     bb34:
       jump bb37
     bb35:
-      %91 = call builtin.exception_value(%89)
-      %92 = load var $1.$promise
-      promise_reject %92, %91
+      %92 = call builtin.exception_value(%90)
+      %93 = load var $1.$promise
+      promise_reject %93, %92
       return
     bb36:
-      %99 = phi [(bb38, %97), (bb39, %98)]
-      %100 = is_exception %99
-      branch %100, bb41, bb40
+      %100 = phi [(bb38, %98), (bb39, %99)]
+      %101 = is_exception %100
+      branch %101, bb41, bb40
     bb37:
-      %94 = phi [(bb30, %93), (bb34, %89)]
-      %95 = phi [(bb30, %93), (bb34, %83)]
-      %96 = const c72
-      branch %80, bb38, bb39
+      %95 = phi [(bb30, %94), (bb34, %90)]
+      %96 = phi [(bb30, %94), (bb34, %84)]
+      %97 = const c73
+      branch %81, bb38, bb39
     bb38:
-      %97 = call builtin.console.log(%96)
+      %98 = call builtin.console.log(%97)
       jump bb36
     bb39:
-      %98 = call %94, this=%95, args=[%96]
+      %99 = call %95, this=%96, args=[%97]
       jump bb36
     bb40:
-      %103 = const c73
-      %104 = load var $1.$promise
-      promise_resolve %104, %103
+      %104 = const c74
+      %105 = load var $1.$promise
+      promise_resolve %105, %104
       return
     bb41:
-      %101 = call builtin.exception_value(%99)
-      %102 = load var $1.$promise
-      promise_reject %102, %101
+      %102 = call builtin.exception_value(%100)
+      %103 = load var $1.$promise
+      promise_reject %103, %102
       return
     bb42:
       return
@@ -431,33 +432,33 @@ module {
   fn @run [needs_prototype] [js_name "run"] [js_length 0] [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c78
+      %1 = const c79
       %2 = call builtin.create_mapped_arguments_object(%0, %1)
       store var $6.arguments, %2
       %3 = new_promise
-      %4 = const c79
-      %5 = const c80
+      %4 = const c80
+      %5 = const c81
       %6 = call builtin.continuation.create(%4, %3, %5)
-      %7 = const c81
-      %8 = const c82
+      %7 = const c82
+      %8 = const c83
       call builtin.continuation.save_var(%6, %7, %8)
-      %9 = const c83
-      %10 = const c84
+      %9 = const c84
+      %10 = const c85
       call builtin.continuation.save_var(%6, %9, %10)
-      %11 = const c85
+      %11 = const c86
       call builtin.continuation.save_var(%6, %11, %3)
-      %12 = const c86
-      %13 = const c87
+      %12 = const c87
+      %13 = const c88
       call builtin.continuation.save_var(%6, %12, %13)
       %14 = load var $6.arguments
-      %15 = const c88
+      %15 = const c89
       call builtin.continuation.save_var(%6, %15, %14)
       %16 = load var $6.$this
-      %17 = const c89
+      %17 = const c90
       call builtin.continuation.save_var(%6, %17, %16)
-      %18 = const c90
-      %19 = const c91
-      %20 = const c92
+      %18 = const c91
+      %19 = const c92
+      %20 = const c93
       call builtin.async_function.resume(%4, %6, %18, %19, %20)
       return %3
 
@@ -505,9 +506,9 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c93
+      %21 = const c94
       store var $0.run, %21
-      %22 = const c94
+      %22 = const c95
       %23 = load var $0.run
       %24 = call %23, this=%22
       %25 = is_exception %24

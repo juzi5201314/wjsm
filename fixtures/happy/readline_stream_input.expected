@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+line "a中b"
+line "c"
+line "尾injected"
+line "kept"
+close
+--- stderr ---
