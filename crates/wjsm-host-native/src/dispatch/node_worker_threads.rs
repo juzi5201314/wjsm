@@ -143,10 +143,17 @@ impl WorkerCluster {
         }
     }
 
-    /// 分配一个新的 cluster 级 SAB backing，返回 backing_id。
-    pub(crate) fn allocate_sab(&self, byte_length: usize, max_byte_length: Option<usize>) -> u32 {
-        let bytes = vec![0; byte_length];
-        self.allocate_sab_bytes(bytes, byte_length, max_byte_length)
+    /// 分配一个新的 cluster 级 SAB backing，返回 backing_id：growable SAB
+    /// 按 maxByteLength 一次性预留容量（后续 grow 不再分配），分配失败
+    /// （容量不可得）返回 None 供调用方抛 RangeError，绝不宿主 OOM abort。
+    pub(crate) fn allocate_sab(
+        &self,
+        byte_length: usize,
+        max_byte_length: Option<usize>,
+    ) -> Option<u32> {
+        let capacity = max_byte_length.unwrap_or(byte_length);
+        let bytes = super::buffers::try_allocate_bytes(byte_length, capacity)?;
+        Some(self.allocate_sab_bytes(bytes, byte_length, max_byte_length))
     }
 
     /// 以显式 bytes 分配 SAB backing（slice 拷贝产物）。

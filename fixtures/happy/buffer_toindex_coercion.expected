@@ -1,0 +1,40 @@
+exit_code: 0
+--- stdout ---
+ab(undefined) ok 0
+ab(NaN) ok 0
+ab(null) ok 0
+ab(true) ok 1
+ab("8") ok 8
+ab(4.5) ok 4
+ab(-0.9) ok 0
+ab(valueOf 4) ok 4
+ab(Symbol) TypeError|Cannot convert a Symbol value to a number
+ab(10n) TypeError|Cannot convert a BigInt value to a number
+ab(-1) RangeError|Invalid array buffer length
+ab(2^53) RangeError|Invalid array buffer length
+ab(Infinity) RangeError|Invalid array buffer length
+ab(2^53-1) RangeError|Array buffer allocation failed
+ab(2^52) RangeError|Array buffer allocation failed
+ab(Symbol,{get max}) TypeError|Cannot convert a Symbol value to a number
+ab max valueOf ok 8
+ab max "8" ok 8
+ab max getter ok 8
+ab options num ok false
+ab options null ok false
+ab max NaN RangeError|Invalid array buffer max length
+ab max -1 RangeError|Invalid array buffer max length
+ab max 2^53 RangeError|Invalid array buffer max length
+ab max 2^52 RangeError|Array buffer allocation failed
+ab max Symbol TypeError|Cannot convert a Symbol value to a number
+ab max 8n TypeError|Cannot convert a BigInt value to a number
+ab max < len RangeError|Invalid array buffer max length
+sab(undefined) ok 0
+sab(valueOf 4) ok 4
+sab(Symbol) TypeError|Cannot convert a Symbol value to a number
+sab(-1) RangeError|Invalid array buffer length
+sab(2^53) RangeError|Invalid array buffer length
+sab(2^52) RangeError|Array buffer allocation failed
+sab max valueOf ok 8
+sab max 2^53 RangeError|Invalid array buffer max length
+sab max 2^52 RangeError|Array buffer allocation failed
+--- stderr ---

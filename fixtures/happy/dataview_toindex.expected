@@ -1,0 +1,47 @@
+exit_code: 0
+--- stdout ---
+dv offset valueOf ok 2
+dv offset undefined ok 0
+dv offset Symbol TypeError|Cannot convert a Symbol value to a number
+dv offset 1n TypeError|Cannot convert a BigInt value to a number
+dv offset -1 RangeError|Start offset -1 is outside the bounds of the buffer
+dv offset 2^53 RangeError|Start offset 9007199254740992 is outside the bounds of the buffer
+dv offset 9 RangeError|Start offset 9 is outside the bounds of the buffer
+dv len valueOf ok 3
+dv len Symbol TypeError|Cannot convert a Symbol value to a number
+dv len -1 RangeError|Invalid DataView length -1
+dv len 2^53 RangeError|Invalid DataView length 9007199254740992
+dv len 100 RangeError|Invalid DataView length 100
+dv-ctor-offset
+dv detached side-effect TypeError|Cannot perform DataView constructor on a detached ArrayBuffer
+dv detached -1 RangeError|Start offset -1 is outside the bounds of the buffer
+dv detached 16 TypeError|Cannot perform DataView constructor on a detached ArrayBuffer
+dv mid-detach offset TypeError|Cannot perform DataView constructor on a detached ArrayBuffer
+dv mid-detach len TypeError|Cannot perform DataView constructor on a detached ArrayBuffer
+dv get idx valueOf ok 9
+dv set idx/val valueOf ok 7
+dv get idx NaN ok 0
+dv get idx undefined ok 0
+dv get idx 1.5 ok 9
+dv get idx Symbol TypeError|Cannot convert a Symbol value to a number
+dv get idx 1n TypeError|Cannot convert a BigInt value to a number
+dv set idx Symbol TypeError|Cannot convert a Symbol value to a number
+dv set val Symbol TypeError|Cannot convert a Symbol value to a number
+dv set val 1n TypeError|Cannot convert a BigInt value to a number
+dv get idx -1 RangeError|Offset is outside the bounds of the DataView
+dv get idx 2^53 RangeError|Offset is outside the bounds of the DataView
+dv get idx 2^52 RangeError|Offset is outside the bounds of the DataView
+dv setUint32 idx -1 RangeError|Offset is outside the bounds of the DataView
+dv getBig idx valueOf ok 7
+dv getBigU idx Symbol TypeError|Cannot convert a Symbol value to a number
+dv setBig idx -1 RangeError|Offset is outside the bounds of the DataView
+dv-get-idx
+dv detached get side TypeError|Cannot perform DataView.prototype.getUint8 on a detached ArrayBuffer
+dv-set-idx
+dv-set-val
+dv detached set side TypeError|Cannot perform DataView.prototype.setUint8 on a detached ArrayBuffer
+dv detached get -1 RangeError|Offset is outside the bounds of the DataView
+dv-oob-val
+dv set val-before-oob RangeError|Offset is outside the bounds of the DataView
+dv mid-detach get TypeError|Cannot perform DataView.prototype.getUint8 on a detached ArrayBuffer
+--- stderr ---
