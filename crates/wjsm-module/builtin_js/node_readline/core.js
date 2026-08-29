@@ -146,7 +146,7 @@ class Interface extends EventEmitter {
     else if (options && options.signal) {
       throw new Error('readline question signal option is not implemented');
     }
-    if (this.closed) throw new Error("'readline' was closed");
+    if (this.closed) throw new Error('readline was closed');
     writeToOutput(this, query);
     if (typeof cb === 'function') this._questionCallbacks.push(cb);
   }

@@ -87,8 +87,29 @@ impl FixtureRunner {
     }
 
     fn run_fixture(&self, fixture: &FixtureCase) -> Result<()> {
-        let (exit_code, stdout, stderr) =
-            wjsm_cli::run_file_in_process_with_root(&fixture.input_path, &self.fixtures_root);
+        // `<name>.stdin` 侧文件提供确定性 stdin 注入：进程内运行经
+        // WJSM_TEST_STDIN 钩子交付（宿主不做真实 fd 读取），oracle 运行经
+        // 真实管道喂给 node，两侧输入逐字节一致。
+        let stdin_content = read_stdin_side_file(&fixture.input_path)?;
+        // `<name>.stdin-chunk` 附加分块大小：wjsm 侧按 N 字节分块交付以覆盖
+        // 跨块拼接路径；oracle 侧仍是单块管道，两侧可观测输出必须一致。
+        let chunk_size = read_side_file(&fixture.input_path, "stdin-chunk")?;
+        let (exit_code, stdout, stderr) = match &stdin_content {
+            Some(content) => {
+                let mut env_overrides = vec![("WJSM_TEST_STDIN", content.as_str())];
+                if let Some(chunk) = &chunk_size {
+                    env_overrides.push(("WJSM_TEST_STDIN_CHUNK", chunk.trim()));
+                }
+                wjsm_cli::run_file_in_process_with_root_and_env(
+                    &fixture.input_path,
+                    &self.fixtures_root,
+                    &env_overrides,
+                )
+            }
+            None => {
+                wjsm_cli::run_file_in_process_with_root(&fixture.input_path, &self.fixtures_root)
+            }
+        };
         let actual = FixtureOutput {
             stdout: normalize_output(&stdout),
             stderr: normalize_output(&stderr),
@@ -118,7 +139,13 @@ impl FixtureRunner {
 
         if self.update_snapshots {
             if oracle_enabled() {
-                verify_oracle(&fixture.input_path, exit_code, &stdout, &stderr)?;
+                verify_oracle(
+                    &fixture.input_path,
+                    stdin_content.as_deref(),
+                    exit_code,
+                    &stdout,
+                    &stderr,
+                )?;
             }
             fs::write(&fixture.expected_path, &actual).with_context(|| {
                 format!(
@@ -178,11 +205,27 @@ fn oracle_enabled() -> bool {
     }
 }
 
+/// 读取 fixture 的 `.stdin` 侧文件（不存在返回 None）。
+fn read_stdin_side_file(input_path: &std::path::Path) -> Result<Option<String>> {
+    read_side_file(input_path, "stdin")
+}
+
+fn read_side_file(input_path: &std::path::Path, extension: &str) -> Result<Option<String>> {
+    let side_path = input_path.with_extension(extension);
+    if !side_path.exists() {
+        return Ok(None);
+    }
+    fs::read_to_string(&side_path)
+        .map(Some)
+        .with_context(|| format!("Failed to read side file {}", side_path.display()))
+}
+
 /// 使用 Node.js 作为 oracle 验证 wjsm 输出。
 /// 如果 wjsm 输出与 Node.js 不一致，拒绝自动更新 .expected。
 /// 返回 Ok 表示通过（可以安全更新），Err 表示被拒绝。
 fn verify_oracle(
     fixture_path: &PathBuf,
+    stdin_content: Option<&str>,
     wjsm_exit: i32,
     wjsm_stdout: &[u8],
     wjsm_stderr: &[u8],
@@ -198,12 +241,38 @@ fn verify_oracle(
         return Ok(());
     }
 
-    let node_output = std::process::Command::new("node")
-        .arg("--no-warnings")
-        .arg(fixture_path)
-        .env("TZ", "UTC")
-        .output()
-        .with_context(|| format!("oracle: failed to run node on {}", fixture_path.display()))?;
+    let node_output = match stdin_content {
+        Some(content) => {
+            // stdin fixture：oracle 侧走真实管道，与 wjsm 侧的测试替身逐字节同源。
+            use std::io::Write as _;
+            let mut child = std::process::Command::new("node")
+                .arg("--no-warnings")
+                .arg(fixture_path)
+                .env("TZ", "UTC")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .with_context(|| {
+                    format!("oracle: failed to spawn node on {}", fixture_path.display())
+                })?;
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(content.as_bytes())
+                .with_context(|| "oracle: failed to write node stdin")?;
+            child.wait_with_output().with_context(|| {
+                format!("oracle: failed to run node on {}", fixture_path.display())
+            })?
+        }
+        None => std::process::Command::new("node")
+            .arg("--no-warnings")
+            .arg(fixture_path)
+            .env("TZ", "UTC")
+            .output()
+            .with_context(|| format!("oracle: failed to run node on {}", fixture_path.display()))?,
+    };
 
     let node_exit = node_output.status.code().unwrap_or(-1);
     let node_stdout = String::from_utf8_lossy(&node_output.stdout).replace("\r\n", "\n");

@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+line "ab中"
+line "cd"
+line "结尾"
+close
+--- stderr ---

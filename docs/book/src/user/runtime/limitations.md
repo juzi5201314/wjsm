@@ -107,6 +107,10 @@ set.forEach((value) => console.log(typeof value)); // "object"
 console.log(typeof globalThis.URL); // "function"
 console.log(new URL("https://例子.测试/").hostname);
 ```
+## process.stdin 与 readline 只覆盖管道输入
+
+`process.stdin` 的真实读取只覆盖管道/重定向输入路径：一次性读源到 EOF，flowing（`data`/`end`/`close`）、paused（`readable` + `read(size)`，含 EOF 宣告前不足量返回 `null` 的 Node `howMuchToRead` 语义）、`setEncoding('utf8')` 按字符边界切块、`for await` 异步迭代均与 Node v22 管道运行逐字节一致（fixture oracle 校验）。TTY 交互输入不挂接原始终端流：fd 0 是终端时按空输入（立即 EOF）处理，`readline` 的 `terminal` 模式因此没有逐键回显/历史/补全，`emitKeypressEvents` 未提供。`question`/行事件在管道输入下正常工作。测试注入用 `WJSM_TEST_STDIN`（内容）与 `WJSM_TEST_STDIN_CHUNK`（分块大小）确定性替身，不做真实 fd 读取。
+
 ## --format native-executable 只覆盖当前宿主
 
 `wjsm build --format native-executable` 在当前宿主上产出可直接运行的 ELF/PE：预链 `wjsm-exec` stub 加上 portable `.wjsm`、预编译 `NativeObject` 与制品内源码快照。Linux 上的 wjsm 出 ELF，Windows 上的 wjsm 出 PE。交叉编译、把 runtime-private object 改后缀冒充 executable，都不支持。打包失败不创建或覆盖输出文件。发行物需要同时带 `wjsm` 与 `wjsm-exec`。

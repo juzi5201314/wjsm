@@ -81,6 +81,9 @@ pub(crate) struct ProcessStdinState {
     pump_scheduled: bool,
     /// 数据可读的 'readable' 通知是否已发（EOF 通知单独判定）。
     readable_notified: bool,
+    /// EOF 是否已向流宣告（对应 Node push(null) 之后的状态）：宣告前
+    /// read(size) 对不足量缓冲返回 null，宣告时 paused 模式补发 'readable'。
+    eof_known: bool,
     ended: bool,
     closed: bool,
 }
@@ -269,6 +272,15 @@ fn read(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
         .map(|size| size as usize);
     if state.process_stdin.utf8 {
         let remaining = decode_remaining(state);
+        // Node howMuchToRead：请求量超过缓冲且 EOF 未宣告时返回 null，
+        // 余量等 EOF 宣告（第二次 'readable'）后才交付。
+        if let Some(size) = requested
+            && size > remaining.chars().count()
+            && !state.process_stdin.eof_known
+        {
+            schedule_pump(state);
+            return value::encode_null();
+        }
         let text: String = match requested {
             // setEncoding 后 size 按字符计（Node string 模式缓冲语义）。
             Some(size) => remaining.chars().take(size).collect(),
@@ -284,6 +296,14 @@ fn read(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
         return state
             .intern_text(text, value::TAG_STRING)
             .unwrap_or_else(|| fail_dispatch(ctx));
+    }
+    // 字节模式同规则：不足量且 EOF 未宣告返回 null。
+    if let Some(size) = requested
+        && size > state.process_stdin.available()
+        && !state.process_stdin.eof_known
+    {
+        schedule_pump(state);
+        return value::encode_null();
     }
     let take = requested
         .unwrap_or(usize::MAX)
@@ -377,7 +397,9 @@ pub(crate) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i
             return exception;
         }
     }
-    // paused 模式的数据可读通知。
+    // paused 模式的数据可读通知；EOF 宣告发生在更晚的一次 pump（对应
+    // Node fd 读到 0 的那次循环），本次先只发数据通知。
+    let mut data_notified_this_pump = false;
     if !state.process_stdin.flowing
         && !state.process_stdin.ended
         && state.process_stdin.available() > 0
@@ -385,32 +407,48 @@ pub(crate) fn pump(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i
         && state.process_stdin.has_listener("readable")
     {
         state.process_stdin.readable_notified = true;
+        data_notified_this_pump = true;
         if let Err(exception) = emit(ctx, state, "readable", &[]) {
             return exception;
         }
     }
-    // EOF 终结：缓冲耗尽后按 Node 次序发（paused 先补一次 'readable'）
-    // 'end' / 'close'，并把 readable 属性翻为 false。
-    if state.process_stdin.filled
-        && state.process_stdin.available() == 0
-        && !state.process_stdin.ended
-    {
-        if !state.process_stdin.flowing && state.process_stdin.has_listener("readable") {
-            if let Err(exception) = emit(ctx, state, "readable", &[]) {
+    if state.process_stdin.filled && !state.process_stdin.ended {
+        if data_notified_this_pump {
+            // EOF 宣告推迟到下一次 pump，保持与 Node 相同的可观测次序：
+            // 数据 'readable' → 消费 → EOF 'readable' → 余量 → 'end'。
+            schedule_pump(state);
+            return value::encode_undefined();
+        }
+        // EOF 宣告：paused 模式补发一次 'readable'（Node onEofChunk 语义），
+        // 此后 read(size) 对不足量缓冲交付余量。
+        if !state.process_stdin.eof_known {
+            state.process_stdin.eof_known = true;
+            if !state.process_stdin.flowing
+                && state.process_stdin.has_listener("readable")
+                && let Err(exception) = emit(ctx, state, "readable", &[])
+            {
                 return exception;
             }
         }
-        state.process_stdin.ended = true;
-        if let Some(stdin) = state.process_stdin.object {
-            let _ = modules::set_named_property(state, stdin, "readable", value::encode_bool(false));
-        }
-        if let Err(exception) = emit(ctx, state, "end", &[]) {
-            return exception;
-        }
-        if !state.process_stdin.closed {
-            state.process_stdin.closed = true;
-            if let Err(exception) = emit(ctx, state, "close", &[]) {
+        // 'end' / 'close' 仅在缓冲全部消费后发，并把 readable 属性翻 false。
+        if state.process_stdin.available() == 0 {
+            state.process_stdin.ended = true;
+            if let Some(stdin) = state.process_stdin.object {
+                let _ = modules::set_named_property(
+                    state,
+                    stdin,
+                    "readable",
+                    value::encode_bool(false),
+                );
+            }
+            if let Err(exception) = emit(ctx, state, "end", &[]) {
                 return exception;
+            }
+            if !state.process_stdin.closed {
+                state.process_stdin.closed = true;
+                if let Err(exception) = emit(ctx, state, "close", &[]) {
+                    return exception;
+                }
             }
         }
     }

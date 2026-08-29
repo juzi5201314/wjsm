@@ -7,7 +7,7 @@ class PromisesInterface extends Interface {
     if (options && options.signal) {
       return Promise.reject(new Error('readline question signal option is not implemented'));
     }
-    if (this.closed) return Promise.reject(new Error("'readline' was closed"));
+    if (this.closed) return Promise.reject(new Error('readline was closed'));
     const self = this;
     return new Promise(function (resolve) {
       writeToOutput(self, query);
