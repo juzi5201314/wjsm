@@ -454,6 +454,7 @@ mod tests {
             callee: ValueId(1),
             this_val: ValueId(1),
             args: Vec::new(),
+            callsite: None,
         });
         let names = BTreeSet::from(["$1.i"]);
         let repr = ValueRepr::plan(&function, &all_values(), &names, false);

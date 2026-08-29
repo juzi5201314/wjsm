@@ -1059,6 +1059,10 @@ struct NativeProgramState {
     function_needs_prototype: Vec<bool>,
     /// 类构造器的错误文案显示名（None = 非类构造器；Some("") = 匿名类）。
     function_class_ctor_names: Vec<Option<String>>,
+    /// 反馈槽下标 → 源级 callsite 表达式渲染（仅语义层挂了 `callsite` 的
+    /// `Call`/`ConstructCall` 站点有条目）；拒绝路径按槽查
+    /// `<expr> is not a function/constructor` 文案（对齐 Node）。
+    feedback_callsites: HashMap<u32, Box<str>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1093,6 +1097,8 @@ struct NativeAgentState {
     function_needs_prototype: Vec<bool>,
     /// 当前 image 的类构造器显示名（见 `NativeProgramState::function_class_ctor_names`）。
     function_class_ctor_names: Vec<Option<String>>,
+    /// 当前 image 的 callsite 文案表（见 `NativeProgramState::feedback_callsites`）。
+    feedback_callsites: HashMap<u32, Box<str>>,
     function_home_objects: Vec<Option<wjsm_ir::HomeObject>>,
     current_image_id: u64,
     /// 当前 image 反馈区的 `(基址, 字节长度)`，随 image 激活刷新。
@@ -1141,6 +1147,10 @@ struct NativeAgentState {
     /// 匿名类为空串）。宿主 invoke 路径的 entry 二参是 environment 而非
     /// callee，handler 无法从 C-ABI 实参回查名字，故经 state 传递。
     pending_class_ctor_name: Option<String>,
+    /// 机器 Call/ConstructCall 站点拒绝的源级 callsite 渲染（prepare 拒绝时
+    /// 按反馈槽查表写入，reject handler 取走）。None = 站点无 callsite
+    /// （内部 desugar/SuperCall/宿主 invoke 路径），文案回退按值渲染。
+    pending_callsite: Option<Box<str>>,
     maps: HashMap<u32, Vec<(i64, i64)>>,
     sets: HashMap<u32, Vec<i64>>,
     weak: dispatch::weak::NativeWeakState,
@@ -1366,6 +1376,7 @@ impl NativeAgentState {
             function_slots: Vec::new(),
             function_needs_prototype: Vec::new(),
             function_class_ctor_names: Vec::new(),
+            feedback_callsites: HashMap::new(),
             function_home_objects: Vec::new(),
             current_image_id: 0,
             current_feedback_region: (0, 0),
@@ -1388,6 +1399,7 @@ impl NativeAgentState {
             function_ids: HashMap::new(),
             pending_stack_trace: None,
             pending_class_ctor_name: None,
+            pending_callsite: None,
             function_closures: HashMap::new(),
             latest_function_closures: HashMap::new(),
             repository,
@@ -1550,6 +1562,8 @@ impl NativeAgentState {
                 .iter()
                 .map(|function| function.class_ctor_name().map(str::to_owned))
                 .collect(),
+            // 槽编号由后端拥有（与 allocate_feedback_slots 同序），宿主只消费。
+            feedback_callsites: wjsm_backend_native::callsites_by_feedback_slot(program),
             function_home_objects: program
                 .functions()
                 .iter()
@@ -1700,6 +1714,7 @@ impl NativeAgentState {
         self.function_slots.clear();
         self.function_needs_prototype.clear();
         self.function_class_ctor_names.clear();
+        self.feedback_callsites.clear();
         self.function_home_objects.clear();
         self.function_lengths.clear();
         self.function_names.clear();
@@ -1871,6 +1886,7 @@ impl NativeAgentState {
             function_slots: std::mem::take(&mut self.function_slots),
             function_needs_prototype: std::mem::take(&mut self.function_needs_prototype),
             function_class_ctor_names: std::mem::take(&mut self.function_class_ctor_names),
+            feedback_callsites: std::mem::take(&mut self.feedback_callsites),
             function_home_objects: std::mem::take(&mut self.function_home_objects),
         }
     }
@@ -1888,6 +1904,7 @@ impl NativeAgentState {
         self.function_source_spans = state.function_source_spans;
         self.function_needs_prototype = state.function_needs_prototype;
         self.function_class_ctor_names = state.function_class_ctor_names;
+        self.feedback_callsites = state.feedback_callsites;
         self.function_home_objects = state.function_home_objects;
     }
 
@@ -4292,11 +4309,17 @@ impl NativeAgentState {
         ctx: &mut NativeVmContext,
         callee: i64,
         construct: bool,
+        feedback_slot: Option<ValidatedFeedbackSlot>,
     ) -> i64 {
         if ctx.js_call_depth >= MAX_JS_CALL_DEPTH {
             self.pending_stack_trace = Some(self.native_stack_trace());
             ctx.pending_exception_kind = PendingExceptionKind::StackOverflow;
         }
+        // 机器 Call/ConstructCall 站点按反馈槽携带源级 callsite 渲染；
+        // 拒绝 handler 取走后生成 `<expr> is not a function/constructor`
+        // 文案（对齐 Node 的 CallPrinter 行为）。无条目（内部 desugar 站点
+        // /SuperCall/宿主 invoke）保持按值渲染回退。
+        self.pending_callsite = feedback_slot.and_then(|slot| self.feedback_callsite(slot));
         self.push_entry_activation(ctx, self.current_image_id);
         self.activations
             .last_mut()
@@ -4348,6 +4371,20 @@ impl NativeAgentState {
             i64::try_from(dispatch::native_class_ctor_rejected as *const () as usize)
                 .expect("native rejected call address fits i64"),
         )
+    }
+
+    /// 反馈槽对应的源级 callsite 渲染（拒绝冷路径查询）。槽属当前 image 时
+    /// 查当前表，否则查已保存的 program state。
+    fn feedback_callsite(&self, slot: ValidatedFeedbackSlot) -> Option<Box<str>> {
+        let callsites = if slot.caller_image_id == self.current_image_id {
+            &self.feedback_callsites
+        } else {
+            &self
+                .programs
+                .get(&slot.caller_image_id)?
+                .feedback_callsites
+        };
+        callsites.get(&slot.site_index).cloned()
     }
 
     /// 类构造器的错误文案显示名（拒绝冷路径查询）。非类构造器返回 None；
@@ -8206,6 +8243,7 @@ second true RangeError JavaScript heap out of memory true\n";
             callee: wjsm_ir::ValueId(0),
             this_val: wjsm_ir::ValueId(1),
             args: Vec::new(),
+            callsite: None,
         });
         user_block.push_instruction(wjsm_ir::Instruction::LoadVar {
             dest: wjsm_ir::ValueId(3),

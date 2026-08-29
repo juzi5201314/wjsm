@@ -1254,6 +1254,11 @@ pub enum Instruction {
         callee: ValueId,
         this_val: ValueId,
         args: Vec<ValueId>,
+        /// 源码调用点的 callee 表达式静态渲染（V8 CallPrinter 同型），仅
+        /// 源级 CallExpression 携带；内部 desugar 调用为 None。宿主在
+        /// kCalledNonCallable 拒绝路径用它渲染
+        /// `<expr> is not a function`（对齐 Node），None 回退按值渲染。
+        callsite: Option<Box<str>>,
     },
     /// 调用当前派生类的 super 构造器；保留当前 new.target。
     SuperCall {
@@ -1268,6 +1273,9 @@ pub enum Instruction {
         callee: ValueId,
         this_val: ValueId,
         args: Vec<ValueId>,
+        /// 同 [`Instruction::Call::callsite`]：`new` 站点 callee 表达式的
+        /// 静态渲染，用于 `<expr> is not a constructor` 文案。
+        callsite: Option<Box<str>>,
     },
     NewObject {
         dest: ValueId,
@@ -1505,6 +1513,7 @@ impl fmt::Display for Instruction {
                 callee,
                 this_val,
                 args,
+                callsite,
             } => {
                 if let Some(dest) = dest {
                     write!(formatter, "{dest} = ")?;
@@ -1519,6 +1528,9 @@ impl fmt::Display for Instruction {
                         write!(formatter, "{arg}")?;
                     }
                     formatter.write_char(']')?;
+                }
+                if let Some(callsite) = callsite {
+                    write!(formatter, ", callsite={callsite:?}")?;
                 }
                 Ok(())
             }
@@ -1552,6 +1564,7 @@ impl fmt::Display for Instruction {
                 callee,
                 this_val,
                 args,
+                callsite,
             } => {
                 if let Some(dest) = dest {
                     write!(formatter, "{dest} = ")?;
@@ -1566,6 +1579,9 @@ impl fmt::Display for Instruction {
                         write!(formatter, "{arg}")?;
                     }
                     formatter.write_char(']')?;
+                }
+                if let Some(callsite) = callsite {
+                    write!(formatter, ", callsite={callsite:?}")?;
                 }
                 Ok(())
             }

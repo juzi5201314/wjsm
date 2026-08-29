@@ -103,6 +103,7 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             callee,
             this_val,
             args,
+            ..
         } => {
             if let Some(dest) = dest {
                 add(dest);
@@ -130,6 +131,7 @@ fn add_offset_to_value_id(ins: &mut Instruction, offset: u32) {
             callee,
             this_val,
             args,
+            ..
         } => {
             if let Some(dest) = dest {
                 add(dest);
@@ -347,6 +349,7 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             callee,
             this_val,
             args,
+            ..
         } => {
             if let Some(dest) = dest {
                 rep(dest);
@@ -374,6 +377,7 @@ pub(crate) fn replace_value_id(ins: &mut Instruction, old_val: ValueId, new_val:
             callee,
             this_val,
             args,
+            ..
         } => {
             if let Some(dest) = dest {
                 rep(dest);
@@ -891,12 +895,14 @@ fn static_inline_round(module: &mut Module) -> bool {
                         callee,
                         this_val,
                         args,
+                        ..
                     } => (true, dest, callee, this_val, args),
                     Instruction::Call {
                         dest,
                         callee,
                         this_val,
                         args,
+                        ..
                     } => (false, dest, callee, this_val, args),
                     _ => continue,
                 };
@@ -1526,6 +1532,7 @@ fn speculative_inline_round(module: &mut Module) -> bool {
                         callee,
                         this_val,
                         args,
+                        ..
                     } => (dest, callee, this_val, args),
                     _ => continue,
                 };
@@ -2206,6 +2213,7 @@ mod tests {
             callee: v_callee,
             this_val: v_obj,
             args: vec![v_arg],
+            callsite: None,
         });
         bb.set_terminator(Terminator::Return { value: Some(v_res) });
         caller.push_block(bb);
@@ -2504,6 +2512,7 @@ mod tests {
             callee: v_fn0,
             this_val: v_this,
             args: vec![v_n],
+            callsite: None,
         });
         m_bb0.set_terminator(Terminator::Return {
             value: Some(v_call_res),

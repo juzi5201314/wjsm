@@ -895,6 +895,7 @@ impl Lowerer {
                 callee: function_value,
                 this_val: ctor_dest,
                 args: vec![],
+                callsite: None,
             },
         );
         self.lower_value_exception_branch(continuation, result)

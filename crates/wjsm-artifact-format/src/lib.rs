@@ -21,7 +21,10 @@ const MAGIC: &[u8; 8] = b"WJSMART\0";
 //      builtin，旧artifact必须重新构建。
 // v13：移除 OptionalGetProp/OptionalGetElem/OptionalCall 指令（可选链改为
 //      链级短路分叉 + 普通 GetProp/GetElem/Call），旧artifact必须重新构建。
-const FORMAT_VERSION: u16 = 13;
+// v14：Call/ConstructCall 指令新增源级 callsite 表达式渲染（TypeError
+//      文案对齐 Node 的 `<expr> is not a function/constructor`），旧
+//      artifact必须重新构建。
+const FORMAT_VERSION: u16 = 14;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

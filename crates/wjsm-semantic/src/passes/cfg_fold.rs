@@ -734,6 +734,7 @@ mod tests {
             callee,
             this_val: callee,
             args: vec![],
+            callsite: None,
         });
         b1.push_instruction(Instruction::IsException {
             dest: ex,

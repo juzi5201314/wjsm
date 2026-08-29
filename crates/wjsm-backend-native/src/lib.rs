@@ -287,6 +287,13 @@ impl NativeCompiler {
     }
 }
 
+/// 反馈槽下标 → 源级 callsite 表达式渲染（`Call`/`ConstructCall` 携带的
+/// `callsite`）。宿主按 `(image, slot)` 在拒绝路径渲染
+/// `<expr> is not a function/constructor`（对齐 Node）。
+pub fn callsites_by_feedback_slot(program: &wjsm_ir::Program) -> HashMap<u32, Box<str>> {
+    lower::callsites_by_feedback_slot(program)
+}
+
 /// 反馈槽对应的 Binary/Compare/Unary SSA，用作 overlay 值类种子。
 pub fn extra_numbers_at_feedback_site(
     program: &wjsm_ir::Program,
@@ -1368,6 +1375,7 @@ mod tests {
             callee: ValueId(1),
             this_val: ValueId(0),
             args,
+            callsite: None,
         });
         caller_block.set_terminator(Terminator::Return {
             value: Some(result),
