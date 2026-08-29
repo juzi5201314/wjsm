@@ -361,7 +361,7 @@ module {
       %17 = call builtin.exception_value(%15)
       throw %17
     bb7:
-      %24 = call %21, this=%18
+      %24 = call %21, this=%18, callsite="(intermediate value).update"
       return %24
     bb8:
       %23 = call builtin.exception_value(%21)
@@ -703,7 +703,7 @@ module {
       %71 = call builtin.console.log(%68)
       jump bb9
     bb16:
-      %72 = call %60, this=%61, args=[%68]
+      %72 = call %60, this=%61, args=[%68], callsite="console.log"
       jump bb9
     bb17:
       %76 = const c43
@@ -797,7 +797,7 @@ module {
       %126 = call builtin.console.log(%125)
       jump bb27
     bb34:
-      %127 = call %114, this=%115, args=[%125]
+      %127 = call %114, this=%115, args=[%125], callsite="console.log"
       jump bb27
     bb35:
       %131 = const c67
@@ -822,7 +822,7 @@ module {
       throw %130
     bb37:
       %146 = const c75
-      %147 = call %143, this=%141, args=[%146]
+      %147 = call %143, this=%141, args=[%146], callsite="methodObject.update"
       %148 = is_exception %147
       branch %148, bb40, bb39
     bb38:
@@ -889,7 +889,7 @@ module {
       %176 = call builtin.console.log(%175)
       jump bb47
     bb54:
-      %177 = call %164, this=%165, args=[%175]
+      %177 = call %164, this=%165, args=[%175], callsite="console.log"
       jump bb47
     bb55:
       %181 = const c86
@@ -968,7 +968,7 @@ module {
       %224 = is_exception %223
       branch %224, bb68, bb67
     bb67:
-      %226 = call %223, this=%221
+      %226 = call %223, this=%221, callsite="homeObject.update"
       %227 = is_exception %226
       branch %227, bb70, bb69
     bb68:
@@ -1020,7 +1020,7 @@ module {
       %246 = call builtin.console.log(%243)
       jump bb65
     bb82:
-      %247 = call %219, this=%220, args=[%243]
+      %247 = call %219, this=%220, args=[%243], callsite="console.log"
       jump bb65
     bb83:
       %251 = const c118
@@ -1116,7 +1116,7 @@ module {
       %310 = is_exception %309
       branch %310, bb107, bb106
     bb102:
-      %304 = call %301, this=%299
+      %304 = call %301, this=%299, callsite="StaticClosure.read"
       %305 = is_exception %304
       branch %305, bb105, bb104
     bb103:
@@ -1138,7 +1138,7 @@ module {
       %312 = call builtin.console.log(%309)
       jump bb93
     bb109:
-      %313 = call %287, this=%288, args=[%309]
+      %313 = call %287, this=%288, args=[%309], callsite="console.log"
       jump bb93
     bb110:
       %317 = const c143
@@ -1327,7 +1327,7 @@ module {
       %420 = call builtin.console.log(%417)
       jump bb138
     bb153:
-      %421 = call %396, this=%397, args=[%417]
+      %421 = call %396, this=%397, args=[%417], callsite="console.log"
       jump bb138
     bb154:
       %425 = const c180
@@ -1381,7 +1381,7 @@ module {
       unreachable
     bb165:
       %457 = const c191
-      %458 = call %454, this=%443, args=[%457]
+      %458 = call %454, this=%443, args=[%457], callsite="(intermediate value).update"
       %459 = is_exception %458
       branch %459, bb168, bb167
     bb166:
@@ -1448,7 +1448,7 @@ module {
       %487 = call builtin.console.log(%486)
       jump bb175
     bb182:
-      %488 = call %475, this=%476, args=[%486]
+      %488 = call %475, this=%476, args=[%486], callsite="console.log"
       jump bb175
     bb183:
       %492 = const c202
@@ -1501,7 +1501,7 @@ module {
     bb193:
       unreachable
     bb194:
-      %524 = call %521, this=%510
+      %524 = call %521, this=%510, callsite="(intermediate value).read"
       %525 = is_exception %524
       branch %525, bb197, bb196
     bb195:
@@ -1562,7 +1562,7 @@ module {
       %552 = is_exception %551
       branch %552, bb209, bb208
     bb208:
-      %554 = call %551, this=%549
+      %554 = call %551, this=%549, callsite="generator.next"
       %555 = const c242
       %556 = get_prop %554, %555
       %557 = is_exception %556
@@ -1587,7 +1587,7 @@ module {
       %563 = call builtin.console.log(%560)
       jump bb206
     bb215:
-      %564 = call %547, this=%548, args=[%560]
+      %564 = call %547, this=%548, args=[%560], callsite="console.log"
       jump bb206
     bb216:
       return

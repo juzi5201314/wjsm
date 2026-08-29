@@ -169,7 +169,7 @@ module {
       %23 = call builtin.console.log(%20)
       jump bb7
     bb12:
-      %24 = call %14, this=%15, args=[%20]
+      %24 = call %14, this=%15, args=[%20], callsite="console.log"
       jump bb7
     bb13:
       %28 = const c48
@@ -225,7 +225,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb21
     bb26:
-      %52 = call %42, this=%43, args=[%48]
+      %52 = call %42, this=%43, args=[%48], callsite="console.log"
       jump bb21
     bb27:
       %56 = const c57
@@ -281,7 +281,7 @@ module {
       %79 = call builtin.console.log(%76)
       jump bb35
     bb40:
-      %80 = call %70, this=%71, args=[%76]
+      %80 = call %70, this=%71, args=[%76], callsite="console.log"
       jump bb35
     bb41:
       %84 = const c66
@@ -337,7 +337,7 @@ module {
       %107 = call builtin.console.log(%104)
       jump bb49
     bb54:
-      %108 = call %98, this=%99, args=[%104]
+      %108 = call %98, this=%99, args=[%104], callsite="console.log"
       jump bb49
     bb55:
       return
@@ -352,7 +352,7 @@ module {
       %2 = const c80
       %3 = get_prop %1, %2
       %4 = const c81
-      %5 = call %3, this=%0, args=[%4]
+      %5 = call %3, this=%0, args=[%4], callsite="rejectB"
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
@@ -361,7 +361,7 @@ module {
       %10 = const c83
       %11 = get_prop %9, %10
       %12 = const c84
-      %13 = call %11, this=%8, args=[%12]
+      %13 = call %11, this=%8, args=[%12], callsite="resolveA"
       %14 = is_exception %13
       branch %14, bb4, bb3
     bb2:
@@ -499,7 +499,7 @@ module {
       %69 = call builtin.promise.all_settled(%68, %65)
       jump bb11
     bb14:
-      %70 = call %63, this=%64, args=[%65]
+      %70 = call %63, this=%64, args=[%65], callsite="Promise.allSettled"
       jump bb11
     bb15:
       %74 = const c75
@@ -518,7 +518,7 @@ module {
       %83 = const c85
       %84 = load var $0.$shared_env
       %85 = call builtin.create_closure(%83, %84)
-      %86 = call %82, this=%79, args=[%85]
+      %86 = call %82, this=%79, args=[%85], callsite="queueMicrotask"
       %87 = is_exception %86
       branch %87, bb20, bb19
     bb18:

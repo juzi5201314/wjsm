@@ -310,7 +310,7 @@ module {
     bb0:
       %0 = const c47
       %1 = load var $4.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @arrow_2 [js_name ""] [js_length 0] [captures: $0.j] [params: $6.$env, $6.$this] [entry=bb0]:
@@ -324,7 +324,7 @@ module {
     bb0:
       %0 = const c77
       %1 = load var $7.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @arrow_4 [js_name "read"] [js_length 0] [captures: $0.whileValue] [params: $9.$env, $9.$this] [entry=bb0]:
@@ -368,7 +368,7 @@ module {
     bb0:
       %0 = const c146
       %1 = load var $16.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @captureInsideFunction [needs_prototype] [js_length 0] [params: $12.$env, $12.$this] [entry=bb0]:
@@ -446,7 +446,7 @@ module {
       %26 = const c136
       %28 = load var $13.$iteration_env.0
       %29 = call builtin.create_closure(%26, %28)
-      %30 = call %23, this=%21, args=[%29]
+      %30 = call %23, this=%21, args=[%29], callsite="closures.push"
       %31 = is_exception %30
       branch %31, bb13, bb12
     bb11:
@@ -492,7 +492,7 @@ module {
     bb23:
       jump bb32
     bb24:
-      %66 = call %61, this=%51, args=[%62]
+      %66 = call %61, this=%51, args=[%62], callsite="closures.map"
       jump bb25
     bb25:
       %67 = phi [(bb26, %63), (bb24, %66)]
@@ -513,7 +513,7 @@ module {
       throw %69
     bb30:
       %74 = const c149
-      %75 = call %71, this=%67, args=[%74]
+      %75 = call %71, this=%67, args=[%74], callsite="closures.map(...).join"
       return %75
     bb31:
       %73 = call builtin.exception_value(%71)
@@ -573,7 +573,7 @@ module {
       branch %95, bb42, bb40
     bb48:
       %99 = const c146
-      %101 = call %93, this=%99
+      %101 = call %93, this=%99, callsite="read"
       store var $16.read, %98
       jump bb47
 
@@ -600,7 +600,7 @@ module {
     bb0:
       %0 = const c197
       %1 = load var $22.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @arrow_11 [js_name "readCreatedBefore"] [js_length 0] [captures: $0.createdBefore] [params: $23.$env, $23.$this] [entry=bb0]:
@@ -619,7 +619,7 @@ module {
     bb0:
       %0 = const c245
       %1 = load var $28.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @arrow_14 [js_name ""] [js_length 0] [captures: $29.key] [params: $31.$env, $31.$this] [entry=bb0]:
@@ -633,7 +633,7 @@ module {
     bb0:
       %0 = const c269
       %1 = load var $32.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @arrow_16 [js_name ""] [js_length 0] [captures: $33.value] [params: $35.$env, $35.$this] [entry=bb0]:
@@ -647,7 +647,7 @@ module {
     bb0:
       %0 = const c292
       %1 = load var $36.read
-      %2 = call %1, this=%0
+      %2 = call %1, this=%0, callsite="read"
       return %2
 
   fn @$module_main [entry=bb0]:
@@ -767,7 +767,7 @@ module {
       %48 = const c30
       %50 = load var $1.$iteration_env.0
       %51 = call builtin.create_closure(%48, %50)
-      %52 = call %45, this=%43, args=[%51]
+      %52 = call %45, this=%43, args=[%51], callsite="letClosures.push"
       %53 = is_exception %52
       branch %53, bb13, bb12
     bb11:
@@ -848,7 +848,7 @@ module {
     bb31:
       jump bb484
     bb32:
-      %104 = call %99, this=%89, args=[%100]
+      %104 = call %99, this=%89, args=[%100], callsite="letClosures.map"
       jump bb33
     bb33:
       %105 = phi [(bb34, %101), (bb32, %104)]
@@ -869,7 +869,7 @@ module {
       throw %107
     bb38:
       %112 = const c50
-      %113 = call %109, this=%105, args=[%112]
+      %113 = call %109, this=%105, args=[%112], callsite="letClosures.map(...).join"
       %114 = is_exception %113
       branch %114, bb41, bb40
     bb39:
@@ -884,7 +884,7 @@ module {
       %116 = call builtin.console.log(%113)
       jump bb24
     bb43:
-      %117 = call %87, this=%88, args=[%113]
+      %117 = call %87, this=%88, args=[%113], callsite="console.log"
       jump bb24
     bb44:
       %121 = new_array(capacity=4)
@@ -952,7 +952,7 @@ module {
       %148 = const c60
       %149 = load var $0.$shared_env
       %150 = call builtin.create_closure(%148, %149)
-      %151 = call %145, this=%143, args=[%150]
+      %151 = call %145, this=%143, args=[%150], callsite="varClosures.push"
       %152 = is_exception %151
       branch %152, bb61, bb60
     bb59:
@@ -1055,7 +1055,7 @@ module {
     bb84:
       jump bb469
     bb85:
-      %205 = call %200, this=%190, args=[%201]
+      %205 = call %200, this=%190, args=[%201], callsite="varClosures.map"
       jump bb86
     bb86:
       %206 = phi [(bb87, %202), (bb85, %205)]
@@ -1076,7 +1076,7 @@ module {
       throw %208
     bb91:
       %213 = const c80
-      %214 = call %210, this=%206, args=[%213]
+      %214 = call %210, this=%206, args=[%213], callsite="varClosures.map(...).join"
       %215 = is_exception %214
       branch %215, bb94, bb93
     bb92:
@@ -1091,7 +1091,7 @@ module {
       %217 = call builtin.console.log(%214)
       jump bb77
     bb96:
-      %218 = call %188, this=%189, args=[%214]
+      %218 = call %188, this=%189, args=[%214], callsite="console.log"
       jump bb77
     bb97:
       %222 = const c81
@@ -1247,7 +1247,7 @@ module {
       %295 = call builtin.console.log(%292)
       jump bb125
     bb134:
-      %296 = call %281, this=%282, args=[%292]
+      %296 = call %281, this=%282, args=[%292], callsite="console.log"
       jump bb125
     bb135:
       %300 = const c105
@@ -1364,7 +1364,7 @@ module {
       %357 = call builtin.console.log(%354)
       jump bb156
     bb165:
-      %358 = call %343, this=%344, args=[%354]
+      %358 = call %343, this=%344, args=[%354], callsite="console.log"
       jump bb156
     bb166:
       %362 = const c150
@@ -1409,7 +1409,7 @@ module {
       %379 = const c158
       %380 = const c159
       %381 = load var $0.captureInsideFunction
-      %382 = call %381, this=%380
+      %382 = call %381, this=%380, callsite="captureInsideFunction"
       %383 = is_exception %382
       branch %383, bb177, bb176
     bb176:
@@ -1428,7 +1428,7 @@ module {
       %388 = call builtin.console.log(%385)
       jump bb174
     bb181:
-      %389 = call %377, this=%378, args=[%385]
+      %389 = call %377, this=%378, args=[%385], callsite="console.log"
       jump bb174
     bb182:
       %393 = new_array(capacity=4)
@@ -1551,7 +1551,7 @@ module {
       %434 = const c176
       %436 = load var $19.$iteration_env.2
       %437 = call builtin.create_closure(%434, %436)
-      %438 = call %431, this=%429, args=[%437]
+      %438 = call %431, this=%429, args=[%437], callsite="nestedClosures.push"
       %439 = is_exception %438
       branch %439, bb205, bb204
     bb203:
@@ -1646,7 +1646,7 @@ module {
     bb227:
       jump bb454
     bb228:
-      %508 = call %503, this=%493, args=[%504]
+      %508 = call %503, this=%493, args=[%504], callsite="nestedClosures.map"
       jump bb229
     bb229:
       %509 = phi [(bb230, %505), (bb228, %508)]
@@ -1667,7 +1667,7 @@ module {
       throw %511
     bb234:
       %516 = const c200
-      %517 = call %513, this=%509, args=[%516]
+      %517 = call %513, this=%509, args=[%516], callsite="nestedClosures.map(...).join"
       %518 = is_exception %517
       branch %518, bb237, bb236
     bb235:
@@ -1682,7 +1682,7 @@ module {
       %520 = call builtin.console.log(%517)
       jump bb220
     bb239:
-      %521 = call %491, this=%492, args=[%517]
+      %521 = call %491, this=%492, args=[%517], callsite="console.log"
       jump bb220
     bb240:
       %525 = const c201
@@ -1813,7 +1813,7 @@ module {
       %584 = const c221
       %585 = const c222
       %586 = load var $0.readCreatedBefore
-      %587 = call %586, this=%585
+      %587 = call %586, this=%585, callsite="readCreatedBefore"
       %588 = is_exception %587
       branch %588, bb272, bb271
     bb271:
@@ -1832,7 +1832,7 @@ module {
       %593 = call builtin.console.log(%590)
       jump bb269
     bb276:
-      %594 = call %582, this=%583, args=[%590]
+      %594 = call %582, this=%583, args=[%590], callsite="console.log"
       jump bb269
     bb277:
       %598 = new_array(capacity=4)
@@ -1878,7 +1878,7 @@ module {
       unreachable
     bb287:
       %619 = const c231
-      %620 = call %616, this=%614, args=[%619]
+      %620 = call %616, this=%614, args=[%619], callsite="nonLoopReads.push"
       %621 = is_exception %620
       branch %621, bb290, bb289
     bb288:
@@ -1952,7 +1952,7 @@ module {
     bb306:
       jump bb439
     bb307:
-      %660 = call %655, this=%645, args=[%656]
+      %660 = call %655, this=%645, args=[%656], callsite="nonLoopReads.map"
       jump bb308
     bb308:
       %661 = phi [(bb309, %657), (bb307, %660)]
@@ -1973,7 +1973,7 @@ module {
       throw %663
     bb313:
       %668 = const c248
-      %669 = call %665, this=%661, args=[%668]
+      %669 = call %665, this=%661, args=[%668], callsite="nonLoopReads.map(...).join"
       %670 = is_exception %669
       branch %670, bb316, bb315
     bb314:
@@ -1988,7 +1988,7 @@ module {
       %672 = call builtin.console.log(%669)
       jump bb299
     bb318:
-      %673 = call %643, this=%644, args=[%669]
+      %673 = call %643, this=%644, args=[%669], callsite="console.log"
       jump bb299
     bb319:
       %677 = new_array(capacity=4)
@@ -2031,7 +2031,7 @@ module {
       %699 = const c255
       %701 = load var $29.$iteration_env.3
       %702 = call builtin.create_closure(%699, %701)
-      %703 = call %693, this=%691, args=[%702]
+      %703 = call %693, this=%691, args=[%702], callsite="keys.push"
       %704 = is_exception %703
       branch %704, bb330, bb329
     bb326:
@@ -2113,7 +2113,7 @@ module {
     bb346:
       jump bb424
     bb347:
-      %741 = call %736, this=%726, args=[%737]
+      %741 = call %736, this=%726, args=[%737], callsite="keys.map"
       jump bb348
     bb348:
       %742 = phi [(bb349, %738), (bb347, %741)]
@@ -2134,7 +2134,7 @@ module {
       throw %744
     bb353:
       %749 = const c272
-      %750 = call %746, this=%742, args=[%749]
+      %750 = call %746, this=%742, args=[%749], callsite="keys.map(...).join"
       %751 = is_exception %750
       branch %751, bb356, bb355
     bb354:
@@ -2156,7 +2156,7 @@ module {
       %756 = call builtin.console.log(%753)
       jump bb339
     bb360:
-      %757 = call %723, this=%724, args=[%753]
+      %757 = call %723, this=%724, args=[%753], callsite="console.log"
       jump bb339
     bb361:
       %761 = new_array(capacity=4)
@@ -2213,7 +2213,7 @@ module {
       %787 = const c278
       %789 = load var $33.$iteration_env.4
       %790 = call builtin.create_closure(%787, %789)
-      %791 = call %781, this=%779, args=[%790]
+      %791 = call %781, this=%779, args=[%790], callsite="values.push"
       %792 = is_exception %791
       branch %792, bb376, bb375
     bb372:
@@ -2295,7 +2295,7 @@ module {
     bb392:
       jump bb409
     bb393:
-      %829 = call %824, this=%814, args=[%825]
+      %829 = call %824, this=%814, args=[%825], callsite="values.map"
       jump bb394
     bb394:
       %830 = phi [(bb395, %826), (bb393, %829)]
@@ -2316,7 +2316,7 @@ module {
       throw %832
     bb399:
       %837 = const c295
-      %838 = call %834, this=%830, args=[%837]
+      %838 = call %834, this=%830, args=[%837], callsite="values.map(...).join"
       %839 = is_exception %838
       branch %839, bb402, bb401
     bb400:
@@ -2338,7 +2338,7 @@ module {
       %844 = call builtin.console.log(%841)
       jump bb385
     bb406:
-      %845 = call %811, this=%812, args=[%841]
+      %845 = call %811, this=%812, args=[%841], callsite="console.log"
       jump bb385
     bb407:
       return
@@ -2650,7 +2650,7 @@ module {
       branch %978, bb494, bb492
     bb500:
       %982 = const c47
-      %984 = call %976, this=%982
+      %984 = call %976, this=%982, callsite="read"
       store var $4.read, %981
       jump bb499
     bb501:
@@ -2658,7 +2658,7 @@ module {
       branch %956, bb479, bb477
     bb502:
       %986 = const c77
-      %988 = call %954, this=%986
+      %988 = call %954, this=%986, callsite="read"
       store var $7.read, %985
       jump bb501
     bb503:
@@ -2666,7 +2666,7 @@ module {
       branch %934, bb464, bb462
     bb504:
       %990 = const c197
-      %992 = call %932, this=%990
+      %992 = call %932, this=%990, callsite="read"
       store var $22.read, %989
       jump bb503
     bb505:
@@ -2674,7 +2674,7 @@ module {
       branch %912, bb449, bb447
     bb506:
       %994 = const c245
-      %996 = call %910, this=%994
+      %996 = call %910, this=%994, callsite="read"
       store var $28.read, %993
       jump bb505
     bb507:
@@ -2682,7 +2682,7 @@ module {
       branch %890, bb434, bb432
     bb508:
       %998 = const c269
-      %1000 = call %888, this=%998
+      %1000 = call %888, this=%998, callsite="read"
       store var $32.read, %997
       jump bb507
     bb509:
@@ -2690,7 +2690,7 @@ module {
       branch %868, bb419, bb417
     bb510:
       %1002 = const c292
-      %1004 = call %866, this=%1002
+      %1004 = call %866, this=%1002, callsite="read"
       store var $36.read, %1001
       jump bb509
     bb511:

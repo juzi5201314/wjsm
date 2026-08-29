@@ -132,7 +132,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_3 [js_name ""] [js_length 0] [captures: $0.resolveB] [params: $4.$env, $4.$this] [entry=bb0]:
@@ -142,7 +142,7 @@ module {
       %2 = const c51
       %3 = get_prop %1, %2
       %4 = const c52
-      %5 = call %3, this=%0, args=[%4]
+      %5 = call %3, this=%0, args=[%4], callsite="resolveB"
       return %5
 
   fn @arrow_4 [js_name ""] [js_length 0] [captures: $0.resolveA] [params: $5.$env, $5.$this] [entry=bb0]:
@@ -152,7 +152,7 @@ module {
       %2 = const c57
       %3 = get_prop %1, %2
       %4 = const c58
-      %5 = call %3, this=%0, args=[%4]
+      %5 = call %3, this=%0, args=[%4], callsite="resolveA"
       return %5
 
   fn @$module_main [entry=bb0]:
@@ -281,7 +281,7 @@ module {
       %69 = call builtin.promise.race(%68, %65)
       jump bb11
     bb14:
-      %70 = call %63, this=%64, args=[%65]
+      %70 = call %63, this=%64, args=[%65], callsite="Promise.race"
       jump bb11
     bb15:
       %74 = const c46
@@ -300,7 +300,7 @@ module {
       %83 = const c53
       %84 = load var $0.$shared_env
       %85 = call builtin.create_closure(%83, %84)
-      %86 = call %82, this=%79, args=[%85]
+      %86 = call %82, this=%79, args=[%85], callsite="queueMicrotask"
       %87 = is_exception %86
       branch %87, bb20, bb19
     bb18:
@@ -314,7 +314,7 @@ module {
       %93 = const c59
       %94 = load var $0.$shared_env
       %95 = call builtin.create_closure(%93, %94)
-      %96 = call %92, this=%89, args=[%95]
+      %96 = call %92, this=%89, args=[%95], callsite="queueMicrotask"
       %97 = is_exception %96
       branch %97, bb22, bb21
     bb20:

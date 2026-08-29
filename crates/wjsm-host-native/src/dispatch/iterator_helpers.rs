@@ -616,10 +616,11 @@ pub(crate) fn get_iterator_flattenable(
 /// 「incompatible receiver」/「is not iterable」错误里的 receiver 渲染
 /// （V8 形态：普通对象 #<Object>，原语按值）。
 pub(crate) fn render_receiver(state: &NativeAgentState, receiver: i64) -> String {
-    if value::is_js_object(receiver) || value::is_proxy(receiver) {
-        "#<Object>".into()
-    } else if value::is_array(receiver) {
+    // 数组须先于 is_js_object（其含数组）判定，否则永远落入 #<Object>。
+    if value::is_array(receiver) {
         "[object Array]".into()
+    } else if value::is_js_object(receiver) || value::is_proxy(receiver) {
+        "#<Object>".into()
     } else {
         render_value(state, receiver)
     }

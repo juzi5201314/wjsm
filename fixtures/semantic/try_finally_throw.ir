@@ -132,7 +132,7 @@ module {
       %39 = call builtin.console.log(%38)
       jump bb10
     bb13:
-      %40 = call %36, this=%37, args=[%38]
+      %40 = call %36, this=%37, args=[%38], callsite="console.log"
       jump bb10
     bb14:
       %45 = load var $1.$abrupt_completion_1

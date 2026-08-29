@@ -182,6 +182,13 @@ pub(crate) fn builtin_from_set_proto_method(name: &str) -> Option<Builtin> {
         "keys" => Some(MapSetKeys),
         "values" => Some(MapSetValues),
         "entries" => Some(MapSetEntries),
+        "union" => Some(SetProtoUnion),
+        "intersection" => Some(SetProtoIntersection),
+        "difference" => Some(SetProtoDifference),
+        "symmetricDifference" => Some(SetProtoSymmetricDifference),
+        "isSubsetOf" => Some(SetProtoIsSubsetOf),
+        "isSupersetOf" => Some(SetProtoIsSupersetOf),
+        "isDisjointFrom" => Some(SetProtoIsDisjointFrom),
         _ => None,
     }
 }

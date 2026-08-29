@@ -440,6 +440,7 @@ impl Lowerer {
                     callee: dispose_method,
                     this_val: val,
                     args: vec![],
+                    callsite: None,
                 },
             );
 

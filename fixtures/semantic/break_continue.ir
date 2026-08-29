@@ -185,7 +185,7 @@ module {
       %68 = call builtin.console.log(%67)
       jump bb28
     bb31:
-      %69 = call %65, this=%66, args=[%67]
+      %69 = call %65, this=%66, args=[%67], callsite="console.log"
       jump bb28
     bb32:
       jump bb1

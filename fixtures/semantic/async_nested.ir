@@ -187,7 +187,7 @@ module {
       %16 = load var $3.$closure_env
       %17 = const c52
       %18 = get_prop %16, %17
-      %19 = call %18, this=%15
+      %19 = call %18, this=%15, callsite="inner"
       %20 = is_exception %19
       branch %20, bb4, bb3
     bb3:
@@ -267,7 +267,7 @@ module {
       %55 = call builtin.console.log(%51)
       jump bb14
     bb19:
-      %56 = call %47, this=%48, args=[%51]
+      %56 = call %47, this=%48, args=[%51], callsite="console.log"
       jump bb14
     bb20:
       %61 = const c63
@@ -378,7 +378,7 @@ module {
       store var $0.outer, %29
       %30 = const c83
       %31 = load var $0.outer
-      %32 = call %31, this=%30
+      %32 = call %31, this=%30, callsite="outer"
       %33 = is_exception %32
       branch %33, bb2, bb1
     bb1:

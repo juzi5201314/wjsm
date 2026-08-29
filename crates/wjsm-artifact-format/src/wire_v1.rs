@@ -540,9 +540,11 @@ fn encode_instruction(
             callee,
             this_val,
             args,
+            callsite,
         } => {
             encoder.u16(9);
             encode_call(encoder, *dest, *callee, *this_val, args)?;
+            encoder.optional_string(callsite.as_deref())?;
         }
         Instruction::SuperCall {
             dest,
@@ -560,9 +562,11 @@ fn encode_instruction(
             callee,
             this_val,
             args,
+            callsite,
         } => {
             encoder.u16(11);
             encode_call(encoder, *dest, *callee, *this_val, args)?;
+            encoder.optional_string(callsite.as_deref())?;
         }
         Instruction::NewObject { dest, capacity } => {
             encoder.u16(12);
@@ -833,6 +837,7 @@ fn decode_instruction(
                 callee,
                 this_val,
                 args,
+                callsite: decoder.optional_string()?.map(String::into_boxed_str),
             })
         }
         10 => {
@@ -852,6 +857,7 @@ fn decode_instruction(
                 callee,
                 this_val,
                 args,
+                callsite: decoder.optional_string()?.map(String::into_boxed_str),
             })
         }
         12 => Ok(Instruction::NewObject {

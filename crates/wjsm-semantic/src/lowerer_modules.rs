@@ -283,6 +283,7 @@ fn emit_builtin_entry_call(lowerer: &mut Lowerer, builtin: &BuiltinSegment) {
             callee,
             this_val,
             args: Vec::new(),
+            callsite: None,
         },
     ];
     let instructions = lowerer.current_function.blocks[entry_block_idx].instructions_mut();

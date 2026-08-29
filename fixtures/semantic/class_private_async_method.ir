@@ -728,7 +728,7 @@ module {
       %58 = call builtin.promise.resolve_static(%57, %53)
       jump bb15
     bb20:
-      %59 = call %49, this=%50, args=[%53]
+      %59 = call %49, this=%50, args=[%53], callsite="Promise.resolve"
       jump bb15
     bb21:
       %65 = const c52
@@ -980,7 +980,7 @@ module {
       %46 = call builtin.promise.resolve_static(%44, %45)
       jump bb12
     bb15:
-      %47 = call %42, this=%43
+      %47 = call %42, this=%43, callsite="Promise.resolve"
       jump bb12
     bb16:
       %53 = const c117
@@ -1064,7 +1064,7 @@ module {
       return
     bb25:
       %80 = const c122
-      %81 = call %76, this=%60, args=[%80]
+      %81 = call %76, this=%60, args=[%80], callsite="[a,b,rest.length,arguments.length].join"
       %82 = is_exception %81
       branch %82, bb28, bb27
     bb26:
@@ -1179,7 +1179,7 @@ module {
       %19 = is_exception %18
       branch %19, bb4, bb3
     bb3:
-      %22 = call %18, this=%15
+      %22 = call %18, this=%15, callsite="(intermediate value).greet"
       %23 = is_exception %22
       branch %23, bb6, bb5
     bb4:
@@ -1239,7 +1239,7 @@ module {
       %46 = call builtin.promise.resolve_static(%44, %45)
       jump bb13
     bb16:
-      %47 = call %42, this=%43
+      %47 = call %42, this=%43, callsite="Promise.resolve"
       jump bb13
     bb17:
       %53 = const c170
@@ -1288,7 +1288,7 @@ module {
       promise_reject %65, %64
       return
     bb24:
-      %73 = call %69, this=%66
+      %73 = call %69, this=%66, callsite="(intermediate value).greet"
       %74 = is_exception %73
       branch %74, bb27, bb26
     bb25:
@@ -1363,7 +1363,7 @@ module {
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      %8 = call %5, this=%2
+      %8 = call %5, this=%2, callsite="(intermediate value).greet"
       return %8
     bb2:
       %7 = call builtin.exception_value(%5)
@@ -1385,7 +1385,7 @@ module {
       store var $13.read, %7
       %8 = const c198
       %9 = load var $13.read
-      %10 = call %9, this=%8
+      %10 = call %9, this=%8, callsite="read"
       return %10
 
   fn @Task.#mutate$async [home_object=@25.prototype] [params: $15.$env, $15.$this] [entry=bb0]:
@@ -1463,7 +1463,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c215
@@ -1588,7 +1588,7 @@ module {
       %18 = is_exception %17
       branch %18, bb4, bb3
     bb3:
-      %21 = call %17, this=%15
+      %21 = call %17, this=%15, callsite="this[#mutate]"
       %22 = is_exception %21
       branch %22, bb6, bb5
     bb4:
@@ -1625,7 +1625,7 @@ module {
       %36 = is_exception %35
       branch %36, bb11, bb10
     bb10:
-      %39 = call %35, this=%33
+      %39 = call %35, this=%33, callsite="this[#mutate]"
       %40 = is_exception %39
       branch %40, bb13, bb12
     bb11:
@@ -1801,7 +1801,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c287
@@ -1831,7 +1831,7 @@ module {
       %53 = call builtin.get_prototype_from_constructor(%51)
       set_proto %52, %53
       %54 = const c290
-      %55 = construct_call %51, this=%52, args=[%54]
+      %55 = construct_call %51, this=%52, args=[%54], callsite="Error"
       %56 = is_exception %55
       branch %56, bb18, bb19
     bb18:
@@ -1951,7 +1951,7 @@ module {
       %37 = is_exception %36
       branch %37, bb14, bb13
     bb6:
-      %20 = call %17, this=%15
+      %20 = call %17, this=%15, callsite="this[#boom]"
       %21 = is_exception %20
       branch %21, bb9, bb8
     bb7:
@@ -2115,7 +2115,7 @@ module {
       %37 = call builtin.promise.resolve_static(%36, %35)
       jump bb9
     bb12:
-      %38 = call %33, this=%34, args=[%35]
+      %38 = call %33, this=%34, args=[%35], callsite="Promise.resolve"
       jump bb9
     bb13:
       %44 = const c356
@@ -2274,7 +2274,7 @@ module {
     bb13:
       jump bb12
     bb14:
-      %26 = call %23, this=%12
+      %26 = call %23, this=%12, callsite="(intermediate value).tag"
       return %26
     bb15:
       %29 = const c387
@@ -2426,7 +2426,7 @@ module {
     bb22:
       unreachable
     bb23:
-      %94 = call %91, this=%80
+      %94 = call %91, this=%80, callsite="(intermediate value).tag"
       store var $30.Probe, %67
       store var $31.Probe, %67
       jump bb12
@@ -2449,7 +2449,7 @@ module {
       branch %3, bb2, bb1
     bb1:
       %5 = load var $34.extra
-      %6 = call %2, this=%0, args=[%5]
+      %6 = call %2, this=%0, args=[%5], callsite="this[#add]"
       return %6
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2463,7 +2463,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#plain]"
       %6 = is_exception %5
       branch %6, bb4, bb3
     bb2:
@@ -2502,7 +2502,7 @@ module {
       %8 = get_prop %6, %7
       %9 = const c446
       %10 = const c447
-      %11 = call %2, this=%0, args=[%5, %8, %9, %10]
+      %11 = call %2, this=%0, args=[%5, %8, %9, %10], callsite="this[#withParams]"
       return %11
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2516,7 +2516,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#viaSuper]"
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2530,7 +2530,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#arrowSuper]"
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2544,7 +2544,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#chain]"
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2558,7 +2558,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#recover]"
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2572,7 +2572,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#boom]"
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -2589,7 +2589,7 @@ module {
       branch %5, bb2, bb1
     bb1:
       %7 = load var $42.kind
-      %8 = call %4, this=%2, args=[%7]
+      %8 = call %4, this=%2, args=[%7], callsite="Task[#stamp]"
       return %8
     bb2:
       %6 = call builtin.exception_value(%4)
@@ -2618,7 +2618,7 @@ module {
       branch %16, bb9, bb8
     bb4:
       %5 = const c471
-      %6 = call %2, this=%0, args=[%5]
+      %6 = call %2, this=%0, args=[%5], callsite="target[#add]"
       %7 = is_exception %6
       branch %7, bb7, bb6
     bb5:
@@ -2699,7 +2699,7 @@ module {
       %21 = call builtin.console.log(%16, %17, %20)
       jump bb7
     bb10:
-      %22 = call %14, this=%15, args=[%16, %17, %20]
+      %22 = call %14, this=%15, args=[%16, %17, %20], callsite="console.log"
       jump bb7
     bb11:
       %26 = load var $env
@@ -2714,7 +2714,7 @@ module {
       throw %25
     bb13:
       %33 = const c523
-      %34 = call %30, this=%28, args=[%33]
+      %34 = call %30, this=%28, args=[%33], callsite="Task.stamp"
       return %34
     bb14:
       %32 = call builtin.exception_value(%30)
@@ -2763,7 +2763,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
     bb11:
       %23 = load var $env
@@ -2777,7 +2777,7 @@ module {
       %22 = call builtin.exception_value(%20)
       throw %22
     bb13:
-      %30 = call %27, this=%25
+      %30 = call %27, this=%25, callsite="task.params"
       return %30
     bb14:
       %29 = call builtin.exception_value(%27)
@@ -2826,7 +2826,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
     bb11:
       %23 = load var $env
@@ -2846,7 +2846,7 @@ module {
       %29 = call builtin.exception_value(%27)
       throw %29
     bb15:
-      %30 = call %27, this=%25
+      %30 = call %27, this=%25, callsite="task.callSuper"
       return %30
     bb16:
       %34 = const c451
@@ -2854,7 +2854,7 @@ module {
       %36 = is_exception %35
       branch %36, bb18, bb17
     bb17:
-      %38 = call %35, this=%25
+      %38 = call %35, this=%25, callsite="this[#viaSuper]"
       jump bb19
     bb18:
       %37 = call builtin.exception_value(%35)
@@ -2905,7 +2905,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
     bb11:
       %23 = load var $env
@@ -2925,7 +2925,7 @@ module {
       %29 = call builtin.exception_value(%27)
       throw %29
     bb15:
-      %30 = call %27, this=%25
+      %30 = call %27, this=%25, callsite="task.chain"
       return %30
     bb16:
       %34 = const c457
@@ -2933,7 +2933,7 @@ module {
       %36 = is_exception %35
       branch %36, bb18, bb17
     bb17:
-      %38 = call %35, this=%25
+      %38 = call %35, this=%25, callsite="this[#chain]"
       jump bb19
     bb18:
       %37 = call builtin.exception_value(%35)
@@ -2984,7 +2984,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
     bb11:
       %23 = load var $env
@@ -3004,7 +3004,7 @@ module {
       %29 = call builtin.exception_value(%27)
       throw %29
     bb15:
-      %30 = call %27, this=%25
+      %30 = call %27, this=%25, callsite="task.recover"
       return %30
     bb16:
       %34 = const c460
@@ -3012,7 +3012,7 @@ module {
       %36 = is_exception %35
       branch %36, bb18, bb17
     bb17:
-      %38 = call %35, this=%25
+      %38 = call %35, this=%25, callsite="this[#recover]"
       jump bb19
     bb18:
       %37 = call builtin.exception_value(%35)
@@ -3078,7 +3078,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
     bb11:
       %23 = load var $env
@@ -3105,7 +3105,7 @@ module {
       %32 = call builtin.exception_value(%30)
       throw %32
     bb17:
-      %30 = call %27, this=%25
+      %30 = call %27, this=%25, callsite="task.reject"
       %31 = is_exception %30
       branch %31, bb16, bb15
     bb18:
@@ -3114,7 +3114,7 @@ module {
       %40 = is_exception %39
       branch %40, bb20, bb19
     bb19:
-      %42 = call %39, this=%25
+      %42 = call %39, this=%25, callsite="this[#boom]"
       jump bb21
     bb20:
       %41 = call builtin.exception_value(%39)
@@ -3173,7 +3173,7 @@ module {
       %18 = call builtin.console.log(%16, %17)
       jump bb7
     bb10:
-      %19 = call %14, this=%15, args=[%16, %17]
+      %19 = call %14, this=%15, args=[%16, %17], callsite="console.log"
       jump bb7
     bb11:
       return
@@ -3364,7 +3364,7 @@ module {
       %135 = new_object(capacity=4)
       %136 = call builtin.get_prototype_from_constructor(%134)
       set_proto %135, %136
-      %137 = construct_call %134, this=%135
+      %137 = construct_call %134, this=%135, callsite="Task"
       %138 = is_exception %137
       branch %138, bb1, bb2
     bb1:
@@ -3432,7 +3432,7 @@ module {
       %165 = is_exception %164
       branch %165, bb19, bb18
     bb18:
-      %167 = call %164, this=%162
+      %167 = call %164, this=%162, callsite="task.plainIsPromise"
       %168 = is_exception %167
       branch %168, bb21, bb20
     bb19:
@@ -3447,7 +3447,7 @@ module {
       %170 = call builtin.console.log(%161, %167)
       jump bb16
     bb23:
-      %171 = call %159, this=%160, args=[%161, %167]
+      %171 = call %159, this=%160, args=[%161, %167], callsite="console.log"
       jump bb16
     bb24:
       %175 = const c489
@@ -3495,7 +3495,7 @@ module {
       branch %195, bb35, bb34
     bb34:
       %197 = load var $0.task
-      %198 = call %194, this=%192, args=[%197]
+      %198 = call %194, this=%192, args=[%197], callsite="Task.tryCall"
       %199 = is_exception %198
       branch %199, bb37, bb36
     bb35:
@@ -3512,7 +3512,7 @@ module {
       throw %200
     bb38:
       %206 = init_object_literal(c499)
-      %207 = call %203, this=%201, args=[%206]
+      %207 = call %203, this=%201, args=[%206], callsite="Task.tryCall"
       %208 = is_exception %207
       branch %208, bb41, bb40
     bb39:
@@ -3527,7 +3527,7 @@ module {
       %210 = call builtin.console.log(%191, %198, %207)
       jump bb32
     bb43:
-      %211 = call %189, this=%190, args=[%191, %198, %207]
+      %211 = call %189, this=%190, args=[%191, %198, %207], callsite="console.log"
       jump bb32
     bb44:
       %215 = const c500
@@ -3583,7 +3583,7 @@ module {
       %236 = call builtin.exception_value(%234)
       throw %236
     bb56:
-      %242 = call %239, this=%237
+      %242 = call %239, this=%237, callsite="task.arrowSuper"
       %243 = is_exception %242
       branch %243, bb59, bb58
     bb57:
@@ -3598,7 +3598,7 @@ module {
       %245 = call builtin.console.log(%231, %234, %242)
       jump bb52
     bb61:
-      %246 = call %229, this=%230, args=[%231, %234, %242]
+      %246 = call %229, this=%230, args=[%231, %234, %242], callsite="console.log"
       jump bb52
     bb62:
       %250 = load var $0.task
@@ -3611,7 +3611,7 @@ module {
       throw %249
     bb64:
       %255 = const c511
-      %256 = call %252, this=%250, args=[%255]
+      %256 = call %252, this=%250, args=[%255], callsite="task.run"
       %257 = is_exception %256
       branch %257, bb67, bb66
     bb65:

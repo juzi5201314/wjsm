@@ -157,7 +157,7 @@ module {
       %33 = call builtin.promise.reject_static(%32, %31)
       jump bb12
     bb15:
-      %34 = call %29, this=%30, args=[%31]
+      %34 = call %29, this=%30, args=[%31], callsite="Promise.reject"
       jump bb12
     bb16:
       %39 = const c36
@@ -258,7 +258,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -309,7 +309,7 @@ module {
       store var $0.recover, %21
       %22 = const c58
       %23 = load var $0.recover
-      %24 = call %23, this=%22
+      %24 = call %23, this=%22, callsite="recover"
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:

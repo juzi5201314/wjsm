@@ -2,6 +2,7 @@ pub(crate) mod agent;
 pub(crate) mod arguments;
 mod array;
 mod array_callbacks;
+pub(crate) mod array_from_async;
 mod array_like;
 mod array_sort;
 pub(crate) mod async_generator;
@@ -380,6 +381,9 @@ pub(crate) fn rejected_call_error(
     callee: i64,
     construct: bool,
 ) -> i64 {
+    // 无条件取走 pending callsite：栈溢出/Proxy 分支也必须消费，避免陈旧
+    // 文案泄漏到后续无关的拒绝站点。
+    let callsite = state.pending_callsite.take();
     if ctx.pending_exception_kind == PendingExceptionKind::StackOverflow {
         ctx.pending_exception_kind = PendingExceptionKind::None;
         let message = "Maximum call stack size exceeded".to_owned();
@@ -396,19 +400,25 @@ pub(crate) fn rejected_call_error(
             .create_exception(error)
             .unwrap_or_else(|| fail_dispatch(ctx));
     }
+    // kCalledNonCallable/kNotConstructor 文案：源级站点按语义层静态渲染的
+    // callee 表达式（V8 CallPrinter 同型，`o.foo is not a function`），
+    // 无 callsite 的站点（内部 desugar/宿主 invoke）回退按值渲染。
     let message = if value::is_proxy(callee) {
         if construct {
             "Proxy target must be a constructor".to_owned()
         } else {
             "Proxy target must be callable".to_owned()
         }
-    } else if construct {
-        format!(
-            "{} is not a constructor",
-            runtime::render_value(state, callee)
-        )
     } else {
-        format!("{} is not a function", runtime::render_value(state, callee))
+        let rendered = match &callsite {
+            Some(text) => text.to_string(),
+            None => runtime::render_value(state, callee),
+        };
+        if construct {
+            format!("{rendered} is not a constructor")
+        } else {
+            format!("{rendered} is not a function")
+        }
     };
     modules::named_error_object(state, "TypeError", message)
         .and_then(|error| state.create_exception(error))
@@ -509,8 +519,8 @@ pub(super) fn dispatch_builtin(
             sab::dispatch_sab => Builtin::SharedArrayBufferConstructor | Builtin::SharedArrayBufferProtoByteLength | Builtin::SharedArrayBufferProtoGrow | Builtin::SharedArrayBufferProtoGrowable | Builtin::SharedArrayBufferProtoMaxByteLength | Builtin::SharedArrayBufferProtoSlice | Builtin::SharedArrayBufferSpecies,
             atomics::dispatch_atomics => Builtin::AtomicsAdd | Builtin::AtomicsAnd | Builtin::AtomicsCompareExchange | Builtin::AtomicsExchange | Builtin::AtomicsIsLockFree | Builtin::AtomicsLoad | Builtin::AtomicsNotify | Builtin::AtomicsOr | Builtin::AtomicsPause | Builtin::AtomicsStore | Builtin::AtomicsSub | Builtin::AtomicsWait | Builtin::AtomicsWaitAsync | Builtin::AtomicsXor,
             enumerator::dispatch_enumerator => Builtin::EnumeratorDone | Builtin::EnumeratorFrom | Builtin::EnumeratorKey | Builtin::EnumeratorNext,
-            collections::dispatch_collection => Builtin::MapConstructor | Builtin::MapGroupBy | Builtin::MapProtoGet | Builtin::MapProtoSet | Builtin::MapSetClear | Builtin::MapSetDelete | Builtin::MapSetEntries | Builtin::MapSetFirstKey | Builtin::MapSetForEach | Builtin::MapSetGetSize | Builtin::MapSetHas | Builtin::MapSetKeys | Builtin::MapSetValues | Builtin::SetConstructor | Builtin::SetProtoAdd | Builtin::SetProtoDelete | Builtin::SetProtoHas,
-            array::dispatch_array => Builtin::ArrayAllocate | Builtin::ArrayAt | Builtin::ArrayConcat | Builtin::ArrayConcatVa | Builtin::ArrayCopyWithin | Builtin::ArrayFill | Builtin::ArrayFlat | Builtin::ArrayFrom | Builtin::ArrayGetLength | Builtin::ArrayHasElement | Builtin::ArrayIncludes | Builtin::ArrayIndexOf | Builtin::ArrayInitLength | Builtin::ArrayIsArray | Builtin::ArrayIsPlain | Builtin::ArraySpeciesDefault | Builtin::ArrayJoin | Builtin::ArrayLastIndexOf | Builtin::ArrayOf | Builtin::ArrayPop | Builtin::ArrayPush | Builtin::ArrayPushHole | Builtin::ArrayPushSpread | Builtin::ArrayReverse | Builtin::ArrayShift | Builtin::ArraySlice | Builtin::ArraySpliceVa | Builtin::ArrayToReversed | Builtin::ArrayToSplicedVa | Builtin::ArrayUnshiftVa | Builtin::ArrayWith,
+            collections::dispatch_collection => Builtin::MapConstructor | Builtin::MapGroupBy | Builtin::MapProtoGet | Builtin::MapProtoSet | Builtin::MapSetClear | Builtin::MapSetDelete | Builtin::MapSetEntries | Builtin::MapSetFirstKey | Builtin::MapSetForEach | Builtin::MapSetGetSize | Builtin::MapSetHas | Builtin::MapSetKeys | Builtin::MapSetValues | Builtin::SetConstructor | Builtin::SetProtoAdd | Builtin::SetProtoDelete | Builtin::SetProtoHas | Builtin::SetProtoUnion | Builtin::SetProtoIntersection | Builtin::SetProtoDifference | Builtin::SetProtoSymmetricDifference | Builtin::SetProtoIsSubsetOf | Builtin::SetProtoIsSupersetOf | Builtin::SetProtoIsDisjointFrom,
+            array::dispatch_array => Builtin::ArrayAllocate | Builtin::ArrayAt | Builtin::ArrayConcat | Builtin::ArrayConcatVa | Builtin::ArrayCopyWithin | Builtin::ArrayFill | Builtin::ArrayFlat | Builtin::ArrayFrom | Builtin::ArrayFromAsync | Builtin::ArrayGetLength | Builtin::ArrayHasElement | Builtin::ArrayIncludes | Builtin::ArrayIndexOf | Builtin::ArrayInitLength | Builtin::ArrayIsArray | Builtin::ArrayIsPlain | Builtin::ArraySpeciesDefault | Builtin::ArrayJoin | Builtin::ArrayLastIndexOf | Builtin::ArrayOf | Builtin::ArrayPop | Builtin::ArrayPush | Builtin::ArrayPushHole | Builtin::ArrayPushSpread | Builtin::ArrayReverse | Builtin::ArrayShift | Builtin::ArraySlice | Builtin::ArraySpliceVa | Builtin::ArrayToReversed | Builtin::ArrayToSplicedVa | Builtin::ArrayUnshiftVa | Builtin::ArrayWith,
             function::dispatch_function => Builtin::FuncApply | Builtin::FuncBind | Builtin::FuncCall | Builtin::SuperApply | Builtin::CreateClosure | Builtin::FunctionSetName | Builtin::FunctionToString,
             array_callbacks::dispatch_array_callback => Builtin::ArrayEvery | Builtin::ArrayFilter | Builtin::ArrayFind | Builtin::ArrayFindIndex | Builtin::ArrayFindLast | Builtin::ArrayFindLastIndex | Builtin::ArrayFlatMap | Builtin::ArrayForEach | Builtin::ArrayMap | Builtin::ArrayReduce | Builtin::ArrayReduceRight | Builtin::ArraySome | Builtin::ArraySort | Builtin::ArrayToSorted,
             json::dispatch_json => Builtin::JsonParse | Builtin::JsonStringify,
@@ -523,7 +533,7 @@ pub(super) fn dispatch_builtin(
             proxy::dispatch_proxy => Builtin::ProxyCreate | Builtin::ProxyRevocable | Builtin::ReflectApply | Builtin::ReflectConstruct | Builtin::ReflectDefineProperty | Builtin::ReflectDeleteProperty | Builtin::ReflectGet | Builtin::ReflectGetOwnPropertyDescriptor | Builtin::ReflectGetPrototypeOf | Builtin::ReflectHas | Builtin::ReflectIsExtensible | Builtin::ReflectOwnKeys | Builtin::ReflectPreventExtensions | Builtin::ReflectSet | Builtin::ReflectSetPrototypeOf,
             primitive::dispatch_primitive => Builtin::BooleanConstructor | Builtin::BooleanProtoToString | Builtin::BooleanProtoValueOf | Builtin::GlobalIsFinite | Builtin::GlobalIsNaN | Builtin::NumberConstructor | Builtin::NumberIsFinite | Builtin::NumberIsInteger | Builtin::NumberIsNaN | Builtin::NumberIsSafeInteger | Builtin::NumberParseFloat | Builtin::NumberParseInt | Builtin::NumberProtoToExponential | Builtin::NumberProtoToFixed | Builtin::NumberProtoToPrecision | Builtin::NumberProtoToString | Builtin::NumberProtoValueOf | Builtin::ToBoolean,
             symbol::dispatch_symbol => Builtin::SymbolCreate | Builtin::SymbolFor | Builtin::SymbolKeyFor | Builtin::SymbolProtoToString | Builtin::SymbolProtoValueOf | Builtin::SymbolWellKnown,
-            string::dispatch_string => Builtin::StringAt | Builtin::StringBuilderAppend | Builtin::StringBuilderFinish | Builtin::StringCharAt | Builtin::StringCharCodeAt | Builtin::StringCodePointAt | Builtin::StringConcatVa | Builtin::StringEndsWith | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::StringIncludes | Builtin::StringIndexOf | Builtin::StringLastIndexOf | Builtin::StringMatch | Builtin::StringMatchAll | Builtin::StringNormalize | Builtin::StringPadEnd | Builtin::StringPadStart | Builtin::StringRaw | Builtin::StringRepeat | Builtin::StringReplace | Builtin::StringReplaceAll | Builtin::StringSearch | Builtin::StringSlice | Builtin::StringSplit | Builtin::StringStartsWith | Builtin::StringSubstring | Builtin::StringToLowerCase | Builtin::StringToString | Builtin::StringToUpperCase | Builtin::StringTrim | Builtin::StringTrimEnd | Builtin::StringTrimStart | Builtin::StringValueOf,
+            string::dispatch_string => Builtin::StringAt | Builtin::StringBuilderAppend | Builtin::StringBuilderFinish | Builtin::StringCharAt | Builtin::StringCharCodeAt | Builtin::StringCodePointAt | Builtin::StringConcatVa | Builtin::StringEndsWith | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::StringIncludes | Builtin::StringIndexOf | Builtin::StringLastIndexOf | Builtin::StringMatch | Builtin::StringMatchAll | Builtin::StringNormalize | Builtin::StringPadEnd | Builtin::StringPadStart | Builtin::StringRaw | Builtin::StringRepeat | Builtin::StringReplace | Builtin::StringReplaceAll | Builtin::StringSearch | Builtin::StringSlice | Builtin::StringSplit | Builtin::StringStartsWith | Builtin::StringSubstring | Builtin::StringToLowerCase | Builtin::StringToString | Builtin::StringToUpperCase | Builtin::StringTrim | Builtin::StringTrimEnd | Builtin::StringTrimStart | Builtin::StringValueOf | Builtin::StringIsWellFormed | Builtin::StringToWellFormed,
             weak::dispatch_weak => Builtin::FinalizationRegistryConstructor | Builtin::FinalizationRegistryProtoRegister | Builtin::FinalizationRegistryProtoUnregister | Builtin::WeakMapConstructor | Builtin::WeakMapProtoDelete | Builtin::WeakMapProtoGet | Builtin::WeakMapProtoHas | Builtin::WeakMapProtoSet | Builtin::WeakRefConstructor | Builtin::WeakRefProtoDeref | Builtin::WeakSetConstructor | Builtin::WeakSetProtoAdd | Builtin::WeakSetProtoDelete | Builtin::WeakSetProtoHas,
             // ── 原 dispatch_inline 兜底 match 拆分出的领域 handler ──
             modules::dispatch_scope => Builtin::ScopeRecordCreate | Builtin::ScopeRecordAddBinding | Builtin::ScopeRecordSetMeta | Builtin::ScopeRecordDestroy | Builtin::ScopeRecordAddWithLayer | Builtin::ScopeRecordGetBinding,

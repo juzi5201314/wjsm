@@ -163,7 +163,7 @@ module {
       %35 = call builtin.promise.resolve_static(%34, %33)
       jump bb9
     bb12:
-      %36 = call %31, this=%32, args=[%33]
+      %36 = call %31, this=%32, args=[%33], callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c36
@@ -233,7 +233,7 @@ module {
       %69 = call builtin.promise.resolve_static(%68, %67)
       jump bb24
     bb27:
-      %70 = call %65, this=%66, args=[%67]
+      %70 = call %65, this=%66, args=[%67], callsite="Promise.resolve"
       jump bb24
     bb28:
       %76 = const c47
@@ -310,7 +310,7 @@ module {
       %102 = call builtin.console.log(%101)
       jump bb39
     bb42:
-      %103 = call %99, this=%100, args=[%101]
+      %103 = call %99, this=%100, args=[%101], callsite="console.log"
       jump bb39
     bb43:
       %108 = const c56
@@ -362,7 +362,7 @@ module {
       %127 = call builtin.console.log(%126)
       jump bb51
     bb54:
-      %128 = call %124, this=%125, args=[%126]
+      %128 = call %124, this=%125, args=[%126], callsite="console.log"
       jump bb51
     bb55:
       %133 = const c63
@@ -460,7 +460,7 @@ module {
       store var $0.multi, %21
       %22 = const c85
       %23 = load var $0.multi
-      %24 = call %23, this=%22
+      %24 = call %23, this=%22, callsite="multi"
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:

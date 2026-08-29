@@ -457,7 +457,7 @@ module {
       %43 = call builtin.console.log(%40)
       jump bb7
     bb22:
-      %44 = call %14, this=%15, args=[%40]
+      %44 = call %14, this=%15, args=[%40], callsite="console.log"
       jump bb7
     bb23:
       return
@@ -474,7 +474,7 @@ module {
       %4 = call builtin.get_prototype_from_constructor(%2)
       set_proto %3, %4
       %5 = load var $2.message
-      %6 = construct_call %2, this=%3, args=[%5]
+      %6 = construct_call %2, this=%3, args=[%5], callsite="Error"
       %7 = is_exception %6
       branch %7, bb1, bb2
     bb1:
@@ -540,7 +540,7 @@ module {
       %18 = const c44
       %19 = get_prop %17, %18
       %20 = const c45
-      %21 = call %19, this=%16, args=[%20]
+      %21 = call %19, this=%16, args=[%20], callsite="throwError"
       %22 = is_exception %21
       branch %22, bb7, bb6
     bb4:
@@ -737,7 +737,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c95
@@ -766,7 +766,7 @@ module {
       %52 = const c99
       %53 = get_prop %51, %52
       %54 = const c100
-      %55 = call %53, this=%50, args=[%54]
+      %55 = call %53, this=%50, args=[%54], callsite="throwError"
       %56 = is_exception %55
       branch %56, bb19, bb18
     bb18:
@@ -901,7 +901,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c134
@@ -929,7 +929,7 @@ module {
       %51 = const c137
       %52 = get_prop %50, %51
       %53 = const c138
-      %54 = call %52, this=%49, args=[%53]
+      %54 = call %52, this=%49, args=[%53], callsite="throwError"
       %55 = is_exception %54
       branch %55, bb19, bb18
     bb18:
@@ -1073,7 +1073,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c173
@@ -1101,7 +1101,7 @@ module {
       %51 = const c176
       %52 = get_prop %50, %51
       %53 = const c177
-      %54 = call %52, this=%49, args=[%53]
+      %54 = call %52, this=%49, args=[%53], callsite="throwError"
       %55 = is_exception %54
       branch %55, bb19, bb18
     bb18:
@@ -1246,7 +1246,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c212
@@ -1274,7 +1274,7 @@ module {
       %51 = const c215
       %52 = get_prop %50, %51
       %53 = const c216
-      %54 = call %52, this=%49, args=[%53]
+      %54 = call %52, this=%49, args=[%53], callsite="throwError"
       %55 = is_exception %54
       branch %55, bb19, bb18
     bb18:
@@ -1410,7 +1410,7 @@ module {
       %35 = call builtin.promise.resolve_static(%33, %34)
       jump bb9
     bb12:
-      %36 = call %31, this=%32
+      %36 = call %31, this=%32, callsite="Promise.resolve"
       jump bb9
     bb13:
       %42 = const c251
@@ -1438,7 +1438,7 @@ module {
       %51 = const c254
       %52 = get_prop %50, %51
       %53 = const c255
-      %54 = call %52, this=%49, args=[%53]
+      %54 = call %52, this=%49, args=[%53], callsite="throwError"
       %55 = is_exception %54
       branch %55, bb19, bb18
     bb18:
@@ -1550,7 +1550,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_15 [js_name ""] [js_length 1] [captures: $0.caught] [params: $20.$env, $20.$this, $20.e] [entry=bb0]:
@@ -1665,7 +1665,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $1.e, %7
@@ -1683,7 +1683,7 @@ module {
       %1 = load var $env
       %2 = const c292
       %3 = get_prop %1, %2
-      %4 = call %3, this=%0
+      %4 = call %3, this=%0, callsite="asyncEq"
       return %4
 
   fn @arrow_17 [direct_callable] [js_name ""] [js_length 0] [params: $22.$env, $22.$this] [entry=bb0]:
@@ -1727,7 +1727,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_18 [js_name ""] [js_length 1] [captures: $0.caught] [params: $23.$env, $23.$this, $23.e] [entry=bb0]:
@@ -1842,7 +1842,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $1.e, %7
@@ -1860,7 +1860,7 @@ module {
       %1 = load var $env
       %2 = const c310
       %3 = get_prop %1, %2
-      %4 = call %3, this=%0
+      %4 = call %3, this=%0, callsite="asyncNeq"
       return %4
 
   fn @arrow_20 [direct_callable] [js_name ""] [js_length 0] [params: $25.$env, $25.$this] [entry=bb0]:
@@ -1904,7 +1904,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_21 [js_name ""] [js_length 1] [captures: $0.caught] [params: $26.$env, $26.$this, $26.e] [entry=bb0]:
@@ -2019,7 +2019,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $1.e, %7
@@ -2037,7 +2037,7 @@ module {
       %1 = load var $env
       %2 = const c328
       %3 = get_prop %1, %2
-      %4 = call %3, this=%0
+      %4 = call %3, this=%0, callsite="asyncSeq"
       return %4
 
   fn @arrow_23 [direct_callable] [js_name ""] [js_length 0] [params: $28.$env, $28.$this] [entry=bb0]:
@@ -2081,7 +2081,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_24 [js_name ""] [js_length 1] [captures: $0.caught] [params: $29.$env, $29.$this, $29.e] [entry=bb0]:
@@ -2196,7 +2196,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $1.e, %7
@@ -2214,7 +2214,7 @@ module {
       %1 = load var $env
       %2 = const c346
       %3 = get_prop %1, %2
-      %4 = call %3, this=%0
+      %4 = call %3, this=%0, callsite="asyncLt"
       return %4
 
   fn @arrow_26 [direct_callable] [js_name ""] [js_length 0] [params: $31.$env, $31.$this] [entry=bb0]:
@@ -2258,7 +2258,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_27 [js_name ""] [js_length 1] [captures: $0.caught] [params: $32.$env, $32.$this, $32.e] [entry=bb0]:
@@ -2373,7 +2373,7 @@ module {
       %51 = call builtin.console.log(%48)
       jump bb9
     bb24:
-      %52 = call %22, this=%23, args=[%48]
+      %52 = call %22, this=%23, args=[%48], callsite="console.log"
       jump bb9
     bb25:
       store var $1.e, %7
@@ -2485,7 +2485,7 @@ module {
       %50 = get_prop %48, %49
       %51 = const c76
       %52 = load var $0.gen
-      %53 = call %52, this=%51
+      %53 = call %52, this=%51, callsite="gen"
       %54 = is_exception %53
       branch %54, bb10, bb9
     bb9:
@@ -2497,7 +2497,7 @@ module {
       %55 = call builtin.exception_value(%53)
       throw %55
     bb11:
-      %60 = call %57, this=%53
+      %60 = call %57, this=%53, callsite="gen(...).next"
       %61 = const c78
       %62 = get_prop %60, %61
       %63 = is_exception %62
@@ -2506,7 +2506,7 @@ module {
       %59 = call builtin.exception_value(%57)
       throw %59
     bb13:
-      %65 = call %50, this=%47, args=[%62]
+      %65 = call %50, this=%47, args=[%62], callsite="String"
       %66 = is_exception %65
       branch %66, bb16, bb15
     bb14:
@@ -2521,7 +2521,7 @@ module {
       %68 = call builtin.console.log(%65)
       jump bb7
     bb18:
-      %69 = call %45, this=%46, args=[%65]
+      %69 = call %45, this=%46, args=[%65], callsite="console.log"
       jump bb7
     bb19:
       %73 = const c117
@@ -2542,7 +2542,7 @@ module {
       store var $0.asyncLt, %83
       %84 = const c276
       %85 = load var $0.asyncAdd
-      %86 = call %85, this=%84
+      %86 = call %85, this=%84, callsite="asyncAdd"
       %87 = is_exception %86
       branch %87, bb22, bb21
     bb20:

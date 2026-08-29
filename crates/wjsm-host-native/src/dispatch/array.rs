@@ -73,6 +73,7 @@ pub(super) fn dispatch_array(
         Builtin::ArrayAllocate => array_allocate(ctx, state, args),
         Builtin::ArrayHasElement => array_has_element(ctx, state, args),
         Builtin::ArrayFrom => array_from(ctx, state, args),
+        Builtin::ArrayFromAsync => super::array_from_async::from_async(ctx, state, args),
         Builtin::ArrayOf => state
             .allocate_array_values_with_gc_retry(ctx, args)
             .unwrap_or_else(|_| fail_dispatch(ctx)),

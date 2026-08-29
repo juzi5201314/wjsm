@@ -257,6 +257,11 @@ impl Lowerer {
                             callee,
                             this_val,
                             args,
+                            // 链内调用位：callee 为链延续（`o.foo?.()`），
+                            // 渲染器穿透 OptChain 包装（V8 链内节点无包装）。
+                            callsite: Some(crate::callsite_render::render_call_callsite(
+                                &ocall.callee,
+                            )),
                         },
                     );
                     dest

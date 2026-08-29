@@ -123,6 +123,7 @@ pub fn licm_disabled_by_env() -> bool {
     passes::licm::licm_disabled_by_env()
 }
 
+mod callsite_render;
 mod lowerer_arrows;
 mod lowerer_assignments;
 mod lowerer_async_eval;
@@ -290,6 +291,7 @@ fn is_string_returning_proto_method(name: &str) -> bool {
             | "concat"
             | "charAt"
             | "normalize"
+            | "toWellFormed"
             | "toString"
             | "valueOf"
     )

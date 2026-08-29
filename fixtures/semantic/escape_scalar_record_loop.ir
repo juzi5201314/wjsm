@@ -331,7 +331,7 @@ module {
       store var $sroa.$0.RECORD.name, %292
       store var $sroa.$0.RECORD.value, %340
       store var $sroa.$0.RECORD.length, %23
-      %55 = call %47, this=%48, args=[%258]
+      %55 = call %47, this=%48, args=[%258], callsite="console.log"
       jump bb7
     bb13:
       %59 = const c58
@@ -393,7 +393,7 @@ module {
       store var $sroa.$0.RECORD.name, %282
       store var $sroa.$0.RECORD.value, %324
       store var $sroa.$0.RECORD.length, %23
-      %81 = call %73, this=%74, args=[%171]
+      %81 = call %73, this=%74, args=[%171], callsite="console.log"
       jump bb21
     bb27:
       store var $sroa.$0.RECORD.name, %282

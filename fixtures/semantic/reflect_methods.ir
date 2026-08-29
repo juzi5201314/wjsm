@@ -176,7 +176,7 @@ module {
       %64 = call builtin.reflect.get(%61, %62, %63)
       jump bb17
     bb20:
-      %65 = call %59, this=%60, args=[%61, %62, %63]
+      %65 = call %59, this=%60, args=[%61, %62, %63], callsite="Reflect.get"
       jump bb17
     bb21:
       branch %31, bb23, bb24
@@ -187,7 +187,7 @@ module {
       %69 = call builtin.console.log(%66)
       jump bb9
     bb24:
-      %70 = call %43, this=%44, args=[%66]
+      %70 = call %43, this=%44, args=[%66], callsite="console.log"
       jump bb9
     bb25:
       return

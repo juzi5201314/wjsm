@@ -137,7 +137,7 @@ module {
       branch %46, bb10, bb9
     bb9:
       %48 = const c32
-      %49 = call %45, this=%43, args=[%48]
+      %49 = call %45, this=%43, args=[%48], callsite="MathUtils.double"
       %50 = is_exception %49
       branch %50, bb12, bb11
     bb10:
@@ -152,7 +152,7 @@ module {
       %52 = call builtin.console.log(%49)
       jump bb7
     bb14:
-      %53 = call %41, this=%42, args=[%49]
+      %53 = call %41, this=%42, args=[%49], callsite="console.log"
       jump bb7
     bb15:
       return
