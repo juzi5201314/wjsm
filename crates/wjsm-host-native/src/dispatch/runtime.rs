@@ -1556,7 +1556,10 @@ fn super_base(state: &mut NativeAgentState) -> Option<i64> {
 /// `Reflect.construct(Symbol, ..)` / 子类 super()）：new.target 已定义且
 /// callee 正是该 builtin 的 native callable。直连 CallBuiltin 站点（如
 /// BigInt 字面量物化）复用外层 JS 激活，其 callee 为用户函数，不会误判。
-pub(super) fn is_builtin_construct_call(state: &NativeAgentState, builtin: wjsm_ir::Builtin) -> bool {
+pub(super) fn is_builtin_construct_call(
+    state: &NativeAgentState,
+    builtin: wjsm_ir::Builtin,
+) -> bool {
     state.activations.last().is_some_and(|activation| {
         !value::is_undefined(activation.new_target)
             && state
@@ -2327,7 +2330,13 @@ pub(super) fn get_property_with_receiver(
                         state.native_callable(crate::NativeCallableKind::FunctionPrototype)
                     && value::strip_gc_color(prototype) != tail
                 {
-                    return get_property_with_receiver(ctx, state, prototype, encoded_key, receiver);
+                    return get_property_with_receiver(
+                        ctx,
+                        state,
+                        prototype,
+                        encoded_key,
+                        receiver,
+                    );
                 }
                 // 隐式 %Function.prototype% 的自有 constructor（§20.2.3.1）。
                 if state.text_matches(encoded_key, "constructor") {
