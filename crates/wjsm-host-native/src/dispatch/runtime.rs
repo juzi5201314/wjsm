@@ -2258,6 +2258,18 @@ pub(super) fn get_property_with_receiver(
                 if let Some(property) = state.primitive_property(tail, encoded_key) {
                     return Ok(property);
                 }
+                // 隐式链尾的父层是 %Function.prototype%（§20.2.3）：其自有
+                // name（""）与 length（+0）在 receiver own 层缺失（删除落
+                // 墓碑）后仍须继承可见，经真实 FunctionPrototype callable
+                // 解析以尊重其上的覆盖与删除；tail 为其自身时继续上行。
+                if (state.text_matches(encoded_key, "name")
+                    || state.text_matches(encoded_key, "length"))
+                    && let Some(prototype) =
+                        state.native_callable(crate::NativeCallableKind::FunctionPrototype)
+                    && value::strip_gc_color(prototype) != tail
+                {
+                    return get_property_with_receiver(ctx, state, prototype, encoded_key, receiver);
+                }
                 // 隐式 %Function.prototype% 的自有 constructor（§20.2.3.1）。
                 if state.text_matches(encoded_key, "constructor") {
                     return Ok(state
@@ -2750,6 +2762,16 @@ pub(super) fn has_property(
                     || state.text_matches(encoded_key, "constructor")
                 {
                     return Ok(true);
+                }
+                // 与 [[Get]] 同构：own 层删除后 name/length 沿隐式
+                // %Function.prototype% 的自有属性继续可见。
+                if (state.text_matches(encoded_key, "name")
+                    || state.text_matches(encoded_key, "length"))
+                    && let Some(prototype) =
+                        state.native_callable(crate::NativeCallableKind::FunctionPrototype)
+                    && value::strip_gc_color(prototype) != tail
+                {
+                    return has_property(ctx, state, prototype, encoded_key);
                 }
                 let Some(prototype) = state.object_prototype else {
                     return Ok(false);
