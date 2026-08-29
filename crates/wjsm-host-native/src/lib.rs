@@ -324,6 +324,7 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
         NativeCallableKind::Fetch(callable) => dispatch::fetch::metadata(callable),
         NativeCallableKind::Stream(callable) => dispatch::streams::metadata(callable),
         NativeCallableKind::Events(callable) => dispatch::events::metadata(callable),
+        NativeCallableKind::WebEncoding(callable) => dispatch::web_encoding::metadata(callable),
         _ => None,
     }
 }
