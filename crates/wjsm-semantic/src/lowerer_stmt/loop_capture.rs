@@ -31,6 +31,28 @@ impl Lowerer {
         bindings
     }
 
+    /// 循环体内「按迭代实例化且被嵌套函数捕获」的词法名集合：体内（含嵌套
+    /// 块 / switch / try-catch / 嵌套循环头，不穿函数边界与嵌套循环体）声明
+    /// 的 let/const/class/using/catch 参数，与体内嵌套函数引用名求交。
+    /// 非空时循环须建按迭代 env 帧，这些绑定经帧 env 读写，闭包每轮捕获
+    /// 独立实例（ES §14.7.4.3 CreatePerIterationEnvironment 的块级推广）。
+    /// 嵌套循环体的声明由内层循环自建帧，故不计入；嵌套循环头的 let/const
+    /// 每次进入内层循环语句重建，归属本（外层）帧。
+    pub(crate) fn loop_body_per_iteration_capture_names(
+        body: &swc_ast::Stmt,
+    ) -> HashSet<String> {
+        let references = nested_function_references(body);
+        if references.is_empty() {
+            return HashSet::new();
+        }
+        let mut declared = HashSet::new();
+        collect_per_iteration_lexical_names(body, &mut declared);
+        references
+            .intersection(&declared)
+            .cloned()
+            .collect()
+    }
+
     pub(crate) fn loop_head_iteration_bindings(
         &self,
         declaration: &swc_ast::VarDecl,
@@ -104,6 +126,25 @@ impl Lowerer {
         let _ = self.ensure_shared_env(block, &stable, DUMMY_SP)?;
         Ok(self.resolve_store_block(block))
     }
+
+    /// while / do-while：循环体存在按迭代词法捕获时创建仅承载体绑定的
+    /// env 帧（无头部绑定）。`block` 就地推进到帧变量准备完成后的延续块；
+    /// env 对象由调用方在每轮体入口经 initialize_empty_iteration_env 新建。
+    pub(crate) fn prepare_loop_body_iteration_frame(
+        &mut self,
+        block: &mut BasicBlockId,
+        body: &swc_ast::Stmt,
+    ) -> Result<Option<IterationEnvFrame>, LoweringError> {
+        let body_capture_names = Self::loop_body_per_iteration_capture_names(body);
+        if body_capture_names.is_empty() {
+            return Ok(None);
+        }
+        let (continuation, mut frame) = self.prepare_iteration_env(*block, Vec::new())?;
+        *block = continuation;
+        frame.body_scope_watermark = Some(self.scopes.scope_count());
+        frame.body_capture_names = body_capture_names;
+        Ok(Some(frame))
+    }
 }
 
 #[derive(Default)]
@@ -170,6 +211,101 @@ impl Visit for NestedFunctionReferenceScan {
         member.obj.visit_with(self);
         if let swc_ast::MemberProp::Computed(computed) = &member.prop {
             computed.expr.visit_with(self);
+        }
+    }
+}
+
+/// 收集语句子树内按迭代实例化的词法声明名：块 / if / labeled / with /
+/// switch / try 逐层递归；嵌套循环只收头部 let/const（每次进入内层循环
+/// 语句重建，归属外层帧），其体由内层循环自建帧；函数 / 类体是独立函数
+/// 上下文，不越界。var 与块内函数声明按函数作用域提升，不属按迭代绑定。
+fn collect_per_iteration_lexical_names(stmt: &swc_ast::Stmt, names: &mut HashSet<String>) {
+    match stmt {
+        swc_ast::Stmt::Decl(decl) => collect_lexical_decl_names(decl, names),
+        swc_ast::Stmt::Block(block) => {
+            for stmt in &block.stmts {
+                collect_per_iteration_lexical_names(stmt, names);
+            }
+        }
+        swc_ast::Stmt::If(if_stmt) => {
+            collect_per_iteration_lexical_names(&if_stmt.cons, names);
+            if let Some(alt) = &if_stmt.alt {
+                collect_per_iteration_lexical_names(alt, names);
+            }
+        }
+        swc_ast::Stmt::Labeled(labeled) => {
+            collect_per_iteration_lexical_names(&labeled.body, names);
+        }
+        swc_ast::Stmt::With(with_stmt) => {
+            collect_per_iteration_lexical_names(&with_stmt.body, names);
+        }
+        swc_ast::Stmt::Switch(switch_stmt) => {
+            for case in &switch_stmt.cases {
+                for stmt in &case.cons {
+                    collect_per_iteration_lexical_names(stmt, names);
+                }
+            }
+        }
+        swc_ast::Stmt::Try(try_stmt) => {
+            for stmt in &try_stmt.block.stmts {
+                collect_per_iteration_lexical_names(stmt, names);
+            }
+            if let Some(handler) = &try_stmt.handler {
+                if let Some(param) = &handler.param {
+                    collect_pattern_names(param, names);
+                }
+                for stmt in &handler.body.stmts {
+                    collect_per_iteration_lexical_names(stmt, names);
+                }
+            }
+            if let Some(finalizer) = &try_stmt.finalizer {
+                for stmt in &finalizer.stmts {
+                    collect_per_iteration_lexical_names(stmt, names);
+                }
+            }
+        }
+        swc_ast::Stmt::For(for_stmt) => {
+            if let Some(swc_ast::VarDeclOrExpr::VarDecl(decl)) = &for_stmt.init
+                && decl.kind != swc_ast::VarDeclKind::Var
+            {
+                for declarator in &decl.decls {
+                    collect_pattern_names(&declarator.name, names);
+                }
+            }
+        }
+        swc_ast::Stmt::ForIn(for_in) => collect_for_head_lexical_names(&for_in.left, names),
+        swc_ast::Stmt::ForOf(for_of) => collect_for_head_lexical_names(&for_of.left, names),
+        _ => {}
+    }
+}
+
+fn collect_lexical_decl_names(decl: &swc_ast::Decl, names: &mut HashSet<String>) {
+    match decl {
+        swc_ast::Decl::Var(var_decl) if var_decl.kind != swc_ast::VarDeclKind::Var => {
+            for declarator in &var_decl.decls {
+                collect_pattern_names(&declarator.name, names);
+            }
+        }
+        swc_ast::Decl::Using(using_decl) => {
+            for declarator in &using_decl.decls {
+                collect_pattern_names(&declarator.name, names);
+            }
+        }
+        swc_ast::Decl::Class(class_decl) => {
+            names.insert(class_decl.ident.sym.to_string());
+        }
+        // var / 函数声明按函数作用域提升；TS enum/namespace 保持 `$0.*`
+        // 槽合并降级模型，不参与按迭代 env。
+        _ => {}
+    }
+}
+
+fn collect_for_head_lexical_names(head: &swc_ast::ForHead, names: &mut HashSet<String>) {
+    if let swc_ast::ForHead::VarDecl(decl) = head
+        && decl.kind != swc_ast::VarDeclKind::Var
+    {
+        for declarator in &decl.decls {
+            collect_pattern_names(&declarator.name, names);
         }
     }
 }

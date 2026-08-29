@@ -311,7 +311,7 @@ impl Lowerer {
         using_decl: &swc_ast::UsingDecl,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
 
         for declarator in &using_decl.decls {
             let mut names = Vec::new();
@@ -326,17 +326,22 @@ impl Lowerer {
                 // 降低初始化表达式
                 if let Some(init_expr) = &declarator.init {
                     let value = self.lower_expr(init_expr, block)?;
-                    self.current_function.append_instruction(
+                    block = self.resolve_store_block(block);
+                    // 标记已初始化（退出 TDZ）后经 store_binding_value 收口：
+                    // 循环体内被闭包捕获的 using 绑定须同步写入按迭代 env /
+                    // 共享 env，而非仅本地槽。
+                    let _ = self.scopes.mark_initialised(&name);
+                    let binding = CapturedBinding::new(name.clone(), scope_id);
+                    block = self.store_binding_value(
                         block,
-                        Instruction::StoreVar {
-                            name: ir_name.clone(),
-                            value,
-                        },
-                    );
+                        &binding,
+                        value,
+                        using_decl.span,
+                        true,
+                    )?;
+                } else {
+                    let _ = self.scopes.mark_initialised(&name);
                 }
-
-                // 标记已初始化
-                let _ = self.scopes.mark_initialised(&name);
 
                 // 记录 using 变量
                 self.active_using_vars.push(ActiveUsingVar {

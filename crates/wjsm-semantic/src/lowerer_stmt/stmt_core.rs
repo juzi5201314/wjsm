@@ -339,6 +339,7 @@ impl Lowerer {
         let captured = self.loop_body_captured_bindings(&while_stmt.body);
         self.mark_stable_loop_captures(&captured, &[]);
         block = self.initialize_stable_loop_captures(block, &captured, &[])?;
+        let iteration_frame = self.prepare_loop_body_iteration_frame(&mut block, &while_stmt.body)?;
 
         let header = self.current_function.new_block();
         let body = self.current_function.new_block();
@@ -375,10 +376,19 @@ impl Lowerer {
             break_reached: false,
         });
 
+        if let Some(frame) = &iteration_frame {
+            self.initialize_empty_iteration_env(body, frame);
+            self.iteration_env_stack.push(frame.clone());
+        }
         let body_flow = self.lower_stmt(&while_stmt.body, StmtFlow::Open(body))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, header);
+        if iteration_frame.is_some() {
+            self.iteration_env_stack
+                .pop()
+                .expect("iteration env stack underflow");
+        }
 
         self.label_stack.pop();
 
@@ -396,6 +406,7 @@ impl Lowerer {
         let captured = self.loop_body_captured_bindings(&do_while.body);
         self.mark_stable_loop_captures(&captured, &[]);
         block = self.initialize_stable_loop_captures(block, &captured, &[])?;
+        let iteration_frame = self.prepare_loop_body_iteration_frame(&mut block, &do_while.body)?;
 
         let body = self.current_function.new_block();
         let condition = self.current_function.new_block();
@@ -413,10 +424,19 @@ impl Lowerer {
             break_reached: false,
         });
 
+        if let Some(frame) = &iteration_frame {
+            self.initialize_empty_iteration_env(body, frame);
+            self.iteration_env_stack.push(frame.clone());
+        }
         let body_flow = self.lower_stmt(&do_while.body, StmtFlow::Open(body))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, condition);
+        if iteration_frame.is_some() {
+            self.iteration_env_stack
+                .pop()
+                .expect("iteration env stack underflow");
+        }
 
         let (cond, branch_condition) = self.lower_branch_condition(&do_while.test, condition)?;
         self.current_function.set_terminator(
@@ -502,16 +522,22 @@ impl Lowerer {
             }
             _ => Vec::new(),
         };
+        let body_capture_names = Self::loop_body_per_iteration_capture_names(&for_stmt.body);
         self.mark_stable_loop_captures(&captured, &iteration_bindings);
 
         let mut init_end = self.resolve_store_block(block);
         init_end =
             self.initialize_stable_loop_captures(init_end, &captured, &iteration_bindings)?;
-        let iteration_frame = if iteration_bindings.is_empty() {
+        let iteration_frame = if iteration_bindings.is_empty() && body_capture_names.is_empty() {
             None
         } else {
-            let (continuation, frame) = self.prepare_iteration_env(init_end, iteration_bindings)?;
+            let (continuation, mut frame) =
+                self.prepare_iteration_env(init_end, iteration_bindings)?;
             init_end = continuation;
+            if !body_capture_names.is_empty() {
+                frame.body_scope_watermark = Some(self.scopes.scope_count());
+                frame.body_capture_names = body_capture_names;
+            }
             self.initialize_iteration_env(init_end, &frame, false);
             Some(frame)
         };

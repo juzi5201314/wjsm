@@ -1170,14 +1170,17 @@ impl Lowerer {
                                 .scopes
                                 .declare(&name, VarKind::Let, true)
                                 .map_err(|msg| self.error(param.span(), msg))?;
-                            let ir_name = format!("${scope_id}.{name}");
-                            self.current_function.append_instruction(
+                            // 经 store_binding_value 收口：catch 参数是按次
+                            // 执行的块级绑定，循环体内被闭包捕获时须同步
+                            // 写入按迭代 env / 共享 env，而非仅本地槽。
+                            let catch_binding = CapturedBinding::new(name, scope_id);
+                            catch_entry = self.store_binding_value(
                                 catch_entry,
-                                Instruction::StoreVar {
-                                    name: ir_name,
-                                    value: exc_val,
-                                },
-                            );
+                                &catch_binding,
+                                exc_val,
+                                param.span(),
+                                true,
+                            )?;
                         }
                         _ => {
                             let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
@@ -1268,14 +1271,17 @@ impl Lowerer {
                             .scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(param.span(), msg))?;
-                        let ir_name = format!("${scope_id}.{name}");
-                        self.current_function.append_instruction(
+                        // 经 store_binding_value 收口：catch 参数是按次执行的
+                        // 块级绑定，循环体内被闭包捕获时须同步写入按迭代
+                        // env / 共享 env，而非仅本地槽。
+                        let catch_binding = CapturedBinding::new(name, scope_id);
+                        catch_entry = self.store_binding_value(
                             catch_entry,
-                            Instruction::StoreVar {
-                                name: ir_name,
-                                value: exc_val,
-                            },
-                        );
+                            &catch_binding,
+                            exc_val,
+                            param.span(),
+                            true,
+                        )?;
                     }
                     _ => {
                         // 先取出 exc_var，再弹出 try_context
