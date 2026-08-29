@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+ask? got "first-answer"
+closed
+after-close Error readline was closed
+line-event "second-line"
+--- stderr ---

@@ -1,6 +1,6 @@
 # Node.js 兼容矩阵
 
-wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到同一封装（ESM `import` 与 CJS `require` 均可）。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
+wjsm 内置 43 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到同一封装（ESM `import` 与 CJS `require` 均可）。下表的「导出项」是核对时通过静态导入实测得到的键数量，用于判断封装的粗略完整度，不代表逐个 API 与 Node 行为一致。
 
 | 模块 | 导出项 | 备注 |
 | --- | --- | --- |
@@ -43,10 +43,12 @@ wjsm 内置 41 个 Node.js 模块封装，`node:` 前缀和裸名都能解析到
 | `constants` | 13 | `os.constants` 与 `fs.constants` 摊平（Node 中已弃用） |
 | `diagnostics_channel` | 5 | `channel`/`subscribe`/`unsubscribe`/`hasSubscribers`/`Channel` |
 | `module` | 7 | `createRequire`（与 CJS 内建 `require` 同一宿主实现）/`builtinModules`（来自注册表）/`isBuiltin`/legacy `Module` 构造器 |
+| `readline` | 8 | `createInterface`/`Interface`/行事件/`question` 与光标操作（`cursorTo`/`moveCursor`/`clearLine`/`clearScreenDown`）；`promises` 属性同 `readline/promises`；`emitKeypressEvents` 依赖终端逐键流，未提供 |
+| `readline/promises` | 4 | `createInterface`（`question` 返回 Promise）与 `Readline` 光标批量队列（`commit`/`rollback`） |
 | `tty` | 4 | `isatty` 真实 fd 探测；`ReadStream`/`WriteStream` 仅形状（stdio 不挂接原始终端流） |
 | `v8` | 10 | `getHeapStatistics` 数据与 `process.memoryUsage` 同源（真实 GC 计量，未计量维度报 0）；`serialize` 等抛「not implemented」 |
 
-未列出的模块（如 `readline`、`repl`、`dns`、`http2`）没有内置封装，导入 `node:` 前缀形式会报 `Unknown built-in module`。其中 `readline` 属于明确排除：宿主 `process.stdin` 目前只有 `on`/`resume` 空实现，没有真实的按行读取能力，提供 `readline` 封装只能是假实现；待宿主 stdin 具备真实读取能力后再补。`dns`、`http2` 涉及真实网络协议栈，同样不在当前范围。
+未列出的模块（如 `repl`、`dns`、`http2`）没有内置封装，导入 `node:` 前缀形式会报 `Unknown built-in module`。`readline` 曾因宿主 `process.stdin` 只有 `on`/`resume` 空实现而被明确排除；现在 `process.stdin` 支持管道输入的真实按块读取（flowing/paused、`read(size)`、`setEncoding('utf8')`、异步迭代），`readline` 与 `readline/promises` 已随之提供（TTY 逐键交互输入仍不在范围，见 limitations）。`dns`、`http2` 涉及真实网络协议栈，不在当前范围。
 
 > <details><summary>「导出项数量」够用吗？</summary>
 >

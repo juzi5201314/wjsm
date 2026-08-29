@@ -162,6 +162,20 @@ const BUILTIN_MODULES: &[BuiltinModule] = &[
         source: include_str!("../builtin_js/node_punycode.js"),
     },
     BuiltinModule {
+        canonical: "readline",
+        source: concat!(
+            include_str!("../builtin_js/node_readline/core.js"),
+            include_str!("../builtin_js/node_readline/exports.js"),
+        ),
+    },
+    BuiltinModule {
+        canonical: "readline/promises",
+        source: concat!(
+            include_str!("../builtin_js/node_readline/core.js"),
+            include_str!("../builtin_js/node_readline/promises_exports.js"),
+        ),
+    },
+    BuiltinModule {
         canonical: "process",
         source: include_str!("../builtin_js/node_process.js"),
     },
@@ -314,6 +328,8 @@ mod tests {
             "timers",
             "timers/promises",
             "punycode",
+            "readline",
+            "readline/promises",
             "process",
             "console",
             "constants",

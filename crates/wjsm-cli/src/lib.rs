@@ -2228,6 +2228,16 @@ pub fn run_file_in_process_with_root(input: &Path, root: &Path) -> (i32, Vec<u8>
     run_file_in_process_with_options_and_root(input, Some(root), &[], &[], None)
 }
 
+/// 同上，附加进程环境覆盖：fixture runner 经 `WJSM_TEST_STDIN` 注入确定性
+/// stdin 内容（进程内运行无法用真实管道，钩子见 dispatch/process_stdin.rs）。
+pub fn run_file_in_process_with_root_and_env(
+    input: &Path,
+    root: &Path,
+    env_overrides: &[(&str, &str)],
+) -> (i32, Vec<u8>, Vec<u8>) {
+    run_file_in_process_with_options_and_root(input, Some(root), &[], env_overrides, None)
+}
+
 /// 在测试进程内执行一段 source，使用与 CLI 相同的 portable artifact/native runtime 路径。
 pub fn run_source_in_process(source: &str) -> (i32, Vec<u8>, Vec<u8>) {
     run_source_in_process_with_flags(source, PipelineFlags::default())
