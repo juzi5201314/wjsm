@@ -6,7 +6,7 @@ use num_traits::ToPrimitive;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, range_error, to_number, type_error};
+use super::runtime::{fail_dispatch, range_error, to_number_coerced, type_error};
 use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
 #[derive(Clone)]
@@ -104,7 +104,10 @@ pub(super) fn incompatible_receiver(
     method: &str,
     args: &[i64],
 ) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let message = format!(
         "Method {method} called on incompatible receiver {}",
         super::iterator_prototypes::render_incompatible_receiver(state, receiver)
@@ -112,21 +115,96 @@ pub(super) fn incompatible_receiver(
     type_error(ctx, state, &message)
 }
 
-/// ToIndex（§7.1.22）近似：缺省 / undefined / NaN / 不可转换 → 0，数值
-/// 截断取整；负值或超出 usize 可表示范围时 Err 携带截断值供 V8 文案渲染。
-pub(super) fn to_index(state: &NativeAgentState, encoded: Option<i64>) -> Result<usize, f64> {
+/// ToIndex（§7.1.22）失败类别。
+pub(super) enum ToIndexError {
+    /// 转换期间已抛出异常（用户 @@toPrimitive / valueOf / toString 抛出、
+    /// Symbol / BigInt 的 TypeError 等），携带异常编码原样上抛。
+    Thrown(i64),
+    /// ToIntegerOrInfinity 结果不在 [0, 2^53-1]，携带截断值供调用方渲染
+    /// 各自的 V8 文案。
+    OutOfRange(f64),
+}
+
+/// ToIndex（§7.1.22）：缺省 / undefined 取 0；否则 ToIntegerOrInfinity——
+/// ToNumber 可执行用户转换（@@toPrimitive / valueOf / toString），Symbol /
+/// BigInt 按 V8 文案抛 TypeError；NaN / ±0 归 0，截断结果必须落在
+/// [0, 2^53-1]，否则 RangeError（文案由调用方按站点渲染）。
+pub(super) fn to_index(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    encoded: Option<i64>,
+) -> Result<usize, ToIndexError> {
     let Some(encoded) = encoded else {
         return Ok(0);
     };
     if value::is_undefined(encoded) {
         return Ok(0);
     }
-    let number = to_number(state, encoded).unwrap_or(0.0);
+    let number = to_number_coerced(ctx, state, encoded).map_err(ToIndexError::Thrown)?;
     if number.is_nan() {
         return Ok(0);
     }
     let truncated = number.trunc();
-    truncated.to_usize().ok_or(truncated)
+    // 2^53 - 1（Number.MAX_SAFE_INTEGER）：ToIndex 的合法闭区间上界。
+    if !(0.0..=9_007_199_254_740_991.0).contains(&truncated) {
+        return Err(ToIndexError::OutOfRange(truncated));
+    }
+    Ok(truncated as usize)
+}
+
+/// 宿主 buffer 字节长度上限：运行时各 byteLength accessor 以 u32 编码长度，
+/// 超过 u32::MAX 的 backing 无法被正确观察，等价于分配失败（对应 V8
+/// kMaxByteLength 越界时的 "Array buffer allocation failed" RangeError）。
+const MAX_BUFFER_BYTE_LENGTH: usize = u32::MAX as usize;
+
+/// CreateByteDataBlock（§6.2.9.2）的可恢复分配：容量经 `try_reserve_exact`
+/// 申请，失败返回 None 供调用方抛 RangeError，绝不触发 Rust allocator 的
+/// 不可恢复 abort。resizable buffer 传入 capacity = maxByteLength 一次性
+/// 预留（对齐 V8 构造期 reserve），后续 resize / grow 不再分配。
+pub(crate) fn try_allocate_bytes(length: usize, capacity: usize) -> Option<Vec<u8>> {
+    let capacity = capacity.max(length);
+    if capacity > MAX_BUFFER_BYTE_LENGTH {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).ok()?;
+    bytes.resize(length, 0);
+    Some(bytes)
+}
+
+/// GetArrayBufferMaxByteLengthOption（§25.1.3.3）：options 非对象保持固定
+/// 长度；`maxByteLength` 经 Get 读取（getter 可执行）后 ToIndex，undefined
+/// 保持固定长度，越界或小于 length 按 V8 文案 RangeError。
+pub(super) fn max_byte_length_option(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    options: Option<i64>,
+    length: usize,
+) -> Result<Option<usize>, i64> {
+    let Some(options) = options else {
+        return Ok(None);
+    };
+    if !value::is_js_object(options) && !value::is_regexp(options) {
+        return Ok(None);
+    }
+    let key = state
+        .intern_text("maxByteLength".into(), value::TAG_STRING)
+        .ok_or_else(|| fail_dispatch(ctx))?;
+    let encoded =
+        super::runtime::get_property(ctx, state, options, key).map_err(|_| fail_dispatch(ctx))?;
+    if value::is_exception(encoded) {
+        return Err(encoded);
+    }
+    if value::is_undefined(encoded) {
+        return Ok(None);
+    }
+    match to_index(ctx, state, Some(encoded)) {
+        Ok(max) if length <= max => Ok(Some(max)),
+        Ok(_) | Err(ToIndexError::OutOfRange(_)) => {
+            Err(range_error(ctx, state, "Invalid array buffer max length"))
+        }
+        Err(ToIndexError::Thrown(exception)) => Err(exception),
+    }
 }
 
 /// GetViewByteLength（§25.3.1.1）：length-tracking 视图随底层 buffer 当前
@@ -291,7 +369,8 @@ pub(crate) fn from_shared_bytes_with_max(
 }
 
 pub(crate) fn allocate_array_buffer(state: &mut NativeAgentState, length: usize) -> Option<i64> {
-    from_shared_bytes(state, Rc::new(RefCell::new(vec![0; length])))
+    let bytes = try_allocate_bytes(length, length)?;
+    from_shared_bytes(state, Rc::new(RefCell::new(bytes)))
 }
 
 fn array_buffer_constructor(
@@ -299,29 +378,27 @@ fn array_buffer_constructor(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    // §25.1.4.1：ToIndex(length)，无实参 / undefined 取 0，负值 RangeError。
-    let Ok(length) = to_index(state, args.first().copied()) else {
-        return range_error(ctx, state, "Invalid array buffer length");
-    };
-    // §25.1.4.1 步骤 3 GetArrayBufferMaxByteLengthOption：options 非对象或
-    // maxByteLength 为 undefined 时保持固定长度；否则 ToIndex 且必须 ≥ length
-    //（§25.1.3.1 AllocateArrayBuffer 步骤 3，V8 文案 RangeError）。
-    let max_option = args.get(1).and_then(|options| {
-        if value::is_undefined(*options) {
-            None
-        } else {
-            super::modules::named_property(state, *options, "maxByteLength")
+    // §25.1.4.1 步骤 2：ToIndex(length)——可执行用户转换；Symbol / BigInt
+    // 的 TypeError 原样上抛，越界按 V8 文案 RangeError。
+    let length = match to_index(ctx, state, args.first().copied()) {
+        Ok(length) => length,
+        Err(ToIndexError::Thrown(exception)) => return exception,
+        Err(ToIndexError::OutOfRange(_)) => {
+            return range_error(ctx, state, "Invalid array buffer length");
         }
-    });
-    let max_byte_length = match max_option {
-        None => None,
-        Some(encoded) if value::is_undefined(encoded) => None,
-        Some(encoded) => match to_index(state, Some(encoded)) {
-            Ok(max) if length <= max => Some(max),
-            _ => return range_error(ctx, state, "Invalid array buffer max length"),
-        },
     };
-    from_shared_bytes_with_max(state, Rc::new(RefCell::new(vec![0; length])), max_byte_length)
+    // §25.1.4.1 步骤 3 GetArrayBufferMaxByteLengthOption。
+    let max_byte_length = match max_byte_length_option(ctx, state, args.get(1).copied(), length) {
+        Ok(max) => max,
+        Err(exception) => return exception,
+    };
+    // §25.1.3.1 AllocateArrayBuffer / CreateByteDataBlock 步骤 1：分配失败
+    // 抛 RangeError（V8 文案），不允许把宿主 OOM 变成不可恢复 abort；
+    // resizable buffer 按 maxByteLength 一次性预留容量。
+    let Some(bytes) = try_allocate_bytes(length, max_byte_length.unwrap_or(length)) else {
+        return range_error(ctx, state, "Array buffer allocation failed");
+    };
+    from_shared_bytes_with_max(state, Rc::new(RefCell::new(bytes)), max_byte_length)
         .unwrap_or_else(|| fail_dispatch(ctx))
 }
 
@@ -346,27 +423,51 @@ fn array_buffer_slice(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(buffer) = args
+    let receiver = args
         .first()
-        .and_then(|receiver| state.array_buffers.get(&value::decode_handle(*receiver)))
-        .cloned()
-    else {
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    let handle = value::decode_handle(receiver);
+    let Some(buffer) = state.array_buffers.get(&handle).cloned() else {
         return incompatible_receiver(ctx, state, "ArrayBuffer.prototype.slice", args);
     };
     // §25.1.6.16 步骤 4：IsDetachedBuffer 抛 TypeError（V8 文案）。
+    let detached_slice = "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer";
     if buffer.detached {
-        return type_error(
-            ctx,
-            state,
-            "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
-        );
+        return type_error(ctx, state, detached_slice);
     }
+    // §25.1.6.16 步骤 6–9：start / end 经 ToIntegerOrInfinity（可执行用户
+    // 转换，Symbol / BigInt TypeError 原样上抛）；end 为 undefined 取 len。
     let length = buffer.bytes.borrow().len();
-    let start = relative_index(state, args.get(1).copied(), length);
-    let end = args.get(2).map_or(length, |encoded| {
-        relative_index(state, Some(*encoded), length)
-    });
-    let bytes = buffer.bytes.borrow()[start.min(end)..end.min(length)].to_vec();
+    let start = match args.get(1) {
+        None => 0,
+        Some(encoded) => match relative_index(ctx, state, *encoded, length) {
+            Ok(start) => start,
+            Err(exception) => return exception,
+        },
+    };
+    let end = match args.get(2) {
+        None => length,
+        Some(encoded) if value::is_undefined(*encoded) => length,
+        Some(encoded) => match relative_index(ctx, state, *encoded, length) {
+            Ok(end) => end,
+            Err(exception) => return exception,
+        },
+    };
+    // 用户转换可能中途 detach（§25.1.6.16 步骤 14 的再检查，V8 同文案）。
+    if state
+        .array_buffers
+        .get(&handle)
+        .is_none_or(|buffer| buffer.detached)
+    {
+        return type_error(ctx, state, detached_slice);
+    }
+    let bytes = {
+        // 用户转换可能中途 resize：拷贝范围按当前字节数收口，避免越界。
+        let source = buffer.bytes.borrow();
+        let upper = source.len();
+        source[start.min(end).min(upper)..end.min(upper)].to_vec()
+    };
     // 先物化原型再分配实例（同 `from_shared_bytes`），此处保留 GC 重试分配。
     let Some(prototype) = state.ensure_array_buffer_prototype() else {
         return fail_dispatch(ctx);
@@ -397,17 +498,59 @@ fn array_buffer_slice(
     object
 }
 
+/// DataView 构造期读取底层 buffer 的当前 byteLength：AB detach 后按 V8
+/// 文案抛 TypeError（§25.3.2.1 步骤 4 与步骤 12 的再检查共用）。
+fn data_view_source_length(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    buffer_handle: u32,
+    shared: &Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
+) -> Result<usize, i64> {
+    if let Some(shared) = shared {
+        return Ok(shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len());
+    }
+    let Some((detached, length)) = state
+        .array_buffers
+        .get(&buffer_handle)
+        .map(|buffer| (buffer.detached, buffer.bytes.borrow().len()))
+    else {
+        return Err(fail_dispatch(ctx));
+    };
+    if detached {
+        return Err(type_error(
+            ctx,
+            state,
+            "Cannot perform DataView constructor on a detached ArrayBuffer",
+        ));
+    }
+    Ok(length)
+}
+
 fn data_view_constructor(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let buffer = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let buffer = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let buffer_handle = value::decode_handle(buffer);
     let shared = state
         .shared_array_buffers
         .get(&buffer_handle)
         .map(|sab| sab.backing.bytes.clone());
+    // §25.3.2.1 步骤 2 RequireInternalSlot(buffer) 失败（V8 文案）。
+    if shared.is_none() && !state.array_buffers.contains_key(&buffer_handle) {
+        return type_error(
+            ctx,
+            state,
+            "First argument to DataView constructor must be an ArrayBuffer",
+        );
+    }
     // buffer 可变长（resizable AB / growable SAB）且 byteLength 缺省时视图为
     // length-tracking（§25.3.2.1 步骤 8.b [[ByteLength]] = auto）。
     let buffer_resizable = if shared.is_some() {
@@ -421,34 +564,12 @@ fn data_view_constructor(
             .get(&buffer_handle)
             .is_some_and(|array_buffer| array_buffer.max_byte_length.is_some())
     };
-    let total_length = if let Some(shared) = &shared {
-        shared.lock().map(|bytes| bytes.len()).unwrap_or(0)
-    } else if let Some(array_buffer) = state.array_buffers.get(&buffer_handle) {
-        // §25.3.2.1 步骤 6：IsDetachedBuffer 抛 TypeError（V8 文案）。
-        if array_buffer.detached {
-            return type_error(
-                ctx,
-                state,
-                "Cannot perform DataView constructor on a detached ArrayBuffer",
-            );
-        }
-        array_buffer.bytes.borrow().len()
-    } else {
-        // §25.3.2.1 步骤 2 RequireInternalSlot(buffer) 失败（V8 文案）。
-        return type_error(
-            ctx,
-            state,
-            "First argument to DataView constructor must be an ArrayBuffer",
-        );
-    };
-    // §25.3.2.1 步骤 3–5：ToIndex(byteOffset)，越界 RangeError（V8 文案）。
-    let offset = match to_index(state, args.get(1).copied()) {
-        Ok(offset) if offset <= total_length => offset,
-        Ok(offset) => {
-            let message = format!("Start offset {offset} is outside the bounds of the buffer");
-            return range_error(ctx, state, &message);
-        }
-        Err(invalid) => {
+    // §25.3.2.1 步骤 3：ToIndex(byteOffset) 先于 detach 检查（用户转换的
+    // 副作用可观察，Node 实测先行），越界 RangeError（V8 文案）。
+    let offset = match to_index(ctx, state, args.get(1).copied()) {
+        Ok(offset) => offset,
+        Err(ToIndexError::Thrown(exception)) => return exception,
+        Err(ToIndexError::OutOfRange(invalid)) => {
             let message = format!(
                 "Start offset {} is outside the bounds of the buffer",
                 wjsm_builtins::number_format::format_number_js(invalid)
@@ -456,27 +577,48 @@ fn data_view_constructor(
             return range_error(ctx, state, &message);
         }
     };
+    // §25.3.2.1 步骤 4–6：detach 检查（用户转换可能中途 detach）后按当前
+    // byteLength 校验 offset。
+    let total_length = match data_view_source_length(ctx, state, buffer_handle, &shared) {
+        Ok(total_length) => total_length,
+        Err(exception) => return exception,
+    };
+    if offset > total_length {
+        let message = format!("Start offset {offset} is outside the bounds of the buffer");
+        return range_error(ctx, state, &message);
+    }
     // §25.3.2.1 步骤 8–9：byteLength 缺省取剩余长度（可变长 buffer 转为
-    // length-tracking），越界 RangeError。
-    let length_tracking =
-        buffer_resizable && args.get(2).is_none_or(|encoded| value::is_undefined(*encoded));
+    // length-tracking）；显式值经 ToIndex（可执行用户转换）后重读当前长度
+    // 再校验 detach 与边界（步骤 12–14 的再检查）。
+    let length_tracking = buffer_resizable
+        && args
+            .get(2)
+            .is_none_or(|encoded| value::is_undefined(*encoded));
     let length = match args.get(2) {
         None => total_length - offset,
         Some(encoded) if value::is_undefined(*encoded) => total_length - offset,
-        Some(encoded) => match to_index(state, Some(*encoded)) {
-            Ok(length) if offset.saturating_add(length) <= total_length => length,
-            Ok(length) => {
-                let message = format!("Invalid DataView length {length}");
+        Some(encoded) => {
+            let requested = match to_index(ctx, state, Some(*encoded)) {
+                Ok(requested) => requested,
+                Err(ToIndexError::Thrown(exception)) => return exception,
+                Err(ToIndexError::OutOfRange(invalid)) => {
+                    let message = format!(
+                        "Invalid DataView length {}",
+                        wjsm_builtins::number_format::format_number_js(invalid)
+                    );
+                    return range_error(ctx, state, &message);
+                }
+            };
+            let current_length = match data_view_source_length(ctx, state, buffer_handle, &shared) {
+                Ok(current_length) => current_length,
+                Err(exception) => return exception,
+            };
+            if offset.saturating_add(requested) > current_length {
+                let message = format!("Invalid DataView length {requested}");
                 return range_error(ctx, state, &message);
             }
-            Err(invalid) => {
-                let message = format!(
-                    "Invalid DataView length {}",
-                    wjsm_builtins::number_format::format_number_js(invalid)
-                );
-                return range_error(ctx, state, &message);
-            }
-        },
+            requested
+        }
     };
     // 先物化 %DataView.prototype% 再分配实例：创建即接线 [[Prototype]]，
     // instanceof / constructor / @@toStringTag 品牌沿真实原型链成立
@@ -553,12 +695,17 @@ fn data_view_get(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    // GetViewValue（§25.3.3.1）步骤 2：ToIndex(requestIndex) 先于 detach /
+    // 越界检查（用户转换可执行），越界按 V8 kInvalidDataViewAccessorOffset。
+    let index = match to_index(ctx, state, args.get(1).copied()) {
+        Ok(index) => index,
+        Err(ToIndexError::Thrown(exception)) => return exception,
+        Err(ToIndexError::OutOfRange(_)) => return data_view_out_of_bounds(ctx, state),
+    };
+    // 用户转换可能中途 detach / resize：按当前状态校验视图与边界。
     let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
         Ok(length) => length,
         Err(exception) => return exception,
-    };
-    let Ok(index) = to_index(state, args.get(1).copied()) else {
-        return data_view_out_of_bounds(ctx, state);
     };
     let start = view.offset.saturating_add(index);
     if index.saturating_add(kind.size()) > view_length {
@@ -602,20 +749,27 @@ fn data_view_set(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    // SetViewValue（§25.3.3.2）步骤 2–3：ToIndex(requestIndex) 与
+    // ToNumber(value) 先于 detach / 越界检查（用户转换可执行，Symbol /
+    // BigInt 抛 TypeError 原样上抛）。
+    let index = match to_index(ctx, state, args.get(1).copied()) {
+        Ok(index) => index,
+        Err(ToIndexError::Thrown(exception)) => return exception,
+        Err(ToIndexError::OutOfRange(_)) => return data_view_out_of_bounds(ctx, state),
+    };
+    let stored = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+    let number = match to_number_coerced(ctx, state, stored) {
+        Ok(number) => number,
+        Err(exception) => return exception,
+    };
+    // 用户转换可能中途 detach / resize：按当前状态校验视图与边界。
     let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
         Ok(length) => length,
         Err(exception) => return exception,
     };
-    let Ok(index) = to_index(state, args.get(1).copied()) else {
-        return data_view_out_of_bounds(ctx, state);
-    };
     if index.saturating_add(kind.size()) > view_length {
         return data_view_out_of_bounds(ctx, state);
     }
-    let number = args
-        .get(2)
-        .and_then(|stored| to_number(state, *stored))
-        .unwrap_or(f64::NAN);
     let little_endian = args
         .get(3)
         .is_some_and(|encoded| value::is_bool(*encoded) && value::decode_bool(*encoded));
@@ -661,12 +815,16 @@ fn data_view_get_bigint(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
+    // GetViewValue（§25.3.3.1）步骤 2：ToIndex 先于 detach / 越界检查。
+    let index = match to_index(ctx, state, args.get(1).copied()) {
+        Ok(index) => index,
+        Err(ToIndexError::Thrown(exception)) => return exception,
+        Err(ToIndexError::OutOfRange(_)) => return data_view_out_of_bounds(ctx, state),
+    };
+    // 用户转换可能中途 detach / resize：按当前状态校验视图与边界。
     let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
         Ok(length) => length,
         Err(exception) => return exception,
-    };
-    let Ok(index) = to_index(state, args.get(1).copied()) else {
-        return data_view_out_of_bounds(ctx, state);
     };
     if index.saturating_add(8) > view_length {
         return data_view_out_of_bounds(ctx, state);
@@ -717,20 +875,25 @@ fn data_view_set_bigint(
     else {
         return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
-    let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
-        Ok(length) => length,
-        Err(exception) => return exception,
+    // SetViewValue（§25.3.3.2）步骤 2–3：ToIndex 与 ToBigInt 先于 detach /
+    // 越界检查（用户转换可执行）。
+    let index = match to_index(ctx, state, args.get(1).copied()) {
+        Ok(index) => index,
+        Err(ToIndexError::Thrown(exception)) => return exception,
+        Err(ToIndexError::OutOfRange(_)) => return data_view_out_of_bounds(ctx, state),
     };
-    let Ok(index) = to_index(state, args.get(1).copied()) else {
-        return data_view_out_of_bounds(ctx, state);
-    };
-    if index.saturating_add(8) > view_length {
-        return data_view_out_of_bounds(ctx, state);
-    }
     let stored = args.get(2).copied().unwrap_or_else(value::encode_undefined);
     let Some(integer) = super::bigint::read(state, stored) else {
         return type_error(ctx, state, "Cannot convert value to a BigInt");
     };
+    // 用户转换可能中途 detach / resize：按当前状态校验视图与边界。
+    let view_length = match require_data_view_length(ctx, state, &view, builtin.as_str()) {
+        Ok(length) => length,
+        Err(exception) => return exception,
+    };
+    if index.saturating_add(8) > view_length {
+        return data_view_out_of_bounds(ctx, state);
+    }
     let little_endian = args
         .get(3)
         .is_some_and(|encoded| value::is_bool(*encoded) && value::decode_bool(*encoded));
@@ -803,15 +966,25 @@ fn write_bytes<const N: usize>(destination: &mut [u8], mut bytes: [u8; N], littl
     destination.copy_from_slice(&bytes);
 }
 
-fn relative_index(state: &NativeAgentState, encoded: Option<i64>, length: usize) -> usize {
-    let number = encoded
-        .and_then(|encoded| to_number(state, encoded))
-        .and_then(|number| number.to_isize())
-        .unwrap_or(0);
-    if number < 0 {
-        length.saturating_sub(number.unsigned_abs())
+/// slice 的相对索引（§25.1.6.16 步骤 6–9）：ToIntegerOrInfinity 可执行用户
+/// 转换（Symbol / BigInt TypeError 原样上抛），NaN 归 0，负值自尾部折算，
+/// ±Infinity 分别收口到 0 / length。
+pub(super) fn relative_index(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    encoded: i64,
+    length: usize,
+) -> Result<usize, i64> {
+    let number = to_number_coerced(ctx, state, encoded)?;
+    if number.is_nan() {
+        return Ok(0);
+    }
+    let truncated = number.trunc();
+    if truncated < 0.0 {
+        let magnitude = (-truncated).min(length as f64) as usize;
+        Ok(length - magnitude)
     } else {
-        usize::try_from(number).unwrap_or(usize::MAX).min(length)
+        Ok(truncated.min(length as f64) as usize)
     }
 }
 pub(crate) enum ViewBacking {
@@ -872,11 +1045,14 @@ pub(crate) fn from_view(
     length_tracking: bool,
 ) -> Option<i64> {
     let buffer_handle = value::decode_handle(backing);
-    let shared = if state.array_buffers.get(&buffer_handle).is_some_and(|buffer| {
-        offset
-            .checked_add(length)
-            .is_some_and(|end| end <= buffer.bytes.borrow().len())
-    }) {
+    let shared = if state
+        .array_buffers
+        .get(&buffer_handle)
+        .is_some_and(|buffer| {
+            offset
+                .checked_add(length)
+                .is_some_and(|end| end <= buffer.bytes.borrow().len())
+        }) {
         None
     } else {
         let shared = state.shared_array_buffers.get(&buffer_handle)?.clone();

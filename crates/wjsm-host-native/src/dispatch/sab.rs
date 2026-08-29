@@ -10,11 +10,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use num_traits::ToPrimitive;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, range_error, to_number};
+use super::runtime::{fail_dispatch, range_error};
 use crate::NativeAgentState;
 
 /// cluster 级共享 backing：bytes 本体 + 元数据。
@@ -95,28 +94,30 @@ pub(super) fn dispatch_sab(
 }
 
 /// `new SharedArrayBuffer(length)` 或 `new SharedArrayBuffer(length, { maxByteLength })`；
-/// ToIndex(length)：实参缺失 / undefined 取 0，负值 RangeError（§25.2.4.1）。
+/// ToIndex(length)（§25.2.4.1）：可执行用户转换（Symbol / BigInt 抛
+/// TypeError），实参缺失 / undefined / NaN 取 0，越界按 V8 文案 RangeError。
 fn constructor(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Ok(length) = super::buffers::to_index(state, args.first().copied()) else {
-        return range_error(ctx, state, "Invalid array buffer length");
-    };
-    let max_option = args.get(1).and_then(|options| {
-        if value::is_undefined(*options) {
-            None
-        } else {
-            super::modules::named_property(state, *options, "maxByteLength")
+    let length = match super::buffers::to_index(ctx, state, args.first().copied()) {
+        Ok(length) => length,
+        Err(super::buffers::ToIndexError::Thrown(exception)) => return exception,
+        Err(super::buffers::ToIndexError::OutOfRange(_)) => {
+            return range_error(ctx, state, "Invalid array buffer length");
         }
-    });
-    let max_byte_length = match max_option {
-        None => None,
-        Some(encoded) if value::is_undefined(encoded) => None,
-        Some(encoded) => match super::buffers::to_index(state, Some(encoded)) {
-            // §25.2.3.1 步骤 3：length > maxByteLength 或负值 RangeError（V8 文案）。
-            Ok(max) if length <= max => Some(max),
-            _ => return range_error(ctx, state, "Invalid array buffer max length"),
-        },
     };
-    let Some(object) = allocate_shared_array_buffer(ctx, state, length, max_byte_length) else {
+    // §25.2.3.1 步骤 3 GetArrayBufferMaxByteLengthOption：length >
+    // maxByteLength 或越界按 V8 文案 RangeError。
+    let max_byte_length =
+        match super::buffers::max_byte_length_option(ctx, state, args.get(1).copied(), length) {
+            Ok(max) => max,
+            Err(exception) => return exception,
+        };
+    // §25.2.3.1 AllocateSharedArrayBuffer / CreateSharedByteDataBlock：分配
+    // 失败按 V8 文案 RangeError（§6.2.9.3 步骤 2），不允许宿主 OOM abort；
+    // growable SAB 按 maxByteLength 一次性预留容量，后续 grow 不再分配。
+    let Some(backing_id) = state.allocate_sab_backing(length, max_byte_length) else {
+        return range_error(ctx, state, "Array buffer allocation failed");
+    };
+    let Some(object) = allocate_shared_array_buffer(ctx, state, backing_id) else {
         return fail_dispatch(ctx);
     };
     object
@@ -143,14 +144,14 @@ pub(crate) fn materialize_from_backing(
     Some(object)
 }
 
-/// 分配挂好 [[Prototype]] 的 SharedArrayBuffer 实例：先物化
-/// %SharedArrayBuffer.prototype% 再分配实例（物化期间的分配不会悬空尚未
-/// 入根的实例对象），创建即接线原型（§25.2.3.1 AllocateSharedArrayBuffer）。
+/// 为既有 cluster backing 分配挂好 [[Prototype]] 的 SharedArrayBuffer 实例：
+/// 先物化 %SharedArrayBuffer.prototype% 再分配实例（物化期间的分配不会
+/// 悬空尚未入根的实例对象），创建即接线原型（§25.2.3.1
+/// AllocateSharedArrayBuffer）。
 fn allocate_shared_array_buffer(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
-    length: usize,
-    max_byte_length: Option<usize>,
+    backing_id: u32,
 ) -> Option<i64> {
     let prototype = state.ensure_shared_array_buffer_prototype()?;
     let object = state.allocate_object_with_gc_retry(ctx, 1, false).ok()?;
@@ -162,7 +163,6 @@ fn allocate_shared_array_buffer(
             value::decode_handle(prototype),
         )
         .ok()?;
-    let backing_id = state.allocate_sab_backing(length, max_byte_length);
     state.insert_shared_array_buffer(value::decode_handle(object), backing_id);
     Some(object)
 }
@@ -228,7 +228,10 @@ fn max_byte_length(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args
 }
 
 fn grow(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     // §25.2.6.4 步骤 2：品牌检查要求可增长 SAB——固定长度 SAB 与非 SAB
     // 同按 V8 incompatible receiver TypeError，且先于 ToIndex(newLength)。
@@ -244,10 +247,16 @@ fn grow(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
             args,
         );
     }
-    // §25.2.6.4 步骤 3：ToIndex(newLength)，负值或不可表示按 V8 文案 RangeError。
+    // §25.2.6.4 步骤 3：ToIndex(newLength)——可执行用户转换（Symbol /
+    // BigInt 抛 TypeError），数值越界与 shrink / 超 max 同按 V8 文案
+    // RangeError。
     let invalid_length = "SharedArrayBuffer.prototype.grow: Invalid length parameter";
-    let Ok(new_length) = super::buffers::to_index(state, args.get(1).copied()) else {
-        return range_error(ctx, state, invalid_length);
+    let new_length = match super::buffers::to_index(ctx, state, args.get(1).copied()) {
+        Ok(new_length) => new_length,
+        Err(super::buffers::ToIndexError::Thrown(exception)) => return exception,
+        Err(super::buffers::ToIndexError::OutOfRange(_)) => {
+            return range_error(ctx, state, invalid_length);
+        }
     };
     let Some(entry) = state.shared_array_buffers.get_mut(&handle) else {
         return fail_dispatch(ctx);
@@ -264,7 +273,10 @@ fn grow(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
 }
 
 fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let receiver = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let handle = value::decode_handle(receiver);
     let Some(entry) = state.shared_array_buffers.get(&handle).cloned() else {
         return super::buffers::incompatible_receiver(
@@ -274,11 +286,24 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
             args,
         );
     };
+    // §25.2.6.6 步骤 6–9：start / end 经 ToIntegerOrInfinity（可执行用户
+    // 转换，Symbol / BigInt TypeError 原样上抛）；end 为 undefined 取 len。
     let length = entry.byte_length();
-    let start = relative_index(state, args.get(1).copied(), length);
-    let end = args.get(2).map_or(length, |encoded| {
-        relative_index(state, Some(*encoded), length)
-    });
+    let start = match args.get(1) {
+        None => 0,
+        Some(encoded) => match super::buffers::relative_index(ctx, state, *encoded, length) {
+            Ok(start) => start,
+            Err(exception) => return exception,
+        },
+    };
+    let end = match args.get(2) {
+        None => length,
+        Some(encoded) if value::is_undefined(*encoded) => length,
+        Some(encoded) => match super::buffers::relative_index(ctx, state, *encoded, length) {
+            Ok(end) => end,
+            Err(exception) => return exception,
+        },
+    };
     let bytes = entry.slice(start, end);
     // 先物化原型再分配实例（同 `allocate_shared_array_buffer`）。
     let Some(prototype) = state.ensure_shared_array_buffer_prototype() else {
@@ -301,18 +326,4 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     let backing_id = state.allocate_sab_backing_from_bytes(bytes);
     state.insert_shared_array_buffer(value::decode_handle(object), backing_id);
     object
-}
-
-fn relative_index(state: &NativeAgentState, input: Option<i64>, length: usize) -> usize {
-    let Some(encoded) = input else {
-        return 0;
-    };
-    let Some(number) = to_number(state, encoded).and_then(|number| number.to_i64()) else {
-        return 0;
-    };
-    if number < 0 {
-        (length as i64 + number).max(0) as usize
-    } else {
-        (number as usize).min(length)
-    }
 }

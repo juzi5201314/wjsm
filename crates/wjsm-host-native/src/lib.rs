@@ -6530,8 +6530,13 @@ impl NativeAgentState {
             || dispatch::fetch::has_pending(self)
     }
 
-    /// 在 cluster 级 SAB 表中分配 backing，返回 backing_id。
-    fn allocate_sab_backing(&self, byte_length: usize, max_byte_length: Option<usize>) -> u32 {
+    /// 在 cluster 级 SAB 表中分配 backing，返回 backing_id；分配失败
+    /// （容量不可得）返回 None，由调用方抛 RangeError。
+    fn allocate_sab_backing(
+        &self,
+        byte_length: usize,
+        max_byte_length: Option<usize>,
+    ) -> Option<u32> {
         self.node_worker_threads
             .cluster
             .allocate_sab(byte_length, max_byte_length)

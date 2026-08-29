@@ -1,0 +1,48 @@
+exit_code: 0
+--- stdout ---
+resize valueOf ok 6
+resize Symbol TypeError|Cannot convert a Symbol value to a number
+resize 6n TypeError|Cannot convert a BigInt value to a number
+resize -1 RangeError|ArrayBuffer.prototype.resize: Invalid length parameter
+resize 2^53 RangeError|ArrayBuffer.prototype.resize: Invalid length parameter
+resize Infinity RangeError|ArrayBuffer.prototype.resize: Invalid length parameter
+resize 2^52 RangeError|ArrayBuffer.prototype.resize: Invalid length parameter
+resize 9>max8 RangeError|ArrayBuffer.prototype.resize: Invalid length parameter
+resize NaN ok 0
+resize-side
+resize detached side TypeError|Cannot perform ArrayBuffer.prototype.resize on a detached ArrayBuffer
+resize detached -1 TypeError|Cannot perform ArrayBuffer.prototype.resize on a detached ArrayBuffer
+resize mid-detach TypeError|Cannot perform ArrayBuffer.prototype.resize on a detached ArrayBuffer
+transfer valueOf ok 6,true
+t2fl valueOf ok 2
+transfer Symbol TypeError|Cannot convert a Symbol value to a number
+transfer -1 RangeError|Invalid array buffer length
+transfer 2^53 RangeError|ArrayBuffer.prototype.transfer: Invalid length parameter
+transfer Infinity RangeError|ArrayBuffer.prototype.transfer: Invalid length parameter
+t2fl 2^53 RangeError|ArrayBuffer.prototype.transferToFixedLength: Invalid length parameter
+t2fl -1 RangeError|Invalid array buffer length
+transfer 2^52 RangeError|Array buffer allocation failed
+transfer 2^52 source ok 4,false
+transfer 17>max16 RangeError|Invalid array buffer length
+transfer detached -1 RangeError|Invalid array buffer length
+transfer detached 2^53 RangeError|ArrayBuffer.prototype.transfer: Invalid length parameter
+transfer detached 2^52 TypeError|Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer
+transfer mid-detach TypeError|Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer
+grow valueOf ok 8
+grow Symbol TypeError|Cannot convert a Symbol value to a number
+grow 8n TypeError|Cannot convert a BigInt value to a number
+grow -1 RangeError|SharedArrayBuffer.prototype.grow: Invalid length parameter
+grow 2^53 RangeError|SharedArrayBuffer.prototype.grow: Invalid length parameter
+grow 2^52 RangeError|SharedArrayBuffer.prototype.grow: Invalid length parameter
+grow NaN len0 ok 0
+nogrow Symbol TypeError|Method SharedArrayBuffer.prototype.grow called on incompatible receiver #<SharedArrayBuffer>
+ab slice valueOf ok 6
+ab slice Symbol TypeError|Cannot convert a Symbol value to a number
+ab slice 2n TypeError|Cannot convert a BigInt value to a number
+ab slice undef end ok 8
+ab slice -Infinity ok 8
+ab slice mid-detach TypeError|Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer
+sab slice valueOf ok 6
+sab slice Symbol TypeError|Cannot convert a Symbol value to a number
+sab slice undef end ok 8
+--- stderr ---
