@@ -200,6 +200,7 @@ fn analyze_candidate(
             _ => None,
         })
         .collect();
+    let mut established_own_keys: HashSet<String> = initial_keys.clone();
     let mut escapes = function.blocks().iter().any(|block| {
         terminator_uses(block.terminator())
             .into_iter()
@@ -253,12 +254,13 @@ fn analyze_candidate(
                         escapes = true;
                         continue;
                     };
-                    // 仅处理已由 CreateDataProperty 建立的自有数据属性；
-                    // 对从原型继承的属性，[[Set]] 可能调用用户可变 accessor。
-                    if !initial_keys.contains(key_name) || family.contains(value) {
+                    if family.contains(value) {
                         escapes = true;
                         continue;
                     }
+                    // CreateDataProperty 预声明键，或空 NewObject 上首次 SetProp
+                    // 建立的自有数据属性（闭包 env 快照），均可标量替换。
+                    established_own_keys.insert(key_name.clone());
                     writes.push(PropertyWrite {
                         key: key_name.clone(),
                         block: block.id(),
@@ -274,6 +276,10 @@ fn analyze_candidate(
                     object, key, dest, ..
                 } if family.contains(object) => {
                     if let Some(key) = const_strings.get(key) {
+                        if !established_own_keys.contains(key) {
+                            escapes = true;
+                            continue;
+                        }
                         reads.push(PropertyRead {
                             key: key.clone(),
                             block: block.id(),
