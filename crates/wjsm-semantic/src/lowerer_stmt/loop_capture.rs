@@ -38,19 +38,14 @@ impl Lowerer {
     /// 独立实例（ES §14.7.4.3 CreatePerIterationEnvironment 的块级推广）。
     /// 嵌套循环体的声明由内层循环自建帧，故不计入；嵌套循环头的 let/const
     /// 每次进入内层循环语句重建，归属本（外层）帧。
-    pub(crate) fn loop_body_per_iteration_capture_names(
-        body: &swc_ast::Stmt,
-    ) -> HashSet<String> {
+    pub(crate) fn loop_body_per_iteration_capture_names(body: &swc_ast::Stmt) -> HashSet<String> {
         let references = nested_function_references(body);
         if references.is_empty() {
             return HashSet::new();
         }
         let mut declared = HashSet::new();
         collect_per_iteration_lexical_names(body, &mut declared);
-        references
-            .intersection(&declared)
-            .cloned()
-            .collect()
+        references.intersection(&declared).cloned().collect()
     }
 
     pub(crate) fn loop_head_iteration_bindings(

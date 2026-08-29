@@ -332,13 +332,8 @@ impl Lowerer {
                     // 共享 env，而非仅本地槽。
                     let _ = self.scopes.mark_initialised(&name);
                     let binding = CapturedBinding::new(name.clone(), scope_id);
-                    block = self.store_binding_value(
-                        block,
-                        &binding,
-                        value,
-                        using_decl.span,
-                        true,
-                    )?;
+                    block =
+                        self.store_binding_value(block, &binding, value, using_decl.span, true)?;
                 } else {
                     let _ = self.scopes.mark_initialised(&name);
                 }

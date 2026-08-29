@@ -68,7 +68,8 @@ impl Lowerer {
         let iteration_frame = if iteration_bindings.is_empty() && body_capture_names.is_empty() {
             None
         } else {
-            let (continuation, mut frame) = self.prepare_iteration_env(block, iteration_bindings)?;
+            let (continuation, mut frame) =
+                self.prepare_iteration_env(block, iteration_bindings)?;
             block = continuation;
             if !body_capture_names.is_empty() {
                 frame.body_scope_watermark = Some(self.scopes.scope_count());
@@ -223,7 +224,8 @@ impl Lowerer {
         let iteration_frame = if iteration_bindings.is_empty() && body_capture_names.is_empty() {
             None
         } else {
-            let (continuation, mut frame) = self.prepare_iteration_env(block, iteration_bindings)?;
+            let (continuation, mut frame) =
+                self.prepare_iteration_env(block, iteration_bindings)?;
             block = continuation;
             if !body_capture_names.is_empty() {
                 frame.body_scope_watermark = Some(self.scopes.scope_count());
@@ -407,7 +409,8 @@ impl Lowerer {
         let iteration_frame = if iteration_bindings.is_empty() && body_capture_names.is_empty() {
             None
         } else {
-            let (continuation, mut frame) = self.prepare_iteration_env(block, iteration_bindings)?;
+            let (continuation, mut frame) =
+                self.prepare_iteration_env(block, iteration_bindings)?;
             block = continuation;
             if !body_capture_names.is_empty() {
                 frame.body_scope_watermark = Some(self.scopes.scope_count());

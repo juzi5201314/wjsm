@@ -339,7 +339,8 @@ impl Lowerer {
         let captured = self.loop_body_captured_bindings(&while_stmt.body);
         self.mark_stable_loop_captures(&captured, &[]);
         block = self.initialize_stable_loop_captures(block, &captured, &[])?;
-        let iteration_frame = self.prepare_loop_body_iteration_frame(&mut block, &while_stmt.body)?;
+        let iteration_frame =
+            self.prepare_loop_body_iteration_frame(&mut block, &while_stmt.body)?;
 
         let header = self.current_function.new_block();
         let body = self.current_function.new_block();
