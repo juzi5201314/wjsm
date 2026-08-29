@@ -800,6 +800,9 @@ pub struct Function {
     /// 该函数捕获的外层变量名列表（闭包用）。
     /// 语义层逃逸分析后填入，后端用于 env 对象的属性名。
     captured_names: Vec<String>,
+    /// 深度 0 捕获在 `$env` 上的自有数据键（按父级写 env 顺序），与 slot 下标对齐。
+    /// 仅用于 `LoadEnvSlot` / `StoreEnvSlot` 快路径；动态形状时回退 GetProp/SetProp。
+    env_layout_keys: Vec<String>,
     /// 该函数内 LoadVar 读到"已知函数声明/闭包"的变量名→FunctionId。
     /// 语义层填充（仅对单次赋值的函数声明变量），后端用于 callee no-GC 分析（Layer 3）。
     /// key = scope-qualified IR name（如 "$0.foo"），value = 被调用函数的 FunctionId。
@@ -846,6 +849,7 @@ impl Function {
             blocks: Vec::new(),
             has_eval: false,
             captured_names: Vec::new(),
+            env_layout_keys: Vec::new(),
             known_callee_vars: std::collections::HashMap::new(),
             home_object: None,
             needs_prototype: false,
@@ -963,6 +967,14 @@ impl Function {
 
     pub fn set_captured_names(&mut self, names: Vec<String>) {
         self.captured_names = names;
+    }
+
+    pub fn env_layout_keys(&self) -> &[String] {
+        &self.env_layout_keys
+    }
+
+    pub fn set_env_layout_keys(&mut self, keys: Vec<String>) {
+        self.env_layout_keys = keys;
     }
 
     pub fn source_span(&self) -> Option<SourceSpan> {
@@ -1484,6 +1496,24 @@ pub enum Instruction {
         value: ValueId,
         transition_shape: Option<u32>,
     },
+    /// 闭包 `$env` 上已知布局的捕获槽读取；shape 不匹配时回退 `key` 的 [[Get]]。
+    LoadEnvSlot {
+        dest: ValueId,
+        env: ValueId,
+        slot: u32,
+        key: ValueId,
+    },
+    /// 闭包 `$env` 上已知布局的捕获槽写入；shape 不匹配时回退 `key` 的 [[Set]]。
+    StoreEnvSlot {
+        dest: Option<ValueId>,
+        env: ValueId,
+        slot: u32,
+        value: ValueId,
+        key: ValueId,
+        /// 与 [`Instruction::SetProp`] 的 `strict` 含义一致。
+        #[serde(default)]
+        strict: bool,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -1827,6 +1857,26 @@ impl fmt::Display for Instruction {
                 }
                 Ok(())
             }
+            Self::LoadEnvSlot { dest, env, slot, key } => {
+                write!(formatter, "{dest} = load_env_slot {env}, {slot}, {key}")
+            }
+            Self::StoreEnvSlot {
+                dest,
+                env,
+                slot,
+                value,
+                key,
+                strict,
+            } => {
+                if let Some(dest) = dest {
+                    write!(formatter, "{dest} = ")?;
+                }
+                write!(formatter, "store_env_slot {env}, {slot}, {value}, {key}")?;
+                if *strict {
+                    write!(formatter, ", strict")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -2074,6 +2124,21 @@ impl Instruction {
                 *object = f(*object);
                 *value = f(*value);
             }
+            Self::LoadEnvSlot { dest, env, key, .. } => {
+                *dest = f(*dest);
+                *env = f(*env);
+                *key = f(*key);
+            }
+            Self::StoreEnvSlot {
+                dest, env, value, key, ..
+            } => {
+                if let Some(dest) = dest {
+                    *dest = f(*dest);
+                }
+                *env = f(*env);
+                *value = f(*value);
+                *key = f(*key);
+            }
         }
     }
 
@@ -2110,12 +2175,14 @@ impl Instruction {
             | Self::GuardShape { dest, .. }
             | Self::GuardElementsKind { dest, .. }
             | Self::GuardCallTarget { dest, .. }
-            | Self::LoadSlot { dest, .. } => Some(*dest),
+            | Self::LoadSlot { dest, .. }
+            | Self::LoadEnvSlot { dest, .. } => Some(*dest),
             Self::CallBuiltin { dest, .. }
             | Self::Call { dest, .. }
             | Self::SuperCall { dest, .. }
             | Self::ConstructCall { dest, .. }
-            | Self::StoreSlot { dest, .. } => *dest,
+            | Self::StoreSlot { dest, .. }
+            | Self::StoreEnvSlot { dest, .. } => *dest,
             Self::StoreVar { .. }
             | Self::SetProto { .. }
             | Self::PromiseResolve { .. }
@@ -2211,6 +2278,8 @@ impl Instruction {
             Self::GuardTag { value, .. } => vec![*value],
             Self::GuardShape { object, .. } | Self::LoadSlot { object, .. } => vec![*object],
             Self::StoreSlot { object, value, .. } => vec![*object, *value],
+            Self::StoreEnvSlot { env, value, key, .. } => vec![*env, *value, *key],
+            Self::LoadEnvSlot { env, key, .. } => vec![*env, *key],
             Self::Const { .. }
             | Self::LoadVar { .. }
             | Self::NewObject { .. }

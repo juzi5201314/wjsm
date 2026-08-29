@@ -850,7 +850,7 @@ impl Lowerer {
             }
             m_ir_function.set_params(param_ir_names);
             let m_captured = self.captured_names_stack.last().unwrap().clone();
-            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+            self.finalize_function_captures(&mut m_ir_function, &m_captured);
             for b in m_blocks {
                 m_ir_function.push_block(b);
             }

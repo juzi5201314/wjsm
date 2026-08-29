@@ -3019,6 +3019,17 @@ impl<M: GrowableHeapMemory> HeapAccessV2<M> {
         self.load_value_slot(object, index)
     }
 
+    /// 在已证明 object shape 与槽布局后按槽下标覆写自有 data 值（无属性名查找）。
+    pub fn write_own_value_slot(
+        &self,
+        handle: u32,
+        index: u32,
+        value: u64,
+    ) -> Result<(), HeapAccessV2Error> {
+        let object = self.resolve_handle(handle)?;
+        self.store_value_slot(handle, object, index, value)
+    }
+
     fn store_value_slot(
         &self,
         handle: u32,

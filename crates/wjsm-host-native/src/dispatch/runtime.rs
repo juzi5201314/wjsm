@@ -459,6 +459,36 @@ pub(super) fn dispatch_runtime(
                 None => value::encode_uninitialized(),
             }
         }
+        NativeRuntimeOp::LoadEnvSlot => {
+            let [env, slot, key] = args else {
+                return fail_dispatch(ctx);
+            };
+            if value::is_exception(*env) {
+                return *env;
+            }
+            if value::is_exception(*key) {
+                return *key;
+            }
+            load_env_slot(ctx, state, *env, *slot, *key)
+                .unwrap_or_else(|()| fail_dispatch(ctx))
+        }
+        NativeRuntimeOp::StoreEnvSlot | NativeRuntimeOp::StoreEnvSlotStrict => {
+            let [env, slot, stored, key] = args else {
+                return fail_dispatch(ctx);
+            };
+            if value::is_exception(*env) {
+                return *env;
+            }
+            if value::is_exception(*stored) {
+                return *stored;
+            }
+            if value::is_exception(*key) {
+                return *key;
+            }
+            let strict = matches!(operation, NativeRuntimeOp::StoreEnvSlotStrict);
+            store_env_slot(ctx, state, *env, *slot, *stored, *key, strict)
+                .unwrap_or_else(|()| fail_dispatch(ctx))
+        }
         NativeRuntimeOp::GetSuperBase => super_base(state).unwrap_or_else(value::encode_undefined),
         NativeRuntimeOp::GetSuperConstructor => {
             super_constructor(state).unwrap_or_else(value::encode_undefined)
@@ -4572,6 +4602,106 @@ pub(crate) fn render_value(state: &NativeAgentState, encoded: i64) -> String {
     } else {
         "[object Object]".into()
     }
+}
+
+fn env_layout_meta_for_function(state: &NativeAgentState, function_index: u32) -> (u32, u32) {
+    use wjsm_backend_native::ENV_LAYOUT_META_WORDS;
+    let base = usize::try_from(function_index)
+        .ok()
+        .and_then(|index| index.checked_mul(ENV_LAYOUT_META_WORDS));
+    let Some(base) = base else {
+        return (0, 0);
+    };
+    let shape = state.env_layout_meta.get(base).copied().unwrap_or(0);
+    let count = state.env_layout_meta.get(base + 1).copied().unwrap_or(0);
+    (shape, count)
+}
+
+fn current_native_function_index(state: &NativeAgentState) -> Option<u32> {
+    state
+        .activations
+        .last()?
+        .function
+        .as_ref()
+        .map(|function| function.function_index)
+}
+
+fn load_env_slot(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    env: i64,
+    slot: i64,
+    key: i64,
+) -> Result<i64, ()> {
+    let Ok(slot) = u32::try_from(slot) else {
+        return Err(());
+    };
+    if let Some(function_index) = current_native_function_index(state) {
+        let (expected_shape, slot_count) = env_layout_meta_for_function(state, function_index);
+        if expected_shape != 0 && slot < slot_count {
+            if let Some(handle) = object_handle(env) {
+                if matches!(state.gc.heap().shape_id(handle), Ok(shape) if shape == expected_shape) {
+                    if let Some(name_id) = property_key(state, key) {
+                        if let Ok(Some((_, index))) =
+                            state.gc.heap().own_data_property_index(handle, name_id)
+                        {
+                            if let Ok(stored) = state.gc.heap().value_slot(handle, index) {
+                                return Ok(stored as i64);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(exception) = get_on_nullish_base(ctx, state, env, key) {
+        return Ok(exception);
+    }
+    get_property(ctx, state, env, key)
+}
+
+fn store_env_slot(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    env: i64,
+    slot: i64,
+    stored: i64,
+    key: i64,
+    strict: bool,
+) -> Result<i64, ()> {
+    let Ok(slot) = u32::try_from(slot) else {
+        return Err(());
+    };
+    if let Some(function_index) = current_native_function_index(state) {
+        let (expected_shape, slot_count) = env_layout_meta_for_function(state, function_index);
+        if expected_shape != 0 && slot < slot_count {
+            if let Some(handle) = object_handle(env) {
+                if matches!(state.gc.heap().shape_id(handle), Ok(shape) if shape == expected_shape) {
+                    if let Some(name_id) = property_key(state, key) {
+                        if let Ok(Some((_, index))) =
+                            state.gc.heap().own_data_property_index(handle, name_id)
+                        {
+                            if state
+                                .gc
+                                .heap()
+                                .write_own_value_slot(handle, index, stored as u64)
+                                .is_ok()
+                            {
+                                return Ok(stored);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(result) = set_on_primitive_receiver(ctx, state, env, key, stored, strict) {
+        return Ok(result);
+    }
+    let completion = set_property_completion(ctx, state, env, key, stored);
+    Ok(property_write::finish_property_set(
+        ctx, state, env, key, stored, strict, completion,
+    ))
 }
 
 #[track_caller]

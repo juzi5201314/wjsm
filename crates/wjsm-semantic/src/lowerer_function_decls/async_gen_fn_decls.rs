@@ -347,7 +347,7 @@ impl Lowerer {
         }
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
-        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        self.finalize_function_captures(&mut ir_function, &captured);
         // 类方法：body 经续体 resume 调用，activation home 只能来自函数元数据。
         if let MethodSuperBinding::Static(home) = method_super {
             ir_function.home_object = Some(home);
@@ -598,7 +598,7 @@ impl Lowerer {
             wrapper_ir_function.set_source_text(text);
         }
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
-        wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
+        self.finalize_function_captures(&mut wrapper_ir_function, &captured);
         if let MethodSuperBinding::Static(home) = method_super {
             wrapper_ir_function.home_object = Some(home);
         }

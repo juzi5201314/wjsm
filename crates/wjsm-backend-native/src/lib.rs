@@ -1,11 +1,13 @@
 pub mod cache;
 pub(crate) mod call_graph;
+pub(crate) mod env_layout;
 pub(crate) mod f64_analysis;
 pub(crate) mod fast_call;
 pub mod image;
 pub(crate) mod lower;
 pub(crate) mod safepoint_free;
 pub(crate) mod template_meta;
+pub use env_layout::{ENV_LAYOUT_META_WORDS, bake_env_layout_meta_table};
 pub use template_meta::{IcTemplateHint, ic_template_hints};
 pub(crate) mod root_plan;
 pub(crate) mod specialize;

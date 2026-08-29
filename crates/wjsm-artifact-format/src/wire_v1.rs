@@ -337,6 +337,7 @@ fn encode_function(encoder: &mut Encoder, function: &Function) -> Result<(), Art
     encoder.u32(function.entry().0);
     encoder.bool(function.has_eval());
     encoder.strings(function.captured_names())?;
+    encoder.strings(function.env_layout_keys())?;
 
     let mut known_callees: Vec<_> = function.known_callee_vars().iter().collect();
     known_callees.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
@@ -413,6 +414,7 @@ fn decode_function(
     function.set_params(params);
     function.set_has_eval(decoder.bool()?);
     function.set_captured_names(decoder.strings(limits.max_strings)?);
+    function.set_env_layout_keys(decoder.strings(limits.max_strings)?);
 
     let known_callee_count = decoder.count(limits.max_strings)?;
     for _ in 0..known_callee_count {
@@ -794,6 +796,27 @@ fn encode_instruction(
             encoder.u32(*index);
             encoder.u32(transition_shape.unwrap_or(u32::MAX));
         }
+        Instruction::LoadEnvSlot { dest, env, slot, key } => {
+            encoder.u16(49);
+            two_values(encoder, *dest, *env);
+            encoder.u32(*slot);
+            value_id(encoder, *key);
+        }
+        Instruction::StoreEnvSlot {
+            dest,
+            env,
+            slot,
+            value,
+            key,
+            strict,
+        } => {
+            encoder.u16(50);
+            optional_value_id(encoder, *dest);
+            two_values(encoder, *env, *value);
+            encoder.u32(*slot);
+            value_id(encoder, *key);
+            encoder.bool(*strict);
+        }
     }
     Ok(())
 }
@@ -1097,6 +1120,32 @@ fn decode_instruction(
                 index,
                 value,
                 transition_shape: (transition != u32::MAX).then_some(transition),
+            })
+        }
+        49 => {
+            let (dest, env) = decode_two(decoder)?;
+            let slot = decoder.u32()?;
+            let key = next_value(decoder)?;
+            Ok(Instruction::LoadEnvSlot {
+                dest,
+                env,
+                slot,
+                key,
+            })
+        }
+        50 => {
+            let dest = decode_optional_value(decoder)?;
+            let (env, value) = decode_two(decoder)?;
+            let slot = decoder.u32()?;
+            let key = next_value(decoder)?;
+            let strict = decoder.bool()?;
+            Ok(Instruction::StoreEnvSlot {
+                dest,
+                env,
+                slot,
+                value,
+                key,
+                strict,
             })
         }
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),

@@ -94,7 +94,7 @@ impl Lowerer {
         ir_function.set_params(param_ir_names);
         // 设置捕获变量列表（逃逸分析结果）
         let captured = self.captured_names_stack.last().unwrap().clone();
-        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        self.finalize_function_captures(&mut ir_function, &captured);
         for (ir_name, fn_id) in known_callees {
             ir_function.record_known_callee(ir_name, fn_id);
         }

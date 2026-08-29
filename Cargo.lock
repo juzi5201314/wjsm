@@ -4492,6 +4492,7 @@ dependencies = [
  "walkdir",
  "windows-sys 0.61.2",
  "wjsm-artifact-format",
+ "wjsm-gc",
  "wjsm-ir",
  "wjsm-native-abi",
  "wjsm-optimize",

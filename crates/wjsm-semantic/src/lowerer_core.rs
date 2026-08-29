@@ -606,14 +606,12 @@ impl Lowerer {
         if binding_env_scope != owner_env_scope {
             return false;
         }
-        // 父函数在闭包创建点存在活动的按迭代 env 帧（循环体按迭代绑定 /
-        // 具名函数表达式 funcEnv）时，本闭包的 `$env` 可能是插在稳定共享
-        // env 之前的迭代 env：直接写 `$env` 会在其上创建遮蔽自有属性，
-        // 内层读到新值而外层仍读稳定 env 旧值。此时回退动态链查找定位 owner。
-        !self
-            .iteration_env_stack
-            .iter()
-            .any(|frame| frame.function_scope_id == owner_env_scope)
+        // 仅当本绑定归属父函数当前活动的按迭代 env 帧时才禁用深度 0 快路径。
+        // 具名函数表达式 funcEnv 帧只持有函数名绑定，不应使同体其它捕获
+        // （如 counter 的 `value`）误退回动态链查找。
+        !self.iteration_env_stack.iter().any(|frame| {
+            frame.function_scope_id == owner_env_scope && frame.owns_binding(binding)
+        })
     }
 
     /// 沿作用域树向上找最近的 Function/Module 作用域（env 的持有者）。
@@ -690,6 +688,121 @@ impl Lowerer {
 
     pub(crate) fn captured_display_names(captured: &[CapturedBinding]) -> Vec<String> {
         captured.iter().map(CapturedBinding::display_name).collect()
+    }
+
+    /// 写入函数的捕获元数据（名称列表 + 深度 0 自有 env 槽布局键）。
+    pub(crate) fn finalize_function_captures(
+        &self,
+        function: &mut wjsm_ir::Function,
+        captured: &[CapturedBinding],
+    ) {
+        function.set_captured_names(Self::captured_display_names(captured));
+        function.set_env_layout_keys(
+            captured
+                .iter()
+                .filter(|binding| self.is_env_layout_binding(binding))
+                .map(CapturedBinding::env_key)
+                .collect(),
+        );
+    }
+
+    /// 捕获绑定是否可作为 `$env` 上固定槽读写（深度 0 且父级自有属性）。
+    pub(crate) fn is_env_layout_binding(&self, binding: &CapturedBinding) -> bool {
+        if binding.is_lexical_this() || binding.is_lexical_new_target() {
+            return false;
+        }
+        if self.iteration_env_for_binding(binding).is_some() {
+            return false;
+        }
+        if !self.captured_binding_at_env_depth_zero(binding) {
+            return false;
+        }
+        self.parent_owns_binding_for_env(binding)
+    }
+
+    /// 父函数在创建闭包 env 时是否以自有属性写入该绑定。
+    fn parent_owns_binding_for_env(&self, binding: &CapturedBinding) -> bool {
+        let Some(binding_scope) = binding.scope_id else {
+            return false;
+        };
+        let current_fn_scope = self.current_function_scope_id();
+        let Some(parent_scope) = self
+            .scopes
+            .arenas
+            .get(current_fn_scope)
+            .and_then(|scope| scope.parent)
+        else {
+            return false;
+        };
+        self.nearest_function_module_scope(binding_scope)
+            == self.nearest_function_module_scope(parent_scope)
+    }
+
+    /// 若可安全走 `LoadEnvSlot`，返回槽下标。
+    pub(crate) fn env_slot_for_binding(&self, binding: &CapturedBinding) -> Option<u32> {
+        if self.eval_scope_bridge_active() || self.current_function.has_eval() {
+            return None;
+        }
+        if !self.is_env_layout_binding(binding) {
+            return None;
+        }
+        let captured = self.captured_names_stack.last()?;
+        let mut slot = 0_u32;
+        for candidate in captured {
+            if candidate == binding {
+                return Some(slot);
+            }
+            if self.is_env_layout_binding(candidate) {
+                slot = slot.saturating_add(1);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn append_load_env_slot(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+    ) -> Option<ValueId> {
+        let slot = self.env_slot_for_binding(binding)?;
+        let env_val = self.load_env_object(block);
+        let key_val = self.append_env_key_const(block, binding);
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadEnvSlot {
+                dest,
+                env: env_val,
+                slot,
+                key: key_val,
+            },
+        );
+        Some(dest)
+    }
+
+    pub(crate) fn append_store_env_slot(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+        value: ValueId,
+        strict: bool,
+    ) -> Option<ValueId> {
+        let slot = self.env_slot_for_binding(binding)?;
+        let env_val = self.load_env_object(block);
+        let key_val = self.append_env_key_const(block, binding);
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreEnvSlot {
+                dest: Some(dest),
+                env: env_val,
+                slot,
+                value,
+                key: key_val,
+                strict,
+            },
+        );
+        Some(dest)
     }
 
     pub(crate) fn is_shared_binding(&self, binding: &CapturedBinding) -> bool {
@@ -893,6 +1006,9 @@ impl Lowerer {
             return Ok(dest);
         }
         self.record_capture(binding.clone());
+        if let Some(dest) = self.append_load_env_slot(block, binding) {
+            return Ok(dest);
+        }
         let env_val = self.load_env_object(block);
         let key_val = self.append_env_key_const(block, binding);
         let dest = self.alloc_value();
