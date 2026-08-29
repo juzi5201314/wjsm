@@ -30,7 +30,7 @@ String.prototype.slice.call("abcdef", 1, 4) // "bcd"
 String.raw`a\nb${1}`                        // "a\\nb1"
 ```
 
-未实现的名字不占位：Annex B 的 HTML 方法族（`anchor`、`big` 等）、`substr`、`isWellFormed` / `toWellFormed`、`trimLeft` / `trimRight` 在原型上不存在，读取得到 `undefined`。
+未实现的名字不占位：Annex B 的 HTML 方法族（`anchor`、`big` 等）、`substr`、`trimLeft` / `trimRight` 在原型上不存在，读取得到 `undefined`。`isWellFormed` / `toWellFormed`（ES2024 §22.1.3）已实现。
 
 ## TypedArray / DataView
 

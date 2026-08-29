@@ -82,8 +82,14 @@ pub(super) fn from_async(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let items = args.first().copied().unwrap_or_else(value::encode_undefined);
-    let map = args.get(1).copied().filter(|map| !value::is_undefined(*map));
+    let items = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    let map = args
+        .get(1)
+        .copied()
+        .filter(|map| !value::is_undefined(*map));
     let this_arg = args.get(2).copied().unwrap_or_else(value::encode_undefined);
     let Some(result) = new_promise(ctx, state) else {
         return fail_dispatch(ctx);
@@ -115,7 +121,11 @@ fn start(
         && !state.is_callable_value(map)
     {
         let rendered = super::iterator_helpers::render_receiver(state, map);
-        return Err(type_error(ctx, state, &format!("{rendered} is not a function")));
+        return Err(type_error(
+            ctx,
+            state,
+            &format!("{rendered} is not a function"),
+        ));
     }
     let source = match get_iteration_method(ctx, state, items, wjsm_ir::wk_symbol::ASYNC_ITERATOR)?
     {
@@ -130,7 +140,17 @@ fn start(
         return Err(fail_dispatch(ctx));
     };
     state.temporary_roots.push(array);
-    let id = register(state, FromAsyncOperation { result, source, map, this_arg, array, index: 0 });
+    let id = register(
+        state,
+        FromAsyncOperation {
+            result,
+            source,
+            map,
+            this_arg,
+            array,
+            index: 0,
+        },
+    );
     step_iterator(ctx, state, id);
     Ok(())
 }
@@ -228,8 +248,21 @@ fn start_array_like(
     }
     let array = allocate_hole_array(ctx, state, length as u32)?;
     state.temporary_roots.push(array);
-    let source = FromAsyncSource::ArrayLike { object: items, length: length as u32 };
-    let id = register(state, FromAsyncOperation { result, source, map, this_arg, array, index: 0 });
+    let source = FromAsyncSource::ArrayLike {
+        object: items,
+        length: length as u32,
+    };
+    let id = register(
+        state,
+        FromAsyncOperation {
+            result,
+            source,
+            map,
+            this_arg,
+            array,
+            index: 0,
+        },
+    );
     array_like_step(ctx, state, id);
     Ok(())
 }
@@ -292,7 +325,10 @@ fn await_with(
     observe_reaction(
         state,
         value::decode_handle(promise),
-        NativePromiseReaction::ArrayFromAsync { operation: id, phase },
+        NativePromiseReaction::ArrayFromAsync {
+            operation: id,
+            phase,
+        },
     );
 }
 
@@ -373,9 +409,13 @@ fn step_iterator(ctx: &mut NativeVmContext, state: &mut NativeAgentState, id: u3
                 error,
                 true,
             ),
-            Ok((unwrapped, done)) => {
-                await_with(ctx, state, id, FromAsyncPhase::SyncUnwrap { done }, unwrapped)
-            }
+            Ok((unwrapped, done)) => await_with(
+                ctx,
+                state,
+                id,
+                FromAsyncPhase::SyncUnwrap { done },
+                unwrapped,
+            ),
         }
         return;
     }
@@ -406,7 +446,11 @@ fn sync_wrapper_next(
 ) -> Result<(i64, bool), i64> {
     if !state.is_callable_value(next) {
         let callsite = default_call_site(state, next);
-        return Err(type_error(ctx, state, &format!("{callsite} is not a function")));
+        return Err(type_error(
+            ctx,
+            state,
+            &format!("{callsite} is not a function"),
+        ));
     }
     let result = state
         .invoke_callable(ctx, next, iterator, &[])
@@ -438,7 +482,11 @@ fn handle_next_result(
     result: i64,
 ) {
     if !value::is_js_object(result) {
-        let error = type_error(ctx, state, "Iterator result Array.fromAsync is not an object");
+        let error = type_error(
+            ctx,
+            state,
+            "Iterator result Array.fromAsync is not an object",
+        );
         close_and_reject(ctx, state, id, error);
         return;
     }
@@ -475,7 +523,12 @@ fn continue_with_value(
         return;
     };
     let mapped = state
-        .invoke_callable(ctx, map, this_arg, &[next_value, value::encode_f64(f64::from(index))])
+        .invoke_callable(
+            ctx,
+            map,
+            this_arg,
+            &[next_value, value::encode_f64(f64::from(index))],
+        )
         .unwrap_or_else(|| fail_dispatch(ctx));
     if value::is_exception(mapped) {
         close_and_reject(ctx, state, id, mapped);
@@ -553,7 +606,12 @@ fn array_like_continue(
         return;
     };
     let mapped = state
-        .invoke_callable(ctx, map, this_arg, &[stored, value::encode_f64(f64::from(index))])
+        .invoke_callable(
+            ctx,
+            map,
+            this_arg,
+            &[stored, value::encode_f64(f64::from(index))],
+        )
         .unwrap_or_else(|| fail_dispatch(ctx));
     if value::is_exception(mapped) {
         reject_operation(state, id, mapped);
@@ -601,7 +659,13 @@ fn close_and_reject(ctx: &mut NativeVmContext, state: &mut NativeAgentState, id:
             // return 缺失 / 出错：立即以原错误拒绝（无额外 tick）。
             None => reject_operation(state, id, error),
             // Await(innerResult) 一跳后拒绝。
-            Some(inner) => await_with(ctx, state, id, FromAsyncPhase::CloseThenReject { error }, inner),
+            Some(inner) => await_with(
+                ctx,
+                state,
+                id,
+                FromAsyncPhase::CloseThenReject { error },
+                inner,
+            ),
         },
         FromAsyncSource::Sync { iterator, .. } => match sync_close_step(ctx, state, iterator) {
             // wrapper 内部异常：按规范吞掉立即拒绝（V8 在此挂起，不复刻）。
@@ -617,9 +681,13 @@ fn close_and_reject(ctx: &mut NativeVmContext, state: &mut NativeAgentState, id:
                 false,
             ),
             // sync return 结果的 value 经 unwrap（1 tick）+ 续点（1 tick）后拒绝。
-            SyncClose::Unwrap(unwrapped) => {
-                await_with(ctx, state, id, FromAsyncPhase::SyncCloseUnwrap { error }, unwrapped)
-            }
+            SyncClose::Unwrap(unwrapped) => await_with(
+                ctx,
+                state,
+                id,
+                FromAsyncPhase::SyncCloseUnwrap { error },
+                unwrapped,
+            ),
         },
     }
     state.temporary_roots.truncate(roots_base);
@@ -690,7 +758,12 @@ fn resolve_operation(state: &mut NativeAgentState, id: u32) {
     let Some(operation) = state.array_from_async.remove(&id) else {
         return;
     };
-    settle_promise(state, value::decode_handle(operation.result), operation.array, false);
+    settle_promise(
+        state,
+        value::decode_handle(operation.result),
+        operation.array,
+        false,
+    );
 }
 
 /// kRejectPromise：结果 promise 以 error 拒绝并移除操作记录。
@@ -729,7 +802,8 @@ pub(crate) fn extend_gc_roots(
         queue.push_back(operation.this_arg);
         queue.extend(operation.map);
         match operation.source {
-            FromAsyncSource::Async { iterator, next } | FromAsyncSource::Sync { iterator, next } => {
+            FromAsyncSource::Async { iterator, next }
+            | FromAsyncSource::Sync { iterator, next } => {
                 queue.push_back(iterator);
                 queue.push_back(next);
             }
