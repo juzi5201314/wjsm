@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+promises keys: Interface,Readline,createInterface
+fn identity: true
+ns tag: [object Module]
+ns identity: true
+dynamic keys: Interface,Readline,createInterface,default
+--- stderr ---

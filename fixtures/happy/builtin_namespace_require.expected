@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+promises typeof: function
+fn identity: true
+interface identity: true
+--- stderr ---

@@ -710,6 +710,12 @@ pub enum Builtin {
     /// （[[Set]] 恒 false、导出经 [[GetOwnProperty]] 呈现为
     /// writable=true 数据描述符等）。args: [namespace]。
     FinalizeModuleNamespace,
+    /// 取回已注册的 canonical 模块命名空间对象（§10.4.6.12 GetModuleNamespace
+    /// 缓存）：按 (当前 image, ModuleId) 解析运行时模块键并读命名空间缓存。
+    /// builtin 段与用户段拆分 image 时，段内 `import * as` 的命名空间由
+    /// `$builtin_main` 创建注册，用户段经本 builtin 取回同一对象而非重建。
+    /// args: [module_id]。
+    GetModuleNamespace,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -745,7 +751,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::FinalizeModuleNamespace as u16
+        Self::GetModuleNamespace as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -957,6 +963,7 @@ impl Builtin {
             Self::ImportMetaResolve => "import_meta.resolve",
             Self::RegisterModuleNamespace => "register_module_namespace",
             Self::FinalizeModuleNamespace => "finalize_module_namespace",
+            Self::GetModuleNamespace => "get_module_namespace",
             Self::CjsCreateRequire => "cjs.create_require",
             Self::CjsRegisterModule => "cjs.register_module",
             Self::JsxCreateElement => "jsx.create_element",
