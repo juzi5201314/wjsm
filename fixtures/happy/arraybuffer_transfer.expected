@@ -1,0 +1,24 @@
+exit_code: 0
+--- stdout ---
+4 7 true false 0
+6 3 0
+4
+true 16 8 true
+false 6 6 true
+RangeError Invalid array buffer length
+RangeError Invalid array buffer length
+0 true true
+0 0 undefined
+undefined
+TypeError Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer
+TypeError Cannot perform ArrayBuffer.prototype.resize on a detached ArrayBuffer
+TypeError Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer
+TypeError Cannot perform %TypedArray%.prototype.join on a detached ArrayBuffer
+TypeError Cannot perform Construct on a detached ArrayBuffer
+TypeError Cannot perform DataView constructor on a detached ArrayBuffer
+TypeError Method ArrayBuffer.prototype.transfer called on incompatible receiver #<Object>
+TypeError Method ArrayBuffer.prototype.transfer called on incompatible receiver #<SharedArrayBuffer>
+true 16 4
+4 9 true
+DataCloneError
+--- stderr ---

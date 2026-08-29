@@ -6,17 +6,37 @@ impl Lowerer {
     }
 
     pub(crate) fn load_eval_scope_env(&mut self, block: BasicBlockId) -> ValueId {
-        // 嵌套函数从 native ABI 的 canonical `$env` slot 读取闭包环境；
-        // 模块主函数则从显式 `$eval_env` 参数读取 sandbox。
-        let name = if self.scopes.lookup("$env").is_ok() {
-            "$env".to_string()
-        } else {
-            EVAL_SCOPE_ENV_PARAM.to_string()
-        };
-        let env = self.alloc_value();
-        self.current_function
-            .append_instruction(block, Instruction::LoadVar { dest: env, name });
-        env
+        // 与 load_env_object 同源取词法环境：async/generator body 的 `$env`
+        // 槽位持有续体对象，真实闭包环境在续体槽还原的 `$closure_env`；普通
+        // 嵌套函数取 canonical `$env`；eval 模块主函数取 `$eval_env`（调用方
+        // ScopeRecord）。分叉实现会在协程体内把续体当环境用（链解析必失败）。
+        self.load_env_object(block)
+    }
+
+    /// eval 桥激活时，无捕获函数/方法仍须物化为携带词法环境的闭包：环境取
+    /// 调用方 ScopeRecord（模块主函数的 $eval_env）或外层 $env 链，嵌套函数
+    /// 体内自由名的 EvalGet/SetBinding 才能沿链解析到调用方绑定。非桥接场景
+    /// 返回 None，保持裸 FunctionRef 形态。
+    pub(crate) fn materialize_eval_bridge_closure(
+        &mut self,
+        block: BasicBlockId,
+        func_ref_val: ValueId,
+    ) -> Option<(ValueId, BasicBlockId)> {
+        if !self.eval_scope_bridge_active() {
+            return None;
+        }
+        let env = self.load_eval_scope_env(block);
+        let closure_block = self.resolve_store_block(block);
+        let closure_val = self.alloc_value();
+        self.current_function.append_instruction(
+            closure_block,
+            Instruction::CallBuiltin {
+                dest: Some(closure_val),
+                builtin: Builtin::CreateClosure,
+                args: vec![func_ref_val, env],
+            },
+        );
+        Some((closure_val, closure_block))
     }
 
     pub(crate) fn append_eval_env_key_const(&mut self, block: BasicBlockId, name: &str) -> ValueId {

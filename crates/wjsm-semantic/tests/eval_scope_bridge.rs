@@ -69,3 +69,47 @@ fn eval_top_level_new_target_reads_scope_record() {
     assert!(dump.contains("__wjsm_new_target"));
     assert!(!dump.contains("call builtin.new.target"));
 }
+
+/// eval 桥下无捕获函数声明仍物化为携带词法环境的闭包（链根接调用方
+/// ScopeRecord），嵌套函数自由名的 EvalGetBinding 沿链解析到调用方绑定。
+#[test]
+fn eval_captureless_fn_decl_materializes_bridge_closure() {
+    let dump = lower_eval_dump("function o(){ function i(){ return x; } return i(); } o();");
+    assert!(dump.contains("call builtin.create_closure"));
+    assert!(dump.contains("call builtin.eval_get_binding"));
+}
+
+/// 生成器 body 的 `$env` 槽位持有续体对象：eval 桥读自由名必须经续体槽
+/// 还原的 `$closure_env`（wrapper 词法环境），不得把续体当环境解析。
+#[test]
+fn eval_generator_body_bridge_env_uses_closure_env() {
+    let dump = lower_eval_dump("function* g(){ yield x; } g().next();");
+    let body = dump
+        .split("function ")
+        .find(|section| section.contains("call builtin.eval_get_binding"))
+        .expect("生成器 body 应含 eval_get_binding");
+    assert!(body.contains(".$closure_env"));
+}
+
+/// 嵌套 direct eval 站点保存并恢复 `$eval_env` 协议槽（image 级共享，
+/// 覆写后外层 eval 体的后续自由名解析会读到已销毁的内层记录），并把
+/// 新记录的 outer 接当前桥环境（meta key 4，共 5 处 set_meta）。
+#[test]
+fn eval_nested_direct_eval_restores_protocol_slot_and_chains_outer() {
+    let dump = lower_eval_dump("eval('1'); x;");
+    let store_count = dump.matches("store var $eval_env").count();
+    assert!(store_count >= 2, "记录写入 + 槽恢复，实际 {store_count}");
+    let meta_count = dump.matches("call builtin.scope_record_set_meta").count();
+    assert_eq!(
+        meta_count, 5,
+        "strict/args/super/new_target/outer 五项 meta"
+    );
+}
+
+/// 匿名生成器表达式经编译器内部临时名（`$__wjsm_*`）走声明存储路径：
+/// 临时名不属于 eval 源码的 VarDeclaredNames，不得外泄到调用方记录。
+#[test]
+fn eval_anonymous_generator_expression_temp_name_does_not_leak() {
+    let dump = lower_eval_dump("(function*(){ yield 1; });");
+    assert!(!dump.contains("call builtin.eval_set_binding"));
+}

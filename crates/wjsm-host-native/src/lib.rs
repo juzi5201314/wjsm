@@ -5233,10 +5233,12 @@ impl NativeAgentState {
     }
 
     /// %ArrayBuffer.prototype%（§25.1.6）懒物化：own `constructor`（可写
-    /// 可配置）、`byteLength` 访问器 getter、`slice` 方法与 @@toStringTag
-    /// （"ArrayBuffer"）；[[Prototype]] 为 %Object.prototype%（分配缺省）。
-    /// 同时给构造器安装 @@species 访问器（§25.1.5.3）。resizable / transfer
-    /// 家族未实现，不占位。
+    /// 可配置）、`byteLength` / `maxByteLength` / `resizable` / `detached`
+    /// 访问器 getter、`slice` / `resize` / `transfer` /
+    /// `transferToFixedLength` 方法与 @@toStringTag（"ArrayBuffer"），
+    /// 安装序对齐 V8/Node 的 getOwnPropertyNames；[[Prototype]] 为
+    /// %Object.prototype%（分配缺省）。同时给构造器安装 @@species
+    /// 访问器（§25.1.5.3）。
     pub(crate) fn ensure_array_buffer_prototype(&mut self) -> Option<i64> {
         if let Some(prototype) = self.array_buffer_prototype {
             return Some(prototype);
@@ -5246,7 +5248,7 @@ impl NativeAgentState {
             wjsm_ir::Builtin::ArrayBufferConstructor,
             false,
         ))?;
-        let prototype = self.allocate_object(4, false).ok()?;
+        let prototype = self.allocate_object(10, false).ok()?;
         // 先登记再安装成员：登记表是 GC 根，安装期间的 intern/分配不会回收
         // 尚未挂满成员的 prototype 对象。
         self.array_buffer_prototype = Some(prototype);
@@ -5257,6 +5259,30 @@ impl NativeAgentState {
             wjsm_ir::Builtin::ArrayBufferProtoByteLength,
         )?;
         self.define_prototype_method(prototype, "slice", wjsm_ir::Builtin::ArrayBufferProtoSlice)?;
+        for (name, builtin) in [
+            (
+                "maxByteLength",
+                wjsm_ir::Builtin::ArrayBufferProtoMaxByteLength,
+            ),
+            ("resizable", wjsm_ir::Builtin::ArrayBufferProtoResizable),
+        ] {
+            self.install_prototype_getter(prototype, name, builtin)?;
+        }
+        for (name, builtin) in [
+            ("resize", wjsm_ir::Builtin::ArrayBufferProtoResize),
+            ("transfer", wjsm_ir::Builtin::ArrayBufferProtoTransfer),
+            (
+                "transferToFixedLength",
+                wjsm_ir::Builtin::ArrayBufferProtoTransferToFixedLength,
+            ),
+        ] {
+            self.define_prototype_method(prototype, name, builtin)?;
+        }
+        self.install_prototype_getter(
+            prototype,
+            "detached",
+            wjsm_ir::Builtin::ArrayBufferProtoDetached,
+        )?;
         self.install_prototype_to_string_tag(prototype, "ArrayBuffer")?;
         self.install_species_accessor(constructor)?;
         Some(prototype)

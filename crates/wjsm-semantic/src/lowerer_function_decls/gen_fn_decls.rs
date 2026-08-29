@@ -328,7 +328,8 @@ impl Lowerer {
                 constant: func_ref_const,
             },
         );
-        let (callee_val, env_val_opt) = if captured.is_empty() {
+        // eval 桥下即使无捕获也把 wrapper 的 $env 传给 body（链根接调用方记录）。
+        let (callee_val, env_val_opt) = if captured.is_empty() && !self.eval_scope_bridge_active() {
             (func_ref_val, None)
         } else {
             let env_val = self.alloc_value();

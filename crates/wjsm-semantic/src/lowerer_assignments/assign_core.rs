@@ -14,8 +14,12 @@ impl Lowerer {
         // VariableEnvironment，其内部声明的 var 是函数局部绑定，绝不能外泄；
         // 而嵌套函数对 eval 顶层 var 的闭包赋值仍须回写，保持记录与静态
         // 绑定同步。
+        // 匿名 generator / async generator 表达式经编译器内部临时名
+        // （`$__wjsm_*`）走声明存储路径：临时名不属于 eval 源码的
+        // VarDeclaredNames（§19.2.1.3），绝不外泄到调用方作用域记录。
         if self.eval_var_writes_to_scope
             && matches!(kind, VarKind::Var)
+            && !name.starts_with("$__wjsm_")
             && self.eval_binding_is_top_level(name)
         {
             return self.append_eval_env_write(name, value, block);

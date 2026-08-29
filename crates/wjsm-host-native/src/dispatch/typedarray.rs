@@ -55,6 +55,48 @@ pub(crate) struct NativeTypedArray {
     pub(crate) is_shared: bool,
     pub(crate) offset: usize,
     pub(crate) length: usize,
+    /// [[ArrayLength]] 为 auto（§23.2.5.1 步骤 7.b）：length 实参缺省且
+    /// buffer 可变长（resizable AB / growable SAB）时随底层长度重算；
+    /// `length` 字段仅记录构造时的快照。
+    pub(crate) length_tracking: bool,
+}
+
+/// TypedArrayLength + IsTypedArrayOutOfBounds
+/// （§10.4.5.12 / §10.4.5.13，经 MakeTypedArrayWithBufferWitnessRecord）：
+/// 返回视图当前有效元素个数。length-tracking 视图随底层 buffer 当前长度
+/// 重算；底层 detach 或视图越界（resizable buffer shrink 后）返回 None——
+/// getter 呈现 0、元素读写按越界处理、方法按 ValidateTypedArray 抛
+/// TypeError。内部 storage 视图（流 / 编码器产物）长度固定恒有效。
+pub(crate) fn view_length(state: &NativeAgentState, array: &NativeTypedArray) -> Option<usize> {
+    let element_size = array.kind.element_size();
+    let buffer_length = if let Some(buffer) = &array.buffer {
+        // detach 标志在 buffer 对象侧表上（bytes 清空后 tracking offset 0
+        // 视图的纯长度计算无法区分 detach 与 resize 到 0）。
+        if let Some(buffer_object) = array.buffer_object
+            && state
+                .array_buffers
+                .get(&value::decode_handle(buffer_object))
+                .is_some_and(|entry| entry.detached)
+        {
+            return None;
+        }
+        buffer.borrow().len()
+    } else if let Some(shared) = &array.shared_buffer {
+        shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    } else {
+        return Some(array.length);
+    };
+    let byte_offset = array.offset.checked_mul(element_size)?;
+    if array.length_tracking {
+        return buffer_length
+            .checked_sub(byte_offset)
+            .map(|remaining| remaining / element_size);
+    }
+    let byte_end = byte_offset.checked_add(array.length.checked_mul(element_size)?)?;
+    (byte_end <= buffer_length).then_some(array.length)
 }
 
 pub(crate) fn create_uint8_array(state: &mut NativeAgentState, bytes: &[u8]) -> Option<i64> {
@@ -76,6 +118,7 @@ pub(crate) fn create_uint8_array(state: &mut NativeAgentState, bytes: &[u8]) -> 
             is_shared: false,
             offset: 0,
             length: bytes.len(),
+            length_tracking: false,
         },
     );
     Some(object)
@@ -83,7 +126,8 @@ pub(crate) fn create_uint8_array(state: &mut NativeAgentState, bytes: &[u8]) -> 
 
 pub(crate) fn prefix_view(state: &mut NativeAgentState, view: i64, length: usize) -> Option<i64> {
     let handle = value::decode_handle(view);
-    let count = state.typed_arrays.get(&handle)?.length.min(length);
+    let entry = state.typed_arrays.get(&handle)?;
+    let count = view_length(state, entry).unwrap_or(0).min(length);
     let mut bytes = Vec::with_capacity(count);
     for index in 0..count {
         let stored = get_element(state, view, index)?;
@@ -95,7 +139,9 @@ pub(crate) fn prefix_view(state: &mut NativeAgentState, view: i64, length: usize
 
 pub(crate) fn byte_length(state: &NativeAgentState, view: i64) -> Option<usize> {
     let array = state.typed_arrays.get(&value::decode_handle(view))?;
-    array.length.checked_mul(array.kind.element_size())
+    view_length(state, array)
+        .unwrap_or(0)
+        .checked_mul(array.kind.element_size())
 }
 pub(crate) enum CloneView {
     Values(Vec<i64>),
@@ -103,11 +149,13 @@ pub(crate) enum CloneView {
         buffer: i64,
         offset: usize,
         length: usize,
+        length_tracking: bool,
     },
     SharedArrayBuffer {
         object: i64,
         offset: usize,
         length: usize,
+        length_tracking: bool,
     },
 }
 
@@ -119,6 +167,7 @@ pub(crate) fn clone_view(
     if let Some(storage) = &array.storage {
         return Some((array.kind, CloneView::Values(storage.borrow().clone())));
     }
+    let current_length = view_length(state, array).unwrap_or(0);
     if array.buffer.is_some() {
         if let Some(buffer_object) = array.buffer_object {
             return Some((
@@ -126,14 +175,15 @@ pub(crate) fn clone_view(
                 CloneView::ArrayBuffer {
                     buffer: buffer_object,
                     offset: array.offset,
-                    length: array.length,
+                    length: current_length,
+                    length_tracking: array.length_tracking,
                 },
             ));
         }
         return Some((
             array.kind,
             CloneView::Values(
-                (0..array.length)
+                (0..current_length)
                     .map(|index| get_element(state, encoded, index))
                     .collect::<Option<Vec<_>>>()?,
             ),
@@ -150,7 +200,8 @@ pub(crate) fn clone_view(
         CloneView::SharedArrayBuffer {
             object,
             offset: array.offset,
-            length: array.length,
+            length: current_length,
+            length_tracking: array.length_tracking,
         },
     ))
 }
@@ -175,6 +226,7 @@ pub(crate) fn from_values(
             is_shared: false,
             offset: 0,
             length,
+            length_tracking: false,
         },
     );
     Some(object)
@@ -186,6 +238,7 @@ pub(crate) fn from_buffer(
     buffer: i64,
     offset: usize,
     length: usize,
+    length_tracking: bool,
 ) -> Option<i64> {
     let buffer_object = buffer;
     let buffer = state
@@ -209,6 +262,7 @@ pub(crate) fn from_buffer(
             is_shared: false,
             offset,
             length,
+            length_tracking,
         },
     );
     Some(object)
@@ -220,6 +274,7 @@ pub(crate) fn from_shared_buffer(
     buffer: i64,
     offset: usize,
     length: usize,
+    length_tracking: bool,
 ) -> Option<i64> {
     let buffer_handle = value::decode_handle(buffer);
     let shared = state.shared_array_buffers.get(&buffer_handle).cloned()?;
@@ -240,6 +295,7 @@ pub(crate) fn from_shared_buffer(
             is_shared: true,
             offset,
             length,
+            length_tracking,
         },
     );
     Some(object)
@@ -496,7 +552,7 @@ pub(crate) fn get_element_intern(
         .typed_arrays
         .get(&value::decode_handle(object))?
         .clone();
-    if index >= array.length {
+    if index >= view_length(state, &array).unwrap_or(0) {
         return None;
     }
     if let Some(storage) = &array.storage {
@@ -523,7 +579,7 @@ pub(crate) fn get_element_intern(
 
 fn get_element_from(state: &NativeAgentState, object: i64, index: usize) -> Option<i64> {
     let array = state.typed_arrays.get(&value::decode_handle(object))?;
-    if index >= array.length {
+    if index >= view_length(state, array).unwrap_or(0) {
         return None;
     }
     if let Some(storage) = &array.storage {
@@ -544,8 +600,9 @@ fn get_element_from(state: &NativeAgentState, object: i64, index: usize) -> Opti
 
 pub(crate) fn visible_bytes(state: &NativeAgentState, object: i64) -> Option<Vec<u8>> {
     let array = state.typed_arrays.get(&value::decode_handle(object))?;
+    let current_length = view_length(state, array).unwrap_or(0);
     let byte_offset = array.offset.checked_mul(array.kind.element_size())?;
-    let byte_length = array.length.checked_mul(array.kind.element_size())?;
+    let byte_length = current_length.checked_mul(array.kind.element_size())?;
     if let Some(buffer) = &array.buffer {
         return buffer
             .borrow()
@@ -561,7 +618,7 @@ pub(crate) fn visible_bytes(state: &NativeAgentState, object: i64) -> Option<Vec
     }
     let storage = array.storage.as_ref()?.borrow();
     let mut bytes = vec![0; byte_length];
-    for (index, encoded) in storage[array.offset..array.offset + array.length]
+    for (index, encoded) in storage[array.offset..array.offset + current_length]
         .iter()
         .copied()
         .enumerate()
@@ -587,7 +644,7 @@ pub(super) fn set_element(
         .typed_arrays
         .get(&value::decode_handle(object))?
         .clone();
-    if index >= array.length {
+    if index >= view_length(state, &array).unwrap_or(0) {
         return None;
     }
     let converted = convert_value(state, array.kind, stored)?;
@@ -719,6 +776,7 @@ fn construct(
             is_shared: false,
             offset: 0,
             length,
+            length_tracking: false,
         },
     );
     if let Some(values) = values {
@@ -739,6 +797,15 @@ fn construct_buffer_view(
     buffer: NativeArrayBuffer,
     proto_override: Option<u32>,
 ) -> i64 {
+    // §23.2.5.1（InitializeTypedArrayFromArrayBuffer 步骤 5）：detached
+    // buffer 抛 TypeError（V8 文案）。
+    if buffer.detached {
+        return type_error(
+            ctx,
+            state,
+            "Cannot perform Construct on a detached ArrayBuffer",
+        );
+    }
     let element_size = kind.element_size();
     let total_bytes = buffer.bytes.borrow().len();
     let Some(byte_offset) = args
@@ -749,6 +816,12 @@ fn construct_buffer_view(
     else {
         return fail_dispatch(ctx);
     };
+    // length 实参缺省且 buffer 可变长 → length-tracking 视图
+    // （§23.2.5.1 步骤 7.b [[ArrayLength]] = auto）。
+    let length_arg_absent = args
+        .get(2)
+        .is_none_or(|encoded| value::is_undefined(*encoded));
+    let length_tracking = length_arg_absent && buffer.max_byte_length.is_some();
     let Some(length) = args
         .get(2)
         .and_then(|encoded| to_number(state, *encoded))
@@ -784,6 +857,7 @@ fn construct_buffer_view(
             is_shared: false,
             offset: byte_offset / element_size,
             length,
+            length_tracking,
         },
     );
     object
@@ -807,6 +881,11 @@ fn construct_shared_buffer_view(
     else {
         return fail_dispatch(ctx);
     };
+    // length 实参缺省且 SAB 可增长 → length-tracking 视图（grow 后重算）。
+    let length_arg_absent = args
+        .get(2)
+        .is_none_or(|encoded| value::is_undefined(*encoded));
+    let length_tracking = length_arg_absent && sab.growable();
     let Some(length) = args
         .get(2)
         .and_then(|encoded| to_number(state, *encoded))
@@ -842,9 +921,38 @@ fn construct_shared_buffer_view(
             is_shared: true,
             offset: byte_offset / element_size,
             length,
+            length_tracking,
         },
     );
     object
+}
+
+/// ValidateTypedArray（§23.2.4.4）：receiver 必须是登记在侧表中的 TypedArray
+/// 实例且视图未 detach / 未越界；违反时按 V8 文案抛 `Cannot perform
+/// %TypedArray%.prototype.{method} on a detached ArrayBuffer`（V8 对越界与
+/// detach 共用 "detached" 措辞）。成功返回（条目快照, 当前长度）。
+fn validated_view(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    args: &[i64],
+    method: &str,
+) -> Result<(NativeTypedArray, usize), i64> {
+    let Some(array) = args
+        .first()
+        .and_then(|receiver| state.typed_arrays.get(&value::decode_handle(*receiver)))
+        .cloned()
+    else {
+        return Err(fail_dispatch(ctx));
+    };
+    match view_length(state, &array) {
+        Some(length) => Ok((array, length)),
+        None => {
+            let message = format!(
+                "Cannot perform %TypedArray%.prototype.{method} on a detached ArrayBuffer"
+            );
+            Err(type_error(ctx, state, &message))
+        }
+    }
 }
 
 /// getter 的品牌检查（RequireInternalSlot(O, [[TypedArrayName]])，
@@ -911,7 +1019,10 @@ pub(super) fn render_getter_receiver(state: &NativeAgentState, receiver: Option<
 }
 
 fn property_length(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
-    let Some(length) = receiver_typed_array(state, args).map(|array| array.length) else {
+    // §23.2.3.21.1：越界 / detach 视图返回 +0，tracking 视图随底层重算。
+    let Some(length) =
+        receiver_typed_array(state, args).map(|array| view_length(state, array).unwrap_or(0))
+    else {
         return incompatible_receiver(ctx, state, "length", args.first().copied());
     };
     u32::try_from(length)
@@ -925,9 +1036,12 @@ fn property_byte_length(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(byte_length) = receiver_typed_array(state, args)
-        .map(|array| array.length.checked_mul(array.kind.element_size()))
-    else {
+    // §23.2.3.2：越界 / detach 视图返回 +0（当前长度 × 元素宽）。
+    let Some(byte_length) = receiver_typed_array(state, args).map(|array| {
+        view_length(state, array)
+            .unwrap_or(0)
+            .checked_mul(array.kind.element_size())
+    }) else {
         return incompatible_receiver(ctx, state, "byteLength", args.first().copied());
     };
     byte_length
@@ -941,9 +1055,14 @@ fn property_byte_offset(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(byte_offset) = receiver_typed_array(state, args)
-        .map(|array| array.offset.checked_mul(array.kind.element_size()))
-    else {
+    // §23.2.3.3：越界 / detach 视图返回 +0。
+    let Some(byte_offset) = receiver_typed_array(state, args).map(|array| {
+        if view_length(state, array).is_none() {
+            Some(0)
+        } else {
+            array.offset.checked_mul(array.kind.element_size())
+        }
+    }) else {
         return incompatible_receiver(ctx, state, "byteOffset", args.first().copied());
     };
     byte_offset
@@ -953,6 +1072,10 @@ fn property_byte_offset(
 }
 
 fn set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> i64 {
+    let (_, target_length) = match validated_view(ctx, state, args, "set") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
+    };
     let [receiver, source, offset] = [
         args.first()
             .copied()
@@ -968,14 +1091,7 @@ fn set(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) ->
     let Some(values) = array_values(state, source) else {
         return fail_dispatch(ctx);
     };
-    let Some(array) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .cloned()
-    else {
-        return fail_dispatch(ctx);
-    };
-    if offset.saturating_add(values.len()) > array.length {
+    if offset.saturating_add(values.len()) > target_length {
         return fail_dispatch(ctx);
     }
     for (index, stored) in values.into_iter().enumerate() {
@@ -990,19 +1106,16 @@ fn slice(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) 
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(array) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .cloned()
-    else {
-        return fail_dispatch(ctx);
+    let (array, current_length) = match validated_view(ctx, state, args, "slice") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
-    let start = relative_index(state, args.get(1).copied(), array.length);
-    let end = args.get(2).map_or(array.length, |encoded| {
-        relative_index(state, Some(*encoded), array.length)
+    let start = relative_index(state, args.get(1).copied(), current_length);
+    let end = args.get(2).map_or(current_length, |encoded| {
+        relative_index(state, Some(*encoded), current_length)
     });
     let first = start.min(end);
-    let count = end.min(array.length).saturating_sub(first);
+    let count = end.min(current_length).saturating_sub(first);
     // §23.2.3.24 步骤 9：A = TypedArraySpeciesCreate(O, «𝔽(count)») 先于
     // 元素读取（species 构造器可再入用户代码改写源）；构造出的长度不足
     // count 抛 TypeError（§23.2.4.1 步骤 3）。
@@ -1063,14 +1176,38 @@ fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     else {
         return fail_dispatch(ctx);
     };
-    let start = relative_index(state, args.get(1).copied(), array.length);
-    let end = args.get(2).map_or(array.length, |encoded| {
-        relative_index(state, Some(*encoded), array.length)
+    // §23.2.3.28 无 ValidateTypedArray：srcLength 对越界视图取 0；但底层
+    // detach 时 TypedArraySpeciesCreate 的 Construct 会失败（V8 文案）。
+    let src_length = match view_length(state, &array) {
+        Some(length) => length,
+        None if array.buffer_object.is_some_and(|buffer_object| {
+            state
+                .array_buffers
+                .get(&value::decode_handle(buffer_object))
+                .is_some_and(|entry| entry.detached)
+        }) =>
+        {
+            return type_error(
+                ctx,
+                state,
+                "Cannot perform Construct on a detached ArrayBuffer",
+            );
+        }
+        None => 0,
+    };
+    // §23.2.3.28 步骤 13：源为 length-tracking 且 end 缺省时结果亦 tracking。
+    let tracking = array.length_tracking
+        && args
+            .get(2)
+            .is_none_or(|encoded| value::is_undefined(*encoded));
+    let start = relative_index(state, args.get(1).copied(), src_length);
+    let end = args.get(2).map_or(src_length, |encoded| {
+        relative_index(state, Some(*encoded), src_length)
     });
     let begin = start.min(end);
     let new_length = end
         .saturating_sub(start)
-        .min(array.length.saturating_sub(start));
+        .min(src_length.saturating_sub(start));
     // §23.2.3.28 步骤 13–14：TypedArraySpeciesCreate(O, «buffer,
     // 𝔽(beginByteOffset), 𝔽(newLength)»)。缺省构造器合流快路径：直接共享
     // 底层 backing 建视图，与 Construct(default, «buffer, offset, len») 等价。
@@ -1100,6 +1237,7 @@ fn subarray(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
             is_shared: array.is_shared,
             offset: array.offset + begin,
             length: new_length,
+            length_tracking: tracking,
         },
     );
     object
@@ -1162,18 +1300,15 @@ fn fill(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(array) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .cloned()
-    else {
-        return fail_dispatch(ctx);
+    let (_, current_length) = match validated_view(ctx, state, args, "fill") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
-    let start = relative_index(state, args.get(2).copied(), array.length);
-    let end = args.get(3).map_or(array.length, |encoded| {
-        relative_index(state, Some(*encoded), array.length)
+    let start = relative_index(state, args.get(2).copied(), current_length);
+    let end = args.get(3).map_or(current_length, |encoded| {
+        relative_index(state, Some(*encoded), current_length)
     });
-    for index in start.min(end)..end.min(array.length) {
+    for index in start.min(end)..end.min(current_length) {
         if set_element(
             state,
             receiver,
@@ -1192,12 +1327,9 @@ fn reverse(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let (_, length) = match validated_view(ctx, state, args, "reverse") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     for index in 0..length / 2 {
         let right = length - index - 1;
@@ -1225,12 +1357,10 @@ fn index_of(
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let method = if reverse { "lastIndexOf" } else { "indexOf" };
+    let (_, length) = match validated_view(ctx, state, args, method) {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let from = args
         .get(2)
@@ -1276,12 +1406,9 @@ fn includes(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let (_, length) = match validated_view(ctx, state, args, "includes") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let needle = args.get(1).copied().unwrap_or_else(value::encode_undefined);
     value::encode_bool((0..length).any(|index| {
@@ -1301,12 +1428,10 @@ fn join(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    // toString（§23.2.3.32）内部调 join，V8 对二者统一报 join 的文案。
+    let (_, length) = match validated_view(ctx, state, args, "join") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let separator = args
         .get(1)
@@ -1332,12 +1457,9 @@ fn copy_within(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let (_, length) = match validated_view(ctx, state, args, "copyWithin") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let target = relative_index(state, args.get(1).copied(), length);
     let start = relative_index(state, args.get(2).copied(), length);
@@ -1360,12 +1482,9 @@ fn at(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -> 
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let (_, length) = match validated_view(ctx, state, args, "at") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let Some(index) = args
         .get(1)
@@ -1403,17 +1522,23 @@ fn callback_iterate(
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
+    let method = match kind {
+        CallbackKind::Every => "every",
+        CallbackKind::Filter => "filter",
+        CallbackKind::Find => "find",
+        CallbackKind::FindIndex => "findIndex",
+        CallbackKind::ForEach => "forEach",
+        CallbackKind::Map => "map",
+        CallbackKind::Some => "some",
+    };
+    let (_, length) = match validated_view(ctx, state, args, method) {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
+    };
     let Some(callback) = args
         .get(1)
         .copied()
         .filter(|value| value::is_callable(*value))
-    else {
-        return fail_dispatch(ctx);
-    };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
     else {
         return fail_dispatch(ctx);
     };
@@ -1473,12 +1598,10 @@ fn reduce(
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let method = if reverse { "reduceRight" } else { "reduce" };
+    let (_, length) = match validated_view(ctx, state, args, method) {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let Some(callback) = args
         .get(1)
@@ -1529,12 +1652,9 @@ fn sort(ctx: &mut NativeVmContext, state: &mut NativeAgentState, args: &[i64]) -
     let Some(receiver) = args.first().copied() else {
         return fail_dispatch(ctx);
     };
-    let Some(length) = state
-        .typed_arrays
-        .get(&value::decode_handle(receiver))
-        .map(|array| array.length)
-    else {
-        return fail_dispatch(ctx);
+    let (_, length) = match validated_view(ctx, state, args, "sort") {
+        Ok(validated) => validated,
+        Err(exception) => return exception,
     };
     let comparator = args
         .get(1)
@@ -1612,8 +1732,13 @@ fn iterator(
         return fail_dispatch(ctx);
     };
     let handle = value::decode_handle(receiver);
-    if !state.typed_arrays.contains_key(&handle) {
-        return fail_dispatch(ctx);
+    let method = match kind {
+        crate::NativeIteratorKind::Entries => "entries",
+        crate::NativeIteratorKind::Keys => "keys",
+        crate::NativeIteratorKind::Values => "values",
+    };
+    if let Err(exception) = validated_view(ctx, state, args, method) {
+        return exception;
     }
     let family = super::iterator_prototypes::NativeIteratorFamily::Array;
     if super::iterator_prototypes::ensure_prototype(state, family).is_none() {
@@ -1668,10 +1793,8 @@ fn array_values(state: &mut NativeAgentState, encoded: i64) -> Option<Vec<i64>> 
             .collect();
     }
     if value::is_js_object(encoded) {
-        let length = state
-            .typed_arrays
-            .get(&value::decode_handle(encoded))?
-            .length;
+        let entry = state.typed_arrays.get(&value::decode_handle(encoded))?;
+        let length = view_length(state, entry).unwrap_or(0);
         return (0..length)
             .map(|index| get_element_intern(state, encoded, index))
             .collect();

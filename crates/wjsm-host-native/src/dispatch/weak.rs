@@ -693,6 +693,13 @@ fn host_edges(state: &NativeAgentState) -> (Vec<GcEdge>, Vec<GcEphemeron>) {
             add(owner(*handle), *stored);
         }
     }
+    // direct eval 的调用方 ScopeRecord 被逃逸闭包钉扎后，其快照绑定值 /
+    // with 层对象 / outer / super_base / new_target 仅由宿主表持有，随记录
+    // 对象存活（记录对象死亡时侧表项由 retain 清扫一并释放）。
+    for (handle, scope) in &state.scope_records {
+        let record_owner = owner(*handle);
+        scope.for_each_gc_value(|stored| add(record_owner, stored));
+    }
     for (handle, buffer) in &state.buffers {
         add(owner(*handle), buffer.array_buffer);
     }

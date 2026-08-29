@@ -817,6 +817,31 @@ impl Lowerer {
             })
             .collect();
 
+        // 2b. 嵌套 direct eval：`$eval_env` 是 image 级协议槽，本站点即将写入
+        // 新记录会覆盖当前 eval 程序的调用方记录——先保存原值，Eval 返回后
+        // 立即恢复（在 IsException 分叉之前，程序内 try/catch 捕获路径的
+        // 自由名解析不受污染；异常穿出模块时槽随 image 失活无需恢复）。
+        let saved_eval_env = if self.eval_mode {
+            let saved = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::LoadVar {
+                    dest: saved,
+                    name: EVAL_SCOPE_ENV_PARAM.to_string(),
+                },
+            );
+            Some(saved)
+        } else {
+            None
+        };
+        // 2c. 桥激活时新记录的 outer 接当前词法环境（eval 主函数 = 调用方
+        // 记录；嵌套函数 = $env 链；协程体 = $closure_env）：嵌套 direct eval
+        // 的自由名沿记录链解析到外层桥（GetIdentifierReference 的 outer 递归，
+        // §9.4.2）。非桥场景保持宿主默认 outer（realm 全局）。
+        let bridge_outer = self
+            .eval_scope_bridge_active()
+            .then(|| self.load_eval_scope_env(eval_block));
+
         // 3. Create ScopeRecord
         let capacity = self.const_val_i64(eval_block, all_bindings.len() as i64);
         let scope_record = self.alloc_value();
@@ -1051,6 +1076,19 @@ impl Lowerer {
         );
         // new.target for eval body: runtime reads scope meta first, then runtime global fallback.
 
+        // 7c. Set meta: outer (key=4)，见 2c。
+        if let Some(outer_env) = bridge_outer {
+            let outer_key = self.const_val_i64(eval_block, 4);
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ScopeRecordSetMeta,
+                    args: vec![scope_record, outer_key, outer_env],
+                },
+            );
+        }
+
         // 8. Call Eval(code, scope_record)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
@@ -1061,6 +1099,17 @@ impl Lowerer {
                 args: vec![code_val, scope_record],
             },
         );
+
+        // 8b. 恢复 `$eval_env` 协议槽（见 2b），先于异常分叉。
+        if let Some(saved) = saved_eval_env {
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::StoreVar {
+                    name: EVAL_SCOPE_ENV_PARAM.to_string(),
+                    value: saved,
+                },
+            );
+        }
 
         // 8. Exception check
         let is_exc = self.alloc_value();

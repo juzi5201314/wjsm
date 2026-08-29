@@ -941,8 +941,9 @@ pub(super) fn set_element_completion(
         .cloned()
     {
         if let Some(index) = array_index(state, index) {
-            if index as usize >= array.length {
-                // IntegerIndexedElementSet：越界写入静默成功（strict 亦不抛）。
+            if index as usize >= super::typedarray::view_length(state, &array).unwrap_or(0) {
+                // IntegerIndexedElementSet：越界写入静默成功（strict 亦不抛），
+                // detach / resize 越界视图同路径。
                 return Ok(SetCompletion::Written);
             }
             if array.kind.is_bigint() != value::is_bigint(stored) {
@@ -3239,10 +3240,11 @@ fn ensure_current(
         super::super::NativeIteratorSource::String(source) => state
             .string_owned(source)
             .is_none_or(|text| iterator.index as usize >= text.utf16_len()),
-        super::super::NativeIteratorSource::TypedArray(source) => state
-            .typed_arrays
-            .get(&source)
-            .is_none_or(|array| iterator.index as usize >= array.length),
+        super::super::NativeIteratorSource::TypedArray(source) => {
+            state.typed_arrays.get(&source).is_none_or(|array| {
+                iterator.index as usize >= super::typedarray::view_length(state, array).unwrap_or(0)
+            })
+        }
         super::super::NativeIteratorSource::Map(source) => state
             .maps
             .get(&source)
