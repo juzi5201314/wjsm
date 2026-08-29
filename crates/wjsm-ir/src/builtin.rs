@@ -710,6 +710,29 @@ pub enum Builtin {
     /// （[[Set]] 恒 false、导出经 [[GetOwnProperty]] 呈现为
     /// writable=true 数据描述符等）。args: [namespace]。
     FinalizeModuleNamespace,
+    /// `String.prototype.isWellFormed`（ES §22.1.3.10）：ToString(this) 后按
+    /// IsStringWellFormedUnicode 判定 UTF-16 码元序列是否无孤立代理项。
+    StringIsWellFormed,
+    /// `String.prototype.toWellFormed`（ES §22.1.3.33）：ToString(this) 后把
+    /// 每个孤立代理项替换为 U+FFFD，返回良构副本。
+    StringToWellFormed,
+    /// `Array.fromAsync`（ES2024 §23.1.2.1）：返回 promise 的异步收集，宿主
+    /// 状态机经微任务驱动 async/sync 迭代器或 array-like 的逐元素 Await。
+    ArrayFromAsync,
+    /// `Set.prototype.union`（ES §24.2.4.16）。
+    SetProtoUnion,
+    /// `Set.prototype.intersection`（ES §24.2.4.9）。
+    SetProtoIntersection,
+    /// `Set.prototype.difference`（ES §24.2.4.5）。
+    SetProtoDifference,
+    /// `Set.prototype.symmetricDifference`（ES §24.2.4.15）。
+    SetProtoSymmetricDifference,
+    /// `Set.prototype.isSubsetOf`（ES §24.2.4.10）。
+    SetProtoIsSubsetOf,
+    /// `Set.prototype.isSupersetOf`（ES §24.2.4.11）。
+    SetProtoIsSupersetOf,
+    /// `Set.prototype.isDisjointFrom`（ES §24.2.4.12）。
+    SetProtoIsDisjointFrom,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -745,7 +768,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::FinalizeModuleNamespace as u16
+        Self::SetProtoIsDisjointFrom as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1277,6 +1300,16 @@ impl Builtin {
             Self::AbortSignalConstructor => "AbortSignal",
             Self::EventConstructor => "Event",
             Self::IteratorCloseThrowCompletion => "iterator.close_throw",
+            Self::StringIsWellFormed => "string.is_well_formed",
+            Self::StringToWellFormed => "string.to_well_formed",
+            Self::ArrayFromAsync => "array.from_async",
+            Self::SetProtoUnion => "Set.prototype.union",
+            Self::SetProtoIntersection => "Set.prototype.intersection",
+            Self::SetProtoDifference => "Set.prototype.difference",
+            Self::SetProtoSymmetricDifference => "Set.prototype.symmetricDifference",
+            Self::SetProtoIsSubsetOf => "Set.prototype.isSubsetOf",
+            Self::SetProtoIsSupersetOf => "Set.prototype.isSupersetOf",
+            Self::SetProtoIsDisjointFrom => "Set.prototype.isDisjointFrom",
         }
     }
 }

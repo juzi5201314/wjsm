@@ -40,6 +40,12 @@ pub fn format_number_js(x: f64) -> String {
     if x == 0.0 {
         return "0".to_string();
     }
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
     let abs = x.abs();
     if abs >= 1e21 || (abs < 1e-6 && abs > 0.0) {
         let s = format!("{:e}", x);
