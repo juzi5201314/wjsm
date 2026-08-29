@@ -52,6 +52,7 @@ mod object_proto;
 mod operator;
 mod primitive;
 mod private;
+pub(crate) mod process_stdin;
 pub(crate) mod promise;
 mod property_write;
 pub(crate) mod proxy;

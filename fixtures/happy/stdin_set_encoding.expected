@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+TypeError Unknown encoding: koi8-r
+set true
+data string "中文行\nmixed 行 line\n"
+end
+--- stderr ---

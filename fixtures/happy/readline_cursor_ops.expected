@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+true true true true true true true true true
+["\u001b[4G","\u001b[8;4H","\u001b[2D\u001b[4B","\u001b[1K","\u001b[2K","\u001b[0K","\u001b[0J"]
+true true true true
+["\u001b[1G"]
+--- stderr ---

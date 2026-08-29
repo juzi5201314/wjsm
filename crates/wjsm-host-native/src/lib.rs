@@ -312,6 +312,9 @@ fn native_function_metadata(kind: NativeCallableKind) -> Option<(&'static str, u
             Some(("return", 0))
         }
         NativeCallableKind::ProcessHrtime => Some(("hrtime", 1)),
+        NativeCallableKind::ProcessStdin(method) => {
+            Some(dispatch::process_stdin::method_metadata(method))
+        }
         NativeCallableKind::ProcessHrtimeBigInt => Some(("bigint", 0)),
         NativeCallableKind::ProcessUptime => Some(("uptime", 0)),
         NativeCallableKind::ProcessMemoryUsage => Some(("memoryUsage", 0)),
@@ -677,6 +680,8 @@ enum NativeCallableKind {
     ProcessWrite(bool),
     ProcessStreamEnd(bool),
     ProcessStreamReturnThis,
+    /// process.stdin 的原生方法与异步迭代器（管道输入真实读取）。
+    ProcessStdin(dispatch::process_stdin::StdinMethod),
     ProcessHrtime,
     ProcessHrtimeBigInt,
     ProcessUptime,
@@ -1301,6 +1306,7 @@ struct NativeAgentState {
     idna: dispatch::idna::IdnaState,
     node_vm: dispatch::node_vm::NodeVmState,
     node_child_process: dispatch::node_child_process::NodeChildProcessState,
+    process_stdin: dispatch::process_stdin::ProcessStdinState,
     node_perf_hooks: dispatch::node_perf_hooks::NodePerfHooksState,
     node_worker_threads: dispatch::node_worker_threads::NodeWorkerThreadsState,
     fetch: dispatch::fetch::NativeFetchState,
@@ -1507,6 +1513,7 @@ impl NativeAgentState {
             idna: dispatch::idna::IdnaState::default(),
             node_vm: dispatch::node_vm::NodeVmState::default(),
             node_child_process: dispatch::node_child_process::NodeChildProcessState::default(),
+            process_stdin: dispatch::process_stdin::ProcessStdinState::default(),
             node_perf_hooks: dispatch::node_perf_hooks::NodePerfHooksState::default(),
             node_worker_threads: dispatch::node_worker_threads::NodeWorkerThreadsState::main(),
             streams: dispatch::streams::NativeStreamsState::default(),
@@ -1810,6 +1817,7 @@ impl NativeAgentState {
         self.module_namespace_objects.clear();
         self.node_worker_threads.reset_agent();
         self.node_child_process.reset_agent();
+        self.process_stdin = dispatch::process_stdin::ProcessStdinState::default();
         // test262_agent 由 configure_test262_agent 注入，reset_execution 不清除，
         // 否则 agent 线程 execute 时会丢失 receiveBroadcast 注册。
         self.agent_bridge = None;
@@ -2843,14 +2851,7 @@ impl NativeAgentState {
         let exec_path = self.intern_text(exec_path, value::TAG_STRING)?;
 
         let return_this = self.native_callable(NativeCallableKind::ProcessStreamReturnThis)?;
-        let stdin = self.allocate_object(2, false).ok()?;
-        for name in ["on", "resume"] {
-            let key = self.intern_property_string(name.into())?;
-            self.gc
-                .heap()
-                .set_property(value::decode_handle(stdin), key, return_this as u64)
-                .ok()?;
-        }
+        let stdin = dispatch::process_stdin::create_stdin_object(self)?;
 
         let stdout = self.allocate_object(3, false).ok()?;
         let stderr = self.allocate_object(3, false).ok()?;
@@ -3703,6 +3704,7 @@ impl NativeAgentState {
             | NativeCallableKind::ProcessWrite(_)
             | NativeCallableKind::ProcessStreamEnd(_)
             | NativeCallableKind::ProcessStreamReturnThis
+            | NativeCallableKind::ProcessStdin(_)
             | NativeCallableKind::ProcessHrtime
             | NativeCallableKind::ProcessHrtimeBigInt
             | NativeCallableKind::ProcessUptime
@@ -6219,7 +6221,8 @@ impl NativeAgentState {
     }
 
     fn has_pending_external_events(&self) -> bool {
-        self.node_child_process.has_pending()
+        self.process_stdin.has_pending()
+            || self.node_child_process.has_pending()
             || dispatch::node_dgram::has_pending(self)
             || dispatch::node_tls::has_pending(self)
             || self.node_worker_threads.has_pending()
@@ -6261,6 +6264,11 @@ impl NativeAgentState {
     }
 
     fn poll_external_events(&mut self, ctx: &mut NativeVmContext) -> i64 {
+        // stdin 泵最先跑：同步源、无阻塞，交付后可能产生新的微任务。
+        let stdin_result = dispatch::process_stdin::pump(ctx, self);
+        if value::is_exception(stdin_result) {
+            return stdin_result;
+        }
         let child_result = dispatch::node_child_process::poll(ctx, self);
         if value::is_exception(child_result) || self.node_child_process.has_pending() {
             return child_result;
@@ -6522,6 +6530,20 @@ fn process_write(
         Err(exception) => return exception,
     };
     state.emit_output(text.as_bytes(), stderr);
+    // write(chunk[, encoding][, callback])：宿主写出同步完成，flush 回调按
+    // Node 实测时序（先于同 tick 注册的 nextTick 回调）入 next_ticks 队列。
+    if let Some(callback) = arguments
+        .iter()
+        .skip(1)
+        .rev()
+        .copied()
+        .find(|argument| value::is_callable(*argument))
+    {
+        let scheduled = dispatch::promise::enqueue_next_tick(ctx, state, callback, Vec::new());
+        if value::is_exception(scheduled) {
+            return scheduled;
+        }
+    }
     value::encode_bool(true)
 }
 
@@ -6787,6 +6809,9 @@ unsafe extern "C" fn native_callable_call(
             this_value
         }
         NativeCallableKind::ProcessStreamReturnThis => this_value,
+        NativeCallableKind::ProcessStdin(method) => {
+            dispatch::process_stdin::call(ctx, state, method, this_value, &arguments)
+        }
         NativeCallableKind::ProxyRevoke(proxy) => {
             let Some(proxy) = usize::try_from(proxy)
                 .ok()
