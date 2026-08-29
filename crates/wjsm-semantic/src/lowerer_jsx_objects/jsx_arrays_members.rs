@@ -323,11 +323,16 @@ impl Lowerer {
         Ok(dest)
     }
 
-    /// 加载当前函数的闭包环境对象（$env 参数）
+    /// 加载当前函数的闭包环境对象（$env 参数）。eval 桥模块主函数没有 $env
+    /// 槽，其词法父环境是调用方 ScopeRecord（$eval_env）——共享 env / classEnv /
+    /// 方法 home env 的链根经此接到记录，环境链才能穿过嵌套函数到调用方
+    /// （direct eval 的 GetIdentifierReference §9.4.2）。
     pub(crate) fn load_env_object(&mut self, block: BasicBlockId) -> ValueId {
         let dest = self.alloc_value();
         let name = if let Some(env_name) = &self.async_closure_env_ir_name {
             env_name.clone()
+        } else if self.eval_scope_bridge_active() && self.scopes.lookup("$env").is_err() {
+            EVAL_SCOPE_ENV_PARAM.to_string()
         } else {
             "$env".to_string()
         };

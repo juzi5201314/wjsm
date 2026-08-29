@@ -1,0 +1,23 @@
+exit_code: 0
+--- stdout ---
+t1 1
+t2 2
+t3 3
+t4 false 4
+t5 5
+t6 6
+t7 7
+t8 8
+t9 9
+t10 undefined
+t11 111
+t12 12
+t14 14
+t15 15
+t16 ReferenceError
+t17 17
+t18 18
+t19 19
+t20 TypeError
+t13 13
+--- stderr ---

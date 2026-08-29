@@ -83,6 +83,12 @@ impl Lowerer {
             },
         );
         if captured.is_empty() {
+            // eval 桥下无捕获 wrapper 表达式仍携带词法环境（链根接调用方记录）。
+            if let Some((closure_val, closure_block)) =
+                self.materialize_eval_bridge_closure(block, wrapper_ref_val)
+            {
+                return Ok((closure_val, closure_block));
+            }
             return Ok((wrapper_ref_val, block));
         }
         let env_val = self.ensure_shared_env(block, captured, span)?;
@@ -139,6 +145,12 @@ impl Lowerer {
                 name: format!("${scope_id}.{name}"),
             },
         );
+        // 存储路径可能分叉推进（共享 env 慢路径、eval 桥闭包物化）：延续块
+        // 必须经 expr_merge_block 上报，否则外层继续写入口块，callee 的定义
+        // 不再支配其使用（invalid IR）。
+        if load_block != block {
+            self.expr_merge_block = Some(load_block);
+        }
         Ok(callee)
     }
 
@@ -849,7 +861,9 @@ impl Lowerer {
             },
         );
 
-        let (callee_val, env_val_opt) = if captured.is_empty() {
+        // eval 桥下即使无捕获也把 wrapper 的 $env（链根接调用方记录）传给
+        // body，body 内自由名的 EvalGet/SetBinding 沿链解析到调用方绑定。
+        let (callee_val, env_val_opt) = if captured.is_empty() && !self.eval_scope_bridge_active() {
             (func_ref_val, None)
         } else {
             let env_val = self.alloc_value();
