@@ -183,7 +183,7 @@ module {
       %44 = call builtin.promise.resolve_static(%43, %39)
       jump bb9
     bb14:
-      %45 = call %33, this=%34, args=[%39]
+      %45 = call %33, this=%34, args=[%39], callsite="Promise.resolve"
       jump bb9
     bb15:
       %51 = const c38
@@ -369,7 +369,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @arrow_3 [direct_callable] [js_name ""] [js_length 1] [params: $4.$env, $4.$this, $4.result] [entry=bb0]:
@@ -421,7 +421,7 @@ module {
       %21 = call builtin.console.log(%18)
       jump bb7
     bb12:
-      %22 = call %14, this=%15, args=[%18]
+      %22 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -473,7 +473,7 @@ module {
       %22 = const c65
       %23 = load var $0.gen
       %24 = const c66
-      %25 = call %23, this=%22, args=[%24]
+      %25 = call %23, this=%22, args=[%24], callsite="gen"
       %26 = is_exception %25
       branch %26, bb2, bb1
     bb1:
@@ -487,7 +487,7 @@ module {
       %27 = call builtin.exception_value(%25)
       throw %27
     bb3:
-      %33 = call %30, this=%28
+      %33 = call %30, this=%28, callsite="g.next"
       %34 = is_exception %33
       branch %34, bb6, bb5
     bb4:
@@ -512,7 +512,7 @@ module {
       %40 = call builtin.exception_value(%38)
       throw %40
     bb9:
-      %46 = call %43, this=%41
+      %46 = call %43, this=%41, callsite="g.next"
       %47 = is_exception %46
       branch %47, bb12, bb11
     bb10:

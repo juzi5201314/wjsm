@@ -72,14 +72,14 @@ module {
       %0 = const c21
       %1 = load var $1.resolve
       %2 = const c22
-      %3 = call %1, this=%0, args=[%2]
+      %3 = call %1, this=%0, args=[%2], callsite="resolve"
       %4 = is_exception %3
       branch %4, bb2, bb1
     bb1:
       %6 = const c23
       %7 = load var $1.reject
       %8 = const c24
-      %9 = call %7, this=%6, args=[%8]
+      %9 = call %7, this=%6, args=[%8], callsite="reject"
       %10 = is_exception %9
       branch %10, bb4, bb3
     bb2:
@@ -89,7 +89,7 @@ module {
       %12 = const c25
       %13 = load var $1.resolve
       %14 = const c26
-      %15 = call %13, this=%12, args=[%14]
+      %15 = call %13, this=%12, args=[%14], callsite="resolve"
       %16 = is_exception %15
       branch %16, bb6, bb5
     bb4:
@@ -157,7 +157,7 @@ module {
       %27 = call builtin.console.log(%26)
       jump bb9
     bb12:
-      %28 = call %24, this=%25, args=[%26]
+      %28 = call %24, this=%25, args=[%26], callsite="console.log"
       jump bb9
     bb13:
       return
@@ -208,7 +208,7 @@ module {
       %19 = call builtin.console.log(%18)
       jump bb7
     bb10:
-      %20 = call %14, this=%15, args=[%18]
+      %20 = call %14, this=%15, args=[%18], callsite="console.log"
       jump bb7
 
   fn @$module_main [entry=bb0]:
@@ -324,7 +324,7 @@ module {
       %59 = call builtin.promise.resolve_static(%57, %58)
       jump bb11
     bb14:
-      %60 = call %55, this=%56
+      %60 = call %55, this=%56, callsite="Promise.resolve"
       jump bb11
     bb15:
       %64 = const c60
@@ -367,13 +367,13 @@ module {
     bb23:
       %80 = const c21
       %82 = const c22
-      %83 = call %24, this=%80, args=[%82]
+      %83 = call %24, this=%80, args=[%82], callsite="resolve"
       %84 = is_exception %83
       branch %84, bb25, bb24
     bb24:
       %86 = const c23
       %88 = const c24
-      %89 = call %25, this=%86, args=[%88]
+      %89 = call %25, this=%86, args=[%88], callsite="reject"
       %90 = is_exception %89
       branch %90, bb27, bb26
     bb25:
@@ -384,7 +384,7 @@ module {
     bb26:
       %92 = const c25
       %94 = const c26
-      %95 = call %24, this=%92, args=[%94]
+      %95 = call %24, this=%92, args=[%94], callsite="resolve"
       %96 = is_exception %95
       branch %96, bb29, bb28
     bb27:

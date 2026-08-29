@@ -4379,10 +4379,7 @@ impl NativeAgentState {
         let callsites = if slot.caller_image_id == self.current_image_id {
             &self.feedback_callsites
         } else {
-            &self
-                .programs
-                .get(&slot.caller_image_id)?
-                .feedback_callsites
+            &self.programs.get(&slot.caller_image_id)?.feedback_callsites
         };
         callsites.get(&slot.site_index).cloned()
     }

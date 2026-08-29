@@ -437,7 +437,7 @@ module {
       %95 = phi [(bb40, %83), (bb43, %88)]
       jump bb46
     bb46:
-      %96 = call %47, this=%45, args=[%72, %95]
+      %96 = call %47, this=%45, args=[%72, %95], callsite="console.log"
       %97 = is_exception %96
       branch %97, bb48, bb47
     bb47:
@@ -713,7 +713,7 @@ module {
       %216 = call builtin.console.log(%200, %205, %208, %211)
       jump bb113
     bb124:
-      %217 = call %196, this=%197, args=[%200, %205, %208, %211]
+      %217 = call %196, this=%197, args=[%200, %205, %208, %211], callsite="console.log"
       jump bb113
     bb125:
       %221 = const c82
@@ -819,7 +819,7 @@ module {
       %262 = phi [(bb151, %258), (bb149, %261)]
       jump bb154
     bb154:
-      %263 = call %245, this=%243, args=[%262]
+      %263 = call %245, this=%243, args=[%262], callsite="console.log"
       %264 = is_exception %263
       branch %264, bb156, bb155
     bb155:
@@ -922,7 +922,7 @@ module {
       %306 = call builtin.console.log(%298, %301)
       jump bb176
     bb183:
-      %307 = call %296, this=%297, args=[%298, %301]
+      %307 = call %296, this=%297, args=[%298, %301], callsite="console.log"
       jump bb176
     bb184:
       %311 = const c109
@@ -1144,7 +1144,7 @@ module {
       %404 = is_exception %403
       branch %404, bb247, bb246
     bb246:
-      %406 = call %344, this=%342, args=[%403]
+      %406 = call %344, this=%342, args=[%403], callsite="console.log"
       %407 = is_exception %406
       branch %407, bb249, bb248
     bb247:
@@ -1321,7 +1321,7 @@ module {
       %480 = call builtin.object.create(%479)
       jump bb294
     bb297:
-      %481 = call %477, this=%478, args=[%479]
+      %481 = call %477, this=%478, args=[%479], callsite="Object.create"
       jump bb294
     bb298:
       store var $0.child, %482
@@ -1438,7 +1438,7 @@ module {
       %532 = phi [(bb324, %520), (bb327, %525)]
       jump bb330
     bb330:
-      %533 = call %507, this=%505, args=[%532]
+      %533 = call %507, this=%505, args=[%532], callsite="console.log"
       %534 = is_exception %533
       branch %534, bb332, bb331
     bb331:
@@ -1566,7 +1566,7 @@ module {
     bb362:
       %596 = load var $0.child
       %597 = const c193
-      %598 = call %593, this=%589, args=[%596, %597]
+      %598 = call %593, this=%589, args=[%596, %597], callsite="Object.prototype.hasOwnProperty.call"
       %599 = is_exception %598
       branch %599, bb365, bb364
     bb363:
@@ -1581,7 +1581,7 @@ module {
       %601 = call builtin.console.log(%575, %580, %598)
       jump bb354
     bb367:
-      %602 = call %571, this=%572, args=[%575, %580, %598]
+      %602 = call %571, this=%572, args=[%575, %580, %598], callsite="console.log"
       jump bb354
     bb368:
       %606 = const c194
@@ -1689,7 +1689,7 @@ module {
       %648 = phi [(bb394, %644), (bb392, %647)]
       jump bb397
     bb397:
-      %649 = call %631, this=%629, args=[%648]
+      %649 = call %631, this=%629, args=[%648], callsite="console.log"
       %650 = is_exception %649
       branch %650, bb399, bb398
     bb398:
@@ -1786,7 +1786,7 @@ module {
       %690 = call builtin.console.log(%684, %687)
       jump bb419
     bb424:
-      %691 = call %682, this=%683, args=[%684, %687]
+      %691 = call %682, this=%683, args=[%684, %687], callsite="console.log"
       jump bb419
     bb425:
       return

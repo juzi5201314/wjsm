@@ -110,7 +110,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @arrow_1 [direct_callable] [js_name ""] [js_length 0] [params: $2.$env, $2.$this] [entry=bb0]:
@@ -154,7 +154,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -241,7 +241,7 @@ module {
       %38 = call builtin.console.log(%37)
       jump bb7
     bb10:
-      %39 = call %35, this=%36, args=[%37]
+      %39 = call %35, this=%36, args=[%37], callsite="console.log"
       jump bb7
     bb11:
       %43 = const c28
@@ -288,7 +288,7 @@ module {
       %61 = call builtin.promise.resolve_static(%59, %60)
       jump bb19
     bb22:
-      %62 = call %57, this=%58
+      %62 = call %57, this=%58, callsite="Promise.resolve"
       jump bb19
     bb23:
       %66 = const c45
@@ -305,7 +305,7 @@ module {
       %73 = const c48
       %74 = get_prop %72, %73
       %75 = const c57
-      %76 = call %74, this=%71, args=[%75]
+      %76 = call %74, this=%71, args=[%75], callsite="queueMicrotask"
       %77 = is_exception %76
       branch %77, bb28, bb27
     bb26:
@@ -355,7 +355,7 @@ module {
       %96 = call builtin.console.log(%95)
       jump bb35
     bb38:
-      %97 = call %93, this=%94, args=[%95]
+      %97 = call %93, this=%94, args=[%95], callsite="console.log"
       jump bb35
     bb39:
       return

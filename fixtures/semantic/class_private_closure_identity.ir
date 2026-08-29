@@ -316,7 +316,7 @@ module {
       %3 = is_exception %2
       branch %3, bb2, bb1
     bb1:
-      %5 = call %2, this=%0
+      %5 = call %2, this=%0, callsite="this[#read]"
       return %5
     bb2:
       %4 = call builtin.exception_value(%2)
@@ -547,7 +547,7 @@ module {
       %124 = is_exception %123
       branch %124, bb28, bb27
     bb27:
-      %126 = call %123, this=%121
+      %126 = call %123, this=%121, callsite="first.capturedMethod"
       %127 = is_exception %126
       branch %127, bb30, bb29
     bb28:
@@ -563,7 +563,7 @@ module {
       %128 = call builtin.exception_value(%126)
       throw %128
     bb31:
-      %134 = call %131, this=%129
+      %134 = call %131, this=%129, callsite="second.capturedMethod"
       %135 = is_exception %134
       branch %135, bb34, bb33
     bb32:
@@ -585,7 +585,7 @@ module {
       %140 = call builtin.console.log(%137)
       jump bb25
     bb38:
-      %141 = call %119, this=%120, args=[%137]
+      %141 = call %119, this=%120, args=[%137], callsite="console.log"
       jump bb25
     bb39:
       %145 = const c89
@@ -631,7 +631,7 @@ module {
       %164 = is_exception %163
       branch %164, bb50, bb49
     bb49:
-      %166 = call %163, this=%161
+      %166 = call %163, this=%161, callsite="first.emptyMethod"
       %167 = is_exception %166
       branch %167, bb52, bb51
     bb50:
@@ -647,7 +647,7 @@ module {
       %168 = call builtin.exception_value(%166)
       throw %168
     bb53:
-      %174 = call %171, this=%169
+      %174 = call %171, this=%169, callsite="second.emptyMethod"
       %175 = is_exception %174
       branch %175, bb56, bb55
     bb54:
@@ -669,7 +669,7 @@ module {
       %180 = call builtin.console.log(%177)
       jump bb47
     bb60:
-      %181 = call %159, this=%160, args=[%177]
+      %181 = call %159, this=%160, args=[%177], callsite="console.log"
       jump bb47
     bb61:
       %185 = load var $0.first
@@ -682,7 +682,7 @@ module {
       throw %184
     bb63:
       %190 = const c99
-      %191 = call %187, this=%185, args=[%190]
+      %191 = call %187, this=%185, args=[%190], callsite="first.write"
       %192 = is_exception %191
       branch %192, bb66, bb65
     bb64:
@@ -732,7 +732,7 @@ module {
       %213 = is_exception %212
       branch %213, bb76, bb75
     bb75:
-      %215 = call %212, this=%210
+      %215 = call %212, this=%210, callsite="second.read"
       %216 = is_exception %215
       branch %216, bb78, bb77
     bb76:
@@ -755,7 +755,7 @@ module {
       %222 = call builtin.console.log(%219)
       jump bb73
     bb82:
-      %223 = call %208, this=%209, args=[%219]
+      %223 = call %208, this=%209, args=[%219], callsite="console.log"
       jump bb73
     bb83:
       %227 = load var $0.first
@@ -767,7 +767,7 @@ module {
       %226 = call builtin.exception_value(%224)
       throw %226
     bb85:
-      %232 = call %229, this=%227
+      %232 = call %229, this=%227, callsite="first.capturedMethod"
       %233 = is_exception %232
       branch %233, bb88, bb87
     bb86:
@@ -815,7 +815,7 @@ module {
       %251 = const c117
       %252 = load var $0.captured
       %253 = const c118
-      %254 = call %252, this=%251, args=[%253]
+      %254 = call %252, this=%251, args=[%253], callsite="captured"
       %255 = is_exception %254
       branch %255, bb98, bb97
     bb97:
@@ -842,7 +842,7 @@ module {
       %272 = is_exception %271
       branch %272, bb108, bb107
     bb103:
-      %266 = call %263, this=%261
+      %266 = call %263, this=%261, callsite="second.read"
       %267 = is_exception %266
       branch %267, bb106, bb105
     bb104:
@@ -864,7 +864,7 @@ module {
       %274 = call builtin.console.log(%271)
       jump bb95
     bb110:
-      %275 = call %249, this=%250, args=[%271]
+      %275 = call %249, this=%250, args=[%271], callsite="console.log"
       jump bb95
     bb111:
       %279 = load var $0.PrivateClosure
@@ -877,7 +877,7 @@ module {
       throw %278
     bb113:
       %284 = const c123
-      %285 = call %281, this=%279, args=[%284]
+      %285 = call %281, this=%279, args=[%284], callsite="PrivateClosure.writeStatic"
       %286 = is_exception %285
       branch %286, bb116, bb115
     bb114:
@@ -927,7 +927,7 @@ module {
       %307 = is_exception %306
       branch %307, bb126, bb125
     bb125:
-      %309 = call %306, this=%304
+      %309 = call %306, this=%304, callsite="PrivateClosure.readStatic"
       %310 = is_exception %309
       branch %310, bb128, bb127
     bb126:
@@ -957,7 +957,7 @@ module {
       %327 = is_exception %326
       branch %327, bb138, bb137
     bb133:
-      %321 = call %318, this=%316
+      %321 = call %318, this=%316, callsite="PrivateClosure.read"
       %322 = is_exception %321
       branch %322, bb136, bb135
     bb134:
@@ -979,7 +979,7 @@ module {
       %329 = call builtin.console.log(%326)
       jump bb123
     bb140:
-      %330 = call %302, this=%303, args=[%326]
+      %330 = call %302, this=%303, args=[%326], callsite="console.log"
       jump bb123
     bb141:
       return

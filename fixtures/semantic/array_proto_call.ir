@@ -124,7 +124,7 @@ module {
     bb6:
       jump bb13
     bb7:
-      %42 = call %35, this=%25, args=[%38]
+      %42 = call %35, this=%25, args=[%38], callsite="a.map"
       jump bb8
     bb8:
       %43 = phi [(bb9, %39), (bb7, %42)]

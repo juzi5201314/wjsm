@@ -241,7 +241,7 @@ module {
       store var $1.gen, %15
       %16 = const c53
       %17 = load var $1.gen
-      %18 = call %17, this=%16
+      %18 = call %17, this=%16, callsite="gen"
       %19 = const c54
       %20 = call builtin.async_iterator.from(%18, %19)
       store var $4.$for_await_iter.0, %20
@@ -350,7 +350,7 @@ module {
       %63 = call builtin.console.log(%62)
       jump bb20
     bb23:
-      %64 = call %60, this=%61, args=[%62]
+      %64 = call %60, this=%61, args=[%62], callsite="console.log"
       jump bb20
     bb24:
       jump bb3
@@ -412,7 +412,7 @@ module {
       %98 = call builtin.console.log(%97)
       jump bb36
     bb39:
-      %99 = call %95, this=%96, args=[%97]
+      %99 = call %95, this=%96, args=[%97], callsite="console.log"
       jump bb36
     bb40:
       %104 = const c74
@@ -510,7 +510,7 @@ module {
       store var $0.run, %21
       %22 = const c95
       %23 = load var $0.run
-      %24 = call %23, this=%22
+      %24 = call %23, this=%22, callsite="run"
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:

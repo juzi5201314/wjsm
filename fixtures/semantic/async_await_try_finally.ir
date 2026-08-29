@@ -221,7 +221,7 @@ module {
       %35 = call builtin.promise.reject_static(%34, %33)
       jump bb13
     bb16:
-      %36 = call %31, this=%32, args=[%33]
+      %36 = call %31, this=%32, args=[%33], callsite="Promise.reject"
       jump bb13
     bb17:
       %42 = const c36
@@ -292,7 +292,7 @@ module {
       %68 = call builtin.console.log(%67)
       jump bb28
     bb31:
-      %69 = call %65, this=%66, args=[%67]
+      %69 = call %65, this=%66, args=[%67], callsite="console.log"
       jump bb28
     bb32:
       jump bb4
@@ -364,7 +364,7 @@ module {
       %102 = call builtin.console.log(%101)
       jump bb44
     bb47:
-      %103 = call %99, this=%100, args=[%101]
+      %103 = call %99, this=%100, args=[%101], callsite="console.log"
       jump bb44
     bb48:
       %109 = load var $5.$abrupt_completion_8
@@ -425,7 +425,7 @@ module {
       %135 = call builtin.console.log(%134)
       jump bb58
     bb61:
-      %136 = call %132, this=%133, args=[%134]
+      %136 = call %132, this=%133, args=[%134], callsite="console.log"
       jump bb58
     bb62:
       %142 = load var $5.$abrupt_completion_9
@@ -450,7 +450,7 @@ module {
       %148 = call builtin.console.log(%147)
       jump bb64
     bb67:
-      %149 = call %145, this=%146, args=[%147]
+      %149 = call %145, this=%146, args=[%147], callsite="console.log"
       jump bb64
     bb68:
       %181 = const c77
@@ -506,7 +506,7 @@ module {
       %172 = call builtin.console.log(%171)
       jump bb76
     bb79:
-      %173 = call %169, this=%170, args=[%171]
+      %173 = call %169, this=%170, args=[%171], callsite="console.log"
       jump bb76
     bb80:
       %179 = load var $5.$abrupt_completion_10
@@ -558,7 +558,7 @@ module {
       %201 = call builtin.console.log(%200)
       jump bb88
     bb91:
-      %202 = call %198, this=%199, args=[%200]
+      %202 = call %198, this=%199, args=[%200], callsite="console.log"
       jump bb88
     bb92:
       %208 = load var $5.$abrupt_completion_11
@@ -610,7 +610,7 @@ module {
       %229 = call builtin.console.log(%228)
       jump bb100
     bb103:
-      %230 = call %226, this=%227, args=[%228]
+      %230 = call %226, this=%227, args=[%228], callsite="console.log"
       jump bb100
     bb104:
       jump bb5
@@ -698,7 +698,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
 
   fn @$module_main [direct_callable] [entry=bb0]:
@@ -749,7 +749,7 @@ module {
       store var $0.run, %21
       %22 = const c113
       %23 = load var $0.run
-      %24 = call %23, this=%22
+      %24 = call %23, this=%22, callsite="run"
       %25 = is_exception %24
       branch %25, bb2, bb1
     bb1:

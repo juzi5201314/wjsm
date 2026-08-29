@@ -127,7 +127,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
     bb11:
       return
@@ -177,7 +177,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
     bb11:
       return
@@ -227,7 +227,7 @@ module {
       %17 = call builtin.console.log(%16)
       jump bb7
     bb10:
-      %18 = call %14, this=%15, args=[%16]
+      %18 = call %14, this=%15, args=[%16], callsite="console.log"
       jump bb7
     bb11:
       return
@@ -324,7 +324,7 @@ module {
       %40 = call builtin.promise.resolve_static(%39, %38)
       jump bb7
     bb10:
-      %41 = call %36, this=%37, args=[%38]
+      %41 = call %36, this=%37, args=[%38], callsite="Promise.resolve"
       jump bb7
     bb11:
       store var $0.p, %42
@@ -372,7 +372,7 @@ module {
       %63 = call builtin.promise.resolve_static(%62, %61)
       jump bb19
     bb22:
-      %64 = call %59, this=%60, args=[%61]
+      %64 = call %59, this=%60, args=[%61], callsite="Promise.resolve"
       jump bb19
     bb23:
       store var $0.p2, %65
@@ -421,7 +421,7 @@ module {
       %87 = call builtin.console.log(%86)
       jump bb31
     bb34:
-      %88 = call %82, this=%83, args=[%86]
+      %88 = call %82, this=%83, args=[%86], callsite="console.log"
       jump bb31
     bb35:
       %92 = load var $0.p2
@@ -480,7 +480,7 @@ module {
       %118 = call builtin.promise.reject_static(%117, %116)
       jump bb45
     bb48:
-      %119 = call %114, this=%115, args=[%116]
+      %119 = call %114, this=%115, args=[%116], callsite="Promise.reject"
       jump bb45
     bb49:
       store var $0.p3, %120

@@ -152,7 +152,7 @@ module {
       %49 = call builtin.console.log(%47)
       jump bb9
     bb12:
-      %50 = call %43, this=%44, args=[%47]
+      %50 = call %43, this=%44, args=[%47], callsite="console.log"
       jump bb9
     bb13:
       %54 = const c31
@@ -206,7 +206,7 @@ module {
       %75 = call builtin.console.log(%72)
       jump bb21
     bb26:
-      %76 = call %68, this=%69, args=[%72]
+      %76 = call %68, this=%69, args=[%72], callsite="console.log"
       jump bb21
     bb27:
       %80 = const c39
@@ -260,7 +260,7 @@ module {
       %101 = call builtin.console.log(%98)
       jump bb35
     bb40:
-      %102 = call %94, this=%95, args=[%98]
+      %102 = call %94, this=%95, args=[%98], callsite="console.log"
       jump bb35
     bb41:
       return

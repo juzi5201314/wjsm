@@ -183,7 +183,7 @@ module {
       %45 = call builtin.console.log(%40)
       jump bb7
     bb12:
-      %46 = call %37, this=%38, args=[%40]
+      %46 = call %37, this=%38, args=[%40], callsite="console.log"
       jump bb7
     bb13:
       %50 = const c30
@@ -229,7 +229,7 @@ module {
       %67 = call builtin.console.log(%66)
       jump bb21
     bb24:
-      %68 = call %64, this=%65, args=[%66]
+      %68 = call %64, this=%65, args=[%66], callsite="console.log"
       jump bb21
     bb25:
       %72 = const c37
@@ -283,7 +283,7 @@ module {
       %94 = call builtin.console.log(%93)
       jump bb33
     bb38:
-      %95 = call %86, this=%87, args=[%93]
+      %95 = call %86, this=%87, args=[%93], callsite="console.log"
       jump bb33
     bb39:
       %99 = const c45
@@ -329,7 +329,7 @@ module {
       %116 = call builtin.console.log(%115)
       jump bb47
     bb50:
-      %117 = call %113, this=%114, args=[%115]
+      %117 = call %113, this=%114, args=[%115], callsite="console.log"
       jump bb47
     bb51:
       %121 = const c52
@@ -385,7 +385,7 @@ module {
       %144 = call builtin.console.log(%139)
       jump bb59
     bb64:
-      %145 = call %136, this=%137, args=[%139]
+      %145 = call %136, this=%137, args=[%139], callsite="console.log"
       jump bb59
     bb65:
       %149 = const c61
@@ -431,7 +431,7 @@ module {
       %166 = call builtin.console.log(%165)
       jump bb73
     bb76:
-      %167 = call %163, this=%164, args=[%165]
+      %167 = call %163, this=%164, args=[%165], callsite="console.log"
       jump bb73
     bb77:
       %171 = const c68
@@ -485,7 +485,7 @@ module {
       %193 = call builtin.console.log(%192)
       jump bb85
     bb90:
-      %194 = call %185, this=%186, args=[%192]
+      %194 = call %185, this=%186, args=[%192], callsite="console.log"
       jump bb85
     bb91:
       %198 = const c76
@@ -531,7 +531,7 @@ module {
       %215 = call builtin.console.log(%214)
       jump bb99
     bb102:
-      %216 = call %212, this=%213, args=[%214]
+      %216 = call %212, this=%213, args=[%214], callsite="console.log"
       jump bb99
     bb103:
       return

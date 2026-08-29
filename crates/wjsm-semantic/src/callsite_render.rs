@@ -555,7 +555,9 @@ fn fold_literal(expr: &swc_ast::Expr) -> Option<FoldedLit> {
             swc_ast::Lit::Num(num) => Some(FoldedLit::Num(num.value)),
             swc_ast::Lit::Bool(value) => Some(FoldedLit::Bool(value.value)),
             swc_ast::Lit::Null(_) => Some(FoldedLit::Null),
-            swc_ast::Lit::Str(text) => Some(FoldedLit::Str(text.value.to_string_lossy().into_owned())),
+            swc_ast::Lit::Str(text) => {
+                Some(FoldedLit::Str(text.value.to_string_lossy().into_owned()))
+            }
             swc_ast::Lit::BigInt(_) => Some(FoldedLit::BigInt),
             // RegExpLiteral 在 V8 中不是 Literal 节点，不参与折叠。
             swc_ast::Lit::Regex(_) | swc_ast::Lit::JSXText(_) => None,

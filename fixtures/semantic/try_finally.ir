@@ -189,7 +189,7 @@ module {
       %46 = call builtin.console.log(%45)
       jump bb14
     bb17:
-      %47 = call %43, this=%44, args=[%45]
+      %47 = call %43, this=%44, args=[%45], callsite="console.log"
       jump bb14
     bb18:
       %52 = load var $1.$abrupt_completion_1
@@ -242,7 +242,7 @@ module {
       %75 = call builtin.console.log(%74)
       jump bb28
     bb31:
-      %76 = call %72, this=%73, args=[%74]
+      %76 = call %72, this=%73, args=[%74], callsite="console.log"
       jump bb28
     bb32:
       %81 = load var $1.$abrupt_completion_2
@@ -263,7 +263,7 @@ module {
       %86 = call builtin.console.log(%85)
       jump bb34
     bb37:
-      %87 = call %83, this=%84, args=[%85]
+      %87 = call %83, this=%84, args=[%85], callsite="console.log"
       jump bb34
     bb38:
       jump bb2
@@ -310,7 +310,7 @@ module {
       %108 = call builtin.console.log(%107)
       jump bb46
     bb49:
-      %109 = call %105, this=%106, args=[%107]
+      %109 = call %105, this=%106, args=[%107], callsite="console.log"
       jump bb46
     bb50:
       %114 = load var $1.$abrupt_completion_3
@@ -354,7 +354,7 @@ module {
       %132 = call builtin.console.log(%131)
       jump bb58
     bb61:
-      %133 = call %129, this=%130, args=[%131]
+      %133 = call %129, this=%130, args=[%131], callsite="console.log"
       jump bb58
     bb62:
       jump bb3
@@ -397,7 +397,7 @@ module {
       %154 = call builtin.console.log(%153)
       jump bb70
     bb73:
-      %155 = call %151, this=%152, args=[%153]
+      %155 = call %151, this=%152, args=[%153], callsite="console.log"
       jump bb70
     bb74:
       return
