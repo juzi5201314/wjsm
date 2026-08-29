@@ -23,6 +23,25 @@ impl Lowerer {
             .collect::<Vec<_>>();
         let _ = self.ensure_function_shared_env(block, &stable_captures, span)?;
         let current_block = self.resolve_store_block(block);
+        // 前向捕获（闭包先于声明创建）：帧 env 尚无该键，写入未初始化哨兵，
+        // 声明执行时 store_binding_value 覆盖——与稳定共享 env 的 TDZ 快照
+        // 语义一致，调用早于声明时 TdzCheck 抛 ReferenceError。
+        for binding in captured {
+            if self.iteration_env_for_binding(binding).is_some() && self.binding_in_tdz(binding) {
+                let env = self.load_iteration_env_for_binding(current_block, binding);
+                let key = self.append_env_key_const(current_block, binding);
+                let sentinel = self.module.add_constant(Constant::Uninitialized);
+                let sentinel_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::Const {
+                        dest: sentinel_val,
+                        constant: sentinel,
+                    },
+                );
+                self.emit_set_prop(current_block, env, key, sentinel_val);
+            }
+        }
         let env = self.load_current_iteration_env(current_block);
         // 内层 resolve 会 take 掉 `$shared_env` 慢路径的 merge；调用方还要用
         // 同一 continuation，否则 CreateClosure 会写回已终止的 branch block。
@@ -225,7 +244,7 @@ impl Lowerer {
     ) -> Option<&IterationEnvFrame> {
         let function_scope_id = self.current_function_scope_id();
         self.iteration_env_stack.iter().rev().find(|frame| {
-            frame.function_scope_id == function_scope_id && frame.bindings.contains(binding)
+            frame.function_scope_id == function_scope_id && frame.owns_binding(binding)
         })
     }
 
@@ -260,6 +279,8 @@ impl Lowerer {
             bindings,
             ir_name: format!("${scope_id}.{name}"),
             parent_ir_name,
+            body_scope_watermark: None,
+            body_capture_names: Default::default(),
         };
         Ok((block, frame))
     }
