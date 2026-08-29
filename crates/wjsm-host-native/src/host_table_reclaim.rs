@@ -27,6 +27,8 @@ pub(crate) struct HostSideTableStats {
     pub stream_objects: usize,
     /// streams 侧内部槽位总活数。
     pub stream_slots: usize,
+    /// intrinsic 删除墓碑条目数（`delete f.name` 等落下的禁复活标记）。
+    pub intrinsic_tombstones: usize,
 }
 
 fn artifact(source: &str) -> PortableArtifact {
@@ -351,4 +353,54 @@ fn fetch_data_url_body_survives_gc_mid_chain() {
         "fetch('data:,hello').then(r=>r.text()).then(t=>{ console.log('body', t); }); gc();",
     );
     assert_eq!(execution.stdout, b"body hello\n");
+}
+
+/// FIX-03 复现：`delete f.name` 在闭包上落删除墓碑（键为编码值）；f 死后
+/// GC 曾只清 callable 属性表而不清 `intrinsic_tombstones`，新函数 g 复用
+/// 同一闭包槽位（编码值相同）即继承旧墓碑，`Object.hasOwn(g,"name")` 错误
+/// 地为 false。现墓碑随 owner 死亡由 sweep 一并清除。
+#[test]
+fn dead_callable_tombstones_are_cleared_when_slots_are_reused() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "function make(x){ const inner=(a)=>a+x; return inner; } \
+         let deleted=0; \
+         for(let i=0;i<8;i++){ const f=make(i); \
+           if(delete f.name && !Object.hasOwn(f,'name')) deleted++; } \
+         gc(); \
+         let inherited=0; const fresh=[]; \
+         for(let i=0;i<8;i++){ const g=make(100+i); fresh.push(g); \
+           if(!Object.hasOwn(g,'name')) inherited++; } \
+         console.log(deleted, inherited, fresh[0].name);",
+    );
+    assert_eq!(execution.stdout, b"8 0 inner\n");
+    runtime.collect_garbage_now().expect("GC should run");
+    let stats = runtime.host_side_table_stats();
+    assert_eq!(
+        stats.intrinsic_tombstones, 0,
+        "死闭包的删除墓碑应随 owner 清扫：{stats:?}"
+    );
+}
+
+/// 边界：永活 intrinsic（builtin native callable）不经 callable owner 清扫
+/// 路径，GC 后删除墓碑必须保持有效——`delete Math.max.name` /
+/// `delete String.raw` 不因 GC 复活。
+#[test]
+fn immortal_intrinsic_tombstones_survive_gc() {
+    let mut runtime = small_heap_runtime();
+    let execution = execute_source_with_runtime(
+        &mut runtime,
+        "console.log(delete Math.max.name, delete String.raw); \
+         gc(); \
+         console.log(Object.hasOwn(Math.max,'name'), Math.max.name==='', \
+           String.raw===undefined, Object.hasOwn(String,'raw'));",
+    );
+    assert_eq!(execution.stdout, b"true true\nfalse true true false\n");
+    runtime.collect_garbage_now().expect("GC should run");
+    let stats = runtime.host_side_table_stats();
+    assert!(
+        stats.intrinsic_tombstones >= 2,
+        "永活 intrinsic 的墓碑不应被 GC 清除：{stats:?}"
+    );
 }
