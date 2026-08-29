@@ -1,0 +1,43 @@
+exit_code: 0
+--- stdout ---
+1a {"value":"n","done":false}
+inner return 9
+1b {"value":"r-9","done":true}
+2a {"value":"n","done":false}
+2b {"value":"still-9","done":false}
+2c {"value":"n","done":false}
+3a {"value":"n","done":false}
+3b {"value":77,"done":true}
+inner return got number 55
+4a {"value":"rv","done":true}
+5a {"value":"n","done":false}
+inner throw boom
+5b {"value":"t-boom","done":false}
+5c {"value":"n","done":false}
+after yield* tv-z
+6a {"value":"tail","done":false}
+6b {"done":true}
+7a {"value":"n","done":false}
+close return undefined
+7b TypeError The iterator does not provide a 'throw' method.
+8a close-rej
+9a throw-rej
+10a TypeError Iterator result 42 is not an object
+10b TypeError Iterator result nope is not an object
+11a TypeError The iterator does not provide a 'throw' method.
+12a {"value":"a","done":false}
+inner caught boom
+12b {"value":"c","done":false}
+inner finally
+outer got inner-done
+12c {"value":"tail","done":false}
+12d {"done":true}
+inner finally
+12e {"value":9,"done":true}
+12f {"done":true}
+sync throw z
+after st-z
+13a {"value":"tail","done":false}
+sync return 9
+14a {"value":"sr-9","done":true}
+--- stderr ---

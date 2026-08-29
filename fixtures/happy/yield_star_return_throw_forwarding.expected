@@ -1,0 +1,45 @@
+exit_code: 0
+--- stdout ---
+1a {"value":"n","done":false}
+inner return 9
+1b {"value":"r-9","done":true}
+2a {"value":"n","done":false}
+2b {"value":"still-9","done":false}
+2c {"value":"n","done":false}
+2d {"value":"still-7","done":false}
+3a {"value":"n","done":false}
+3b {"value":9,"done":true}
+4a {"value":"n","done":false}
+inner throw boom
+4b {"value":"t-boom","done":false}
+4c {"value":"n","done":false}
+after yield* tv-z
+5a {"value":"tail","done":false}
+5b {"done":true}
+6a {"value":"n","done":false}
+close return undefined
+6b TypeError The iterator does not provide a 'throw' method.
+7a TypeError The iterator does not provide a 'throw' method.
+8a TypeError Iterator result 42 is not an object
+8b TypeError Iterator result nope is not an object
+inner return 9
+outer finally
+9a {"value":"rv-9","done":true}
+10a getter-boom
+11a TypeError number 42 is not a function
+11b TypeError string "x" is not a function
+12a {"value":"a","done":false}
+inner caught boom
+12b {"value":"c","done":false}
+inner finally
+outer got inner-done
+12c {"value":"tail","done":false}
+12d {"done":true}
+inner finally
+12e {"value":9,"done":true}
+12f {"done":true}
+inner throw t1
+13a {"value":"t-t1","done":false}
+inner return r1
+13b {"value":"r-r1","done":true}
+--- stderr ---
