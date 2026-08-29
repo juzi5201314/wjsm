@@ -24,9 +24,7 @@ use wjsm_ir::{
 };
 
 use super::cfg_fold::{self, terminator_successors};
-use crate::closure_direct_call::{
-    resolve_function_ref_callee, should_backend_direct_closure_call,
-};
+use crate::closure_direct_call::{resolve_function_ref_callee, should_backend_direct_closure_call};
 use crate::ir_walk::{instr_uses, instruction_dest, terminator_uses};
 
 /// 计算函数内最大的 ValueId。
@@ -400,11 +398,6 @@ fn resolve_callee_id(
     callee: &ValueId,
 ) -> Option<(FunctionId, Option<ValueId>)> {
     let defs_ref: HashMap<ValueId, &Instruction> = defs.iter().map(|(k, v)| (*k, v)).collect();
-    if let Some(function_id) =
-        resolve_function_ref_callee(module, caller, &defs_ref, load_reaching, callee)
-    {
-        return Some((function_id, None));
-    }
 
     let mut current = *callee;
     while let Some(reaching) = load_reaching.get(&current) {
@@ -412,6 +405,28 @@ fn resolve_callee_id(
             break;
         }
         current = *reaching;
+    }
+
+    // GetProp 解析到不可变函数绑定时，object 就是词法 env（模块 shared_env /
+    // 外层闭包 env）。必须带回，否则后续内联会用 caller 的 $env 冒充，
+    // 模块内 `work→fib` 自递归会读到错误 env 上的非函数值。
+    if let Some(Instruction::GetProp { object, key, .. }) = defs.get(&current) {
+        let Instruction::Const { constant, .. } = defs.get(key)? else {
+            return None;
+        };
+        let Constant::String(key_str) = constants.get(constant.0 as usize)? else {
+            return None;
+        };
+        let immutable = crate::closure_direct_call::module_immutable_function_bindings(module);
+        if let Some(function_id) = immutable.get(key_str).copied() {
+            return Some((function_id, Some(*object)));
+        }
+    }
+
+    if let Some(function_id) =
+        resolve_function_ref_callee(module, caller, &defs_ref, load_reaching, callee)
+    {
+        return Some((function_id, None));
     }
 
     match defs.get(&current) {
@@ -525,12 +540,22 @@ fn static_inline_round(module: &mut Module) -> bool {
                 if callee_idx >= per_func_info.len() {
                     continue;
                 }
-                let (_direct_callable, has_eval, num_blocks, is_class_ctor) =
+                let (direct_callable, has_eval, num_blocks, is_class_ctor) =
                     per_func_info[callee_idx];
                 if has_eval || num_blocks == 0 || callee_idx == func_idx {
                     continue;
                 }
-                if closure_env.is_some() && should_backend_direct_closure_call(module, callee_id) {
+                // 非 direct_callable 必须有证明的 lex_env（create_closure 或
+                // GetProp 的 object）。否则会用 caller $env 冒充，模块内捕获
+                // 函数（如 fib）内联后自递归读错 env → "X is not a function"。
+                if !direct_callable && closure_env.is_none() {
+                    continue;
+                }
+                if should_backend_direct_closure_call(module, callee_id) {
+                    // 无 lex_env 证据时绝不能内联带 captures 的函数。
+                    if closure_env.is_none() {
+                        continue;
+                    }
                     // 存储闭包（load → 单次 store create_closure）留给后端直调；
                     // 即时 create_closure+invoke（IIFE / factory 返回值）仍允许内联，
                     // 以保留 callee_dead_slot_names 对 WeakRef/FinalizationRegistry 的清槽。
