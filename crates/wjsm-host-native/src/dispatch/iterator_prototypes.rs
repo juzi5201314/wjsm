@@ -235,6 +235,15 @@ fn host_brand_constructor_name(state: &NativeAgentState, receiver: i64) -> Optio
     if state.promises.contains_key(&handle) {
         return Some("Promise");
     }
+    if state.array_buffers.contains_key(&handle) {
+        return Some("ArrayBuffer");
+    }
+    if state.shared_array_buffers.contains_key(&handle) {
+        return Some("SharedArrayBuffer");
+    }
+    if state.data_views.contains_key(&handle) {
+        return Some("DataView");
+    }
     state.weak.brand_name(handle)
 }
 

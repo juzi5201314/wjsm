@@ -6,7 +6,7 @@ use num_traits::ToPrimitive;
 use wjsm_ir::{Builtin, value};
 use wjsm_native_abi::NativeVmContext;
 
-use super::runtime::{fail_dispatch, to_number, type_error};
+use super::runtime::{fail_dispatch, range_error, to_number, type_error};
 use crate::{BUILTIN_PROTOTYPE_PROPERTY_FLAGS, NativeAgentState, NativeCallableKind};
 
 #[derive(Clone)]
@@ -33,26 +33,44 @@ pub(super) fn dispatch_buffer(
         Builtin::ArrayBufferProtoByteLength => array_buffer_byte_length(ctx, state, args),
         Builtin::ArrayBufferProtoSlice => array_buffer_slice(ctx, state, args),
         Builtin::DataViewConstructor => data_view_constructor(ctx, state, args),
-        Builtin::DataViewProtoGetFloat64 => data_view_get(ctx, state, args, ViewType::Float64),
-        Builtin::DataViewProtoGetFloat32 => data_view_get(ctx, state, args, ViewType::Float32),
-        Builtin::DataViewProtoGetInt32 => data_view_get(ctx, state, args, ViewType::Int32),
-        Builtin::DataViewProtoGetUint32 => data_view_get(ctx, state, args, ViewType::Uint32),
-        Builtin::DataViewProtoGetInt16 => data_view_get(ctx, state, args, ViewType::Int16),
-        Builtin::DataViewProtoGetUint16 => data_view_get(ctx, state, args, ViewType::Uint16),
-        Builtin::DataViewProtoGetInt8 => data_view_get(ctx, state, args, ViewType::Int8),
-        Builtin::DataViewProtoGetUint8 => data_view_get(ctx, state, args, ViewType::Uint8),
-        Builtin::DataViewProtoSetFloat64 => data_view_set(ctx, state, args, ViewType::Float64),
-        Builtin::DataViewProtoSetFloat32 => data_view_set(ctx, state, args, ViewType::Float32),
-        Builtin::DataViewProtoSetInt32 => data_view_set(ctx, state, args, ViewType::Int32),
-        Builtin::DataViewProtoSetUint32 => data_view_set(ctx, state, args, ViewType::Uint32),
-        Builtin::DataViewProtoSetInt16 => data_view_set(ctx, state, args, ViewType::Int16),
-        Builtin::DataViewProtoSetUint16 => data_view_set(ctx, state, args, ViewType::Uint16),
-        Builtin::DataViewProtoSetInt8 => data_view_set(ctx, state, args, ViewType::Int8),
-        Builtin::DataViewProtoSetUint8 => data_view_set(ctx, state, args, ViewType::Uint8),
-        Builtin::DataViewProtoGetBigInt64 => data_view_get_bigint(ctx, state, args, true),
-        Builtin::DataViewProtoGetBigUint64 => data_view_get_bigint(ctx, state, args, false),
+        Builtin::DataViewProtoGetFloat64 => {
+            data_view_get(ctx, state, builtin, args, ViewType::Float64)
+        }
+        Builtin::DataViewProtoGetFloat32 => {
+            data_view_get(ctx, state, builtin, args, ViewType::Float32)
+        }
+        Builtin::DataViewProtoGetInt32 => data_view_get(ctx, state, builtin, args, ViewType::Int32),
+        Builtin::DataViewProtoGetUint32 => {
+            data_view_get(ctx, state, builtin, args, ViewType::Uint32)
+        }
+        Builtin::DataViewProtoGetInt16 => data_view_get(ctx, state, builtin, args, ViewType::Int16),
+        Builtin::DataViewProtoGetUint16 => {
+            data_view_get(ctx, state, builtin, args, ViewType::Uint16)
+        }
+        Builtin::DataViewProtoGetInt8 => data_view_get(ctx, state, builtin, args, ViewType::Int8),
+        Builtin::DataViewProtoGetUint8 => data_view_get(ctx, state, builtin, args, ViewType::Uint8),
+        Builtin::DataViewProtoSetFloat64 => {
+            data_view_set(ctx, state, builtin, args, ViewType::Float64)
+        }
+        Builtin::DataViewProtoSetFloat32 => {
+            data_view_set(ctx, state, builtin, args, ViewType::Float32)
+        }
+        Builtin::DataViewProtoSetInt32 => data_view_set(ctx, state, builtin, args, ViewType::Int32),
+        Builtin::DataViewProtoSetUint32 => {
+            data_view_set(ctx, state, builtin, args, ViewType::Uint32)
+        }
+        Builtin::DataViewProtoSetInt16 => data_view_set(ctx, state, builtin, args, ViewType::Int16),
+        Builtin::DataViewProtoSetUint16 => {
+            data_view_set(ctx, state, builtin, args, ViewType::Uint16)
+        }
+        Builtin::DataViewProtoSetInt8 => data_view_set(ctx, state, builtin, args, ViewType::Int8),
+        Builtin::DataViewProtoSetUint8 => data_view_set(ctx, state, builtin, args, ViewType::Uint8),
+        Builtin::DataViewProtoGetBigInt64 => data_view_get_bigint(ctx, state, builtin, args, true),
+        Builtin::DataViewProtoGetBigUint64 => {
+            data_view_get_bigint(ctx, state, builtin, args, false)
+        }
         Builtin::DataViewProtoSetBigInt64 | Builtin::DataViewProtoSetBigUint64 => {
-            data_view_set_bigint(ctx, state, args)
+            data_view_set_bigint(ctx, state, builtin, args)
         }
         Builtin::DataViewProtoBuffer
         | Builtin::DataViewProtoByteLength
@@ -61,11 +79,44 @@ pub(super) fn dispatch_buffer(
     })
 }
 
+/// RequireInternalSlot 失败的 V8 口径 TypeError：
+/// `Method {method} called on incompatible receiver {receiver}`。
+pub(super) fn incompatible_receiver(
+    ctx: &mut NativeVmContext,
+    state: &mut NativeAgentState,
+    method: &str,
+    args: &[i64],
+) -> i64 {
+    let receiver = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let message = format!(
+        "Method {method} called on incompatible receiver {}",
+        super::iterator_prototypes::render_incompatible_receiver(state, receiver)
+    );
+    type_error(ctx, state, &message)
+}
+
+/// ToIndex（§7.1.22）近似：缺省 / undefined / NaN / 不可转换 → 0，数值
+/// 截断取整；负值或超出 usize 可表示范围时 Err 携带截断值供 V8 文案渲染。
+pub(super) fn to_index(state: &NativeAgentState, encoded: Option<i64>) -> Result<usize, f64> {
+    let Some(encoded) = encoded else {
+        return Ok(0);
+    };
+    if value::is_undefined(encoded) {
+        return Ok(0);
+    }
+    let number = to_number(state, encoded).unwrap_or(0.0);
+    if number.is_nan() {
+        return Ok(0);
+    }
+    let truncated = number.trunc();
+    truncated.to_usize().ok_or(truncated)
+}
+
 /// `get DataView.prototype.buffer` / `byteLength` / `byteOffset`
 /// （§25.3.4.1–3）：receiver 必须携带 [[DataView]] 品牌（side table 有条目）。
 fn data_view_accessor(
     ctx: &mut NativeVmContext,
-    state: &NativeAgentState,
+    state: &mut NativeAgentState,
     builtin: Builtin,
     args: &[i64],
 ) -> i64 {
@@ -73,7 +124,8 @@ fn data_view_accessor(
         .first()
         .and_then(|object| state.data_views.get(&value::decode_handle(*object)))
     else {
-        return fail_dispatch(ctx);
+        let method = format!("get {}", builtin.as_str());
+        return incompatible_receiver(ctx, state, &method, args);
     };
     match builtin {
         Builtin::DataViewProtoBuffer => value::encode_object_handle(view.buffer),
@@ -161,39 +213,31 @@ pub(crate) fn allocate_array_buffer(state: &mut NativeAgentState, length: usize)
     from_shared_bytes(state, Rc::new(RefCell::new(vec![0; length])))
 }
 
-/// `ToIndex(length)` 的既有近似（完整 ToIndex 语义之外的输入走 fail）：
-/// 实参缺失或 undefined 按规范取 0（`new ArrayBuffer()` 合法）。
-fn byte_length_argument(state: &NativeAgentState, encoded: Option<i64>) -> Option<usize> {
-    let Some(encoded) = encoded else {
-        return Some(0);
-    };
-    if value::is_undefined(encoded) {
-        return Some(0);
-    }
-    to_number(state, encoded).and_then(|number| number.to_usize())
-}
-
 fn array_buffer_constructor(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(length) = byte_length_argument(state, args.first().copied()) else {
-        return fail_dispatch(ctx);
+    // §25.1.4.1：ToIndex(length)，无实参 / undefined 取 0，负值 RangeError。
+    let Ok(length) = to_index(state, args.first().copied()) else {
+        return range_error(ctx, state, "Invalid array buffer length");
     };
     allocate_array_buffer(state, length).unwrap_or_else(|| fail_dispatch(ctx))
 }
 
 fn array_buffer_byte_length(
     ctx: &mut NativeVmContext,
-    state: &NativeAgentState,
+    state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    args.first()
+    let Some(length) = args
+        .first()
         .and_then(|object| state.array_buffers.get(&value::decode_handle(*object)))
         .and_then(|buffer| u32::try_from(buffer.bytes.borrow().len()).ok())
-        .map(|length| value::encode_f64(f64::from(length)))
-        .unwrap_or_else(|| fail_dispatch(ctx))
+    else {
+        return incompatible_receiver(ctx, state, "get ArrayBuffer.prototype.byteLength", args);
+    };
+    value::encode_f64(f64::from(length))
 }
 
 fn array_buffer_slice(
@@ -201,15 +245,12 @@ fn array_buffer_slice(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(receiver) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
-    let Some(buffer) = state
-        .array_buffers
-        .get(&value::decode_handle(receiver))
+    let Some(buffer) = args
+        .first()
+        .and_then(|receiver| state.array_buffers.get(&value::decode_handle(*receiver)))
         .cloned()
     else {
-        return fail_dispatch(ctx);
+        return incompatible_receiver(ctx, state, "ArrayBuffer.prototype.slice", args);
     };
     let length = buffer.bytes.borrow().len();
     let start = relative_index(state, args.get(1).copied(), length);
@@ -249,9 +290,7 @@ fn data_view_constructor(
     state: &mut NativeAgentState,
     args: &[i64],
 ) -> i64 {
-    let Some(buffer) = args.first().copied() else {
-        return fail_dispatch(ctx);
-    };
+    let buffer = args.first().copied().unwrap_or_else(value::encode_undefined);
     let buffer_handle = value::decode_handle(buffer);
     let shared = state
         .shared_array_buffers
@@ -259,21 +298,50 @@ fn data_view_constructor(
         .map(|sab| sab.backing.bytes.clone());
     let total_length = if let Some(shared) = &shared {
         shared.lock().map(|bytes| bytes.len()).unwrap_or(0)
-    } else {
-        let Some(array_buffer) = state.array_buffers.get(&buffer_handle) else {
-            return fail_dispatch(ctx);
-        };
+    } else if let Some(array_buffer) = state.array_buffers.get(&buffer_handle) {
         array_buffer.bytes.borrow().len()
+    } else {
+        // §25.3.2.1 步骤 2 RequireInternalSlot(buffer) 失败（V8 文案）。
+        return type_error(
+            ctx,
+            state,
+            "First argument to DataView constructor must be an ArrayBuffer",
+        );
     };
-    let offset = relative_index(state, args.get(1).copied(), total_length);
-    let length = args
-        .get(2)
-        .and_then(|encoded| to_number(state, *encoded))
-        .and_then(|number| number.to_usize())
-        .unwrap_or_else(|| total_length.saturating_sub(offset));
-    if offset.saturating_add(length) > total_length {
-        return fail_dispatch(ctx);
-    }
+    // §25.3.2.1 步骤 3–5：ToIndex(byteOffset)，越界 RangeError（V8 文案）。
+    let offset = match to_index(state, args.get(1).copied()) {
+        Ok(offset) if offset <= total_length => offset,
+        Ok(offset) => {
+            let message = format!("Start offset {offset} is outside the bounds of the buffer");
+            return range_error(ctx, state, &message);
+        }
+        Err(invalid) => {
+            let message = format!(
+                "Start offset {} is outside the bounds of the buffer",
+                wjsm_builtins::number_format::format_number_js(invalid)
+            );
+            return range_error(ctx, state, &message);
+        }
+    };
+    // §25.3.2.1 步骤 8–9：byteLength 缺省取剩余长度，越界 RangeError。
+    let length = match args.get(2) {
+        None => total_length - offset,
+        Some(encoded) if value::is_undefined(*encoded) => total_length - offset,
+        Some(encoded) => match to_index(state, Some(*encoded)) {
+            Ok(length) if offset.saturating_add(length) <= total_length => length,
+            Ok(length) => {
+                let message = format!("Invalid DataView length {length}");
+                return range_error(ctx, state, &message);
+            }
+            Err(invalid) => {
+                let message = format!(
+                    "Invalid DataView length {}",
+                    wjsm_builtins::number_format::format_number_js(invalid)
+                );
+                return range_error(ctx, state, &message);
+            }
+        },
+    };
     // 先物化 %DataView.prototype% 再分配实例：创建即接线 [[Prototype]]，
     // instanceof / constructor / @@toStringTag 品牌沿真实原型链成立
     // （§25.3.2.1 OrdinaryCreateFromConstructor）。
@@ -329,9 +397,15 @@ impl ViewType {
     }
 }
 
+/// GetViewValue / SetViewValue 越界（§25.3.3.1 步骤 11，V8 文案）。
+fn data_view_out_of_bounds(ctx: &mut NativeVmContext, state: &mut NativeAgentState) -> i64 {
+    range_error(ctx, state, "Offset is outside the bounds of the DataView")
+}
+
 fn data_view_get(
     ctx: &mut NativeVmContext,
-    state: &NativeAgentState,
+    state: &mut NativeAgentState,
+    builtin: Builtin,
     args: &[i64],
     kind: ViewType,
 ) -> i64 {
@@ -340,18 +414,14 @@ fn data_view_get(
         .and_then(|object| state.data_views.get(&value::decode_handle(*object)))
         .cloned()
     else {
-        return fail_dispatch(ctx);
+        return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
-    let Some(index) = args
-        .get(1)
-        .and_then(|encoded| to_number(state, *encoded))
-        .and_then(|number| number.to_usize())
-    else {
-        return fail_dispatch(ctx);
+    let Ok(index) = to_index(state, args.get(1).copied()) else {
+        return data_view_out_of_bounds(ctx, state);
     };
     let start = view.offset.saturating_add(index);
     if index.saturating_add(kind.size()) > view.length {
-        return fail_dispatch(ctx);
+        return data_view_out_of_bounds(ctx, state);
     }
     let little_endian = args
         .get(2)
@@ -380,28 +450,27 @@ fn data_view_get(
 fn data_view_set(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
+    builtin: Builtin,
     args: &[i64],
     kind: ViewType,
 ) -> i64 {
-    let [receiver, index, stored, ..] = args else {
-        return fail_dispatch(ctx);
-    };
-    let Some(view) = state
-        .data_views
-        .get(&value::decode_handle(*receiver))
+    let Some(view) = args
+        .first()
+        .and_then(|receiver| state.data_views.get(&value::decode_handle(*receiver)))
         .cloned()
     else {
-        return fail_dispatch(ctx);
+        return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
-    let Some(index) = to_number(state, *index).and_then(|number| number.to_usize()) else {
-        return fail_dispatch(ctx);
+    let Ok(index) = to_index(state, args.get(1).copied()) else {
+        return data_view_out_of_bounds(ctx, state);
     };
     if index.saturating_add(kind.size()) > view.length {
-        return fail_dispatch(ctx);
+        return data_view_out_of_bounds(ctx, state);
     }
-    let Some(number) = to_number(state, *stored) else {
-        return fail_dispatch(ctx);
-    };
+    let number = args
+        .get(2)
+        .and_then(|stored| to_number(state, *stored))
+        .unwrap_or(f64::NAN);
     let little_endian = args
         .get(3)
         .is_some_and(|encoded| value::is_bool(*encoded) && value::decode_bool(*encoded));
@@ -436,6 +505,7 @@ fn data_view_set(
 fn data_view_get_bigint(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
+    builtin: Builtin,
     args: &[i64],
     signed: bool,
 ) -> i64 {
@@ -444,17 +514,13 @@ fn data_view_get_bigint(
         .and_then(|object| state.data_views.get(&value::decode_handle(*object)))
         .cloned()
     else {
-        return fail_dispatch(ctx);
+        return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
-    let Some(index) = args
-        .get(1)
-        .and_then(|encoded| to_number(state, *encoded))
-        .and_then(|number| number.to_usize())
-    else {
-        return fail_dispatch(ctx);
+    let Ok(index) = to_index(state, args.get(1).copied()) else {
+        return data_view_out_of_bounds(ctx, state);
     };
     if index.saturating_add(8) > view.length {
-        return fail_dispatch(ctx);
+        return data_view_out_of_bounds(ctx, state);
     }
     let little_endian = args
         .get(2)
@@ -492,25 +558,24 @@ fn data_view_get_bigint(
 fn data_view_set_bigint(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
+    builtin: Builtin,
     args: &[i64],
 ) -> i64 {
-    let [receiver, index, stored, ..] = args else {
-        return fail_dispatch(ctx);
-    };
-    let Some(view) = state
-        .data_views
-        .get(&value::decode_handle(*receiver))
+    let Some(view) = args
+        .first()
+        .and_then(|receiver| state.data_views.get(&value::decode_handle(*receiver)))
         .cloned()
     else {
-        return fail_dispatch(ctx);
+        return incompatible_receiver(ctx, state, builtin.as_str(), args);
     };
-    let Some(index) = to_number(state, *index).and_then(|number| number.to_usize()) else {
-        return fail_dispatch(ctx);
+    let Ok(index) = to_index(state, args.get(1).copied()) else {
+        return data_view_out_of_bounds(ctx, state);
     };
     if index.saturating_add(8) > view.length {
-        return fail_dispatch(ctx);
+        return data_view_out_of_bounds(ctx, state);
     }
-    let Some(integer) = super::bigint::read(state, *stored) else {
+    let stored = args.get(2).copied().unwrap_or_else(value::encode_undefined);
+    let Some(integer) = super::bigint::read(state, stored) else {
         return type_error(ctx, state, "Cannot convert value to a BigInt");
     };
     let little_endian = args

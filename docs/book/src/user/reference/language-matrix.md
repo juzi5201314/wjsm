@@ -62,9 +62,9 @@
 | `Symbol` | 可用 | |
 | `RegExp`（含命名捕获组与 Unicode property escapes） | 可用 | 由 `regress` 提供；`\p{...}` / `\P{...}` 字符属性需 `/u`；UCD Unicode 17 与 Phase 1 manifest 一致。`Script(_Extensions)=Unknown`/`Zzzz` 与 `regexp-v-flag` property-of-strings 暂未纳入（regress 缺口） |
 | `JSON` | 可用 | |
-| TypedArray、`ArrayBuffer`、`SharedArrayBuffer` | 可用 | 原型方法可取值并经 `call`/`apply`/`bind` 复用，各构造器 `prototype` 对象可用；TypedArray `toLocaleString` 委托与 Array 相同的 Intl 路径 |
-| `DataView` | 可用 | get/set 全族（含 `getBigInt64`/`getBigUint64`/`setBigInt64`/`setBigUint64`）可取值传递 |
-| `Atomics` | 可用 | |
+| TypedArray、`ArrayBuffer`、`SharedArrayBuffer` | 可用 | 实例原型链完整挂接（`instanceof` / `constructor` / `@@toStringTag` 品牌一致），原型方法可取值并经 `call`/`apply`/`bind` 复用，`byteLength` 等规范 accessor getter 在位；`SharedArrayBuffer` 是全局对象上真实自有属性；TypedArray `toLocaleString` 委托与 Array 相同的 Intl 路径 |
+| `DataView` | 可用 | 实例挂 `DataView.prototype`（`constructor` / `@@toStringTag` / `buffer`・`byteLength`・`byteOffset` accessor），get/set 全族（含 `getBigInt64`/`getBigUint64`/`setBigInt64`/`setBigUint64`）可取值传递 |
+| `Atomics` | 可用 | 全局对象上真实自有属性的命名空间对象（`@@toStringTag: "Atomics"`），静态方法可覆盖 / 删除并按普通属性语义生效 |
 | `WeakRef`、`FinalizationRegistry` | 可用 | |
 | `Date` | 可用 | `toLocale*` 委托 `Intl.DateTimeFormat` |
 | `Intl` | 可用 | ECMA-402 核心构造器与 `getCanonicalLocales` / `supportedValuesOf`；不含 Temporal intl402、`intl-normative-optional` 遗留构造器 |

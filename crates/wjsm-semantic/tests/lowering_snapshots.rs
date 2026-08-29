@@ -1167,6 +1167,36 @@ fn es2023_builtins_lower_to_call_builtin() {
     }
 }
 
+#[test]
+fn sab_atomics_globals_lower_to_global_env_semantics() {
+    // SharedArrayBuffer / Atomics 急切物化为全局真实自有属性后，裸标识符
+    // 读取与 typeof 须按全局环境记录语义（GlobalEnvGet：删除后
+    // ReferenceError / typeof 容忍读）解析；`new SharedArrayBuffer` 挂
+    // GLOBAL_IDENT IntrinsicPristine 守卫，pristine 时直连构造 builtin。
+    let source = "console.log(typeof SharedArrayBuffer, typeof Atomics);\nSharedArrayBuffer;\nAtomics;\nnew SharedArrayBuffer(4);\n";
+    let module = parse_module(source).expect("parse should succeed");
+    let program = lower_module(module, false).expect("lowering should succeed");
+    let text = program.dump_text();
+    for marker in [
+        "builtin.global_env.get",
+        "builtin.intrinsic_pristine",
+        "builtin.intrinsic_resolve",
+        "builtin.SharedArrayBuffer",
+        "string(\"Atomics\")",
+    ] {
+        assert!(
+            text.contains(marker),
+            "expected `{marker}` in IR:\n{text}"
+        );
+    }
+    // typeof 与裸读各 2 处，全部经全局环境记录语义（4 个 GlobalEnvGet）。
+    assert_eq!(
+        text.matches("builtin.global_env.get").count(),
+        4,
+        "SharedArrayBuffer / Atomics 的 typeof 与裸读都应走 GlobalEnvGet:\n{text}"
+    );
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));
