@@ -73,6 +73,7 @@ mod typedarray_static;
 pub(crate) mod weak;
 pub(crate) mod web_encoding;
 mod with_env;
+mod yield_delegate;
 
 pub(crate) use self::array::construct as construct_array;
 pub(crate) use self::errors::error_constructor;
@@ -540,6 +541,7 @@ pub(super) fn dispatch_builtin(
             global_env::dispatch_global_env => Builtin::GlobalEnvCheck | Builtin::GlobalEnvDeclareVar | Builtin::GlobalEnvDeclareFunc | Builtin::GlobalEnvDeclareLex | Builtin::GlobalEnvInitLex | Builtin::GlobalEnvGet | Builtin::GlobalEnvSet | Builtin::GlobalEnvDelete,
             with_env::dispatch_with => Builtin::WithHasBinding | Builtin::WithToObject,
             iterator::dispatch_iterator => Builtin::IteratorFrom | Builtin::StringIterator | Builtin::IteratorDone | Builtin::IteratorValue | Builtin::IteratorStepValue | Builtin::IteratorNext | Builtin::IteratorClose | Builtin::IteratorCloseThrowCompletion,
+            yield_delegate::dispatch_yield_delegate => Builtin::IteratorDelegateThrow | Builtin::IteratorDelegateReturn | Builtin::AsyncIteratorDelegateThrow | Builtin::AsyncIteratorDelegateReturn | Builtin::IteratorResultRequireObject | Builtin::IteratorThrowMethodMissingError,
             node_perf_hooks::dispatch_perf => Builtin::PerformanceNow,
             operator::dispatch_operator => Builtin::AbstractCompare | Builtin::AbstractEq | Builtin::StrictEq | Builtin::TypeOf | Builtin::InstanceOf | Builtin::In | Builtin::Throw | Builtin::ExceptionValue | Builtin::NewTarget | Builtin::Debugger | Builtin::IsCallable | Builtin::IsJsObject | Builtin::GetPrototypeFromConstructor | Builtin::IsString | Builtin::TdzCheck | Builtin::ToPropertyKey | Builtin::ThisTdzCheck | Builtin::SuperCallOnceCheck,
             structured_clone::dispatch_structured_clone => Builtin::StructuredClone,

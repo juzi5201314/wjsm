@@ -751,6 +751,36 @@ pub enum Builtin {
     DataViewProtoByteLength,
     /// `get DataView.prototype.byteOffset`（ES §25.3.4.3）。
     DataViewProtoByteOffset,
+    /// sync `yield*` 收到 throw completion 的向内转发（§27.5.3.7 步骤 7.b）：
+    /// GetMethod(iterator, "throw") 后调用并把结果对象缓存进委托迭代器条目
+    /// （done/current），供 header 的 IteratorDone/IteratorValue 续走；方法
+    /// 缺失时按步骤 7.b.iii 先 IteratorClose（normal completion，close 错误
+    /// 传播）再返回 TypeError 异常。args: [iterator, thrown]。
+    IteratorDelegateThrow,
+    /// sync `yield*` 收到 return completion 的向内转发（§27.5.3.7 步骤 7.c）：
+    /// GetMethod(iterator, "return") 缺失时返回 undefined 哨兵（语义层按
+    /// 步骤 7.c.iii 直接 ReturnCompletion(received)），否则调用并缓存结果
+    /// 对象后原样返回（结果恒为对象，与哨兵不混淆）。args: [iterator, value]。
+    IteratorDelegateReturn,
+    /// async `yield*` 收到 throw completion 的向内转发同步段（§27.5.3.7
+    /// 步骤 7.b 的 async 形态）：返回 {k, v} 标记对象——k=0 为 throw 方法
+    /// 调用结果（语义层 Await 后按 done 分支）、k=1 为方法缺失时 return()
+    /// 的 close 结果（Await 后校验对象再抛缺方法 TypeError）；throw 与
+    /// return 皆缺时直接返回 TypeError 异常。args: [iterator, thrown]。
+    AsyncIteratorDelegateThrow,
+    /// async `yield*` 收到 return completion 的向内转发同步段（§27.5.3.7
+    /// 步骤 7.c 的 async 形态）：返回 {k, v} 标记对象——k=0 为 return 方法
+    /// 调用结果（语义层 Await 后按 done 分支）、k=2 为方法缺失（语义层
+    /// Await(received) 后 ReturnCompletion，步骤 7.c.iii）。args: [iterator, value]。
+    AsyncIteratorDelegateReturn,
+    /// IteratorComplete 前置的结果对象校验（§7.4.4 步骤 1 的 Object 断言）：
+    /// 非对象返回 TypeError（V8 kIteratorResultNotAnObject 文案），否则原样
+    /// 返回。async `yield*` 转发 Await 后由语义层调用。args: [result]。
+    IteratorResultRequireObject,
+    /// `yield*` throw 方法缺失的 TypeError 错误对象（§27.5.3.7 步骤 7.b.iii.6，
+    /// V8 kThrowMethodMissing 文案）：async 形态的 close Await 完成后由语义层
+    /// 取错误对象并抛出。args: []。
+    IteratorThrowMethodMissingError,
 }
 
 /// 把 `Builtin` 变体直接映射到宿主 handler 的跳表宏。
@@ -786,7 +816,7 @@ impl Builtin {
 
     /// 返回当前 portable artifact 可识别的最后一个 builtin ID。
     pub const fn last_wire_id() -> u16 {
-        Self::DataViewProtoByteOffset as u16
+        Self::IteratorThrowMethodMissingError as u16
     }
 
     /// 从 portable artifact 的 builtin ID 恢复枚举。
@@ -1340,6 +1370,12 @@ impl Builtin {
             Self::SetProtoIsSubsetOf => "Set.prototype.isSubsetOf",
             Self::SetProtoIsSupersetOf => "Set.prototype.isSupersetOf",
             Self::SetProtoIsDisjointFrom => "Set.prototype.isDisjointFrom",
+            Self::IteratorDelegateThrow => "iterator.delegate_throw",
+            Self::IteratorDelegateReturn => "iterator.delegate_return",
+            Self::AsyncIteratorDelegateThrow => "async_iterator.delegate_throw",
+            Self::AsyncIteratorDelegateReturn => "async_iterator.delegate_return",
+            Self::IteratorResultRequireObject => "iterator.result_require_object",
+            Self::IteratorThrowMethodMissingError => "iterator.throw_method_missing_error",
         }
     }
 }

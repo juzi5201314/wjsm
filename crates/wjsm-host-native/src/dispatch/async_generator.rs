@@ -430,7 +430,7 @@ fn is_internal(state: &NativeAgentState, generator: u32) -> bool {
             .map(|generator| generator.continuation)
 }
 
-fn enqueue(
+pub(super) fn enqueue(
     ctx: &mut NativeVmContext,
     state: &mut NativeAgentState,
     receiver: i64,
