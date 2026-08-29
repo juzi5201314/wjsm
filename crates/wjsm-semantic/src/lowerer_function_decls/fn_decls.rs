@@ -124,8 +124,17 @@ impl Lowerer {
         // CreateClosure 的 dest 产生于 closure_block，必须在此 block 上 StoreVar 才能保证 def dominates use，否则 store 读到未初始化值 → 闭包变量为 undefined（shared_mutable / 工厂返回方法等场景）。
         let mut store_block = outer_block;
         let callee_val = if captured.is_empty() {
-            // 非闭包函数：直接使用 FunctionRef
-            func_ref_val
+            // eval 桥下无捕获声明也要携带词法环境（调用方 ScopeRecord / 外层
+            // $env 链），否则嵌套函数读调用方绑定时链根缺失。
+            if let Some((closure_val, closure_block)) =
+                self.materialize_eval_bridge_closure(outer_block, func_ref_val)
+            {
+                store_block = closure_block;
+                closure_val
+            } else {
+                // 非闭包函数：直接使用 FunctionRef
+                func_ref_val
+            }
         } else {
             let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
             let closure_block = self.resolve_store_block(outer_block);
@@ -182,8 +191,12 @@ impl Lowerer {
         // 仅对函数声明（hoisted，语义不可重赋）安全；async / async-generator 的包装函数
         // 也是通过此路径记录的（它们仍是函数声明，不是 let/const 闭包），
         // 后端分析对该 callee 保守视其函数体 may-GC（闭包 env 可能分配）。
-        self.current_function
-            .record_known_callee(ir_name.clone(), callee_fn_id);
+        // eval 桥下声明一律物化为携带记录环境的闭包，direct_call 读取折叠的
+        // 契约「绑定值 ≡ FunctionRef 常量」失效（折叠会分裂函数身份），不登记。
+        if !self.eval_scope_bridge_active() {
+            self.current_function
+                .record_known_callee(ir_name.clone(), callee_fn_id);
+        }
         self.current_function.append_instruction(
             block,
             Instruction::StoreVar {

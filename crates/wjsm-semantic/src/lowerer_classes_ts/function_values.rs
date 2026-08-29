@@ -25,6 +25,12 @@ impl Lowerer {
             },
         );
         if function.captured.is_empty() {
+            // eval 桥下类方法/访问器等函数值同样携带词法环境（链根接调用方记录）。
+            if let Some((closure_val, closure_block)) =
+                self.materialize_eval_bridge_closure(block, function_value)
+            {
+                return Ok((closure_block, closure_val));
+            }
             return Ok((block, function_value));
         }
 

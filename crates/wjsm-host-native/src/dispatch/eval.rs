@@ -41,14 +41,15 @@ pub(super) fn dispatch_eval(
             let [environment] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            modules::scope_record_super_base(state, *environment)
-                .unwrap_or_else(value::encode_undefined)
+            let record = effective_scope_record(state, *environment);
+            modules::scope_record_super_base(state, record).unwrap_or_else(value::encode_undefined)
         }
         Builtin::EvalWithBase => {
             let [environment, key] = args else {
                 return Some(fail_dispatch(ctx));
             };
-            match resolve_with_layers(ctx, state, *environment, *key) {
+            let record = effective_scope_record(state, *environment);
+            match resolve_with_layers(ctx, state, record, *key) {
                 WithLayerResolution::Object(object) => object,
                 WithLayerResolution::Static => value::encode_undefined(),
                 WithLayerResolution::Abrupt(exception) => exception,
@@ -56,6 +57,14 @@ pub(super) fn dispatch_eval(
         }
         _ => return None,
     })
+}
+
+/// eval 绑定 builtin 的环境实参归约：direct eval 主函数直传调用方
+/// ScopeRecord；嵌套闭包传入的是 env 对象链（原型链根接记录，见语义层
+/// eval 桥物化），沿链归约到记录后环境链才能穿过嵌套函数到调用方
+/// （GetIdentifierReference §9.4.2）。链上无记录时保持原值（平面语义）。
+fn effective_scope_record(state: &NativeAgentState, environment: i64) -> i64 {
+    modules::resolve_scope_record(state, environment).unwrap_or(environment)
 }
 
 /// 名字经 ScopeRecord with 层链（由内到外）的解析结果。
@@ -146,40 +155,51 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     let [environment, key] = args else {
         return fail_dispatch(ctx);
     };
+    let mut environment = effective_scope_record(state, *environment);
+    let innermost = environment;
     if state.text_matches(*key, "__wjsm_new_target")
-        && let Some(new_target) = modules::scope_record_new_target(state, *environment)
+        && let Some(new_target) = modules::scope_record_new_target(state, environment)
     {
         return new_target;
     }
-    // with 层先于静态绑定按层序路由：声明于 with 体外侧的名字可被对象环境拦截。
-    match resolve_with_layers(ctx, state, *environment, *key) {
-        WithLayerResolution::Object(object) => {
-            let Ok(result) = runtime::get_property(ctx, state, object, *key) else {
-                return fail_dispatch(ctx);
-            };
-            return result;
+    // 记录可成链（嵌套 direct eval：内层记录 outer 接外层桥环境）：逐记录按
+    // with 层 → 静态绑定的层序解析，未命中沿 outer 归约到下一记录
+    // （GetIdentifierReference 的 outer 递归，§9.4.2）。
+    let outer = loop {
+        // with 层先于静态绑定按层序路由：声明于 with 体外侧的名字可被对象环境拦截。
+        match resolve_with_layers(ctx, state, environment, *key) {
+            WithLayerResolution::Object(object) => {
+                let Ok(result) = runtime::get_property(ctx, state, object, *key) else {
+                    return fail_dispatch(ctx);
+                };
+                return result;
+            }
+            WithLayerResolution::Abrupt(exception) => return exception,
+            WithLayerResolution::Static => {}
         }
-        WithLayerResolution::Abrupt(exception) => return exception,
-        WithLayerResolution::Static => {}
-    }
-    match modules::scope_record_get(state, *environment, *key) {
-        modules::ScopeBindingRead::Value(result) => return result,
-        modules::ScopeBindingRead::Uninitialized => {
-            let name = eval_binding_name(state, *key);
-            // 派生构造器 this TDZ（`$this` 仅在 super() 前持哨兵）：文案
-            // 对齐 V8 的 super 提示；其余词法绑定用通用 TDZ 文案。
-            let message = if name == "$this" {
-                "Must call super constructor in derived class before accessing 'this' \
-                 or returning from derived constructor"
-                    .to_string()
-            } else {
-                format!("Cannot access '{name}' before initialization")
-            };
-            return javascript_error(ctx, state, "ReferenceError", message);
+        match modules::scope_record_get(state, environment, *key) {
+            modules::ScopeBindingRead::Value(result) => return result,
+            modules::ScopeBindingRead::Uninitialized => {
+                let name = eval_binding_name(state, *key);
+                // 派生构造器 this TDZ（`$this` 仅在 super() 前持哨兵）：文案
+                // 对齐 V8 的 super 提示；其余词法绑定用通用 TDZ 文案。
+                let message = if name == "$this" {
+                    "Must call super constructor in derived class before accessing 'this' \
+                     or returning from derived constructor"
+                        .to_string()
+                } else {
+                    format!("Cannot access '{name}' before initialization")
+                };
+                return javascript_error(ctx, state, "ReferenceError", message);
+            }
+            modules::ScopeBindingRead::Missing => {}
         }
-        modules::ScopeBindingRead::Missing => {}
-    }
-    let outer = modules::scope_record_outer(state, *environment).unwrap_or(*environment);
+        let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+        match modules::resolve_scope_record(state, outer) {
+            Some(next) if next != environment => environment = next,
+            _ => break outer,
+        }
+    };
     // 全局环境声明式记录（脚本级 let/const/class）先于全局对象属性命中（§9.1.1.4.1）。
     if let Some(env_key) = runtime::property_key(state, *key) {
         match global_env::lexical_read(state, outer, env_key) {
@@ -202,7 +222,7 @@ fn eval_get_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     if !value::is_undefined(result) {
         return result;
     }
-    match eval_binding_exists(ctx, state, *environment, *key) {
+    match eval_binding_exists(ctx, state, innermost, *key) {
         Ok(true) => result,
         Ok(false) => javascript_error(
             ctx,
@@ -218,44 +238,35 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
     let [environment, key, stored] = args else {
         return fail_dispatch(ctx);
     };
-    // with 层命中：PutValue → 对象 [[Set]]（record 的 strict 位是 eval 体的
-    // 有效严格性，决定失败写是否抛 TypeError）。
-    match resolve_with_layers(ctx, state, *environment, *key) {
-        WithLayerResolution::Object(object) => {
-            let operation = if modules::scope_record_is_strict(state, *environment) {
-                NativeRuntimeOp::SetPropStrict
-            } else {
-                NativeRuntimeOp::SetProp
-            };
-            return runtime::dispatch_runtime(
-                ctx,
-                state,
-                operation,
-                &[object, *key, *stored],
-                None,
-            );
+    let mut environment = effective_scope_record(state, *environment);
+    // 写点有效严格性 = 最内层记录（eval 体自身）的 strict 位：绑定命中链上
+    // 外层记录 / with 层 / 全局时仍按写点严格性裁决（PutValue 的 S 参数）。
+    let site_strict = modules::scope_record_is_strict(state, environment);
+    // 记录链逐层解析（层序同 eval_get_binding），未命中落到最外层记录的
+    // outer（realm 全局）。
+    let outer_env = loop {
+        // with 层命中：PutValue → 对象 [[Set]]。
+        match resolve_with_layers(ctx, state, environment, *key) {
+            WithLayerResolution::Object(object) => {
+                let operation = if site_strict {
+                    NativeRuntimeOp::SetPropStrict
+                } else {
+                    NativeRuntimeOp::SetProp
+                };
+                return runtime::dispatch_runtime(
+                    ctx,
+                    state,
+                    operation,
+                    &[object, *key, *stored],
+                    None,
+                );
+            }
+            WithLayerResolution::Abrupt(exception) => return exception,
+            WithLayerResolution::Static => {}
         }
-        WithLayerResolution::Abrupt(exception) => return exception,
-        WithLayerResolution::Static => {}
-    }
-    match modules::scope_record_set(state, *environment, *key, *stored) {
-        modules::ScopeBindingWrite::Updated => return *stored,
-        modules::ScopeBindingWrite::Constant => {
-            return javascript_error(
-                ctx,
-                state,
-                "TypeError",
-                format!(
-                    "assignment to constant `{}`",
-                    eval_binding_name(state, *key)
-                ),
-            );
-        }
-        // 非严格不可变绑定（具名函数表达式自身名字，S=false）：写入按
-        // eval 体有效严格性分流——严格 TypeError、非严格静默忽略
-        // （赋值表达式值仍为 RHS）。
-        modules::ScopeBindingWrite::SloppyImmutable => {
-            if modules::scope_record_is_strict(state, *environment) {
+        match modules::scope_record_set(state, environment, *key, *stored) {
+            modules::ScopeBindingWrite::Updated => return *stored,
+            modules::ScopeBindingWrite::Constant => {
                 return javascript_error(
                     ctx,
                     state,
@@ -266,12 +277,32 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
                     ),
                 );
             }
-            return *stored;
+            // 非严格不可变绑定（具名函数表达式自身名字，S=false）：写入按
+            // eval 体有效严格性分流——严格 TypeError、非严格静默忽略
+            // （赋值表达式值仍为 RHS）。
+            modules::ScopeBindingWrite::SloppyImmutable => {
+                if site_strict {
+                    return javascript_error(
+                        ctx,
+                        state,
+                        "TypeError",
+                        format!(
+                            "assignment to constant `{}`",
+                            eval_binding_name(state, *key)
+                        ),
+                    );
+                }
+                return *stored;
+            }
+            modules::ScopeBindingWrite::Missing => {}
         }
-        modules::ScopeBindingWrite::Missing => {}
-    }
+        let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+        match modules::resolve_scope_record(state, outer) {
+            Some(next) if next != environment => environment = next,
+            _ => break outer,
+        }
+    };
     // 全局环境声明式记录命中：SetMutableBinding（TDZ / const 检查）先于对象记录。
-    let outer_env = modules::scope_record_outer(state, *environment).unwrap_or(*environment);
     if let Some(env_key) = runtime::property_key(state, *key) {
         match global_env::lexical_write(state, outer_env, env_key, *stored) {
             global_env::GlobalLexicalWrite::Written => return *stored,
@@ -295,7 +326,7 @@ fn eval_set_binding(ctx: &mut NativeVmContext, state: &mut NativeAgentState, arg
             global_env::GlobalLexicalWrite::Missing => {}
         }
     }
-    if modules::scope_record_is_strict(state, *environment) {
+    if site_strict {
         // 严格 eval 写未入快照的名字：全局对象记录持有该属性（含惰性内建）
         // 时按 [[Set]]（strict）写入；确实缺失才抛 ReferenceError（§9.1.1.1.5）。
         let exists = runtime::property_key(state, *key).is_some_and(|env_key| {
@@ -335,20 +366,28 @@ fn eval_binding_exists(
     environment: i64,
     key: i64,
 ) -> Result<bool, i64> {
+    let mut environment = effective_scope_record(state, environment);
     if state.text_matches(key, "__wjsm_new_target")
         && modules::scope_record_new_target(state, environment).is_some()
     {
         return Ok(true);
     }
-    match resolve_with_layers(ctx, state, environment, key) {
-        WithLayerResolution::Object(_) => return Ok(true),
-        WithLayerResolution::Abrupt(exception) => return Err(exception),
-        WithLayerResolution::Static => {}
-    }
-    if modules::scope_record_contains(state, environment, key) {
-        return Ok(true);
-    }
-    let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+    // 记录链逐层探测（层序同 eval_get_binding）。
+    let outer = loop {
+        match resolve_with_layers(ctx, state, environment, key) {
+            WithLayerResolution::Object(_) => return Ok(true),
+            WithLayerResolution::Abrupt(exception) => return Err(exception),
+            WithLayerResolution::Static => {}
+        }
+        if modules::scope_record_contains(state, environment, key) {
+            return Ok(true);
+        }
+        let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+        match modules::resolve_scope_record(state, outer) {
+            Some(next) if next != environment => environment = next,
+            _ => break outer,
+        }
+    };
     if let Some(env_key) = runtime::property_key(state, key)
         && global_env::lexical_has(state, outer, env_key)
     {
@@ -366,8 +405,9 @@ fn eval_binding_exists(
 /// 裁决（§9.1.1.2.7）；调用方声明式绑定（scope record 快照，含 arguments）
 /// 不可删除返回 false（§9.1.1.1.8）；全局词法绑定与受限全局名返回 false；
 /// 其余交由全局对象属性 [[Delete]]（可配置属性删除返回 true，缺失名即
-/// 不可解析引用亦 true）。嵌套闭包传入的是 env 对象链而非 record：链上
-/// 命中同为声明式绑定（false，绝不从 env 对象删属性），未命中回退全局。
+/// 不可解析引用亦 true）。嵌套闭包传入 env 对象链时先归约到链根记录，
+/// delete 与读取走同一条到调用方的环境链；链上无记录的历史平面形态按
+/// 链上命中即声明式绑定（false，绝不从 env 对象删属性）、未命中回退全局。
 /// delete 标识符在严格代码是 early error，本 builtin 只会从 sloppy 站点发射。
 fn eval_delete_binding(
     ctx: &mut NativeVmContext,
@@ -375,21 +415,29 @@ fn eval_delete_binding(
     environment: i64,
     key: i64,
 ) -> i64 {
-    match resolve_with_layers(ctx, state, environment, key) {
-        WithLayerResolution::Object(base) => {
-            return runtime::delete_property_operator(ctx, state, base, key, false);
-        }
-        WithLayerResolution::Abrupt(exception) => return exception,
-        WithLayerResolution::Static => {}
-    }
+    let mut environment = effective_scope_record(state, environment);
     let global = if modules::is_scope_record(state, environment) {
-        if modules::scope_record_contains(state, environment, key)
-            || (state.text_matches(key, "arguments")
-                && modules::scope_record_has_arguments(state, environment))
-        {
-            return value::encode_bool(false);
+        // 记录链逐层裁决（层序同 eval_binding_exists）。
+        loop {
+            match resolve_with_layers(ctx, state, environment, key) {
+                WithLayerResolution::Object(base) => {
+                    return runtime::delete_property_operator(ctx, state, base, key, false);
+                }
+                WithLayerResolution::Abrupt(exception) => return exception,
+                WithLayerResolution::Static => {}
+            }
+            if modules::scope_record_contains(state, environment, key)
+                || (state.text_matches(key, "arguments")
+                    && modules::scope_record_has_arguments(state, environment))
+            {
+                return value::encode_bool(false);
+            }
+            let outer = modules::scope_record_outer(state, environment).unwrap_or(environment);
+            match modules::resolve_scope_record(state, outer) {
+                Some(next) if next != environment => environment = next,
+                _ => break outer,
+            }
         }
-        modules::scope_record_outer(state, environment).unwrap_or(environment)
     } else {
         match runtime::has_property(ctx, state, environment, key) {
             Ok(true) => return value::encode_bool(false),

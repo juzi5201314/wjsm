@@ -88,7 +88,15 @@ impl Lowerer {
 
         let mut store_block = outer_block;
         let callee_val = if captured.is_empty() {
-            wrapper_ref_val
+            // eval 桥下 wrapper 同样物化闭包，见 lower_fn_decl 的同型分支。
+            if let Some((closure_val, closure_block)) =
+                self.materialize_eval_bridge_closure(outer_block, wrapper_ref_val)
+            {
+                store_block = closure_block;
+                closure_val
+            } else {
+                wrapper_ref_val
+            }
         } else {
             let env_val = self.ensure_shared_env(outer_block, captured, span)?;
             let closure_block = self.resolve_store_block(outer_block);

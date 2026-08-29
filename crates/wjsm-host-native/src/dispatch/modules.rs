@@ -61,6 +61,27 @@ pub(crate) struct NativeScopeRecord {
     is_strict: bool,
 }
 
+impl NativeScopeRecord {
+    /// 记录持有的全部 JS 值（快照绑定 / with 层对象 / outer / super_base /
+    /// new_target）。eval 内创建的闭包逃逸时记录被钉扎存活，这些值此后仅由
+    /// 宿主表引用，GC 必须沿记录对象加边保活。
+    pub(crate) fn for_each_gc_value(&self, mut visit: impl FnMut(i64)) {
+        for binding in self.bindings.values() {
+            visit(binding.value);
+        }
+        for layer in &self.with_layers {
+            visit(layer.object);
+        }
+        visit(self.outer);
+        if let Some(super_base) = self.super_base {
+            visit(super_base);
+        }
+        if let Some(new_target) = self.new_target {
+            visit(new_target);
+        }
+    }
+}
+
 pub(crate) enum ScopeBindingRead {
     Missing,
     Uninitialized,
@@ -305,6 +326,9 @@ pub(crate) fn scope_record_set_meta(
         1 => scope.has_arguments_binding = metadata_bool(stored),
         2 => scope.super_base = Some(stored),
         3 => scope.new_target = Some(stored),
+        // 嵌套 direct eval：内层记录的 outer 接外层桥环境（调用方记录 /
+        // $env 链），记录未命中时沿链继续解析而非直落 realm 全局。
+        4 => scope.outer = stored,
         _ => return false,
     }
     true
@@ -359,9 +383,30 @@ pub(crate) fn destroy_scope_record(state: &mut NativeAgentState, record: i64) {
         state.scope_records.remove(&record);
     }
 }
+/// 环境实参归约到调用方 ScopeRecord：嵌套闭包携带的是普通 env 对象
+/// （共享 env / classEnv / 方法 home env，原型链根接记录，见语义层
+/// eval 桥物化），沿 [[Prototype]] 走到首个登记在册的记录；直传记录时
+/// 原样返回；链上无记录（历史平面形态 / 链根为全局）返回 None。普通对象
+/// 的 [[SetPrototypeOf]] 拒绝环（§10.1.2.1），链行走必然终止。
+pub(crate) fn resolve_scope_record(state: &NativeAgentState, environment: i64) -> Option<i64> {
+    let mut current = environment;
+    loop {
+        if is_scope_record(state, current) {
+            return Some(current);
+        }
+        let handle = object_handle(current)?;
+        let prototype = state.gc.heap().prototype(handle).ok()?;
+        current = super::runtime::decode_proto_slot(state, prototype)?;
+    }
+}
+
 fn scope_record_is_retained_by_closure(state: &NativeAgentState, target: i64) -> bool {
     state.closures.iter().flatten().any(|closure| {
-        let mut record = closure.environment;
+        // 闭包环境可能是 env 对象链（原型链根接记录）：先归约到记录，
+        // 再沿记录 outer 链比对（direct eval 嵌套时记录成链）。
+        let Some(mut record) = resolve_scope_record(state, closure.environment) else {
+            return false;
+        };
         loop {
             if record == target {
                 return true;
@@ -499,7 +544,12 @@ pub(super) fn dispatch_scope(
             scope_record_get_binding_flat(state, *record, *key)
         }
         Builtin::ScopeRecordDestroy => {
-            if let Some(record) = args.first() {
+            // direct eval 站点回写后销毁记录；eval 内创建的闭包可能携带记录
+            // （或原型链根接记录的 env 对象）逃逸，此时记录必须存活——闭包
+            // 死亡后记录对象失去根，侧表项由 GC retain 清扫兜底释放。
+            if let Some(record) = args.first()
+                && !scope_record_is_retained_by_closure(state, *record)
+            {
                 destroy_scope_record(state, *record);
             }
             value::encode_undefined()
