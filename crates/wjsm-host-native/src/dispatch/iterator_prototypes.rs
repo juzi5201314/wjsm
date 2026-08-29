@@ -195,11 +195,15 @@ pub(crate) fn family_next(
     type_error(ctx, state, &message)
 }
 
-/// incompatible receiver 的 V8 NoSideEffectsToString 子集：对象沿真实原型
-/// 链找 @@toStringTag 数据属性（不触发访问器），命中字符串渲染
-/// `[object {tag}]`；数组缺省 `[object Array]`；普通对象 `#<Object>`；
-/// 原始值按值渲染。
+/// incompatible receiver 的 V8 NoSideEffectsToString 子集：宿主品牌实例
+///（Map / Set / WeakMap / WeakSet / Promise，toString 未覆盖且 constructor
+/// 为具名函数）先按 `#<Ctor>` 渲染；其余对象沿真实原型链找 @@toStringTag
+/// 数据属性（不触发访问器），命中字符串渲染 `[object {tag}]`；数组缺省
+/// `[object Array]`；普通对象 `#<Object>`；原始值按值渲染。
 pub(crate) fn render_incompatible_receiver(state: &NativeAgentState, receiver: i64) -> String {
+    if let Some(name) = host_brand_constructor_name(state, receiver) {
+        return format!("#<{name}>");
+    }
     if value::is_js_object(receiver) || value::is_array(receiver) {
         if let Some(tag) = no_side_effects_to_string_tag(state, receiver) {
             return format!("[object {tag}]");
@@ -213,6 +217,25 @@ pub(crate) fn render_incompatible_receiver(state: &NativeAgentState, receiver: i
     } else {
         render_value(state, receiver)
     }
+}
+
+/// V8 `#<Ctor>` 分支的宿主品牌子集：品牌数据在侧表、原型链上无
+/// @@toStringTag，构造器名即品牌名。
+fn host_brand_constructor_name(state: &NativeAgentState, receiver: i64) -> Option<&'static str> {
+    if !value::is_object(receiver) {
+        return None;
+    }
+    let handle = value::decode_handle(receiver);
+    if state.maps.contains_key(&handle) {
+        return Some("Map");
+    }
+    if state.sets.contains_key(&handle) {
+        return Some("Set");
+    }
+    if state.promises.contains_key(&handle) {
+        return Some("Promise");
+    }
+    state.weak.brand_name(handle)
 }
 
 /// 沿堆原型链查 @@toStringTag：只认数据属性字符串值，访问器与非字符串

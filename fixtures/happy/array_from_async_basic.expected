@@ -1,0 +1,22 @@
+exit_code: 0
+--- stdout ---
+fromAsync 1 function
+array [1,2,3]
+string ["a","b"]
+set [3,4]
+map ["[1,\"x\"]"]
+syncGen ["p1","v2"]
+syncDoneP [1]
+asyncSrc [0,10,20]
+agen ["g1","g2"]
+map [2,5,8]
+mapAsync [10,21]
+thisArg [11]
+arrlike ["a","b",null]
+lenValueOf ["x","y"]
+lenNeg []
+primitive []
+isArray true 1
+detached [7,8]
+done
+--- stderr ---

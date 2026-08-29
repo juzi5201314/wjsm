@@ -1,0 +1,33 @@
+exit_code: 0
+--- stdout ---
+A next 0
+A sync end
+A tick 1
+A next 1
+A tick 2
+A next 2
+A tick 3
+A tick 4
+A done ["v0","v1"]
+A tick 5
+B sync end
+A tick 6
+B tick 1
+B tick 2
+B tick 3
+B tick 4
+B tick 5
+B tick 6
+B tick 7
+B done [10,20]
+B tick 8
+B tick 9
+C sync end
+C tick 1
+C empty done
+C tick 2
+C tick 3
+C arrlike done ["a","b"]
+C tick 4
+C tick 5
+--- stderr ---

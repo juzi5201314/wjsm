@@ -20,8 +20,8 @@ enum ProtoMethod {
 }
 
 /// Node v22 `Object.getOwnPropertyNames(String.prototype)` 序中本引擎已
-/// 实现的方法子集（Annex B 的 HTML 方法族与 substr、`isWellFormed` /
-/// `toWellFormed`、`trimLeft` / `trimRight` 未实现，不占位）。
+/// 实现的方法子集（Annex B 的 HTML 方法族与 substr、`trimLeft` /
+/// `trimRight` 未实现，不占位）。
 const PROTO_METHODS: &[(&str, ProtoMethod)] = &[
     ("at", ProtoMethod::Builtin(Builtin::StringAt)),
     ("charAt", ProtoMethod::Builtin(Builtin::StringCharAt)),
@@ -37,6 +37,10 @@ const PROTO_METHODS: &[(&str, ProtoMethod)] = &[
     ("endsWith", ProtoMethod::Builtin(Builtin::StringEndsWith)),
     ("includes", ProtoMethod::Builtin(Builtin::StringIncludes)),
     ("indexOf", ProtoMethod::Builtin(Builtin::StringIndexOf)),
+    (
+        "isWellFormed",
+        ProtoMethod::Builtin(Builtin::StringIsWellFormed),
+    ),
     (
         "lastIndexOf",
         ProtoMethod::Builtin(Builtin::StringLastIndexOf),
@@ -68,6 +72,10 @@ const PROTO_METHODS: &[(&str, ProtoMethod)] = &[
         ProtoMethod::Builtin(Builtin::StringStartsWith),
     ),
     ("toString", ProtoMethod::Builtin(Builtin::StringToString)),
+    (
+        "toWellFormed",
+        ProtoMethod::Builtin(Builtin::StringToWellFormed),
+    ),
     ("trim", ProtoMethod::Builtin(Builtin::StringTrim)),
     ("trimStart", ProtoMethod::Builtin(Builtin::StringTrimStart)),
     ("trimEnd", ProtoMethod::Builtin(Builtin::StringTrimEnd)),

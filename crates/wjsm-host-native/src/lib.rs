@@ -883,6 +883,7 @@ fn static_builtin(owner: wjsm_ir::Builtin, key: &str) -> Option<wjsm_ir::Builtin
         (Builtin::PromiseCreate, "withResolvers") => Builtin::PromiseWithResolvers,
         (Builtin::ArrayIsArray, "isArray") => Builtin::ArrayIsArray,
         (Builtin::ArrayIsArray, "from") => Builtin::ArrayFrom,
+        (Builtin::ArrayIsArray, "fromAsync") => Builtin::ArrayFromAsync,
         (Builtin::ArrayIsArray, "of") => Builtin::ArrayOf,
         (Builtin::StringFromCharCode, "fromCharCode") => Builtin::StringFromCharCode,
         (Builtin::StringFromCharCode, "fromCodePoint") => Builtin::StringFromCodePoint,
@@ -1167,6 +1168,10 @@ struct NativeAgentState {
     async_from_sync_iterators: HashMap<u32, i64>,
     async_iterator_objects: HashSet<i64>,
     async_generator_resume_completions: HashMap<u32, f64>,
+    /// `Array.fromAsync`（§23.1.2.1）在飞操作：promise reaction 携带的
+    /// operation id → 状态机记录，结果 promise 结算即移除。
+    array_from_async: HashMap<u32, dispatch::array_from_async::FromAsyncOperation>,
+    array_from_async_next_id: u32,
     promise_reactions: HashMap<u32, Vec<dispatch::promise::NativeScheduledReaction>>,
     /// 待报告的 unhandled rejection: (promise_handle, reason)。
     /// 微任务队列排空检查点报告第一个仍未处理的条目并终止（Node throw 语义）；
@@ -1415,6 +1420,8 @@ impl NativeAgentState {
             async_from_sync_iterators: HashMap::new(),
             async_iterator_objects: HashSet::new(),
             async_generator_resume_completions: HashMap::new(),
+            array_from_async: HashMap::new(),
+            array_from_async_next_id: 0,
             promise_reactions: HashMap::new(),
             pending_unhandled_rejections: Vec::new(),
             promise_combinators: Vec::new(),
@@ -1810,6 +1817,8 @@ impl NativeAgentState {
         self.async_from_sync_iterators.clear();
         self.async_iterator_objects.clear();
         self.async_generator_resume_completions.clear();
+        self.array_from_async.clear();
+        self.array_from_async_next_id = 0;
         self.promise_reactions.clear();
         self.pending_unhandled_rejections.clear();
         self.microtasks.clear();
@@ -2677,6 +2686,10 @@ impl NativeAgentState {
                     )),
                     "from" => self.native_callable(NativeCallableKind::Builtin(
                         wjsm_ir::Builtin::ArrayFrom,
+                        false,
+                    )),
+                    "fromAsync" => self.native_callable(NativeCallableKind::Builtin(
+                        wjsm_ir::Builtin::ArrayFromAsync,
                         false,
                     )),
                     "of" => self.native_callable(NativeCallableKind::Builtin(

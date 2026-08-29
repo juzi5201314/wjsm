@@ -45,6 +45,18 @@ impl NativeWeakState {
         self.finalization_registries
             .retain(|handle, _| is_live(*handle));
     }
+
+    /// 错误渲染用品牌判定：receiver 为 WeakMap / WeakSet 实例时给出构造器名
+    ///（V8 NoSideEffectsToString 的 `#<Ctor>` 分支）。
+    pub(crate) fn brand_name(&self, handle: u32) -> Option<&'static str> {
+        if self.weak_maps.contains_key(&handle) {
+            Some("WeakMap")
+        } else if self.weak_sets.contains_key(&handle) {
+            Some("WeakSet")
+        } else {
+            None
+        }
+    }
 }
 
 pub(super) fn dispatch_weak(
@@ -917,6 +929,7 @@ fn extend_host_roots(state: &NativeAgentState, queue: &mut VecDeque<i64>) {
         }
     }
     queue.extend(state.async_from_sync_iterators.values().copied());
+    super::array_from_async::extend_gc_roots(&state.array_from_async, queue);
     // 全局声明式记录的词法绑定值（let/const/class）仅由宿主表持有，必须钉扎。
     for record in state.global_env_records.values() {
         queue.extend(record.lexical.values().map(|binding| binding.value));
@@ -1036,6 +1049,9 @@ fn extend_reaction_roots(
         }
         NativePromiseReaction::Stream(reaction) => {
             super::streams::extend_reaction_roots(&agent.streams, *reaction, queue);
+        }
+        NativePromiseReaction::ArrayFromAsync { phase, .. } => {
+            super::array_from_async::extend_phase_roots(phase, queue);
         }
     }
 }

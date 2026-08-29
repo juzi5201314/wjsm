@@ -80,6 +80,56 @@ pub fn normalize_runtime_string_by_form(
     }
 }
 
+/// IsStringWellFormedUnicode（ES §7.2.9）：UTF-16 码元序列中不存在孤立
+/// 代理项——每个高位代理必须紧跟低位代理，低位代理必须紧随高位代理。
+pub fn is_well_formed_units(input: &RuntimeString) -> bool {
+    let units = input.as_flat_slice();
+    let mut i = 0usize;
+    while i < units.len() {
+        let unit = units[i];
+        if is_high_surrogate(unit) {
+            if i + 1 >= units.len() || !is_low_surrogate(units[i + 1]) {
+                return false;
+            }
+            i += 2;
+            continue;
+        }
+        if is_low_surrogate(unit) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `String.prototype.toWellFormed`（ES §22.1.3.33）步骤 4：按 CodePointAt
+/// 逐码位扫描，孤立代理项替换为 U+FFFD（REPLACEMENT CHARACTER），
+/// 良构片段原样保留。
+pub fn to_well_formed_units(input: &RuntimeString) -> RuntimeString {
+    if is_well_formed_units(input) {
+        return input.clone();
+    }
+    let units = input.as_flat_slice();
+    let mut out = Vec::with_capacity(units.len());
+    let mut i = 0usize;
+    while i < units.len() {
+        let unit = units[i];
+        if is_high_surrogate(unit) && i + 1 < units.len() && is_low_surrogate(units[i + 1]) {
+            out.push(unit);
+            out.push(units[i + 1]);
+            i += 2;
+            continue;
+        }
+        if is_high_surrogate(unit) || is_low_surrogate(unit) {
+            out.push(0xFFFD);
+        } else {
+            out.push(unit);
+        }
+        i += 1;
+    }
+    RuntimeString::from_utf16_units(out)
+}
+
 fn code_point_width_at(units: &[u16], index: usize) -> Option<(u32, usize, bool)> {
     let unit = *units.get(index)?;
     if is_high_surrogate(unit) && index + 1 < units.len() && is_low_surrogate(units[index + 1]) {

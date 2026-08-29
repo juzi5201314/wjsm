@@ -1,0 +1,41 @@
+exit_code: 0
+--- stdout ---
+null-src ERR TypeError "Cannot read properties of null (reading 'Symbol(Symbol.asyncIterator)')"
+undef-src ERR TypeError "Cannot read properties of undefined (reading 'Symbol(Symbol.asyncIterator)')"
+badmap-num ERR TypeError "42 is not a function"
+badmap-null-src ERR TypeError "42 is not a function"
+badmap-str ERR TypeError "hi is not a function"
+badmap-obj ERR TypeError "#<Object> is not a function"
+badmap-arr ERR TypeError "[object Array] is not a function"
+badmap-null ERR TypeError "null is not a function"
+nc-asynciter ERR TypeError "Array.fromAsync requires that the property of the first argument, items[Symbol.asyncIterator], when exists, be a function"
+nc-synciter ERR TypeError "Array.fromAsync requires that the property of the first argument, items[Symbol.iterator], when exists, be a function"
+nonobj-iter ERR TypeError "Result of the Symbol.iterator method is not an object"
+nonobj-synciter ERR TypeError "Result of the Symbol.iterator method is not an object"
+nc-next ERR TypeError "number 9 is not a function"
+nc-next-str ERR TypeError "string \"foo\" is not a function"
+nc-next-missing ERR TypeError "undefined is not a function"
+nonobj-result ERR TypeError "Iterator result Array.fromAsync is not an object"
+nonobj-result-p ERR TypeError "Iterator result Array.fromAsync is not an object"
+sync-nonobj ERR TypeError "Iterator result 5 is not an object"
+len-throw ERR Error "len boom"
+elem-throw ERR Error "get boom"
+arrlike-map-throw ERR Error "map boom"
+len-invalid ERR RangeError "Invalid array length"
+map-throw-close ERR Error "boom"
+map-throw-close events ["return"]
+next-reject-close ERR Error "arej"
+next-reject-close events ["next","return"]
+next-throw-close ERR Error "nextboom"
+next-throw-close events ["next","return"]
+done-throw-close ERR Error "doneboom"
+done-throw-close events ["return"]
+value-throw-close ERR Error "valboom"
+value-throw-close events ["return"]
+map-reject-close ERR Error "mrej"
+map-reject-close events ["return"]
+sync-reject-close ERR Error "rej"
+sync-reject-close events ["next","sync-return"]
+no-return ERR Error "noret"
+done
+--- stderr ---
