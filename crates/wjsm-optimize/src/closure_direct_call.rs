@@ -80,6 +80,35 @@ fn resolve_create_closure(
     })
 }
 
+/// 函数体内仅被 `StoreVar` 写过一次的绑定是否恒为 `FunctionRef`（如 `const add = arrow`）。
+pub(crate) fn immutable_fnref_for_var(
+    function: &Function,
+    defs: &HashMap<ValueId, &Instruction>,
+    constants: &[Constant],
+    name: &str,
+) -> Option<FunctionId> {
+    let mut store_values = Vec::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::StoreVar { name: slot, value } = instruction
+                && slot == name
+            {
+                store_values.push(*value);
+            }
+        }
+    }
+    if store_values.len() != 1 {
+        return None;
+    }
+    match defs.get(&store_values[0]) {
+        Some(Instruction::Const { constant, .. }) => match constants.get(constant.0 as usize) {
+            Some(Constant::FunctionRef(function_id)) => Some(*function_id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn single_store_value(function: &Function, name: &str) -> Option<ValueId> {
     let mut values = Vec::new();
     for block in function.blocks() {
@@ -158,7 +187,7 @@ pub fn should_backend_direct_closure_call(module: &Module, function_id: Function
 /// 解析 callee ValueId 为 FunctionRef（含不可变模块绑定与 env GetProp）。
 pub fn resolve_function_ref_callee(
     module: &Module,
-    _function: &Function,
+    caller: &Function,
     defs: &HashMap<ValueId, &Instruction>,
     load_reaching: &HashMap<ValueId, ValueId>,
     callee: &ValueId,
@@ -171,7 +200,10 @@ pub fn resolve_function_ref_callee(
             Some(Constant::FunctionRef(function_id)) => Some(*function_id),
             _ => None,
         },
-        Instruction::LoadVar { name, .. } => immutable.get(name).copied(),
+        Instruction::LoadVar { name, .. } => immutable
+            .get(name)
+            .copied()
+            .or_else(|| immutable_fnref_for_var(caller, defs, constants, name)),
         Instruction::GetProp { object: _, key, .. } => {
             let Instruction::Const { constant, .. } = defs.get(key)? else {
                 return None;
@@ -228,5 +260,48 @@ mod tests {
         let resolved = resolve_stored_closure_call(&module, work, ValueId(3)).expect("应解析");
         assert_eq!(resolved.function_id, fn_id);
         assert_eq!(resolved.env, ValueId(1));
+    }
+
+    #[test]
+    fn resolves_local_const_function_ref_for_inline() {
+        let mut module = Module::new();
+        let add_id = FunctionId(2);
+        let add_const = module.add_constant(Constant::FunctionRef(add_id));
+        let mut work = Function::new("work", BasicBlockId(0));
+        work.set_params(vec!["$4.$env".to_string(), "$4.$this".to_string()]);
+        let mut bb = BasicBlock::new(BasicBlockId(0));
+        bb.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: add_const,
+        });
+        bb.push_instruction(Instruction::StoreVar {
+            name: "$4.add".to_string(),
+            value: ValueId(0),
+        });
+        bb.push_instruction(Instruction::LoadVar {
+            dest: ValueId(1),
+            name: "$4.add".to_string(),
+        });
+        bb.set_terminator(Terminator::Return { value: Some(ValueId(1)) });
+        work.push_block(bb);
+        module.push_function(Function::new("dummy", BasicBlockId(0)));
+        module.push_function(work);
+
+        let defs: HashMap<ValueId, &Instruction> = module.functions()[1]
+            .blocks()[0]
+            .instructions()
+            .iter()
+            .filter_map(|ins| instruction_dest(ins).map(|d| (d, ins)))
+            .collect();
+        let load_reaching = crate::inline_for_ea::compute_load_var_reaching(&module.functions()[1]);
+        let resolved = resolve_function_ref_callee(
+            &module,
+            &module.functions()[1],
+            &defs,
+            &load_reaching,
+            &ValueId(1),
+        )
+        .expect("应解析局部 const add");
+        assert_eq!(resolved, add_id);
     }
 }
