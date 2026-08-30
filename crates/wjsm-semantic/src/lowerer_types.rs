@@ -117,6 +117,9 @@ pub(crate) struct Lowerer {
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     pub(crate) captured_names_stack: Vec<Vec<CapturedBinding>>,
+    /// 函数声明降级时登记自身绑定：体内读取同名标识符走外层 `LoadVar` 而非闭包捕获，
+    /// 使自递归可走 `direct_call`（`FunctionRef` 直调）而非 env `GetProp` 动态分派。
+    pub(crate) fn_decl_self_binding_stack: Vec<Option<CapturedBinding>>,
     /// 当前函数中被任意后代函数捕获的本地 binding；不随 CFG shared-env 状态回退。
     pub(crate) shared_binding_names_stack: Vec<std::collections::HashSet<CapturedBinding>>,
     /// 每层函数的 function scope id，用于判断变量是否逃逸。

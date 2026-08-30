@@ -20,7 +20,7 @@ use wjsm_ir::{
     FunctionId, Instruction, Program, Terminator, UnaryOp, ValueId, constants, value,
 };
 use wjsm_native_abi::{
-    COOPERATIVE_POLL_STEP_BYTES, NATIVE_BARRIER_MARKING_MASK, NativeBarrierState, NativeHostSymbol,
+    COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES, COOPERATIVE_POLL_STEP_BYTES, NATIVE_BARRIER_MARKING_MASK, NativeBarrierState, NativeHostSymbol,
     NativeRootFrame, NativeRuntimeOp, NativeSignature, NativeVmContext, native_variable_names,
 };
 
@@ -28,7 +28,8 @@ use rayon::prelude::*;
 
 use crate::f64_analysis::infer_f64_values;
 use crate::fast_call::{
-    compile_slow_trampoline, fast_entry_signature, fast_js_arity, is_fast_call_eligible,
+    compile_slow_trampoline, fast_entry_signature, fast_js_arity, is_fast_body_eligible,
+    is_fast_call_eligible,
     js_param_count,
 };
 use crate::root_plan::RootPlan;

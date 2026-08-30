@@ -551,12 +551,12 @@ module {
       %98 = const c0
       jump bb48
     bb40:
-      %96 = set_elem %87, %88, %101
+      %96 = set_elem %87, %88, %102
       jump bb43
     bb41:
       jump bb43
     bb42:
-      %97 = call builtin.exception_value(%101)
+      %97 = call builtin.exception_value(%102)
       throw %97
     bb43:
       %77 = add %88, %82
@@ -570,11 +570,11 @@ module {
       %64 = is_exception %63
       branch %64, bb27, bb26
     bb47:
-      %95 = is_exception %101
+      %95 = is_exception %102
       branch %95, bb42, bb40
     bb48:
-      %99 = const c146
-      %101 = call %93, this=%99, callsite="read"
+      %100 = const c146
+      %102 = call %93, this=%100, callsite="read"
       store var $16.read, %98
       jump bb47
 

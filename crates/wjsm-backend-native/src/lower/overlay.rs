@@ -6,7 +6,7 @@ use std::mem::offset_of;
 
 use anyhow::{Context, Result};
 use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData, types};
-use wjsm_ir::{BasicBlockId, FunctionId, Program, ValueId, constants, value};
+use wjsm_ir::{BasicBlockId, FunctionId, Instruction, Program, ValueId, constants, value};
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext};
 
 use crate::value_repr::{define_value_boxed, use_value_boxed};
@@ -401,7 +401,25 @@ pub(crate) fn emit_resume_dispatch(
         let skip = cx.builder.create_block();
         cx.builder.ins().brif(hit, restore, &[], skip, &[]);
         cx.builder.switch_to_block(restore);
-        let lives = wjsm_ir::typed_cfg::loop_header_live_phis(function, *header);
+        // 与 OSR poll / overlay 守卫同一套 live：含循环不变量，不能只用 φ dest。
+        let first_non_phi = function
+            .blocks()
+            .iter()
+            .find(|block| block.id() == *header)
+            .map(|block| {
+                block
+                    .instructions()
+                    .iter()
+                    .position(|instruction| !matches!(instruction, Instruction::Phi { .. }))
+                    .unwrap_or(block.instructions().len())
+            })
+            .unwrap_or(0);
+        let lives = wjsm_optimize::live_values_at(
+            program,
+            FunctionId(function_index),
+            *header,
+            first_non_phi,
+        );
         for (index, live) in lives.iter().enumerate() {
             let offset = i32::try_from(index * 8).context("resume live offset")?;
             let value = cx

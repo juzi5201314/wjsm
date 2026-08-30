@@ -29,6 +29,7 @@ impl Lowerer {
         let async_gen_name = format!("{name}$asyncgen");
 
         self.push_function_context(&async_gen_name, BasicBlockId(0));
+        self.register_fn_decl_self_binding(&name, fn_decl.span())?;
         self.apply_function_strictness(fn_decl.function.body.as_ref());
         self.is_async_fn = true;
         self.is_async_generator_fn = true;
@@ -346,7 +347,14 @@ impl Lowerer {
             ir_function.set_source_span(span);
         }
         ir_function.set_params(param_ir_names);
-        let captured = self.captured_names_stack.last().unwrap().clone();
+        let self_binding = self
+            .fn_decl_self_binding_stack
+            .last()
+            .and_then(|slot| slot.clone());
+        let captured = Self::filter_fn_decl_self_captures(
+            self.captured_names_stack.last().unwrap(),
+            self_binding.as_ref(),
+        );
         self.finalize_function_captures(&mut ir_function, &captured);
         // 类方法：body 经续体 resume 调用，activation home 只能来自函数元数据。
         if let MethodSuperBinding::Static(home) = method_super {

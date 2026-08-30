@@ -35,7 +35,7 @@ pub(crate) fn compile_program_inner(
     let mut fast_ids: Vec<Option<FuncId>> = Vec::with_capacity(program.functions().len());
     let mut fast_signatures: Vec<Option<Signature>> = Vec::with_capacity(program.functions().len());
     for (index, function) in program.functions().iter().enumerate() {
-        if is_fast_call_eligible(function) {
+        if is_fast_body_eligible(function) {
             let fast_signature = fast_entry_signature(call_conv, js_param_count(function));
             let fast_id = module
                 .declare_function(

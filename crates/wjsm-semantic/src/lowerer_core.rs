@@ -80,6 +80,7 @@ impl Lowerer {
             function_pending_loop_label_stack: Vec::new(),
             function_expr_continuation_stack: Vec::new(),
             captured_names_stack: Vec::new(),
+            fn_decl_self_binding_stack: Vec::new(),
             shared_binding_names_stack: vec![std::collections::HashSet::new()],
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
@@ -395,6 +396,7 @@ impl Lowerer {
         let fn_scope_id = self.scopes.current_scope_id();
         self.function_scope_id_stack.push(fn_scope_id);
         self.captured_names_stack.push(Vec::new());
+        self.fn_decl_self_binding_stack.push(None);
         self.shared_binding_names_stack
             .push(std::collections::HashSet::new());
         self.is_arrow_fn_stack.push(false); // 默认非箭头函数，箭头函数会单独设置
@@ -451,6 +453,9 @@ impl Lowerer {
             .captured_names_stack
             .pop()
             .expect("captured names stack underflow");
+        self.fn_decl_self_binding_stack
+            .pop()
+            .expect("fn decl self binding stack underflow");
         self.shared_binding_names_stack
             .pop()
             .expect("shared binding names stack underflow");
@@ -606,11 +611,18 @@ impl Lowerer {
         if binding_env_scope != owner_env_scope {
             return false;
         }
-        // 仅当本绑定归属父函数当前活动的按迭代 env 帧时才禁用深度 0 快路径。
-        // 具名函数表达式 funcEnv 帧只持有函数名绑定，不应使同体其它捕获
-        // （如 counter 的 `value`）误退回动态链查找。
+        // 父函数在闭包创建点存在活动的按迭代 env 帧（循环头按迭代绑定 /
+        // 循环体词法捕获）时，本闭包的 `$env` 可能是插在稳定共享 env
+        // 之前的迭代 env：直接写 `$env` 会在其上创建遮蔽自有属性，内层读到
+        // 新值而外层仍读稳定 env 旧值。此时回退动态链查找定位 owner。
+        //
+        // 具名函数表达式 / 类名的 funcEnv 帧（`body_scope_watermark == None` 且
+        // 不持有当前 binding）只服务自身名字绑定；`create_closure` 仍走
+        // `ensure_shared_env`，运行时 `$env` 与 owner 一致。Lowering 内层函数体时
+        // 外层 funcEnv 帧仍在栈上，若整帧匹配会误杀深度 0 快路径。
         !self.iteration_env_stack.iter().any(|frame| {
-            frame.function_scope_id == owner_env_scope && frame.owns_binding(binding)
+            frame.function_scope_id == owner_env_scope
+                && (frame.body_scope_watermark.is_some() || frame.owns_binding(binding))
         })
     }
 
@@ -634,10 +646,52 @@ impl Lowerer {
     }
 
     pub(crate) fn record_capture(&mut self, binding: CapturedBinding) {
+        if self.is_fn_decl_self_binding(&binding) {
+            return;
+        }
         if let Some(captured) = self.captured_names_stack.last_mut()
             && !captured.contains(&binding)
         {
             captured.push(binding);
+        }
+    }
+
+    /// 登记正在降级的函数声明自身绑定（外层作用域槽），供体内自引用走 `LoadVar`。
+    pub(crate) fn register_fn_decl_self_binding(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> Result<(), LoweringError> {
+        let (scope_id, _) = self
+            .scopes
+            .lookup(name)
+            .map_err(|msg| self.error(span, msg))?;
+        if let Some(slot) = self.fn_decl_self_binding_stack.last_mut() {
+            *slot = Some(CapturedBinding::new(name, scope_id));
+        }
+        Ok(())
+    }
+
+    /// 当前函数体内读取的是否为正在降级的函数声明自身绑定。
+    pub(crate) fn is_fn_decl_self_binding(&self, binding: &CapturedBinding) -> bool {
+        self.fn_decl_self_binding_stack
+            .last()
+            .and_then(|slot| slot.as_ref())
+            .is_some_and(|self_binding| self_binding == binding)
+    }
+
+    /// 从捕获列表剔除函数声明自引用（防御性过滤，正常路径不应登记）。
+    pub(crate) fn filter_fn_decl_self_captures(
+        captured: &[CapturedBinding],
+        self_binding: Option<&CapturedBinding>,
+    ) -> Vec<CapturedBinding> {
+        match self_binding {
+            Some(self_binding) => captured
+                .iter()
+                .filter(|binding| *binding != self_binding)
+                .cloned()
+                .collect(),
+            None => captured.to_vec(),
         }
     }
 

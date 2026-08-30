@@ -466,6 +466,42 @@ pub(crate) fn lower_instruction(
             // 代码生成不消费。
             callsite: _,
         } => {
+            if let Some(resolved) = wjsm_optimize::resolve_stored_closure_call(
+                tables.program,
+                tables.ir_function,
+                *callee,
+            ) && wjsm_optimize::should_backend_direct_closure_call(
+                tables.program,
+                resolved.function_id,
+            ) && let Some(decl) =
+                tables.function_decls.get(resolved.function_id.0 as usize)
+            {
+                let func_ref = *tables
+                    .imported_function_decls
+                    .entry(resolved.function_id)
+                    .or_insert_with(|| decl.import(cx.builder.func));
+                if let Some(arity) = fast_js_arity(decl.signature()) {
+                    return lower_closure_direct_call_instruction(
+                        cx,
+                        func_ref,
+                        *dest,
+                        resolved.env,
+                        *this_val,
+                        args,
+                        roots,
+                        arity,
+                    );
+                }
+                return lower_direct_call_instruction(
+                    cx,
+                    func_ref,
+                    *dest,
+                    Some(resolved.env),
+                    *this_val,
+                    args,
+                    roots,
+                );
+            }
             let direct_callee = tables
                 .constant_defs
                 .get(callee)
@@ -487,7 +523,9 @@ pub(crate) fn lower_instruction(
                         cx, func_ref, *dest, *this_val, args, roots, arity,
                     )
                 } else {
-                    lower_direct_call_instruction(cx, func_ref, *dest, *this_val, args, roots)
+                    lower_direct_call_instruction(
+                        cx, func_ref, *dest, None, *this_val, args, roots,
+                    )
                 }
             } else {
                 lower_call_instruction(

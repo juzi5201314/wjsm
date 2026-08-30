@@ -24,6 +24,7 @@ use wjsm_ir::{
 };
 
 use super::cfg_fold::{self, terminator_successors};
+use crate::closure_direct_call::{resolve_function_ref_callee, should_backend_direct_closure_call};
 use crate::ir_walk::{instr_uses, instruction_dest, terminator_uses};
 
 /// 计算函数内最大的 ValueId。
@@ -260,7 +261,7 @@ enum ReachSlot {
     Unknown,
 }
 
-fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
+pub(crate) fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
     let mut load_reaching: HashMap<ValueId, ValueId> = HashMap::new();
 
     // 名字先统一编号成下标：旧实现的 out/in 集是 String 键 HashMap，每轮
@@ -365,18 +366,67 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
     load_reaching
 }
 
+/// callee 是否即为调用点的 `create_closure` 结果（IIFE / 工厂即时求值）。
+/// 与「先 store 再 load 的存储闭包」区分：后者由后端直调，不应再内联体。
+fn is_immediate_create_closure_invoke(
+    defs: &HashMap<ValueId, Instruction>,
+    load_reaching: &HashMap<ValueId, ValueId>,
+    callee: ValueId,
+) -> bool {
+    let mut current = callee;
+    while let Some(reaching) = load_reaching.get(&current) {
+        if *reaching == current {
+            break;
+        }
+        current = *reaching;
+    }
+    matches!(
+        defs.get(&current),
+        Some(Instruction::CallBuiltin {
+            builtin: Builtin::CreateClosure,
+            ..
+        })
+    )
+}
+
 fn resolve_callee_id(
+    module: &Module,
+    caller: &wjsm_ir::Function,
     defs: &HashMap<ValueId, Instruction>,
     constants: &[Constant],
     load_reaching: &HashMap<ValueId, ValueId>,
     callee: &ValueId,
 ) -> Option<(FunctionId, Option<ValueId>)> {
+    let defs_ref: HashMap<ValueId, &Instruction> = defs.iter().map(|(k, v)| (*k, v)).collect();
+
     let mut current = *callee;
     while let Some(reaching) = load_reaching.get(&current) {
         if *reaching == current {
             break;
         }
         current = *reaching;
+    }
+
+    // GetProp 解析到不可变函数绑定时，object 就是词法 env（模块 shared_env /
+    // 外层闭包 env）。必须带回，否则后续内联会用 caller 的 $env 冒充，
+    // 模块内 `work→fib` 自递归会读到错误 env 上的非函数值。
+    if let Some(Instruction::GetProp { object, key, .. }) = defs.get(&current) {
+        let Instruction::Const { constant, .. } = defs.get(key)? else {
+            return None;
+        };
+        let Constant::String(key_str) = constants.get(constant.0 as usize)? else {
+            return None;
+        };
+        let immutable = crate::closure_direct_call::module_immutable_function_bindings(module);
+        if let Some(function_id) = immutable.get(key_str).copied() {
+            return Some((function_id, Some(*object)));
+        }
+    }
+
+    if let Some(function_id) =
+        resolve_function_ref_callee(module, caller, &defs_ref, load_reaching, callee)
+    {
+        return Some((function_id, None));
     }
 
     match defs.get(&current) {
@@ -476,6 +526,8 @@ fn static_inline_round(module: &mut Module) -> bool {
                     _ => continue,
                 };
                 let (callee_id, closure_env) = match resolve_callee_id(
+                    module,
+                    function,
                     &per_func_defs[func_idx],
                     &constants_snapshot,
                     &per_func_load_reaching[func_idx],
@@ -490,9 +542,30 @@ fn static_inline_round(module: &mut Module) -> bool {
                 }
                 let (direct_callable, has_eval, num_blocks, is_class_ctor) =
                     per_func_info[callee_idx];
-                let can_call = direct_callable || closure_env.is_some();
-                if !can_call || has_eval || num_blocks == 0 || callee_idx == func_idx {
+                if has_eval || num_blocks == 0 || callee_idx == func_idx {
                     continue;
+                }
+                // 非 direct_callable 必须有证明的 lex_env（create_closure 或
+                // GetProp 的 object）。否则会用 caller $env 冒充，模块内捕获
+                // 函数（如 fib）内联后自递归读错 env → "X is not a function"。
+                if !direct_callable && closure_env.is_none() {
+                    continue;
+                }
+                if should_backend_direct_closure_call(module, callee_id) {
+                    // 无 lex_env 证据时绝不能内联带 captures 的函数。
+                    if closure_env.is_none() {
+                        continue;
+                    }
+                    // 存储闭包（load → 单次 store create_closure）留给后端直调；
+                    // 即时 create_closure+invoke（IIFE / factory 返回值）仍允许内联，
+                    // 以保留 callee_dead_slot_names 对 WeakRef/FinalizationRegistry 的清槽。
+                    if !is_immediate_create_closure_invoke(
+                        &per_func_defs[func_idx],
+                        &per_func_load_reaching[func_idx],
+                        *callee,
+                    ) {
+                        continue;
+                    }
                 }
                 // 类构造器的 [[Call]]（无 new）必须在运行时抛 TypeError
                 //（ES §10.2.1 步骤 2）：保留动态调用，不得内联函数体。
@@ -614,7 +687,24 @@ fn inline_static_candidate(
 
     let current_max = current_max_value[func_idx];
     let undefined_dest = ValueId(current_max + 1);
-    let value_offset = current_max + 2;
+    let caller = &module.functions()[func_idx];
+    let caller_env_name = caller
+        .params()
+        .first()
+        .filter(|name| is_env_name(name))
+        .cloned();
+    let needs_caller_lex_env = candidate.closure_env.is_none() && caller_env_name.is_some();
+    let caller_lex_env_dest = if needs_caller_lex_env {
+        ValueId(current_max + 2)
+    } else {
+        undefined_dest
+    };
+    let value_offset = if needs_caller_lex_env {
+        current_max + 3
+    } else {
+        current_max + 2
+    };
+    let callee_lex_env = candidate.closure_env.unwrap_or(caller_lex_env_dest);
 
     // ── 分裂调用块 ──
     // B_pre 保留调用前指令 + undefined 常量，终止器暂置 Jump(克隆入口)；
@@ -674,8 +764,7 @@ fn inline_static_candidate(
                     continue;
                 }
                 if is_env_name(name) {
-                    let env_val = candidate.closure_env.unwrap_or(undefined_dest);
-                    param_subst.push((mapped_dest, env_val));
+                    param_subst.push((mapped_dest, callee_lex_env));
                     continue;
                 }
                 if let Some((param_idx, _)) = callee_params
@@ -776,7 +865,11 @@ fn inline_static_candidate(
             clone_max = clone_max.max(used.0);
         }
     }
-    current_max_value[func_idx] = undefined_dest.0.max(clone_max);
+    current_max_value[func_idx] = if needs_caller_lex_env {
+        caller_lex_env_dest.0.max(clone_max)
+    } else {
+        undefined_dest.0.max(clone_max)
+    };
 
     // ── 重写 B_pre：调用前指令 + undefined 常量 + 注入的形参初始值；
     //    终止器 = Jump(克隆入口)。 ──
@@ -790,6 +883,12 @@ fn inline_static_candidate(
             dest: undefined_dest,
             constant: undefined_id,
         });
+        if needs_caller_lex_env {
+            b_pre.push_instruction(Instruction::LoadVar {
+                dest: caller_lex_env_dest,
+                name: caller_env_name.expect("caller env name checked above"),
+            });
+        }
         for (name, value) in &inject_subst {
             b_pre.push_instruction(Instruction::StoreVar {
                 name: name.clone(),
