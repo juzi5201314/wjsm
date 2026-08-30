@@ -116,6 +116,19 @@ fn has_non_boolean_branch_condition(function: &wjsm_ir::Function, constants: &[C
     })
 }
 
+/// 函数体是否对 `storage_name` 做了 LoadVar/StoreVar（参数落槽与 safepoint-free 共用）。
+pub(crate) fn function_uses_local_var(function: &wjsm_ir::Function, storage_name: &str) -> bool {
+    function.blocks().iter().any(|block| {
+        block.instructions().iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                    if name == storage_name
+            )
+        })
+    })
+}
+
 /// 与 `lower_function_parameters` 一致：非 frame local 的参数会经宿主 `StoreVar` 落槽。
 /// 仅当该参数在本函数体内确有 LoadVar/StoreVar 时才需要宿主槽；未使用的 `$env`/`$this`
 /// 形参不应把整函数挡在 safepoint-free 之外（典型：顶层 `function work()`）。
@@ -124,15 +137,7 @@ fn parameters_need_host_store(
     frame_locals: &BTreeSet<&str>,
     variable_slots: &HashMap<String, u32>,
 ) -> bool {
-    let uses_canonical_this = function.blocks().iter().any(|block| {
-        block.instructions().iter().any(|instruction| {
-            matches!(
-                instruction,
-                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
-                    if name == "$this"
-            )
-        })
-    });
+    let uses_canonical_this = function_uses_local_var(function, "$this");
     for (index, name) in function.params().iter().enumerate() {
         let storage_name = if index == 0
             && (function.name().ends_with("$async")
@@ -157,16 +162,7 @@ fn parameters_need_host_store(
         if !variable_slots.contains_key(storage_name) {
             continue;
         }
-        let touched = function.blocks().iter().any(|block| {
-            block.instructions().iter().any(|instruction| {
-                matches!(
-                    instruction,
-                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
-                        if name == storage_name
-                )
-            })
-        });
-        if touched {
+        if function_uses_local_var(function, storage_name) {
             return true;
         }
     }
