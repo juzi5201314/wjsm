@@ -195,7 +195,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;opt={opt_level};probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;hypot-latch=elem-guard;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -391,8 +391,8 @@ mod capability_tests {
             let compiler = NativeCompiler::new().expect("declared native host must initialize");
             assert!(compiler.settings_key().contains("arch=x86_64"));
             assert!(
-                compiler.settings_key().contains("roots=skip-bool-imm"),
-                "布尔立即数不当 GC 根必须进 cache 键:\n{}",
+                compiler.settings_key().contains("hypot-latch=elem-guard"),
+                "hypot getter 闩锁快路径必须进 cache 键:\n{}",
                 compiler.settings_key()
             );
         } else {

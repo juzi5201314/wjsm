@@ -395,7 +395,7 @@ pub(crate) fn const_property_key_raw(
     value::inline_property_key_raw(encoded)
 }
 
-fn template_property_index_by_key_text(
+pub(crate) fn template_property_index_by_key_text(
     constants: &[Constant],
     template: ConstantId,
     key_text: &str,

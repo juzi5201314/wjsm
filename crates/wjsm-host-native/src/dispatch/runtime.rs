@@ -3905,11 +3905,13 @@ pub(super) fn range_error(
 /// licm elem-guard 的 pre-header 一次性校验（只读、不分配、不执行用户代码）：
 ///
 /// `array` 当前必须是 PACKED 普通数组，全部元素为 shape 等于模板烘焙 shape 的
-/// 普通对象，且每个元素的所有值槽均非对象（含 regexp）。三个条件合起来保证：
-/// 循环体内闩锁 `GetProp` 可以跳过逐迭代 shape 检查直读模板槽偏移，且读出
-/// 的值参与协变运算（ToPrimitive）时不可能回调用户代码。任一条件不满足时返回
-/// false，同循环的 Guarded 指令全部退回通用路径，语义不变。
-fn elem_shape_guard_holds(state: &NativeAgentState, array: i64, template_index: u32) -> bool {
+/// 普通对象，且每个元素的所有值槽均非对象（含 regexp）。模板键若覆盖 hypot
+/// getter 的双操作数，还要求全部元素共享同一原型、该原型上对应 accessor
+/// 仍是编译期 hypot getter、且 `Math.hypot` 仍 pristine。四个条件合起来保证：
+/// 循环体内闩锁 `GetProp` 可以跳过逐迭代 shape 检查直读模板槽（hypot 属性则
+/// 双槽 + typed thunk），且读出的值参与协变运算时不可能回调用户代码。
+/// 任一条件不满足时返回 false，同循环的 Guarded 指令全部退回通用路径。
+fn elem_shape_guard_holds(state: &mut NativeAgentState, array: i64, template_index: u32) -> bool {
     if !value::is_array(array) {
         return false;
     }
@@ -3933,7 +3935,29 @@ fn elem_shape_guard_holds(state: &NativeAgentState, array: i64, template_index: 
     let Ok(length) = heap.array_length(handle) else {
         return false;
     };
-    (0..length).all(|index| elem_conforms(heap, handle, index, baked_shape, slot_count))
+    let mut first_element = None;
+    let mut shared_proto = None;
+    for index in 0..length {
+        let Some(element_handle) = elem_conforms(heap, handle, index, baked_shape, slot_count)
+        else {
+            return false;
+        };
+        let Ok(proto) = heap.prototype(element_handle) else {
+            return false;
+        };
+        match shared_proto {
+            None => {
+                first_element = Some(element_handle);
+                shared_proto = Some(proto);
+            }
+            Some(expected) if expected == proto => {}
+            Some(_) => return false,
+        }
+    }
+    let Some(receiver) = first_element else {
+        return true;
+    };
+    hypot_proto_accessors_hold(state, receiver, baked_shape)
 }
 
 /// 单个数组元素的守卫条件：非洞、TAG_OBJECT、shape 命中烘焙模板、值槽全部非对象。
@@ -3943,25 +3967,166 @@ fn elem_conforms(
     index: u32,
     baked_shape: u32,
     slot_count: u32,
-) -> bool {
+) -> Option<u32> {
     let Ok(Some(element)) = heap.get_element(array_handle, index) else {
-        return false;
+        return None;
     };
     let element = element as i64;
     if !value::is_object(element) {
-        return false;
+        return None;
     }
     let element_handle = value::decode_object_handle(element);
     if !matches!(heap.shape_id(element_handle), Ok(shape) if shape == baked_shape) {
-        return false;
+        return None;
     }
-    (0..slot_count).all(|slot| match heap.value_slot(element_handle, slot) {
+    let slots_ok = (0..slot_count).all(|slot| match heap.value_slot(element_handle, slot) {
         Ok(stored) => {
             let stored = stored as i64;
             !value::is_js_object(stored) && !value::is_regexp(stored)
         }
         Err(_) => false,
-    })
+    });
+    slots_ok.then_some(element_handle)
+}
+
+/// 模板键覆盖 hypot getter 操作数时，校验原型 accessor 身份与 `Math.hypot`。
+fn hypot_proto_accessors_hold(
+    state: &mut NativeAgentState,
+    receiver: u32,
+    baked_shape: u32,
+) -> bool {
+    // 不 clone Program：pre-header 每次进入循环都会跑守卫，整包快照拷贝会
+    // 把 elem-guard 的收益吃掉。快照缺失时无法证明存在 hypot getter / 方法
+    // 身份，跳过额外检查（自有键闩锁仍由 shape 校验覆盖）。
+    let (getters, methods) = {
+        let Some(program) = state.program_snapshots.get(&state.current_image_id) else {
+            return true;
+        };
+        (
+            wjsm_optimize::collect_hypot_getters(program),
+            wjsm_optimize::collect_guarded_methods(program),
+        )
+    };
+    if getters.is_empty() && methods.is_empty() {
+        return true;
+    }
+    let mut interned = Vec::new();
+    for getter in &getters {
+        let Some(property) =
+            state.intern_property_string(RuntimeString::from(getter.property.as_str()))
+        else {
+            return false;
+        };
+        let Some(lhs) = state.intern_property_string(RuntimeString::from(getter.lhs_key.as_str()))
+        else {
+            return false;
+        };
+        let Some(rhs) = state.intern_property_string(RuntimeString::from(getter.rhs_key.as_str()))
+        else {
+            return false;
+        };
+        interned.push((property, lhs, rhs, getter.function.0));
+    }
+    let mut expected: Vec<(crate::PropertyKey, Vec<u32>)> = Vec::new();
+    {
+        let heap = state.gc.heap();
+        for (property, lhs, rhs, function_id) in interned {
+            let lhs_ok = heap
+                .shapes()
+                .lookup(baked_shape, lhs)
+                .is_some_and(|prop| !prop.is_accessor());
+            let rhs_ok = heap
+                .shapes()
+                .lookup(baked_shape, rhs)
+                .is_some_and(|prop| !prop.is_accessor());
+            if !lhs_ok || !rhs_ok {
+                continue;
+            }
+            if let Some((_, ids)) = expected.iter_mut().find(|(key, _)| *key == property) {
+                if !ids.contains(&function_id) {
+                    ids.push(function_id);
+                }
+            } else {
+                expected.push((property, vec![function_id]));
+            }
+        }
+    }
+    if !expected.is_empty() {
+        if !super::intrinsics::math_hypot_is_pristine(state) {
+            return false;
+        }
+        for (property, ids) in expected {
+            if !hypot_accessor_matches(state, receiver, property, &ids) {
+                return false;
+            }
+        }
+    }
+    guarded_methods_hold(state, receiver, &methods)
+}
+
+fn hypot_accessor_matches(
+    state: &mut NativeAgentState,
+    receiver: u32,
+    property: crate::PropertyKey,
+    ids: &[u32],
+) -> bool {
+    let getter = {
+        let heap = state.gc.heap();
+        let Some((_, _, slot)) = heap
+            .get_property_slot_on_proto_chain_for_ic(receiver, property)
+            .ok()
+            .flatten()
+        else {
+            return false;
+        };
+        if slot.flags & constants::FLAG_IS_ACCESSOR as u32 == 0 {
+            return false;
+        }
+        slot.getter
+    };
+    let Some(function) = state.callable_function(getter as i64) else {
+        return false;
+    };
+    function.image_id == state.current_image_id && ids.contains(&function.function_index)
+}
+
+/// 阶段 C 方法仍是数据属性且函数身份未变；原型上没有该方法则跳过。
+fn guarded_methods_hold(
+    state: &mut NativeAgentState,
+    receiver: u32,
+    methods: &[(String, u32)],
+) -> bool {
+    if methods.is_empty() {
+        return true;
+    }
+    let mut interned: Vec<(crate::PropertyKey, u32)> = Vec::new();
+    for (property, function_id) in methods {
+        let Some(key) = state.intern_property_string(RuntimeString::from(property.as_str())) else {
+            return false;
+        };
+        interned.push((key, *function_id));
+    }
+    for (property, function_id) in interned {
+        let slot = {
+            let heap = state.gc.heap();
+            heap.get_property_slot_on_proto_chain_for_ic(receiver, property)
+                .ok()
+                .flatten()
+        };
+        let Some((_, _, slot)) = slot else {
+            continue;
+        };
+        if slot.flags & constants::FLAG_IS_ACCESSOR as u32 != 0 {
+            return false;
+        }
+        let Some(function) = state.callable_function(slot.value as i64) else {
+            return false;
+        };
+        if function.image_id != state.current_image_id || function.function_index != function_id {
+            return false;
+        }
+    }
+    true
 }
 
 fn init_object_literal_or_fail(

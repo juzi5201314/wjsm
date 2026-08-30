@@ -1,12 +1,15 @@
 //! 识别 `get norm() { return Math.hypot(this.x, this.y); }` 形态的类 getter。
 //!
-//! 后端 ACCESSOR IC 命中后用 CLIF 比较 getter 的 `TAG_FUNCTION` 身份，再按
-//! 接收者自有数据槽直读两个操作数并调用 typed `Math.hypot` thunk，跳过
-//! `invoke_callable`。本模块只做 IR 形态判定，不发射 Cranelift。
+//! 后端两条快路径共用本模块的形态判定：
+//! - ACCESSOR IC 命中后 CLIF 比较 getter 身份，再双槽直读 + typed thunk；
+//! - elem-guard 闩锁 `GetProp`：pre-header 已证明原型 accessor 仍是 hypot
+//!   getter 时，跳过 IC，按模板槽直读双操作数并调用同一 thunk。
 
 use std::collections::HashMap;
 
-use wjsm_ir::{Builtin, Constant, Function, FunctionId, Instruction, Program, Terminator, ValueId};
+use wjsm_ir::{
+    Builtin, Constant, ConstantId, Function, FunctionId, Instruction, Program, Terminator, ValueId,
+};
 
 use crate::ir_walk::instruction_dest;
 
@@ -195,6 +198,84 @@ pub fn hypot_getter_slots_by_function(program: &Program) -> HashMap<u32, (String
         .collect()
 }
 
+/// 模板自有键能覆盖该 hypot getter 的双操作数时，返回 `(lhs_key, rhs_key)`。
+/// 同一属性名对应多组不同槽键则放弃（闩锁快路径不能猜槽）。
+pub fn hypot_own_slots_for_property<'a>(
+    getters: &'a [HypotGetter],
+    property: &str,
+    template_keys: &[String],
+) -> Option<(&'a str, &'a str)> {
+    let mut found = None;
+    for getter in getters {
+        if getter.property != property {
+            continue;
+        }
+        if !template_keys.iter().any(|key| key == &getter.lhs_key) {
+            continue;
+        }
+        if !template_keys.iter().any(|key| key == &getter.rhs_key) {
+            continue;
+        }
+        let pair = (getter.lhs_key.as_str(), getter.rhs_key.as_str());
+        match found {
+            None => found = Some(pair),
+            Some(existing) if existing == pair => {}
+            Some(_) => return None,
+        }
+    }
+    found
+}
+
+/// 按模板常量解析 hypot getter 双槽键名。
+pub fn hypot_own_slots_for_template_key(
+    program: &Program,
+    template: ConstantId,
+    property: &str,
+) -> Option<(String, String)> {
+    let keys = crate::escape_scalar_record::template_key_names(program.constants(), template)?;
+    let getters = collect_hypot_getters(program);
+    let (lhs, rhs) = hypot_own_slots_for_property(&getters, property, &keys)?;
+    Some((lhs.to_owned(), rhs.to_owned()))
+}
+
+/// 阶段 C `GuardSameFunction` 对应的原型方法：`(属性名, 期望函数下标)`。
+/// elem-guard pre-header 用它核对 `p.scale` 仍是数据属性且身份未变。
+pub fn collect_guarded_methods(program: &Program) -> Vec<(String, u32)> {
+    if program.functions().iter().any(Function::has_eval) {
+        return Vec::new();
+    }
+    let constants = program.constants();
+    let mut methods = Vec::new();
+    for function in program.functions() {
+        let defs = defs_in_function(function);
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let Instruction::GuardSameFunction {
+                    callee,
+                    function: target,
+                    ..
+                } = instruction
+                else {
+                    continue;
+                };
+                let Some(def) = defs.get(callee) else {
+                    continue;
+                };
+                let Instruction::GetProp { key, .. } = def else {
+                    continue;
+                };
+                let Some(property) = const_string(function, constants, *key) else {
+                    continue;
+                };
+                methods.push((property.to_owned(), target.0));
+            }
+        }
+    }
+    methods.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    methods.dedup();
+    methods
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +349,17 @@ class Vec {
         let names: Vec<_> = getters.iter().map(|g| g.property.as_str()).collect();
         assert!(names.contains(&"norm"), "{names:?}");
         assert!(names.contains(&"length"), "{names:?}");
+    }
+
+    #[test]
+    fn hypot_own_slots_match_template_keys() {
+        let module = parse_module(POINT).expect("解析");
+        let program = lower_module(module, false).expect("lowering");
+        let getters = collect_hypot_getters(&program);
+        let keys = vec!["x".to_owned(), "y".to_owned()];
+        let pair = hypot_own_slots_for_property(&getters, "norm", &keys).expect("norm 槽");
+        assert_eq!(pair, ("x", "y"));
+        assert!(hypot_own_slots_for_property(&getters, "norm", &["dx".into()]).is_none());
+        assert!(hypot_own_slots_for_property(&getters, "area", &keys).is_none());
     }
 }

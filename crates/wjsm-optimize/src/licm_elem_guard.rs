@@ -12,13 +12,14 @@
 //!
 //! 静态前提（任一不成立则整个循环放弃，一条也不替换）：
 //!
-//! 1. 候选 `GetElem` 的 receiver 定义在循环体外（往轮 licm 已把可外提的
-//!    LoadVar 搬进 pre-header），且是「单赋值数组绑定」的 LoadVar：该绑定
-//!    全模块只有一次 StoreVar，写入同函数内 `NewArray +
-//!    builtin.array.push(InitObjectLiteral)` 构造的字面量数组，全部元素模板
-//!    键序一致（烘焙 shape 因此相同）。绑定被改写过的数组在运行期由守卫
-//!    重验兜底，这里只需要一个可信的模板来源。
-//! 2. 候选 `GetProp` 的 receiver 是候选 `GetElem` 的 dest，键是模板自有键。
+//!     1. 候选 `GetElem` 的 receiver 定义在循环体外（往轮 licm 已把可外提的
+//!    LoadVar 搬进 pre-header），且是「单赋值数组绑定」的 LoadVar 或
+//!    LoadEnvSlot：该绑定全模块只有一次 StoreVar，写入同函数内 `NewArray +
+//!    builtin.array.push(InitObjectLiteral)` 构造的字面量数组，或
+//!    `Array.from` + 统一类构造器（自有数据键序一致）。绑定被改写过的数组
+//!    在运行期由守卫重验兜底，这里只需要一个可信的模板来源。
+//! 2. 候选 `GetProp` 的 receiver 是候选 `GetElem` 的 dest，键是模板自有键，
+//!    或编译期识别的 hypot getter 属性（操作数键落在模板自有键上）。
 //! 3. 循环体全部指令通过「守卫为真期间不执行用户代码」白名单：协变运算
 //!    （Binary / 关系比较 / 字符串拼接 / abstract_compare）的操作数必须落在
 //!    「守卫为真时必为原始值」集合内——数字值类证明、原始常量、Guarded 读取
@@ -29,10 +30,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use wjsm_ir::{
-    BasicBlockId, Builtin, Constant, ConstantId, Function, Instruction, Module, UnaryOp, ValueId,
+    BasicBlockId, Builtin, Constant, ConstantId, Function, Instruction, Module, Terminator,
+    UnaryOp, ValueId,
 };
 
+use super::cfg_fold::terminator_successors;
 use super::escape_scalar_record::template_key_names;
+use super::hypot_getter::{collect_hypot_getters, hypot_own_slots_for_property};
 use super::licm::LoopView;
 use super::licm_apply::ElemGuard;
 use super::licm_facts::{ModuleFacts, is_protocol_or_env_name};
@@ -49,16 +53,17 @@ enum ArrayState {
     Poisoned,
 }
 
-/// 收集「全模块恰好一次 StoreVar、写入值是同函数内统一模板对象字面量数组」
-/// 的绑定 → 元素模板。模板只是守卫的静态候选：绑定或数组内容后续被改写时，
-/// 运行期 `GuardElementsKind`（带模板）校验失败、退回通用路径，正确性不受影响。
-pub(crate) fn stable_elem_array_bindings(module: &Module) -> HashMap<String, ConstantId> {
-    let mut store_sites: HashMap<&str, u32> = HashMap::new();
+/// 收集「全模块恰好一次 StoreVar、写入值是同函数内统一模板对象字面量数组
+/// 或 `Array.from` + 统一类构造器」的绑定 → 元素模板。模板只是守卫的静态
+/// 候选：绑定或数组内容后续被改写时，运行期 `GuardElementsKind`（带模板）
+/// 校验失败、退回通用路径，正确性不受影响。
+pub(crate) fn stable_elem_array_bindings(module: &mut Module) -> HashMap<String, ConstantId> {
+    let mut store_sites: HashMap<String, u32> = HashMap::new();
     for function in module.functions() {
         for block in function.blocks() {
             for instruction in block.instructions() {
                 if let Instruction::StoreVar { name, .. } = instruction {
-                    *store_sites.entry(name.as_str()).or_insert(0) += 1;
+                    *store_sites.entry(name.clone()).or_insert(0) += 1;
                 }
             }
         }
@@ -67,13 +72,14 @@ pub(crate) fn stable_elem_array_bindings(module: &Module) -> HashMap<String, Con
     for function in module.functions() {
         collect_function_array_bindings(module, function, &store_sites, &mut bindings);
     }
+    super::licm_array_from::add_array_from_bindings(module, &store_sites, &mut bindings);
     bindings
 }
 
 fn collect_function_array_bindings(
     module: &Module,
     function: &Function,
-    store_sites: &HashMap<&str, u32>,
+    store_sites: &HashMap<String, u32>,
     bindings: &mut HashMap<String, ConstantId>,
 ) {
     let constants = module.constants();
@@ -108,7 +114,7 @@ fn collect_function_array_bindings(
                 }
                 Instruction::StoreVar { name, value } => {
                     if let Some(ArrayState::Uniform(template, _)) = arrays.get(value)
-                        && store_sites.get(name.as_str()).copied() == Some(1)
+                        && store_sites.get(name).copied() == Some(1)
                     {
                         bindings.insert(name.clone(), *template);
                     }
@@ -141,11 +147,14 @@ fn push_element(constants: &[Constant], state: &mut ArrayState, template: Option
 
 // ── 循环级候选识别与安全性 ───────────────────────────────────────────────
 
-/// elem 候选：`GetElem` 的 dest → 守卫信息。
+/// elem 候选：`GetElem` 的 dest（及循环内 LoadVar 别名）→ 守卫信息。
+#[derive(Clone, Copy)]
 struct ElemCandidate {
     array: ValueId,
     template: ConstantId,
     site: (BasicBlockId, usize),
+    /// 原始 `GetElem` dest；别名与源头共享，便于按数组分组时只插一次站点。
+    origin: ValueId,
 }
 
 /// 为一个循环规划全部 elem-guard；候选存在但白名单不过时返回空。
@@ -157,7 +166,8 @@ pub(crate) fn plan_elem_guards(
     if view.has_suspend {
         return Vec::new();
     }
-    let elems = collect_elem_candidates(module, view, facts);
+    let mut elems = collect_elem_candidates(module, view, facts);
+    alias_elem_load_vars(view, &mut elems);
     if elems.is_empty() {
         return Vec::new();
     }
@@ -166,16 +176,29 @@ pub(crate) fn plan_elem_guards(
         return Vec::new();
     }
     // 只保留有 GetProp 支撑的 GetElem：守卫收益来自属性读取快路径。
-    let used: HashSet<ValueId> = props.iter().map(|(elem, _)| *elem).collect();
+    let used: HashSet<ValueId> = props
+        .iter()
+        .filter_map(|(dest, _)| elems.get(dest).map(|candidate| candidate.origin))
+        .collect();
     let elem_sites: HashSet<(BasicBlockId, usize)> = elems
         .iter()
-        .filter(|(dest, _)| used.contains(dest))
+        .filter(|(dest, candidate)| **dest == candidate.origin && used.contains(dest))
         .map(|(_, candidate)| candidate.site)
         .collect();
     let prop_sites: HashSet<(BasicBlockId, usize)> = props.iter().map(|(_, site)| *site).collect();
+    let method_sites = method_load_sites(view, &elems);
     let prop_dests = prop_dest_set(view, &prop_sites);
     let prim = primitive_values(module, view, facts, &prop_dests);
-    if !body_safe_with_guard(view, facts, &prim, &elem_sites, &prop_sites) {
+    let safe_blocks = guard_true_body_blocks(view);
+    if !body_safe_with_guard(
+        view,
+        facts,
+        &prim,
+        &elem_sites,
+        &prop_sites,
+        &method_sites,
+        &safe_blocks,
+    ) {
         return Vec::new();
     }
     group_guards(&elems, &props, &used)
@@ -218,6 +241,7 @@ fn collect_elem_candidates(
                     array: *object,
                     template,
                     site: (block.id(), index),
+                    origin: *dest,
                 },
             );
         }
@@ -225,33 +249,201 @@ fn collect_elem_candidates(
     candidates
 }
 
-/// `value` 是否是定义在循环体外、单赋值数组绑定的 LoadVar；是则给出元素模板。
+/// `value` 是否是单赋值数组绑定：循环外 LoadVar，或循环内对捕获槽的
+/// `LoadEnvSlot`（`$env` 形参循环不变，键是绑定名）。
 fn stable_array_template(
     view: &LoopView<'_>,
     facts: &ModuleFacts,
     value: ValueId,
 ) -> Option<ConstantId> {
     let (block, index) = view.defs.get(&value).copied()?;
-    if view.body.contains(&block) {
-        return None;
-    }
-    let Instruction::LoadVar { name, .. } = view
+    let instruction = view
         .function
         .block_by_id(block)?
         .instructions()
-        .get(index)?
-    else {
-        return None;
-    };
-    facts.elem_array_templates.get(name).copied()
+        .get(index)?;
+    match instruction {
+        Instruction::LoadVar { name, .. } if !view.body.contains(&block) => {
+            facts.elem_array_templates.get(name).copied()
+        }
+        Instruction::LoadEnvSlot { env, key, .. } => {
+            if !env_is_loop_invariant(view, *env) {
+                return None;
+            }
+            let name = view.strings.get(key)?;
+            facts.elem_array_templates.get(name).copied()
+        }
+        _ => None,
+    }
 }
 
-/// 候选 `GetProp`：receiver 是候选 elem 的 dest，键是该模板的自有键。
+fn env_is_loop_invariant(view: &LoopView<'_>, env: ValueId) -> bool {
+    let Some((block, index)) = view.defs.get(&env).copied() else {
+        return false;
+    };
+    if !view.body.contains(&block) {
+        return true;
+    }
+    matches!(
+        view.function
+            .block_by_id(block)
+            .and_then(|block| block.instructions().get(index)),
+        Some(Instruction::LoadVar { name, .. })
+            if name == "$env" || name.ends_with(".$env")
+    )
+}
+
+/// `const p = POINTS[i]`：循环内 LoadVar 的绑定若全部 StoreVar 写入值都是
+/// 同一源头的 elem dest（或已解析别名），则 LoadVar dest 也视为该元素。
+fn alias_elem_load_vars(view: &LoopView<'_>, elems: &mut HashMap<ValueId, ElemCandidate>) {
+    let mut stores: HashMap<String, Vec<ValueId>> = HashMap::new();
+    for block in view.function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::StoreVar { name, value } = instruction {
+                stores.entry(name.clone()).or_default().push(*value);
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for block in view.function.blocks() {
+            if !view.body.contains(&block.id()) {
+                continue;
+            }
+            for instruction in block.instructions() {
+                changed |= try_alias_load_var(elems, &stores, instruction);
+            }
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
+fn try_alias_load_var(
+    elems: &mut HashMap<ValueId, ElemCandidate>,
+    stores: &HashMap<String, Vec<ValueId>>,
+    instruction: &Instruction,
+) -> bool {
+    let Instruction::LoadVar { dest, name } = instruction else {
+        return false;
+    };
+    if elems.contains_key(dest) {
+        return false;
+    }
+    let Some(values) = stores.get(name) else {
+        return false;
+    };
+    if values.is_empty() || !values.iter().all(|value| elems.contains_key(value)) {
+        return false;
+    }
+    let origin = elems[&values[0]].origin;
+    if !values.iter().all(|value| elems[value].origin == origin) {
+        return false;
+    }
+    let source = elems[&values[0]].clone();
+    elems.insert(*dest, source);
+    true
+}
+
+/// 阶段 C 方法加载：`GetProp` dest 被同循环 `GuardSameFunction` 消费。
+/// 不闩锁（不是模板自有键），只从白名单豁免——pre-header 会核对原型身份。
+fn method_load_sites(
+    view: &LoopView<'_>,
+    elems: &HashMap<ValueId, ElemCandidate>,
+) -> HashSet<(BasicBlockId, usize)> {
+    let callees: HashSet<ValueId> = view
+        .function
+        .blocks()
+        .iter()
+        .filter(|block| view.body.contains(&block.id()))
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::GuardSameFunction { callee, .. } => Some(*callee),
+            _ => None,
+        })
+        .collect();
+    let mut sites = HashSet::new();
+    for block in view.function.blocks() {
+        if !view.body.contains(&block.id()) {
+            continue;
+        }
+        for (index, instruction) in block.instructions().iter().enumerate() {
+            let Instruction::GetProp {
+                dest,
+                object,
+                latch,
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            if latch.is_some() || !callees.contains(dest) || !elems.contains_key(object) {
+                continue;
+            }
+            sites.insert((block.id(), index));
+        }
+    }
+    sites
+}
+
+/// 守卫为真时可达的循环体：不走 `GuardSameFunction` 的 false 边。
+/// 阶段 C 失败路径含 Call / 未内联 GetProp，不能出现在守卫为真的前缀里。
+fn guard_true_body_blocks(view: &LoopView<'_>) -> HashSet<BasicBlockId> {
+    let mut skip: HashSet<(u32, u32)> = HashSet::new();
+    for block in view.function.blocks() {
+        if !view.body.contains(&block.id()) {
+            continue;
+        }
+        let Some(dest) =
+            block
+                .instructions()
+                .iter()
+                .rev()
+                .find_map(|instruction| match instruction {
+                    Instruction::GuardSameFunction { dest, .. } => Some(*dest),
+                    _ => None,
+                })
+        else {
+            continue;
+        };
+        if let Terminator::Branch {
+            condition,
+            false_block,
+            ..
+        } = block.terminator()
+            && *condition == dest
+        {
+            skip.insert((block.id().0, false_block.0));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut stack = vec![view.header];
+    while let Some(block_id) = stack.pop() {
+        if !view.body.contains(&block_id) || !seen.insert(block_id) {
+            continue;
+        }
+        let Some(block) = view.function.block_by_id(block_id) else {
+            continue;
+        };
+        for successor in terminator_successors(block.terminator()) {
+            if skip.contains(&(block_id.0, successor.0)) {
+                continue;
+            }
+            stack.push(successor);
+        }
+    }
+    seen
+}
+
+/// 候选 `GetProp`：receiver 是候选 elem 的 dest，键是该模板的自有键，
+/// 或 hypot getter 属性（双操作数键均在模板上）。
 fn collect_prop_candidates(
     module: &Module,
     view: &LoopView<'_>,
     elems: &HashMap<ValueId, ElemCandidate>,
 ) -> Vec<(ValueId, (BasicBlockId, usize))> {
+    let hypot_getters = collect_hypot_getters(module);
     let mut props = Vec::new();
     for block in view.function.blocks() {
         if !view.body.contains(&block.id()) {
@@ -273,9 +465,12 @@ fn collect_prop_candidates(
             let Some(key_text) = view.strings.get(key) else {
                 continue;
             };
-            let owns_key = template_key_names(module.constants(), candidate.template)
-                .is_some_and(|keys| keys.iter().any(|name| name == key_text));
-            if owns_key {
+            let Some(keys) = template_key_names(module.constants(), candidate.template) else {
+                continue;
+            };
+            let owns_key = keys.iter().any(|name| name == key_text);
+            let hypot_key = hypot_own_slots_for_property(&hypot_getters, key_text, &keys).is_some();
+            if owns_key || hypot_key {
                 props.push((*object, (block.id(), index)));
             }
         }
@@ -454,6 +649,8 @@ fn builtin_result_primitive(builtin: Builtin) -> bool {
             | Builtin::ConsoleWarn
             | Builtin::ConsoleError
             | Builtin::ConsoleTrace
+            | Builtin::MathHypot
+            | Builtin::ExceptionValue
     )
 }
 
@@ -472,12 +669,20 @@ fn stable_array_length_read(
     let Some((block, index)) = view.defs.get(&object).copied() else {
         return false;
     };
-    let Some(Instruction::LoadVar { name, .. }) = view
+    let Some(instruction) = view
         .function
         .block_by_id(block)
         .and_then(|block| block.instructions().get(index))
     else {
         return false;
+    };
+    let name = match instruction {
+        Instruction::LoadVar { name, .. } => name.as_str(),
+        Instruction::LoadEnvSlot { key, .. } => match view.strings.get(key) {
+            Some(name) => name.as_str(),
+            None => return false,
+        },
+        _ => return false,
     };
     facts.elem_array_templates.contains_key(name)
 }
@@ -538,6 +743,8 @@ fn body_safe_with_guard(
     prim: &HashSet<ValueId>,
     elem_sites: &HashSet<(BasicBlockId, usize)>,
     prop_sites: &HashSet<(BasicBlockId, usize)>,
+    method_sites: &HashSet<(BasicBlockId, usize)>,
+    safe_blocks: &HashSet<BasicBlockId>,
 ) -> bool {
     let numbers = facts.numbers.get(&(view.func_idx as u32));
     let number_proved =
@@ -549,12 +756,13 @@ fn body_safe_with_guard(
             .any(|record| record.family[view.func_idx].contains(value))
     };
     for block in view.function.blocks() {
-        if !view.body.contains(&block.id()) {
+        if !view.body.contains(&block.id()) || !safe_blocks.contains(&block.id()) {
             continue;
         }
         for (index, instruction) in block.instructions().iter().enumerate() {
             if elem_sites.contains(&(block.id(), index))
                 || prop_sites.contains(&(block.id(), index))
+                || method_sites.contains(&(block.id(), index))
             {
                 continue;
             }
@@ -562,6 +770,7 @@ fn body_safe_with_guard(
                 Instruction::Const { .. }
                 | Instruction::Phi { .. }
                 | Instruction::LoadVar { .. }
+                | Instruction::LoadEnvSlot { .. }
                 | Instruction::StoreVar { .. }
                 | Instruction::IsException { .. }
                 | Instruction::GuardSameFunction { .. }
@@ -596,8 +805,10 @@ fn body_safe_with_guard(
                     | Builtin::ConsoleError
                     | Builtin::ConsoleTrace
                     | Builtin::IsJsObject
-                    | Builtin::ToBoolean => true,
+                    | Builtin::ToBoolean
+                    | Builtin::ExceptionValue => true,
                     Builtin::AbstractCompare => args.iter().all(|arg| prim.contains(arg)),
+                    Builtin::MathHypot => args.iter().all(|arg| prim.contains(arg)),
                     _ => false,
                 },
                 _ => false,
