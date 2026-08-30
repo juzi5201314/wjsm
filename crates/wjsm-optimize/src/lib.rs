@@ -30,9 +30,7 @@ pub use facts::{
     BinaryFact, CallFact, ElemFact, INLINE_MAX_CALLEE_INSTRUCTIONS, INLINE_MAX_DEPTH,
     INLINE_MAX_NET_GROWTH, POLY_MAX, PropFact, SpeculativeFacts,
 };
-pub use hypot_getter::{
-    HypotGetter, collect_hypot_getters, hypot_getter_slots_by_function, hypot_getters_by_property,
-};
+pub use hypot_getter::{HypotGetter, collect_hypot_getters, hypot_getter_slots_by_function};
 pub use inline_for_ea::{find_exception_path, max_value_id_in_function, undefined_const_id};
 pub use ir_walk::{collect_uses, instr_uses, instruction_dest, terminator_uses};
 pub use licm::licm_disabled_by_env;

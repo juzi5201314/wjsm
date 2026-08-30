@@ -187,14 +187,6 @@ pub fn collect_hypot_getters(program: &Program) -> Vec<HypotGetter> {
     getters
 }
 
-/// 属性名 → 唯一 hypot getter。
-pub fn hypot_getters_by_property(program: &Program) -> HashMap<String, HypotGetter> {
-    collect_hypot_getters(program)
-        .into_iter()
-        .map(|getter| (getter.property.clone(), getter))
-        .collect()
-}
-
 /// 函数下标 → `(lhs_key, rhs_key)`，供宿主 ACCESSOR IC 回填槽下标。
 pub fn hypot_getter_slots_by_function(program: &Program) -> HashMap<u32, (String, String)> {
     collect_hypot_getters(program)
