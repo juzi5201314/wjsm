@@ -204,6 +204,51 @@ pub(crate) fn plan_elem_guards(
     group_guards(&elems, &props, &used)
 }
 
+/// 守卫 array 若定义在循环体内，把它及其循环内操作数（`LoadVar $env` /
+/// 常量键 / `LoadEnvSlot`）一并外提。只读、无用户代码。
+pub(crate) fn array_loads_to_hoist(
+    view: &LoopView<'_>,
+    guards: &[ElemGuard],
+) -> Vec<(BasicBlockId, usize)> {
+    let mut sites = HashSet::new();
+    for guard in guards {
+        collect_in_loop_def_chain(view, guard.array, &mut sites);
+    }
+    let mut ordered: Vec<(BasicBlockId, usize)> = sites.into_iter().collect();
+    ordered.sort_unstable_by_key(|(block, index)| (block.0, *index));
+    ordered
+}
+
+fn collect_in_loop_def_chain(
+    view: &LoopView<'_>,
+    value: ValueId,
+    sites: &mut HashSet<(BasicBlockId, usize)>,
+) {
+    let Some((block, index)) = view.defs.get(&value).copied() else {
+        return;
+    };
+    if !view.body.contains(&block) || !sites.insert((block, index)) {
+        return;
+    }
+    let Some(instruction) = view
+        .function
+        .block_by_id(block)
+        .and_then(|block| block.instructions().get(index))
+    else {
+        return;
+    };
+    match instruction {
+        Instruction::LoadEnvSlot { env, key, .. } => {
+            collect_in_loop_def_chain(view, *env, sites);
+            collect_in_loop_def_chain(view, *key, sites);
+        }
+        Instruction::LoadVar { .. } | Instruction::Const { .. } => {}
+        _ => {
+            sites.remove(&(block, index));
+        }
+    }
+}
+
 /// 候选 `GetElem`：receiver 定义在循环体外，且定义是单赋值数组绑定的 LoadVar。
 fn collect_elem_candidates(
     module: &Module,

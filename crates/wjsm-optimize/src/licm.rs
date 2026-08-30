@@ -169,14 +169,22 @@ fn plan_one_loop(module: &Module, func_idx: usize, facts: &ModuleFacts) -> Optio
             &strings,
             facts,
         );
-        let moves = collect_moves(module, &view, facts);
-        // elem-guard 依赖往轮已把循环不变 LoadVar（数组 receiver）搬进
-        // pre-header，因此只在常规候选耗尽后规划，一轮一类。
+        let mut moves = collect_moves(module, &view, facts);
+        // 常规候选耗尽后再规划 elem-guard。捕获 POINTS 的 work() 里
+        // LoadEnvSlot 因循环含调用不能走普通 LoadVar 外提，必须随守卫同一轮
+        // 搬进 pre-header，否则 GuardElementsKind 读到循环体内尚未定义的 SSA。
         let elem_guards = if moves.is_empty() {
             super::licm_elem_guard::plan_elem_guards(module, &view, facts)
         } else {
             Vec::new()
         };
+        if !elem_guards.is_empty() {
+            for site in super::licm_elem_guard::array_loads_to_hoist(&view, &elem_guards) {
+                if !moves.contains(&site) {
+                    moves.push(site);
+                }
+            }
+        }
         if !moves.is_empty() || !elem_guards.is_empty() {
             return Some(Plan {
                 header: natural.header,

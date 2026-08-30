@@ -106,6 +106,29 @@ fn program_has_elem_guard(program: &wjsm_ir::Program) -> bool {
     })
 }
 
+/// 守卫的 array 必须与 `GuardElementsKind` 同块定义（pre-header 已外提
+/// LoadEnvSlot），不能仍留在循环体 GetElem 块里。
+fn guard_array_defined_in_preheader(program: &wjsm_ir::Program) -> bool {
+    program.functions().iter().all(|function| {
+        let mut defs = std::collections::HashMap::new();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Some(dest) = wjsm_optimize::instruction_dest(instruction) {
+                    defs.insert(dest, block.id());
+                }
+            }
+        }
+        function.blocks().iter().all(|block| {
+            block.instructions().iter().all(|instruction| {
+                let Instruction::GuardElementsKind { array, .. } = instruction else {
+                    return true;
+                };
+                defs.get(array) == Some(&block.id())
+            })
+        })
+    })
+}
+
 fn dump_instructions(program: &wjsm_ir::Program) -> String {
     program
         .functions()
@@ -136,6 +159,10 @@ fn array_from_ctor_nested_work_emits_elem_guard() {
     assert!(
         program_has_elem_guard(&program),
         "捕获 POINTS 的 work 循环也应发出 GuardElementsKind：{text}"
+    );
+    assert!(
+        guard_array_defined_in_preheader(&program),
+        "嵌套 work 的守卫 array 必须在 pre-header 定义：{text}"
     );
 }
 
@@ -185,5 +212,9 @@ fn object_props_work_loop_emits_elem_guard() {
     assert!(
         program_has_latched_getprop(&program),
         "object-props work 应对 POINTS[i] 属性读取加 latch：{text}"
+    );
+    assert!(
+        guard_array_defined_in_preheader(&program),
+        "GuardElementsKind 的 array 必须在 pre-header 定义：{text}"
     );
 }
