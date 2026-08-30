@@ -255,7 +255,8 @@ fn retarget_object_predecessors(
     };
     let mut retarget = Vec::new();
     for source in sources {
-        let Some(identity) = unique_success_identity(defs, source.value, &mut HashSet::new()) else {
+        let Some(identity) = unique_success_identity(defs, source.value, &mut HashSet::new())
+        else {
             continue;
         };
         if identity == collapse.object {
@@ -416,6 +417,104 @@ mod tests {
         assert!(
             !text.contains("store var $scaled, %6"),
             "成功路径不应再存储混合 phi：{text}"
+        );
+    }
+
+    #[test]
+    fn get_prop_success_is_not_object_identity() {
+        let mut program = Program::new();
+        let key = program.add_constant(Constant::String("x".into()));
+        let mut function = Function::new("f", BasicBlockId(0));
+
+        let mut bb0 = BasicBlock::new(BasicBlockId(0));
+        bb0.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$obj".into(),
+        });
+        bb0.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: key,
+        });
+        bb0.push_instruction(Instruction::GetProp {
+            dest: ValueId(2),
+            object: ValueId(0),
+            key: ValueId(1),
+            latch: None,
+            latch_template: None,
+        });
+        bb0.push_instruction(Instruction::IsException {
+            dest: ValueId(3),
+            value: ValueId(2),
+        });
+        bb0.set_terminator(Terminator::Branch {
+            condition: ValueId(3),
+            true_block: BasicBlockId(1),
+            false_block: BasicBlockId(2),
+        });
+
+        let mut bb1 = BasicBlock::new(BasicBlockId(1));
+        bb1.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(4)),
+            builtin: Builtin::ExceptionValue,
+            args: vec![ValueId(2)],
+        });
+        bb1.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+
+        let mut bb2 = BasicBlock::new(BasicBlockId(2));
+        bb2.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+
+        let mut bb3 = BasicBlock::new(BasicBlockId(3));
+        bb3.push_instruction(Instruction::Phi {
+            dest: ValueId(5),
+            sources: vec![
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(1),
+                    value: ValueId(4),
+                },
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(2),
+                    value: ValueId(2),
+                },
+            ],
+        });
+        bb3.push_instruction(Instruction::IsException {
+            dest: ValueId(6),
+            value: ValueId(5),
+        });
+        bb3.set_terminator(Terminator::Branch {
+            condition: ValueId(6),
+            true_block: BasicBlockId(4),
+            false_block: BasicBlockId(5),
+        });
+
+        let mut bb4 = BasicBlock::new(BasicBlockId(4));
+        bb4.set_terminator(Terminator::Throw { value: ValueId(5) });
+
+        let mut bb5 = BasicBlock::new(BasicBlockId(5));
+        bb5.push_instruction(Instruction::StoreVar {
+            name: "$v".into(),
+            value: ValueId(5),
+        });
+        bb5.set_terminator(Terminator::Return {
+            value: Some(ValueId(5)),
+        });
+
+        function.push_block(bb0);
+        function.push_block(bb1);
+        function.push_block(bb2);
+        function.push_block(bb3);
+        function.push_block(bb4);
+        function.push_block(bb5);
+        program.push_function(function);
+
+        let function = program.function_mut(FunctionId(0)).expect("function 0");
+        assert!(
+            !fold_function(function),
+            "GetProp 成功值不是对象身份，不得折叠"
         );
     }
 }
