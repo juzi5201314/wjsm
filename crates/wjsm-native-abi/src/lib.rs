@@ -47,9 +47,10 @@ pub const NATIVE_ALLOCATION_FAST_HOST: u32 = 1 << 2;
 
 /// 每次循环回边生成的代码从 `NativeVmContext::stack_budget_bytes` 扣除的字节数。
 ///
-/// 回边内联为「load + 饱和减 + 判零」；预算耗尽才真正调用
+/// 回边内联为「读预算 + 减步长 + 判零」；预算耗尽才真正调用
 /// `NativeRuntimeOp::CooperativePoll`（宿主在其中重置预算并执行 inspector / GC /
-/// 外部事件轮询）。步长越小轮询越频繁；取 64KiB 使 8MiB 初始预算在无外部事件的
+/// 外部事件轮询）。safepoint-free 函数把预算缓存在寄存器，快路径不写 vmctx。
+/// 步长越小轮询越频繁；取 64KiB 使 8MiB 初始预算在无外部事件的
 /// 紧循环中约每 128 次回边轮询一次。
 pub const COOPERATIVE_POLL_STEP_BYTES: usize = 64 * 1024;
 /// 循环回边专用步长：比分配路径的 [`COOPERATIVE_POLL_STEP_BYTES`] 小得多，避免

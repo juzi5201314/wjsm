@@ -51,8 +51,10 @@ fn lower_native_direct_call(
         .store(MemFlagsData::trusted(), new_depth, cx.ctx, depth_offset);
 
     cx.flush()?;
+    cx.publish_poll_budget()?;
     let call = cx.builder.ins().call(target, &call_args);
     let result = cx.builder.inst_results(call)[0];
+    cx.reload_poll_budget()?;
 
     cx.builder
         .ins()
@@ -180,11 +182,13 @@ pub(crate) fn lower_direct_call_instruction(
     let args_len_val = cx.builder.ins().iconst(types::I32, i64::from(args_len));
 
     cx.flush()?;
+    cx.publish_poll_budget()?;
     let call = cx.builder.ins().call(
         target,
         &[cx.ctx, env_value, this_value, active_len, args_len_val],
     );
     let result = cx.builder.inst_results(call)[0];
+    cx.reload_poll_budget()?;
 
     cx.builder
         .ins()
@@ -252,12 +256,14 @@ pub(crate) fn lower_call_instruction(
     let args_base = cx.builder.ins().isub(active_len, args_len);
     let env = cx.call(NativeRuntimeOp::LoadCallEnv.id(), &[], None)?;
     cx.flush()?;
+    cx.publish_poll_budget()?;
     let call = cx.builder.ins().call_indirect(
         slow_call_signature,
         entry,
         &[cx.ctx, env, this_value, args_base, args_len],
     );
     let result = cx.builder.inst_results(call)[0];
+    cx.reload_poll_budget()?;
     cx.publish_roots(roots, &[result])?;
     let _ = cx.call(NativeRuntimeOp::FinishCall.id(), &[], None)?;
     if let Some(destination) = destination {

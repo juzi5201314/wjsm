@@ -3,10 +3,10 @@
 #![allow(unused_imports)]
 use super::*;
 use anyhow::{Context, Result, bail};
-use cranelift_codegen::ir::{self, InstBuilder, types};
+use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData, types};
 use cranelift_frontend::FunctionBuilder;
 use wjsm_ir::{Instruction, ValueId, constants, value};
-use wjsm_native_abi::NativeRuntimeOp;
+use wjsm_native_abi::{COOPERATIVE_POLL_BUDGET, NativeRuntimeOp};
 
 pub(crate) fn lower_value_operation(
     cx: &mut LoweringCx<'_, '_>,
@@ -363,39 +363,44 @@ pub(crate) fn emit_is_function(builder: &mut FunctionBuilder<'_>, input: ir::Val
     builder.ins().band(boxed, is_fn)
 }
 
-pub(crate) fn return_if_exception(
-    builder: &mut FunctionBuilder<'_>,
-    result: ir::Value,
-    root_frame: Option<&mut FrameLowering>,
-    ctx: ir::Value,
-) -> Result<()> {
-    let is_exception = emit_is_exception(builder, result);
-    let exception_block = builder.create_block();
-    let continue_block = builder.create_block();
-    builder
+pub(crate) fn return_if_exception(cx: &mut LoweringCx<'_, '_>, result: ir::Value) -> Result<()> {
+    let is_exception = emit_is_exception(cx.builder, result);
+    let exception_block = cx.builder.create_block();
+    let continue_block = cx.builder.create_block();
+    cx.builder
         .ins()
         .brif(is_exception, exception_block, &[], continue_block, &[]);
-    builder.switch_to_block(exception_block);
-    if let Some(root_frame) = root_frame {
-        root_frame.unlink(builder, ctx)?;
+    cx.builder.switch_to_block(exception_block);
+    cx.unlink_roots()?;
+    cx.builder.ins().return_(&[result]);
+    cx.builder.switch_to_block(continue_block);
+    Ok(())
+}
+
+fn current_poll_budget(cx: &mut LoweringCx<'_, '_>) -> Result<ir::Value> {
+    if let Some(var) = cx.poll_budget {
+        Ok(cx.builder.use_var(var))
+    } else {
+        load_vmctx_poll_budget(cx.builder, cx.ctx)
     }
-    builder.ins().return_(&[result]);
-    builder.switch_to_block(continue_block);
+}
+
+fn commit_poll_budget(cx: &mut LoweringCx<'_, '_>, remaining: ir::Value) -> Result<()> {
+    if let Some(var) = cx.poll_budget {
+        cx.builder.def_var(var, remaining);
+        return Ok(());
+    }
+    cx.builder.ins().store(
+        MemFlagsData::trusted(),
+        remaining,
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, stack_budget_bytes))?,
+    );
     Ok(())
 }
 
 pub(crate) fn lower_cooperative_poll(cx: &mut LoweringCx<'_, '_>) -> Result<()> {
-    let budget_addr = cx.builder.ins().iadd_imm_s(
-        cx.ctx,
-        i64::from(vmctx_offset(offset_of!(
-            NativeVmContext,
-            stack_budget_bytes
-        ))?),
-    );
-    let budget = cx
-        .builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), budget_addr, 0);
+    let budget = current_poll_budget(cx)?;
     let step_i64 =
         i64::try_from(COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES).expect("loop poll step fits i64");
     // 预算已 ≤ 步长（含耗尽的 0）→ 慢路径：进 dispatcher 轮询并重置预算。
@@ -410,17 +415,36 @@ pub(crate) fn lower_cooperative_poll(cx: &mut LoweringCx<'_, '_>) -> Result<()> 
         .ins()
         .brif(exhausted, slow_block, &[], fast_block, &[]);
 
+    emit_poll_fast_path(cx, fast_block, budget, step_i64)?;
+    let continue_block = cx.builder.create_block();
+    cx.builder.ins().jump(continue_block, &[]);
+    emit_poll_slow_path(cx, slow_block, continue_block)?;
+
+    cx.builder.switch_to_block(continue_block);
+    cx.builder.seal_block(continue_block);
+    Ok(())
+}
+
+fn emit_poll_fast_path(
+    cx: &mut LoweringCx<'_, '_>,
+    fast_block: ir::Block,
+    budget: ir::Value,
+    step_i64: i64,
+) -> Result<()> {
     // 快路径：预算充足，扣减步长后继续回边，不调用 dispatcher。
+    // 寄存器预算（safepoint-free）只 def Variable，不写 vmctx。
     cx.builder.switch_to_block(fast_block);
     cx.builder.seal_block(fast_block);
     let step = cx.builder.ins().iconst(types::I64, step_i64);
     let remaining = cx.builder.ins().isub(budget, step);
-    cx.builder
-        .ins()
-        .store(MemFlagsData::trusted(), remaining, budget_addr, 0);
-    let continue_block = cx.builder.create_block();
-    cx.builder.ins().jump(continue_block, &[]);
+    commit_poll_budget(cx, remaining)
+}
 
+fn emit_poll_slow_path(
+    cx: &mut LoweringCx<'_, '_>,
+    slow_block: ir::Block,
+    continue_block: ir::Block,
+) -> Result<()> {
     // 慢路径：预算耗尽，进 dispatcher 轮询（inspector / GC / 外部事件 / 期限）；
     // 宿主在 CooperativePoll 处理中把预算重置回初始值。
     cx.builder.switch_to_block(slow_block);
@@ -434,10 +458,19 @@ pub(crate) fn lower_cooperative_poll(cx: &mut LoweringCx<'_, '_>) -> Result<()> 
         &[],
         None,
     )?;
-    return_if_exception(cx.builder, result, cx.root_frame.as_deref_mut(), cx.ctx)?;
+    // 先把寄存器同步成宿主刚写入的预算，异常返回才不会用耗尽值覆盖 vmctx。
+    reset_poll_budget_after_host(cx)?;
+    return_if_exception(cx, result)?;
     cx.builder.ins().jump(continue_block, &[]);
+    Ok(())
+}
 
-    cx.builder.switch_to_block(continue_block);
-    cx.builder.seal_block(continue_block);
+fn reset_poll_budget_after_host(cx: &mut LoweringCx<'_, '_>) -> Result<()> {
+    let Some(var) = cx.poll_budget else {
+        return Ok(());
+    };
+    let budget = i64::try_from(COOPERATIVE_POLL_BUDGET).expect("poll budget fits i64");
+    let reset = cx.builder.ins().iconst(types::I64, budget);
+    cx.builder.def_var(var, reset);
     Ok(())
 }

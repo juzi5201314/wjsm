@@ -620,6 +620,9 @@ pub(crate) struct LoweringCx<'a, 'f> {
     pub(crate) barrier_state: ir::Value,
     pub(crate) current_instruction: u32,
     pub(crate) feedback_ptr: Option<ir::Value>,
+    /// safepoint-free 函数把 `stack_budget_bytes` 缓存在 Cranelift Variable 里：
+    /// 回边快路径只做寄存器减/分支，出口与嵌套 JS 调用处再写回 vmctx。
+    pub(crate) poll_budget: Option<Variable>,
 }
 
 impl LoweringCx<'_, '_> {
@@ -637,9 +640,35 @@ impl LoweringCx<'_, '_> {
     }
 
     pub(crate) fn unlink_roots(&mut self) -> Result<()> {
+        self.publish_poll_budget()?;
         if let Some(root_frame) = self.root_frame.as_mut() {
             root_frame.unlink(self.builder, self.ctx)?;
         }
+        Ok(())
+    }
+
+    /// 把寄存器里的协作预算写回 vmctx，供嵌套 JS 帧入口加载。
+    pub(crate) fn publish_poll_budget(&mut self) -> Result<()> {
+        let Some(var) = self.poll_budget else {
+            return Ok(());
+        };
+        let budget = self.builder.use_var(var);
+        self.builder.ins().store(
+            MemFlagsData::trusted(),
+            budget,
+            self.ctx,
+            vmctx_offset(offset_of!(NativeVmContext, stack_budget_bytes))?,
+        );
+        Ok(())
+    }
+
+    /// 从 vmctx 重新加载协作预算（嵌套 JS 返回后，或宿主 CooperativePoll 重置后）。
+    pub(crate) fn reload_poll_budget(&mut self) -> Result<()> {
+        let Some(var) = self.poll_budget else {
+            return Ok(());
+        };
+        let budget = load_vmctx_poll_budget(self.builder, self.ctx)?;
+        self.builder.def_var(var, budget);
         Ok(())
     }
 
@@ -700,6 +729,18 @@ impl LoweringCx<'_, '_> {
     pub(crate) fn flush(&mut self) -> Result<()> {
         self.flush_roots()
     }
+}
+
+pub(crate) fn load_vmctx_poll_budget(
+    builder: &mut FunctionBuilder<'_>,
+    ctx: ir::Value,
+) -> Result<ir::Value> {
+    Ok(builder.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        ctx,
+        vmctx_offset(offset_of!(NativeVmContext, stack_budget_bytes))?,
+    ))
 }
 
 /// 指令 lowering 所需的只读/半可变表。

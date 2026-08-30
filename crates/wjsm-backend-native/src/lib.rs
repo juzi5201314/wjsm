@@ -195,7 +195,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;opt={opt_level};probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;poll=reg-spfree;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -393,6 +393,11 @@ mod capability_tests {
             assert!(
                 compiler.settings_key().contains("roots=skip-bool-imm"),
                 "布尔立即数不当 GC 根必须进 cache 键:\n{}",
+                compiler.settings_key()
+            );
+            assert!(
+                compiler.settings_key().contains("poll=reg-spfree"),
+                "safepoint-free 寄存器预算必须进 cache 键:\n{}",
                 compiler.settings_key()
             );
         } else {
@@ -989,6 +994,32 @@ mod tests {
             !diagnostics.clif.contains("atomic_rmw"),
             "f64 循环不应在回边发布根:\n{}",
             diagnostics.clif
+        );
+    }
+
+    /// safepoint-free 数值循环把 poll 预算留在寄存器：快路径 `isub` 块不得 store vmctx。
+    #[test]
+    fn safepoint_free_loop_keeps_poll_budget_in_register() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Number(1.0)))
+            .expect("numeric loop diagnostics should compile");
+        let body = clif_section(&diagnostics.clif, ";; function 0: loop_sum");
+        let step = i64::try_from(wjsm_native_abi::COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES)
+            .expect("loop poll step");
+        let step_imm = format!("iconst.i64 {step}");
+        let fast = clif_block_containing(body, "isub").expect("回边快路径应发出 isub");
+        assert!(
+            fast.contains(&step_imm) || body.contains(&step_imm),
+            "快路径应扣减回边步长 {step}:\n{body}"
+        );
+        assert!(
+            !fast.contains("store"),
+            "寄存器预算快路径不得 store stack_budget_bytes:\n{fast}"
+        );
+        assert!(
+            body.contains("store"),
+            "函数出口仍须把预算写回 vmctx:\n{body}"
         );
     }
 

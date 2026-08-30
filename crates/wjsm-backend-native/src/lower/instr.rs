@@ -81,7 +81,7 @@ pub(crate) fn lower_instruction(
                         .iconst(types::I64, i64::from(constant_id.0));
                     let result =
                         cx.call(NativeRuntimeOp::MaterializeRegExp.id(), &[index], None)?;
-                    return_if_exception(cx.builder, result, cx.root_frame.as_deref_mut(), cx.ctx)?;
+                    return_if_exception(cx, result)?;
                     result
                 }
             };

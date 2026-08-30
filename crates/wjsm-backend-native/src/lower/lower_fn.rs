@@ -121,6 +121,15 @@ pub(crate) fn lower_function(
         ctx_value,
         vmctx_offset(offset_of!(NativeVmContext, barrier_state))?,
     );
+    // 入口块支配 resume pad 与函数体：在此加载预算后，回边只动寄存器。
+    let poll_budget = if safepoint_free {
+        let var = builder.declare_var(types::I64);
+        let loaded = load_vmctx_poll_budget(&mut builder, ctx_value)?;
+        builder.def_var(var, loaded);
+        Some(var)
+    } else {
+        None
+    };
     {
         let mut cx = LoweringCx {
             builder: &mut builder,
@@ -140,6 +149,7 @@ pub(crate) fn lower_function(
             barrier_state,
             current_instruction: 0,
             feedback_ptr: None,
+            poll_budget,
         };
         lower_function_parameters(
             &mut cx,
