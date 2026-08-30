@@ -359,6 +359,7 @@ fn function_is_terminating_pure(function: &Function, classes: &ValueClassSet) ->
                 | Instruction::Compare { .. }
                 | Instruction::IsException { .. }
                 | Instruction::GuardSameFunction { .. }
+                | Instruction::GuardSamePrototypeAccessor { .. }
                 | Instruction::DebugCheck { .. } => true,
                 Instruction::Unary {
                     op: UnaryOp::Not | UnaryOp::Void | UnaryOp::IsNullish,

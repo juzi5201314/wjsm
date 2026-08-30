@@ -98,6 +98,7 @@ pub(crate) fn infer_boolean_values(
                     Instruction::Compare { dest, .. }
                     | Instruction::IsException { dest, .. }
                     | Instruction::GuardSameFunction { dest, .. }
+                    | Instruction::GuardSamePrototypeAccessor { dest, .. }
                     | Instruction::GuardTag { dest, .. }
                     | Instruction::GuardShape { dest, .. }
                     | Instruction::GuardElementsKind { dest, .. }

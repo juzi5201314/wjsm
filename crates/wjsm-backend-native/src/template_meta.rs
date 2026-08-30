@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use wjsm_ir::{Constant, ConstantId, Function, Instruction, Program, ValueId, value};
+use wjsm_ir::{Constant, ConstantId, Function, FunctionId, Instruction, Program, ValueId, value};
 
 /// 单态 trio mega-slot 覆盖的三个自有数据键（与 property-key 热路径一致）。
 pub(crate) const TRIO_KEY_NAME: &str = "name";
@@ -125,10 +125,13 @@ pub(crate) type TemplateOriginMap = HashMap<ValueId, TemplateSite>;
 
 pub(crate) fn build_template_origin_maps(program: &Program) -> Vec<TemplateOriginMap> {
     let seed = collect_shared_template_vars(program);
+    let ctor_templates = class_constructor_instance_templates(program);
     program
         .functions()
         .iter()
-        .map(|function| build_template_origin_map(function, program.constants(), &seed))
+        .map(|function| {
+            build_template_origin_map(function, program.constants(), &seed, &ctor_templates)
+        })
         .collect()
 }
 
@@ -160,7 +163,7 @@ fn collect_template_var_stores(
     function: &Function,
     constants: &[Constant],
 ) -> Vec<(String, TemplateSite)> {
-    let origins = build_template_origin_map(function, constants, &HashMap::new());
+    let origins = build_template_origin_map(function, constants, &HashMap::new(), &HashMap::new());
     let mut stores = Vec::new();
     for block in function.blocks() {
         for instruction in block.instructions() {
@@ -178,7 +181,9 @@ fn build_template_origin_map(
     function: &Function,
     constants: &[Constant],
     seed: &HashMap<String, TemplateSite>,
+    ctor_templates: &HashMap<FunctionId, TemplateSite>,
 ) -> TemplateOriginMap {
+    let const_defs = const_defs_for_function(function);
     let mut value_origins = HashMap::new();
     let mut var_origins: HashMap<&str, TemplateSite> = seed
         .iter()
@@ -196,6 +201,13 @@ fn build_template_origin_map(
                                 meta_index,
                             },
                         );
+                    }
+                }
+                Instruction::ConstructCall { dest: Some(dest), callee, .. } => {
+                    if let Some(site) =
+                        resolve_construct_call_template(constants, &const_defs, *callee, ctor_templates)
+                    {
+                        value_origins.insert(*dest, site);
                     }
                 }
                 Instruction::StoreVar { name, value } => {
@@ -236,6 +248,92 @@ fn build_template_origin_map(
         }
     }
     value_origins
+}
+
+/// 类构造器 → 实例模板：键序与构造器 `this` 上的 `SetProp` 一致。
+fn class_constructor_instance_templates(program: &Program) -> HashMap<FunctionId, TemplateSite> {
+    let constants = program.constants();
+    let mut map = HashMap::new();
+    for (idx, function) in program.functions().iter().enumerate() {
+        if !function.is_class_constructor() {
+            continue;
+        }
+        let Some(keys) = extract_constructor_own_key_raws(function, constants) else {
+            continue;
+        };
+        let Some(template) = find_object_template_by_keys(constants, &keys) else {
+            continue;
+        };
+        let Some(meta_index) = object_template_meta_index(constants, template) else {
+            continue;
+        };
+        map.insert(
+            FunctionId(idx as u32),
+            TemplateSite {
+                template,
+                meta_index,
+            },
+        );
+    }
+    map
+}
+
+fn extract_constructor_own_key_raws(function: &Function, constants: &[Constant]) -> Option<Vec<u64>> {
+    let const_defs = const_defs_for_function(function);
+    let mut keys = Vec::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            let Instruction::SetProp { object, key, .. } = instruction else {
+                continue;
+            };
+            if !load_var_is_this(function, *object) {
+                return None;
+            }
+            keys.push(const_property_key_raw(constants, &const_defs, *key)?);
+        }
+    }
+    (!keys.is_empty()).then_some(keys)
+}
+
+fn load_var_is_this(function: &Function, object: ValueId) -> bool {
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            let Instruction::LoadVar { dest, name } = instruction else {
+                continue;
+            };
+            if *dest == object {
+                return name == "$this" || name.ends_with(".$this");
+            }
+        }
+    }
+    false
+}
+
+fn find_object_template_by_keys(constants: &[Constant], keys: &[u64]) -> Option<ConstantId> {
+    for (index, constant) in constants.iter().enumerate() {
+        if let Constant::ObjectTemplate {
+            keys: template_keys,
+        } = constant
+            && template_keys == keys
+        {
+            return Some(ConstantId(u32::try_from(index).expect("常量下标在 u32 内")));
+        }
+    }
+    None
+}
+
+fn resolve_construct_call_template(
+    constants: &[Constant],
+    const_defs: &HashMap<ValueId, ConstantId>,
+    callee: ValueId,
+    ctor_templates: &HashMap<FunctionId, TemplateSite>,
+) -> Option<TemplateSite> {
+    let constant_id = const_defs.get(&callee)?;
+    let index = usize::try_from(constant_id.0).ok()?;
+    let Constant::FunctionRef(function_id) = constants.get(index)? else {
+        return None;
+    };
+    ctor_templates.get(function_id).copied()
 }
 
 fn const_defs_for_function(function: &Function) -> HashMap<ValueId, ConstantId> {

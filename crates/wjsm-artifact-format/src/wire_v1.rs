@@ -794,6 +794,17 @@ fn encode_instruction(
             encoder.u32(*index);
             encoder.u32(transition_shape.unwrap_or(u32::MAX));
         }
+        Instruction::GuardSamePrototypeAccessor {
+            dest,
+            object,
+            key,
+            function,
+        } => {
+            encoder.u16(49);
+            value_id(encoder, *dest);
+            two_values(encoder, *object, *key);
+            encoder.u32(function.0);
+        }
     }
     Ok(())
 }
@@ -1097,6 +1108,16 @@ fn decode_instruction(
                 index,
                 value,
                 transition_shape: (transition != u32::MAX).then_some(transition),
+            })
+        }
+        49 => {
+            let dest = next_value(decoder)?;
+            let (object, key) = decode_two(decoder)?;
+            Ok(Instruction::GuardSamePrototypeAccessor {
+                dest,
+                object,
+                key,
+                function: FunctionId(decoder.u32()?),
             })
         }
         _ => Err(ArtifactFormatError::UnknownTag("instruction", tag.into())),

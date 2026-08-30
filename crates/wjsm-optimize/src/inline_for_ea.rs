@@ -260,7 +260,7 @@ enum ReachSlot {
     Unknown,
 }
 
-fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
+pub(crate) fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, ValueId> {
     let mut load_reaching: HashMap<ValueId, ValueId> = HashMap::new();
 
     // 名字先统一编号成下标：旧实现的 out/in 集是 String 键 HashMap，每轮
@@ -366,6 +366,8 @@ fn compute_load_var_reaching(function: &wjsm_ir::Function) -> HashMap<ValueId, V
 }
 
 fn resolve_callee_id(
+    _module: &Module,
+    _caller: &wjsm_ir::Function,
     defs: &HashMap<ValueId, Instruction>,
     constants: &[Constant],
     load_reaching: &HashMap<ValueId, ValueId>,
@@ -476,6 +478,8 @@ fn static_inline_round(module: &mut Module) -> bool {
                     _ => continue,
                 };
                 let (callee_id, closure_env) = match resolve_callee_id(
+                    module,
+                    function,
                     &per_func_defs[func_idx],
                     &constants_snapshot,
                     &per_func_load_reaching[func_idx],
@@ -490,8 +494,13 @@ fn static_inline_round(module: &mut Module) -> bool {
                 }
                 let (direct_callable, has_eval, num_blocks, is_class_ctor) =
                     per_func_info[callee_idx];
-                let can_call = direct_callable || closure_env.is_some();
-                if !can_call || has_eval || num_blocks == 0 || callee_idx == func_idx {
+                if has_eval || num_blocks == 0 || callee_idx == func_idx {
+                    continue;
+                }
+                // 非 direct_callable 必须有证明的 lex_env（create_closure 或
+                // GetProp 的 object）。否则会用 caller $env 冒充，模块内捕获
+                // 函数（如 fib）内联后自递归读错 env → "X is not a function"。
+                if !direct_callable && closure_env.is_none() {
                     continue;
                 }
                 // 类构造器的 [[Call]]（无 new）必须在运行时抛 TypeError
@@ -614,7 +623,24 @@ fn inline_static_candidate(
 
     let current_max = current_max_value[func_idx];
     let undefined_dest = ValueId(current_max + 1);
-    let value_offset = current_max + 2;
+    let caller = &module.functions()[func_idx];
+    let caller_env_name = caller
+        .params()
+        .first()
+        .filter(|name| is_env_name(name))
+        .cloned();
+    let needs_caller_lex_env = candidate.closure_env.is_none() && caller_env_name.is_some();
+    let caller_lex_env_dest = if needs_caller_lex_env {
+        ValueId(current_max + 2)
+    } else {
+        undefined_dest
+    };
+    let value_offset = if needs_caller_lex_env {
+        current_max + 3
+    } else {
+        current_max + 2
+    };
+    let callee_lex_env = candidate.closure_env.unwrap_or(caller_lex_env_dest);
 
     // ── 分裂调用块 ──
     // B_pre 保留调用前指令 + undefined 常量，终止器暂置 Jump(克隆入口)；
@@ -674,8 +700,7 @@ fn inline_static_candidate(
                     continue;
                 }
                 if is_env_name(name) {
-                    let env_val = candidate.closure_env.unwrap_or(undefined_dest);
-                    param_subst.push((mapped_dest, env_val));
+                    param_subst.push((mapped_dest, callee_lex_env));
                     continue;
                 }
                 if let Some((param_idx, _)) = callee_params
@@ -776,7 +801,11 @@ fn inline_static_candidate(
             clone_max = clone_max.max(used.0);
         }
     }
-    current_max_value[func_idx] = undefined_dest.0.max(clone_max);
+    current_max_value[func_idx] = if needs_caller_lex_env {
+        caller_lex_env_dest.0.max(clone_max)
+    } else {
+        undefined_dest.0.max(clone_max)
+    };
 
     // ── 重写 B_pre：调用前指令 + undefined 常量 + 注入的形参初始值；
     //    终止器 = Jump(克隆入口)。 ──
@@ -790,6 +819,12 @@ fn inline_static_candidate(
             dest: undefined_dest,
             constant: undefined_id,
         });
+        if needs_caller_lex_env {
+            b_pre.push_instruction(Instruction::LoadVar {
+                dest: caller_lex_env_dest,
+                name: caller_env_name.expect("caller env name checked above"),
+            });
+        }
         for (name, value) in &inject_subst {
             b_pre.push_instruction(Instruction::StoreVar {
                 name: name.clone(),
@@ -930,6 +965,21 @@ struct SpeculativeCandidate {
     dest: ValueId,
     /// 区域块集 S（有序：调用块第一，其余 BFS 序）。
     region_blocks: Vec<BasicBlockId>,
+    /// 目标仅通过 env 读取不可变模块绑定时，快路径传入 caller 的 $env。
+    use_caller_env: bool,
+}
+
+/// 阶段 D：getter 推测内联候选。
+#[derive(Debug, Clone)]
+struct GetterSpeculativeCandidate {
+    func_idx: u32,
+    block_idx: u32,
+    instr_idx: usize,
+    object: ValueId,
+    key: ValueId,
+    target: FunctionId,
+    dest: ValueId,
+    region_blocks: Vec<BasicBlockId>,
 }
 
 /// 计算推测内联站点的消费区（闭包 T + 区域块集 S）。
@@ -1063,6 +1113,97 @@ fn compute_region(
     Some((closure, s_blocks))
 }
 
+/// 不可变函数/类声明绑定（与 semantic direct_call pass 同规则）。
+fn module_immutable_function_bindings(module: &Module) -> HashMap<String, FunctionId> {
+    let mut store_count: HashMap<&str, u32> = HashMap::new();
+    for function in module.functions() {
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                if let Instruction::StoreVar { name, .. } = instruction {
+                    *store_count.entry(name.as_str()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut immutable = HashMap::new();
+    for function in module.functions() {
+        for (name, function_id) in function.known_callee_vars() {
+            if store_count.get(name.as_str()) == Some(&1) {
+                immutable.insert(name.clone(), *function_id);
+            }
+        }
+    }
+    immutable
+}
+
+/// callee 的 env 读取是否仅限于不可变模块函数/类绑定（`GetProp(env, name)`）。
+fn callee_only_reads_immutable_env_bindings(
+    module: &Module,
+    function: &wjsm_ir::Function,
+) -> bool {
+    if function.captured_names().is_empty() {
+        return false;
+    }
+    let immutable = module_immutable_function_bindings(module);
+    let mut env_dests = Vec::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::LoadVar { dest, name } = instruction
+                && is_env_name(name)
+            {
+                env_dests.push(*dest);
+            }
+        }
+    }
+    if env_dests.is_empty() {
+        return false;
+    }
+    let const_defs: HashMap<ValueId, ConstantId> = function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::Const { dest, constant } => Some((*dest, *constant)),
+            _ => None,
+        })
+        .collect();
+    for env_dest in env_dests {
+        for use_instr in crate::collect_uses(function, env_dest) {
+            match use_instr {
+                Instruction::GetProp { key, .. } => {
+                    let Some(constant_id) = const_defs.get(key) else {
+                        return false;
+                    };
+                    let Some(Constant::String(name)) =
+                        module.constants().get(constant_id.0 as usize)
+                    else {
+                        return false;
+                    };
+                    if !immutable.contains_key(name) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+fn match_unique_getter(module: &Module, key_name: &str) -> Option<FunctionId> {
+    let display = format!("get {key_name}");
+    let mut matches = Vec::new();
+    for (idx, function) in module.functions().iter().enumerate() {
+        if function.js_name().is_some_and(|name| name == display)
+            && function.direct_callable()
+            && !function.has_eval()
+        {
+            matches.push(FunctionId(idx as u32));
+        }
+    }
+    (matches.len() == 1).then(|| matches[0])
+}
+
 /// 在指定块集合内重命名变量（LoadVar/StoreVar 的 name 字段）。
 fn rename_var_in_blocks(blocks: &mut [BasicBlock], old_name: &str, new_name: &str) {
     for block in blocks {
@@ -1159,15 +1300,24 @@ fn speculative_inline_round(module: &mut Module) -> bool {
                     continue;
                 }
                 let (direct_callable, has_eval, target_blocks) = per_func_info[target_idx];
-                if !direct_callable
-                    || has_eval
+                let target_func = &module.functions()[target_idx];
+                let use_caller_env = !direct_callable
+                    && !target_func.captured_names().is_empty()
+                    && callee_only_reads_immutable_env_bindings(module, target_func)
+                    && module.functions()[func_idx]
+                        .params()
+                        .first()
+                        .is_some_and(|name| is_env_name(name));
+                if !direct_callable && !use_caller_env {
+                    continue;
+                }
+                if has_eval
                     || target_idx == func_idx
                     || target_blocks > 64
                     || target_blocks == 0
                 {
                     continue;
                 }
-                let target_func = &module.functions()[target_idx];
                 // 阶段 C 只处理 Call 站点：类构造器的 [[Call]] 必须在运行时
                 // 抛 TypeError，不得把构造器体克隆成快路径。
                 if target_func.is_class_constructor() {
@@ -1204,6 +1354,7 @@ fn speculative_inline_round(module: &mut Module) -> bool {
                     args: args.clone(),
                     dest: *dest,
                     region_blocks,
+                    use_caller_env,
                 });
             }
         }
@@ -1332,7 +1483,27 @@ fn inline_speculative_candidate(
     let current_max = current_max_value[func_idx];
     let guard_dest = ValueId(current_max + 1);
     let undefined_dest = ValueId(current_max + 2);
-    let value_offset = current_max + 3;
+    let caller_env_name = module.functions()[func_idx]
+        .params()
+        .first()
+        .filter(|name| is_env_name(name))
+        .cloned();
+    let needs_caller_lex_env = candidate.use_caller_env && caller_env_name.is_some();
+    let caller_lex_env_dest = if needs_caller_lex_env {
+        ValueId(current_max + 3)
+    } else {
+        undefined_dest
+    };
+    let value_offset = if needs_caller_lex_env {
+        current_max + 4
+    } else {
+        current_max + 3
+    };
+    let callee_lex_env = if needs_caller_lex_env {
+        caller_lex_env_dest
+    } else {
+        undefined_dest
+    };
 
     // ── 1. 分裂调用块 ──
     let (pre_instructions, call_instruction, post_instructions, orig_terminator) = {
@@ -1403,7 +1574,7 @@ fn inline_speculative_candidate(
                     continue;
                 }
                 if is_env_name(name) {
-                    param_subst.push((mapped_dest, undefined_dest));
+                    param_subst.push((mapped_dest, callee_lex_env));
                     continue;
                 }
                 if let Some((param_idx, _)) = callee_params
@@ -1666,7 +1837,11 @@ fn inline_speculative_candidate(
             clone_max = clone_max.max(used.0);
         }
     }
-    current_max_value[func_idx] = guard_dest.0.max(undefined_dest.0).max(clone_max);
+    current_max_value[func_idx] = if needs_caller_lex_env {
+        caller_lex_env_dest.0.max(clone_max)
+    } else {
+        guard_dest.0.max(undefined_dest.0).max(clone_max)
+    };
 
     // ── 4. 追加全部克隆块 + 应用替换 ──
     {
@@ -1697,6 +1872,12 @@ fn inline_speculative_candidate(
             dest: undefined_dest,
             constant: undefined_id,
         });
+        if needs_caller_lex_env {
+            b_pre.push_instruction(Instruction::LoadVar {
+                dest: caller_lex_env_dest,
+                name: caller_env_name.expect("caller env name checked above"),
+            });
+        }
         for (name, value) in &inject_subst {
             b_pre.push_instruction(Instruction::StoreVar {
                 name: name.clone(),
@@ -1716,6 +1897,395 @@ fn inline_speculative_candidate(
     }
 
     // 快路径区域中 R 的 use 已替换为 ret_mapped（克隆时完成）。
+    *rename_seq += rename_map.len() as u32;
+}
+
+/// 阶段 D：守卫式推测 getter 内联（`p.norm` → 内联 `get norm` 体）。
+fn speculative_getter_inline_round(module: &mut Module) -> bool {
+    let constants_snapshot: Vec<Constant> = module.constants().to_vec();
+    let per_func_defs: Vec<HashMap<ValueId, Instruction>> = module
+        .functions()
+        .iter()
+        .map(|f| {
+            let mut defs = HashMap::new();
+            for block in f.blocks() {
+                for instr in block.instructions() {
+                    if let Some(dest) = instruction_dest(instr) {
+                        defs.insert(dest, instr.clone());
+                    }
+                }
+            }
+            defs
+        })
+        .collect();
+    let per_func_info: Vec<(bool, bool, usize)> = module
+        .functions()
+        .iter()
+        .map(|f| (f.direct_callable(), f.has_eval(), f.blocks().len()))
+        .collect();
+    let per_func_max_value: Vec<u32> = module
+        .functions()
+        .iter()
+        .map(max_value_id_in_function)
+        .collect();
+
+    let mut candidates: Vec<GetterSpeculativeCandidate> = Vec::new();
+    for (func_idx, function) in module.functions().iter().enumerate() {
+        for (block_idx, block) in function.blocks().iter().enumerate() {
+            for (instr_idx, instr) in block.instructions().iter().enumerate() {
+                let Instruction::GetProp {
+                    dest,
+                    object,
+                    key,
+                    latch: None,
+                    ..
+                } = instr
+                else {
+                    continue;
+                };
+                let key_name = match per_func_defs[func_idx].get(key) {
+                    Some(Instruction::Const { constant, .. }) => {
+                        match constants_snapshot.get(constant.0 as usize) {
+                            Some(Constant::String(s)) => s.clone(),
+                            _ => continue,
+                        }
+                    }
+                    _ => continue,
+                };
+                let target = match match_unique_getter(module, &key_name) {
+                    Some(id) => id,
+                    None => continue,
+                };
+                let target_idx = target.0 as usize;
+                if target_idx >= per_func_info.len() {
+                    continue;
+                }
+                let (direct_callable, has_eval, target_blocks) = per_func_info[target_idx];
+                if !direct_callable
+                    || has_eval
+                    || target_idx == func_idx
+                    || target_blocks > 64
+                    || target_blocks == 0
+                {
+                    continue;
+                }
+                let target_func = &module.functions()[target_idx];
+                if contains_excluded_instruction(target_func) {
+                    continue;
+                }
+                let return_count = target_func
+                    .blocks()
+                    .iter()
+                    .filter(|b| matches!(b.terminator(), Terminator::Return { .. }))
+                    .count();
+                if return_count == 0 {
+                    continue;
+                }
+                if function.blocks().len() + target_blocks + 8 > 512 {
+                    continue;
+                }
+                let Some((_closure, region_blocks)) =
+                    compute_region(function, block.id(), *dest)
+                else {
+                    continue;
+                };
+                candidates.push(GetterSpeculativeCandidate {
+                    func_idx: func_idx as u32,
+                    block_idx: block_idx as u32,
+                    instr_idx,
+                    object: *object,
+                    key: *key,
+                    target,
+                    dest: *dest,
+                    region_blocks,
+                });
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return false;
+    }
+    candidates.sort_by_key(|c| (c.func_idx, c.block_idx, c.instr_idx as u32));
+    candidates.reverse();
+    let mut current_max_value = per_func_max_value;
+    let undefined_id = undefined_const_id(module);
+    let mut rename_seq = 0u32;
+    for candidate in candidates {
+        inline_getter_speculative_candidate(
+            module,
+            &candidate,
+            &mut current_max_value,
+            undefined_id,
+            &mut rename_seq,
+        );
+    }
+    true
+}
+
+/// 内联单个 getter 推测站点（结构同阶段 C，守卫为原型 accessor 比对）。
+fn inline_getter_speculative_candidate(
+    module: &mut Module,
+    candidate: &GetterSpeculativeCandidate,
+    current_max_value: &mut [u32],
+    undefined_id: ConstantId,
+    rename_seq: &mut u32,
+) {
+    let func_idx = candidate.func_idx as usize;
+    let block_idx = candidate.block_idx as usize;
+    let instr_idx = candidate.instr_idx;
+    let caller_id = FunctionId(candidate.func_idx);
+
+    let mut region_blocks = candidate.region_blocks.clone();
+    {
+        let function = &module.functions()[func_idx];
+        let mut s_set: HashSet<BasicBlockId> = region_blocks.iter().copied().collect();
+        let mut queue: Vec<BasicBlockId> = region_blocks.clone();
+        while let Some(bid) = queue.pop() {
+            for succ in terminator_successors(function.blocks()[bid.0 as usize].terminator()) {
+                if s_set.contains(&succ) {
+                    continue;
+                }
+                let succ_block = &function.blocks()[succ.0 as usize];
+                let is_loop_jump_plate = matches!(
+                    succ_block.terminator(),
+                    Terminator::Jump { target } if is_backedge_target(function, *target)
+                );
+                if is_loop_jump_plate {
+                    s_set.insert(succ);
+                    region_blocks.push(succ);
+                    queue.push(succ);
+                }
+            }
+        }
+        let mut bad_backedge = false;
+        'region_exit: for &bid in &region_blocks {
+            for succ in terminator_successors(function.blocks()[bid.0 as usize].terminator()) {
+                if s_set.contains(&succ) {
+                    continue;
+                }
+                if !is_backedge_target(function, succ) {
+                    bad_backedge = true;
+                    break 'region_exit;
+                }
+            }
+        }
+        if bad_backedge {
+            return;
+        }
+    }
+
+    let target_func = match module.function_mut(candidate.target) {
+        Some(f) => f.clone(),
+        None => return,
+    };
+
+    let current_max = current_max_value[func_idx];
+    let guard_dest = ValueId(current_max + 1);
+    let undefined_dest = ValueId(current_max + 2);
+    let value_offset = current_max + 3;
+
+    let (pre_instructions, get_prop_instruction, post_instructions, orig_terminator) = {
+        let block = &module.functions()[func_idx].blocks()[block_idx];
+        let pre: Vec<Instruction> = block.instructions()[..instr_idx].to_vec();
+        let get_prop = block.instructions()[instr_idx].clone();
+        let post: Vec<Instruction> = block.instructions()[instr_idx + 1..].to_vec();
+        (pre, get_prop, post, block.terminator().clone())
+    };
+    let b_slow_id = BasicBlockId(module.functions()[func_idx].blocks().len() as u32);
+    {
+        let caller = module
+            .function_mut(caller_id)
+            .expect("caller function must exist");
+        let mut b_slow = BasicBlock::new(b_slow_id);
+        b_slow.push_instruction(get_prop_instruction);
+        for ins in &post_instructions {
+            b_slow.push_instruction(ins.clone());
+        }
+        b_slow.set_terminator(orig_terminator.clone());
+        caller.push_block(b_slow);
+    }
+
+    let callee_offset = module.functions()[func_idx].blocks().len() as u32;
+    let fast_entry = BasicBlockId(target_func.entry().0 + callee_offset);
+    let region_entry = BasicBlockId(
+        module.functions()[func_idx].blocks().len() as u32 + target_func.blocks().len() as u32,
+    );
+    let exception_path = find_exception_path(
+        &module.functions()[func_idx],
+        block_idx,
+        instr_idx,
+        candidate.dest,
+    );
+
+    let callee_params = target_func.params().to_vec();
+    let dead_slots = callee_dead_slot_names(&target_func);
+    let mut param_subst: Vec<(ValueId, ValueId)> = Vec::new();
+    let inject_subst: Vec<(String, ValueId)> = Vec::new();
+    let mut callee_clones: Vec<BasicBlock> = Vec::with_capacity(target_func.blocks().len());
+    let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
+    for cb in target_func.blocks() {
+        let mut clone = BasicBlock::new(BasicBlockId(cb.id().0 + callee_offset));
+        for ins in cb.instructions() {
+            if let Instruction::LoadVar { dest, name } = ins {
+                let mapped_dest = ValueId(dest.0 + value_offset);
+                if is_this_name(name) {
+                    param_subst.push((mapped_dest, candidate.object));
+                    continue;
+                }
+                if is_env_name(name) {
+                    param_subst.push((mapped_dest, undefined_dest));
+                    continue;
+                }
+                if let Some((param_idx, _)) = callee_params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| p.as_str() == name)
+                    && param_idx >= 2
+                {
+                    param_subst.push((mapped_dest, undefined_dest));
+                    continue;
+                }
+            }
+            let mut ins = ins.clone();
+            add_offset_to_value_id(&mut ins, value_offset);
+            ins.remap_blocks(&mut |b| BasicBlockId(b.0 + callee_offset));
+            clone.push_instruction(ins);
+        }
+        let mut term = cb.terminator().clone();
+        term.remap_values(&mut |v| ValueId(v.0 + value_offset));
+        term.remap_blocks(&mut |b| BasicBlockId(b.0 + callee_offset));
+        match term {
+            Terminator::Return { value } => {
+                let mapped = value.unwrap_or(undefined_dest);
+                return_records.push((clone.id(), mapped));
+                store_dead_slots(&mut clone, &dead_slots, undefined_dest);
+                clone.set_terminator(Terminator::Jump {
+                    target: region_entry,
+                });
+            }
+            Terminator::Throw { value } => {
+                store_dead_slots(&mut clone, &dead_slots, undefined_dest);
+                if let Some((tmp_name, catch_target)) = &exception_path {
+                    clone.push_instruction(Instruction::StoreVar {
+                        name: tmp_name.clone(),
+                        value,
+                    });
+                    clone.set_terminator(Terminator::Jump {
+                        target: *catch_target,
+                    });
+                } else {
+                    clone.set_terminator(Terminator::Throw { value });
+                }
+            }
+            other => clone.set_terminator(other),
+        }
+        callee_clones.push(clone);
+    }
+
+    let mut block_map: HashMap<BasicBlockId, BasicBlockId> = HashMap::new();
+    let mut next_id = region_entry;
+    for &orig in &region_blocks {
+        block_map.insert(orig, next_id);
+        next_id = BasicBlockId(next_id.0 + 1);
+    }
+    let resolve_param = |v: ValueId| {
+        param_subst
+            .iter()
+            .find(|(old, _)| *old == v)
+            .map_or(v, |(_, new)| *new)
+    };
+
+    let region_defined: HashSet<ValueId> = region_blocks
+        .iter()
+        .flat_map(|bid| {
+            module.functions()[func_idx].blocks()[bid.0 as usize]
+                .instructions()
+                .iter()
+                .filter_map(|ins| instruction_dest(ins))
+        })
+        .collect();
+
+    let mut region_clones: Vec<BasicBlock> = Vec::with_capacity(region_blocks.len());
+    for &orig in &region_blocks {
+        let orig_block = &module.functions()[func_idx].blocks()[orig.0 as usize];
+        let mut clone = BasicBlock::new(block_map[&orig]);
+        for ins in orig_block.instructions() {
+            let mut ins = ins.clone();
+            ins.remap_values(&mut |v| {
+                if region_defined.contains(&v) {
+                    ValueId(v.0 + value_offset)
+                } else {
+                    v
+                }
+            });
+            ins.remap_values(&mut |v| resolve_param(v));
+            ins.remap_blocks(&mut |b| block_map.get(&b).copied().unwrap_or(b));
+            clone.push_instruction(ins);
+        }
+        let mut term = orig_block.terminator().clone();
+        term.remap_values(&mut |v| {
+            if region_defined.contains(&v) {
+                ValueId(v.0 + value_offset)
+            } else {
+                v
+            }
+        });
+        term.remap_values(&mut |v| resolve_param(v));
+        term.remap_blocks(&mut |b| block_map.get(&b).copied().unwrap_or(b));
+        clone.set_terminator(term);
+        region_clones.push(clone);
+    }
+
+    let ret_dest = candidate.dest;
+    let mut rename_map: HashMap<ValueId, ValueId> = HashMap::new();
+    for (_ret_block, ret_val) in return_records {
+        let mapped_ret = resolve_param(ret_val);
+        rename_map.insert(mapped_ret, ret_dest);
+    }
+
+    {
+        let caller = module
+            .function_mut(caller_id)
+            .expect("caller function must exist");
+        for clone in callee_clones {
+            caller.push_block(clone);
+        }
+        for clone in region_clones {
+            caller.push_block(clone);
+        }
+        for (old, new) in &rename_map {
+            replace_all_uses_of(caller, *old, *new);
+        }
+        for (old_val, new_val) in &param_subst {
+            replace_all_uses_of(caller, *old_val, *new_val);
+        }
+        let b_pre = &mut caller.blocks_mut()[block_idx];
+        *b_pre.instructions_mut() = pre_instructions;
+        b_pre.push_instruction(Instruction::Const {
+            dest: undefined_dest,
+            constant: undefined_id,
+        });
+        for (name, value) in &inject_subst {
+            b_pre.push_instruction(Instruction::StoreVar {
+                name: name.clone(),
+                value: *value,
+            });
+        }
+        b_pre.push_instruction(Instruction::GuardSamePrototypeAccessor {
+            dest: guard_dest,
+            object: candidate.object,
+            key: candidate.key,
+            function: candidate.target,
+        });
+        b_pre.set_terminator(Terminator::Branch {
+            condition: guard_dest,
+            true_block: fast_entry,
+            false_block: b_slow_id,
+        });
+    }
+
+    let clone_max = value_offset + max_value_id_in_function(&target_func);
+    current_max_value[func_idx] = guard_dest.0.max(undefined_dest.0).max(clone_max);
     *rename_seq += rename_map.len() as u32;
 }
 
@@ -1744,8 +2314,14 @@ pub(crate) fn run(module: &mut Module) {
     let spec_inlined = speculative_inline_round(module);
     cfg_fold::run(module);
 
-    // 阶段 C 内联展开的方法体中可能暴露出新的 direct_call / 构造器调用，级联触发阶段 A
-    if spec_inlined {
+    // 阶段 D：守卫式推测 getter 内联。
+    let getter_inlined = speculative_getter_inline_round(module);
+    if getter_inlined {
+        cfg_fold::run(module);
+    }
+
+    // 阶段 C/D 内联展开的方法体中可能暴露出新的 direct_call / 构造器调用，级联触发阶段 A
+    if spec_inlined || getter_inlined {
         let mut post_round = 0;
         loop {
             post_round += 1;

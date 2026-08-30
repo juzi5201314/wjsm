@@ -1,6 +1,7 @@
 //! Sound / Speculative IR→IR 优化入口。
 
 mod cfg_fold;
+mod class_instance_template;
 mod dce;
 mod escape_scalar;
 mod escape_scalar_record;
@@ -78,6 +79,7 @@ pub struct OptimizedUnit {
 
 pub fn optimize_sound(program: &mut Program) {
     inline_for_ea::run(program);
+    class_instance_template::augment_class_instance_templates(program);
     cfg_fold::run(program);
     object_literal_read_fold::run(program);
     escape_scalar::run(program);
@@ -95,6 +97,7 @@ pub fn optimize_speculative(program: &mut Program, facts: &SpeculativeFacts) -> 
     peel::peel_first_iteration(program, facts);
     speculative::rewrite_speculative(program, facts, &mut deopt_map, &mut slot_map);
     inline_for_ea::run(program);
+    class_instance_template::augment_class_instance_templates(program);
     let class_seeds = wjsm_ir::value_class::FunctionSeeds {
         param_is_number: facts.param_tags.iter().map(|tag| *tag == 0x1f).collect(),
         extra_numbers: facts.extra_number_values.iter().copied().collect(),

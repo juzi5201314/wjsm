@@ -1428,6 +1428,13 @@ pub enum Instruction {
         callee: ValueId,
         function: FunctionId,
     },
+    /// 推测 getter 内联防卫：对象原型链上该键的 accessor getter 与 function 一致时为 true。
+    GuardSamePrototypeAccessor {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+        function: FunctionId,
+    },
     /// 将错误对象编码为 TAG_EXCEPTION（用于函数返回异常）
     EncodeException {
         dest: ValueId,
@@ -1768,6 +1775,16 @@ impl fmt::Display for Instruction {
                 "{dest} = guard_same_function {callee}, @{function}",
                 function = function.0
             ),
+            Self::GuardSamePrototypeAccessor {
+                dest,
+                object,
+                key,
+                function,
+            } => write!(
+                formatter,
+                "{dest} = guard_same_prototype_accessor {object}, {key}, @{function}",
+                function = function.0
+            ),
             Self::EncodeException { dest, value } => {
                 write!(formatter, "{dest} = encode_exception {value}")
             }
@@ -2037,6 +2054,16 @@ impl Instruction {
                 *dest = f(*dest);
                 *callee = f(*callee);
             }
+            Self::GuardSamePrototypeAccessor {
+                dest,
+                object,
+                key,
+                ..
+            } => {
+                *dest = f(*dest);
+                *object = f(*object);
+                *key = f(*key);
+            }
             Self::EncodeException { dest, value } => {
                 *dest = f(*dest);
                 *value = f(*value);
@@ -2102,6 +2129,7 @@ impl Instruction {
             | Self::CollectRestArgs { dest, .. }
             | Self::IsException { dest, .. }
             | Self::GuardSameFunction { dest, .. }
+            | Self::GuardSamePrototypeAccessor { dest, .. }
             | Self::EncodeException { dest, .. }
             | Self::ExceptionToObject { dest, .. }
             | Self::CreateDataProperty { dest, .. }
@@ -2208,6 +2236,7 @@ impl Instruction {
             Self::GuardSameFunction { callee, .. } | Self::GuardCallTarget { callee, .. } => {
                 vec![*callee]
             }
+            Self::GuardSamePrototypeAccessor { object, key, .. } => vec![*object, *key],
             Self::GuardTag { value, .. } => vec![*value],
             Self::GuardShape { object, .. } | Self::LoadSlot { object, .. } => vec![*object],
             Self::StoreSlot { object, value, .. } => vec![*object, *value],

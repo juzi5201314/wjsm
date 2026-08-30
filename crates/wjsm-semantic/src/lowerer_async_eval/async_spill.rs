@@ -161,6 +161,10 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
         | LoadSlot { object: value, .. }
         | GuardTag { value, .. }
         | GuardCallTarget { callee: value, .. } => replace(value),
+        GuardSamePrototypeAccessor { object, key, .. } => {
+            replace(object);
+            replace(key);
+        }
         StringConcatVa { parts, .. } => replace_all(parts),
         InitObjectLiteral { values, .. } => replace_all(values),
         CallBuiltin { args, .. } => replace_all(args),

@@ -615,6 +615,12 @@ pub(super) fn dispatch_runtime(
                 }),
             )
         }
+        NativeRuntimeOp::GuardSamePrototypeAccessor => {
+            let [object, key, function] = args else {
+                return fail_dispatch(ctx);
+            };
+            guard_same_prototype_accessor(state, *object, *key, *function)
+        }
         NativeRuntimeOp::CreateException => {
             let Some(thrown) = args.first().copied() else {
                 return fail_dispatch(ctx);
@@ -2200,6 +2206,38 @@ fn backfill_get_prop_ic(
             unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
         }
     }
+}
+
+fn guard_same_prototype_accessor(
+    state: &mut NativeAgentState,
+    object: i64,
+    key: i64,
+    function: i64,
+) -> i64 {
+    let Ok(function_id) = u32::try_from(function) else {
+        return value::encode_bool(false);
+    };
+    let Some(handle) = object_handle(object) else {
+        return value::encode_bool(false);
+    };
+    let Some(name_id) = property_key(state, key) else {
+        return value::encode_bool(false);
+    };
+    let Ok(Some((_holder, _slot, property))) = state
+        .gc
+        .heap()
+        .get_property_slot_on_proto_chain_for_ic(handle, name_id)
+    else {
+        return value::encode_bool(false);
+    };
+    if property.flags & wjsm_ir::constants::FLAG_IS_ACCESSOR as u32 == 0 {
+        return value::encode_bool(false);
+    }
+    let getter = property.getter as i64;
+    value::encode_bool(
+        value::is_callable(getter)
+            && state.callable_matches_local_function(getter, function_id),
+    )
 }
 
 pub(crate) fn property_key(state: &mut NativeAgentState, encoded: i64) -> Option<PropertyKey> {

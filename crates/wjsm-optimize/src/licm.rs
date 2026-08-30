@@ -274,6 +274,7 @@ fn loop_never_runs_user_code(
                 | Instruction::StoreVar { .. }
                 | Instruction::IsException { .. }
                 | Instruction::GuardSameFunction { .. }
+                | Instruction::GuardSamePrototypeAccessor { .. }
                 | Instruction::DebugCheck { .. } => true,
                 Instruction::Unary {
                     op: UnaryOp::Not | UnaryOp::Void | UnaryOp::IsNullish,

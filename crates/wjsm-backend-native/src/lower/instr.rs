@@ -732,6 +732,22 @@ pub(crate) fn lower_instruction(
             )?;
             define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
+        Instruction::GuardSamePrototypeAccessor {
+            dest,
+            object,
+            key,
+            function,
+        } => {
+            let object = use_value_boxed(cx.builder, cx.variables, *object)?;
+            let key = use_value_boxed(cx.builder, cx.variables, *key)?;
+            let function = cx.builder.ins().iconst(types::I64, i64::from(function.0));
+            let result = cx.call(
+                NativeRuntimeOp::GuardSamePrototypeAccessor.id(),
+                &[object, key, function],
+                None,
+            )?;
+            define_value_boxed(cx.builder, cx.variables, *dest, result)
+        }
         Instruction::CollectRestArgs { dest, skip } => {
             let skip = cx.builder.ins().iconst(types::I64, i64::from(*skip));
             let result = cx.call(NativeRuntimeOp::CollectRestArguments.id(), &[skip], None)?;
