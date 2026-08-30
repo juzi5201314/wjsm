@@ -77,6 +77,9 @@ pub unsafe extern "C" fn native_math_tanh(value: f64) -> f64 {
 pub unsafe extern "C" fn native_math_pow(base: f64, exponent: f64) -> f64 {
     f64::powf(base, exponent)
 }
+pub unsafe extern "C" fn native_math_hypot(x: f64, y: f64) -> f64 {
+    f64::hypot(x, y)
+}
 
 pub(super) fn dispatch_math(
     ctx: &mut NativeVmContext,

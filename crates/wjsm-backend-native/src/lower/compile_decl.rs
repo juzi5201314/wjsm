@@ -56,6 +56,10 @@ pub(crate) fn compile_program_inner(
     let string_builder_finish = declare_string_builder_finish_thunk(&mut module)?;
     let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let inferred_f64 = infer_f64_values(program);
+    let hypot_property_names: HashSet<String> = wjsm_optimize::collect_hypot_getters(program)
+        .into_iter()
+        .map(|getter| getter.property)
+        .collect();
     let math_thunks = declare_math_thunks(&mut module, program, &inferred_f64)?;
     let frame_locals = program.frame_local_variable_names_by_function();
     let boxed_frame_locals: Vec<BTreeSet<&str>> = program
@@ -196,6 +200,7 @@ pub(crate) fn compile_program_inner(
                 direct_callable_functions: &direct_callable_functions,
                 safepoint_free,
                 collect_diagnostics,
+                hypot_property_names: &hypot_property_names,
             })
         })
         .collect::<Result<Vec<_>, NativeCompileError>>()?;
@@ -543,6 +548,11 @@ pub(crate) fn declare_math_thunks(
                 }
             }
         }
+    }
+    // hypot getter 的 CallBuiltin 目标未经 f64 证明，但 ACCESSOR IC 快路径仍要
+    // 引用 typed `Math.hypot` thunk；有合格 getter 时强制声明。
+    if !wjsm_optimize::collect_hypot_getters(program).is_empty() {
+        used.insert(wjsm_ir::Builtin::MathHypot);
     }
     let mut used: Vec<_> = used.into_iter().collect();
     used.sort_by_key(|builtin| builtin.wire_id());

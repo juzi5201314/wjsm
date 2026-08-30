@@ -323,6 +323,11 @@ impl CompiledImage {
         }
     }
 
+    /// IC 区 u32 字数（每槽 8 字）；无 IC 槽时为 0。
+    pub fn ic_slot_word_count(&self) -> usize {
+        self.ic_slots.len()
+    }
+
     /// install 期按编译 hint 与对象模板烘焙元数据预填 IC 槽（OWN_DATA）。
     pub fn prefill_template_ic_slots(
         &mut self,

@@ -380,7 +380,7 @@ pub(crate) fn lower_instruction(
             }
             Ok(())
         }
-        // 已证明 f64 的 21 个 libm Math builtin：typed native direct call。
+        // 已证明 f64 的 typed libm Math builtin：typed native direct call。
         // guard 即类型检查——实参未证明 f64 时落入下方 dispatcher 路径，
         // 保留 to_number_coerced 与 BigInt TypeError 语义。
         Instruction::CallBuiltin {
@@ -473,8 +473,7 @@ pub(crate) fn lower_instruction(
             ) && wjsm_optimize::should_backend_direct_closure_call(
                 tables.program,
                 resolved.function_id,
-            ) && let Some(decl) =
-                tables.function_decls.get(resolved.function_id.0 as usize)
+            ) && let Some(decl) = tables.function_decls.get(resolved.function_id.0 as usize)
             {
                 let func_ref = *tables
                     .imported_function_decls
@@ -523,9 +522,7 @@ pub(crate) fn lower_instruction(
                         cx, func_ref, *dest, *this_val, args, roots, arity,
                     )
                 } else {
-                    lower_direct_call_instruction(
-                        cx, func_ref, *dest, None, *this_val, args, roots,
-                    )
+                    lower_direct_call_instruction(cx, func_ref, *dest, None, *this_val, args, roots)
                 }
             } else {
                 lower_call_instruction(
@@ -917,9 +914,12 @@ pub(crate) fn lower_instruction(
             *value,
             *transition_shape,
         ),
-        Instruction::LoadEnvSlot { dest, env, slot, key } => {
-            lower_load_env_slot(cx, tables, tables.has_env_layout, *dest, *env, *slot, *key)
-        }
+        Instruction::LoadEnvSlot {
+            dest,
+            env,
+            slot,
+            key,
+        } => lower_load_env_slot(cx, tables, tables.has_env_layout, *dest, *env, *slot, *key),
         Instruction::StoreEnvSlot {
             dest,
             env,

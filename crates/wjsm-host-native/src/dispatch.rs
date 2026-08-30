@@ -79,9 +79,9 @@ pub(crate) use self::errors::error_constructor;
 pub(super) use self::math::{
     native_math_acos, native_math_acosh, native_math_asin, native_math_asinh, native_math_atan,
     native_math_atan2, native_math_atanh, native_math_cbrt, native_math_cos, native_math_cosh,
-    native_math_exp, native_math_expm1, native_math_log, native_math_log1p, native_math_log2,
-    native_math_log10, native_math_pow, native_math_sin, native_math_sinh, native_math_tan,
-    native_math_tanh,
+    native_math_exp, native_math_expm1, native_math_hypot, native_math_log, native_math_log1p,
+    native_math_log2, native_math_log10, native_math_pow, native_math_sin, native_math_sinh,
+    native_math_tan, native_math_tanh,
 };
 pub(crate) use self::object::construct_object;
 use self::runtime::dispatch_runtime;

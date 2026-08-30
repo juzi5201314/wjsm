@@ -47,9 +47,9 @@ pub use wjsm_module::ModuleSourceStore;
 use dispatch::{
     native_host_operation, native_math_acos, native_math_acosh, native_math_asin,
     native_math_asinh, native_math_atan, native_math_atan2, native_math_atanh, native_math_cbrt,
-    native_math_cos, native_math_cosh, native_math_exp, native_math_expm1, native_math_log,
-    native_math_log1p, native_math_log2, native_math_log10, native_math_pow, native_math_sin,
-    native_math_sinh, native_math_tan, native_math_tanh, native_string_add,
+    native_math_cos, native_math_cosh, native_math_exp, native_math_expm1, native_math_hypot,
+    native_math_log, native_math_log1p, native_math_log2, native_math_log10, native_math_pow,
+    native_math_sin, native_math_sinh, native_math_tan, native_math_tanh, native_string_add,
     native_string_builder_append, native_string_builder_append_number,
     native_string_builder_finish, native_zgc_load_barrier_assist, native_zgc_store_barrier,
 };
@@ -604,6 +604,7 @@ impl NativeSymbolResolver for NativeHostRegistry {
             NativeHostSymbol::MathTan => native_math_tan as *const (),
             NativeHostSymbol::MathTanh => native_math_tanh as *const (),
             NativeHostSymbol::MathPow => native_math_pow as *const (),
+            NativeHostSymbol::MathHypot => native_math_hypot as *const (),
             NativeHostSymbol::ZgcLoadBarrierAssist => native_zgc_load_barrier_assist as *const (),
             NativeHostSymbol::ZgcStoreBarrier => native_zgc_store_barrier as *const (),
             NativeHostSymbol::StringAdd => native_string_add as *const (),

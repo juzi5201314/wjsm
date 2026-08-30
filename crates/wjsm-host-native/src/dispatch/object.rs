@@ -3,8 +3,8 @@ use wjsm_ir::{Builtin, HEAP_TYPE_ARGUMENTS, constants, value, wk_symbol};
 use wjsm_native_abi::NativeVmContext;
 
 use super::runtime::{
-    fail_dispatch, get_property, iterator_done, iterator_from, iterator_value, object_handle,
-    ordinary_set, property_key, strict_equal, type_error,
+    fail_dispatch, get_property, invalidate_hypot_accessor_if_key, iterator_done, iterator_from,
+    iterator_value, object_handle, ordinary_set, property_key, strict_equal, type_error,
 };
 use crate::{NativeAgentState, NativeCallableKind, PropertyKey};
 
@@ -1876,6 +1876,7 @@ pub(crate) fn define_property(
     if !super::runtime::is_language_object(*object) {
         return type_error(ctx, state, "Object.defineProperty called on non-object");
     }
+    invalidate_hypot_accessor_if_key(state, *key);
     // ToPropertyDescriptor（§6.2.6.5 步骤 1）：描述符非对象 TypeError（V8
     // kPropertyDescObject 渲染值为后缀），先于 [[DefineOwnProperty]]/trap。
     if !super::runtime::is_language_object(*descriptor) {

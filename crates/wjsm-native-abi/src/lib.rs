@@ -737,6 +737,7 @@ pub enum NativeHostSymbol {
     StringBuilderAppend = 25,
     StringBuilderFinish = 26,
     StringBuilderAppendNumber = 27,
+    MathHypot = 28,
 }
 
 impl NativeHostSymbol {
@@ -769,6 +770,7 @@ impl NativeHostSymbol {
         Self::StringBuilderAppend,
         Self::StringBuilderFinish,
         Self::StringBuilderAppendNumber,
+        Self::MathHypot,
     ];
 
     pub const fn id(self) -> u16 {
@@ -805,13 +807,14 @@ impl NativeHostSymbol {
             Self::StringBuilderAppend => "wjsm_native_string_builder_append",
             Self::StringBuilderFinish => "wjsm_native_string_builder_finish",
             Self::StringBuilderAppendNumber => "wjsm_native_string_builder_append_number",
+            Self::MathHypot => "wjsm_native_math_hypot",
         }
     }
 
     pub const fn signature(self) -> NativeSignature {
         match self {
             Self::HostOperationDispatcher => NativeSignature::HostOperation,
-            Self::MathAtan2 | Self::MathPow => NativeSignature::F64Binary,
+            Self::MathAtan2 | Self::MathPow | Self::MathHypot => NativeSignature::F64Binary,
             Self::ZgcLoadBarrierAssist => NativeSignature::ZgcLoadBarrier,
             Self::ZgcStoreBarrier => NativeSignature::ZgcStoreBarrier,
             Self::StringAdd => NativeSignature::ValueBinary,
@@ -846,6 +849,7 @@ impl NativeHostSymbol {
             Builtin::MathTan => Self::MathTan,
             Builtin::MathTanh => Self::MathTanh,
             Builtin::MathPow => Self::MathPow,
+            Builtin::MathHypot => Self::MathHypot,
             _ => return None,
         })
     }
@@ -1307,6 +1311,7 @@ mod tests {
             Builtin::MathTan,
             Builtin::MathTanh,
             Builtin::MathPow,
+            Builtin::MathHypot,
         ];
         for builtin in typed {
             let symbol = NativeHostSymbol::for_builtin(builtin).expect("typed builtin 有 thunk");

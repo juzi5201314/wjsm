@@ -185,6 +185,7 @@ pub(crate) fn lower_function(
             };
             hoisted_constants.insert(*constant_id, result);
         }
+        let hypot_property_names = input.hypot_property_names;
         let mut imported_function_decls: HashMap<FunctionId, ir::FuncRef> = HashMap::new();
         let mut tables = InstructionTables {
             program,
@@ -209,6 +210,7 @@ pub(crate) fn lower_function(
             function_decls: input.function_decls,
             imported_function_decls: &mut imported_function_decls,
             direct_callable_functions: input.direct_callable_functions,
+            hypot_property_names: &hypot_property_names,
         };
 
         let headers = wjsm_ir::typed_cfg::loop_headers(ir_function);

@@ -36,11 +36,12 @@ pub(crate) fn run(module: &mut Module) {
 
 pub(crate) fn fold_function(function: &mut Function) -> bool {
     let defs = collect_defs(function);
-    let collapses = collect_collapses(function, &defs);
+    let def_blocks = collect_def_blocks(function);
+    let dom = Dominators::compute(function);
+    let collapses = collect_collapses(function, &defs, &def_blocks, &dom);
     if collapses.is_empty() {
         return false;
     }
-    let dom = Dominators::compute(function);
     let mut changed = false;
     for collapse in &collapses {
         if apply_collapse(function, &dom, collapse) {
@@ -65,7 +66,24 @@ fn collect_defs(function: &Function) -> HashMap<ValueId, Instruction> {
     defs
 }
 
-fn collect_collapses(function: &Function, defs: &HashMap<ValueId, Instruction>) -> Vec<Collapse> {
+fn collect_def_blocks(function: &Function) -> HashMap<ValueId, BasicBlockId> {
+    let mut blocks = HashMap::new();
+    for block in function.blocks() {
+        for instruction in block.instructions() {
+            if let Some(dest) = instruction_dest(instruction) {
+                blocks.insert(dest, block.id());
+            }
+        }
+    }
+    blocks
+}
+
+fn collect_collapses(
+    function: &Function,
+    defs: &HashMap<ValueId, Instruction>,
+    def_blocks: &HashMap<ValueId, BasicBlockId>,
+    dom: &Dominators,
+) -> Vec<Collapse> {
     let mut out = Vec::new();
     for block in function.blocks() {
         let Terminator::Branch {
@@ -86,10 +104,18 @@ fn collect_collapses(function: &Function, defs: &HashMap<ValueId, Instruction>) 
             let Some(Instruction::Phi { .. }) = defs.get(value) else {
                 continue;
             };
-            let Some(object) = non_exception_identity(defs, *value, &mut HashSet::new()) else {
+            let Some(object) = unique_success_identity(defs, *value, &mut HashSet::new()) else {
                 continue;
             };
             if object == *value {
+                continue;
+            }
+            // 身份 SSA 必须支配成功块，否则 retarget 后会出现「定义块不支配
+            // 使用点」（`x || 1000` 的 Const、单侧 Compare 等）。
+            let Some(object_block) = def_blocks.get(&object).copied() else {
+                continue;
+            };
+            if !dom.dominates(object_block, *false_block) {
                 continue;
             }
             out.push(Collapse {
@@ -103,35 +129,59 @@ fn collect_collapses(function: &Function, defs: &HashMap<ValueId, Instruction>) 
     out
 }
 
+/// Phi 源在成功路径上的身份。`ExceptionValue` 可跳过；未知源（GetProp /
+/// Const / LoadVar 等）必须中止折叠，否则会把单侧 SSA 当成整条成功边的身份。
+enum SourceKind {
+    Exception,
+    Unknown,
+    Value(ValueId),
+}
+
 /// 非异常路径上 `value` 必等于的对象 SSA。纯 `exception_value` 源视为无身份。
-fn non_exception_identity(
+fn unique_success_identity(
     defs: &HashMap<ValueId, Instruction>,
     value: ValueId,
     visiting: &mut HashSet<ValueId>,
 ) -> Option<ValueId> {
-    if !visiting.insert(value) {
-        return None;
+    match source_kind(defs, value, visiting) {
+        SourceKind::Value(identity) => Some(identity),
+        SourceKind::Exception | SourceKind::Unknown => None,
     }
-    let instruction = defs.get(&value)?;
+}
+
+fn source_kind(
+    defs: &HashMap<ValueId, Instruction>,
+    value: ValueId,
+    visiting: &mut HashSet<ValueId>,
+) -> SourceKind {
+    if !visiting.insert(value) {
+        return SourceKind::Unknown;
+    }
+    let Some(instruction) = defs.get(&value) else {
+        visiting.remove(&value);
+        return SourceKind::Unknown;
+    };
     let result = match instruction {
-        Instruction::Const { .. }
-        | Instruction::NewObject { .. }
+        // Const 不能当成功路径身份：`x || 1000` 的默认常量与 GetProp 成功值
+        // 不是同一 SSA，retarget 后会出现「bb9 定义的 %const 在 bb10 成功边
+        // 上被使用」的支配错误。
+        Instruction::NewObject { .. }
         | Instruction::InitObjectLiteral { .. }
         | Instruction::Compare { .. }
-        | Instruction::NewArray { .. } => Some(value),
+        | Instruction::NewArray { .. } => SourceKind::Value(value),
         Instruction::CallBuiltin {
             builtin: Builtin::CreateClosure,
             ..
-        } => Some(value),
+        } => SourceKind::Value(value),
         Instruction::CallBuiltin {
             builtin: Builtin::ExceptionValue,
             ..
-        } => None,
+        } => SourceKind::Exception,
         Instruction::SetProp { object, .. } | Instruction::CreateDataProperty { object, .. } => {
-            non_exception_identity(defs, *object, visiting)
+            source_kind(defs, *object, visiting)
         }
         Instruction::Phi { sources, .. } => merge_phi_identities(defs, sources, visiting),
-        _ => None,
+        _ => SourceKind::Unknown,
     };
     visiting.remove(&value);
     result
@@ -141,19 +191,23 @@ fn merge_phi_identities(
     defs: &HashMap<ValueId, Instruction>,
     sources: &[wjsm_ir::PhiSource],
     visiting: &mut HashSet<ValueId>,
-) -> Option<ValueId> {
+) -> SourceKind {
     let mut found = None;
     for source in sources {
-        let Some(identity) = non_exception_identity(defs, source.value, visiting) else {
-            continue;
-        };
-        match found {
-            None => found = Some(identity),
-            Some(existing) if existing == identity => {}
-            Some(_) => return None,
+        match source_kind(defs, source.value, visiting) {
+            SourceKind::Exception => {}
+            SourceKind::Unknown => return SourceKind::Unknown,
+            SourceKind::Value(identity) => match found {
+                None => found = Some(identity),
+                Some(existing) if existing == identity => {}
+                Some(_) => return SourceKind::Unknown,
+            },
         }
     }
-    found
+    match found {
+        Some(identity) => SourceKind::Value(identity),
+        None => SourceKind::Unknown,
+    }
 }
 
 fn apply_collapse(function: &mut Function, dom: &Dominators, collapse: &Collapse) -> bool {
@@ -201,7 +255,8 @@ fn retarget_object_predecessors(
     };
     let mut retarget = Vec::new();
     for source in sources {
-        let Some(identity) = non_exception_identity(defs, source.value, &mut HashSet::new()) else {
+        let Some(identity) = unique_success_identity(defs, source.value, &mut HashSet::new())
+        else {
             continue;
         };
         if identity == collapse.object {
@@ -362,6 +417,104 @@ mod tests {
         assert!(
             !text.contains("store var $scaled, %6"),
             "成功路径不应再存储混合 phi：{text}"
+        );
+    }
+
+    #[test]
+    fn get_prop_success_is_not_object_identity() {
+        let mut program = Program::new();
+        let key = program.add_constant(Constant::String("x".into()));
+        let mut function = Function::new("f", BasicBlockId(0));
+
+        let mut bb0 = BasicBlock::new(BasicBlockId(0));
+        bb0.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$obj".into(),
+        });
+        bb0.push_instruction(Instruction::Const {
+            dest: ValueId(1),
+            constant: key,
+        });
+        bb0.push_instruction(Instruction::GetProp {
+            dest: ValueId(2),
+            object: ValueId(0),
+            key: ValueId(1),
+            latch: None,
+            latch_template: None,
+        });
+        bb0.push_instruction(Instruction::IsException {
+            dest: ValueId(3),
+            value: ValueId(2),
+        });
+        bb0.set_terminator(Terminator::Branch {
+            condition: ValueId(3),
+            true_block: BasicBlockId(1),
+            false_block: BasicBlockId(2),
+        });
+
+        let mut bb1 = BasicBlock::new(BasicBlockId(1));
+        bb1.push_instruction(Instruction::CallBuiltin {
+            dest: Some(ValueId(4)),
+            builtin: Builtin::ExceptionValue,
+            args: vec![ValueId(2)],
+        });
+        bb1.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+
+        let mut bb2 = BasicBlock::new(BasicBlockId(2));
+        bb2.set_terminator(Terminator::Jump {
+            target: BasicBlockId(3),
+        });
+
+        let mut bb3 = BasicBlock::new(BasicBlockId(3));
+        bb3.push_instruction(Instruction::Phi {
+            dest: ValueId(5),
+            sources: vec![
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(1),
+                    value: ValueId(4),
+                },
+                wjsm_ir::PhiSource {
+                    predecessor: BasicBlockId(2),
+                    value: ValueId(2),
+                },
+            ],
+        });
+        bb3.push_instruction(Instruction::IsException {
+            dest: ValueId(6),
+            value: ValueId(5),
+        });
+        bb3.set_terminator(Terminator::Branch {
+            condition: ValueId(6),
+            true_block: BasicBlockId(4),
+            false_block: BasicBlockId(5),
+        });
+
+        let mut bb4 = BasicBlock::new(BasicBlockId(4));
+        bb4.set_terminator(Terminator::Throw { value: ValueId(5) });
+
+        let mut bb5 = BasicBlock::new(BasicBlockId(5));
+        bb5.push_instruction(Instruction::StoreVar {
+            name: "$v".into(),
+            value: ValueId(5),
+        });
+        bb5.set_terminator(Terminator::Return {
+            value: Some(ValueId(5)),
+        });
+
+        function.push_block(bb0);
+        function.push_block(bb1);
+        function.push_block(bb2);
+        function.push_block(bb3);
+        function.push_block(bb4);
+        function.push_block(bb5);
+        program.push_function(function);
+
+        let function = program.function_mut(FunctionId(0)).expect("function 0");
+        assert!(
+            !fold_function(function),
+            "GetProp 成功值不是对象身份，不得折叠"
         );
     }
 }
