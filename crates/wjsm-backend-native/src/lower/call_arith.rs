@@ -363,72 +363,12 @@ pub(crate) fn emit_osr_poll(
     instruction_index: u32,
     lives: &[ValueId],
 ) -> Result<()> {
-    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
-    let table = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, function_table))?,
-    );
-    let stride = i64::try_from(std::mem::size_of::<wjsm_native_abi::NativeFunctionEntry>())
-        .context("function entry size")?;
-    let offset = i64::from(cx.function_index) * stride;
-    let entry = cx.builder.ins().iadd_imm_s(table, offset);
-    let osr = cx.builder.ins().load(
-        pointer_type,
-        MemFlagsData::trusted(),
-        entry,
-        i32::try_from(offset_of!(wjsm_native_abi::NativeFunctionEntry, osr_entry))
-            .context("osr_entry offset")?,
-    );
-    let has = cx
-        .builder
-        .ins()
-        .icmp_imm_s(ir::condcodes::IntCC::NotEqual, osr, 0);
-    let take = cx.builder.create_block();
-    let cont = cx.builder.create_block();
-    cx.builder.ins().brif(has, take, &[], cont, &[]);
-    cx.builder.switch_to_block(take);
-    store_resume_lives(cx, lives)?;
-    let plus = cx.builder.ins().iconst(types::I32, i64::from(header.0) + 1);
-    cx.builder.ins().store(
-        MemFlagsData::trusted(),
-        plus,
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, resume_block_plus_one))?,
-    );
-    let func = cx
-        .builder
-        .ins()
-        .iconst(types::I32, i64::from(cx.function_index));
-    cx.builder.ins().store(
-        MemFlagsData::trusted(),
-        func,
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, resume_function_id))?,
-    );
-    let inst_index = cx
-        .builder
-        .ins()
-        .iconst(types::I32, i64::from(instruction_index));
-    cx.builder.ins().store(
-        MemFlagsData::trusted(),
-        inst_index,
-        cx.ctx,
-        vmctx_offset(offset_of!(NativeVmContext, resume_instruction_index))?,
-    );
-    let args_base = cx.builder.ins().iconst(types::I32, 0);
-    let args_count = cx.builder.ins().iconst(types::I32, 0);
-    let inst = cx.builder.ins().call_indirect(
-        tables.slow_call_signature,
-        osr,
-        &[cx.ctx, cx.env, cx.this_value, args_base, args_count],
-    );
-    let result = cx.builder.inst_results(inst)[0];
-    cx.unlink_roots()?;
-    cx.builder.ins().return_(&[result]);
-    cx.builder.switch_to_block(cont);
-    cx.builder.seal_block(cont);
+    // osr_entry 当前指向「整函数」specialized body（见 specialize.rs /
+    // install_osr_entry），不是循环中段续跑入口。若在 header 把控制权交给它，
+    // 等于用特化 SSA/投机假设重跑整个函数；与 generic 的 resume 槽、根帧状态
+    // 交织后会在 array_inline / Map churn 等分配路径上 SIGSEGV。
+    // 在真正的中段 OSR 或可证明的入口重启落地前，轮询只保留占位，不转移。
+    let _ = (cx, tables, header, instruction_index, lives);
     Ok(())
 }
 
