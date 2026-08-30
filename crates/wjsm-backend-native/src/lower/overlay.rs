@@ -13,7 +13,7 @@ use crate::value_repr::{define_value_boxed, use_value_boxed};
 
 use super::{
     BarrierThunks, LoweringCx, emit_feedback_tag_code, emit_guarded_slot_read,
-    emit_is_boxed_handle, vmctx_offset,
+    emit_is_boxed_handle, emit_is_function, emit_strip_gc_color, vmctx_offset,
 };
 
 fn define_boxed_bool(cx: &mut LoweringCx<'_, '_>, dest: ValueId, flag: ir::Value) -> Result<()> {
@@ -132,6 +132,8 @@ pub(crate) fn lower_guard_elements_kind(
     define_boxed_bool(cx, dest, ok)
 }
 
+/// TAG_FUNCTION 句柄：查 vmctx 下标表是否等于期望 IR `function_index`；
+/// 闭包/bound/其它 image 回退宿主 `GuardSameFunction`。
 pub(crate) fn lower_guard_call_target(
     cx: &mut LoweringCx<'_, '_>,
     dest: ValueId,
@@ -139,13 +141,81 @@ pub(crate) fn lower_guard_call_target(
     function: FunctionId,
 ) -> Result<()> {
     let encoded = use_value_boxed(cx.builder, cx.variables, callee)?;
+    let plain = emit_strip_gc_color(cx.builder, encoded);
+    let is_fn = emit_is_function(cx.builder, plain);
+
+    let have_fn = cx.builder.create_block();
+    let in_table = cx.builder.create_block();
+    let slow = cx.builder.create_block();
+    let merge = cx.builder.create_block();
+    cx.builder.append_block_param(merge, types::I64);
+
+    cx.builder.ins().brif(is_fn, have_fn, &[], slow, &[]);
+
+    cx.builder.switch_to_block(have_fn);
+    cx.builder.seal_block(have_fn);
+    let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
+    let count = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, function_ref_index_count))?,
+    );
+    let count = cx.builder.ins().uextend(types::I64, count);
+    let rid = cx.builder.ins().band_imm_u(plain, i64::from(u32::MAX));
+    let in_range = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::UnsignedLessThan, rid, count);
+    cx.builder.ins().brif(in_range, in_table, &[], slow, &[]);
+
+    cx.builder.switch_to_block(in_table);
+    cx.builder.seal_block(in_table);
+    let base = cx.builder.ins().load(
+        pointer_type,
+        MemFlagsData::trusted(),
+        cx.ctx,
+        vmctx_offset(offset_of!(NativeVmContext, function_ref_index_base))?,
+    );
+    let scale = cx.builder.ins().ishl_imm_u(rid, 2);
+    let address = cx.builder.ins().iadd(base, scale);
+    let ir_index = cx
+        .builder
+        .ins()
+        .load(types::I32, MemFlagsData::trusted(), address, 0);
+    let ir_index = cx.builder.ins().uextend(types::I64, ir_index);
+    let expected = cx.builder.ins().iconst(types::I64, i64::from(function.0));
+    let idx_ok = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, ir_index, expected);
+    let true_value = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_bool(true));
+    let false_value = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_bool(false));
+    let fast_boxed = cx.builder.ins().select(idx_ok, true_value, false_value);
+    cx.builder
+        .ins()
+        .jump(merge, &[ir::BlockArg::Value(fast_boxed)]);
+
+    cx.builder.switch_to_block(slow);
+    cx.builder.seal_block(slow);
     let expected = cx.builder.ins().iconst(types::I64, i64::from(function.0));
     let result = cx.call(
         NativeRuntimeOp::GuardSameFunction.id(),
         &[encoded, expected],
         None,
     )?;
-    define_value_boxed(cx.builder, cx.variables, dest, result)
+    cx.builder.ins().jump(merge, &[ir::BlockArg::Value(result)]);
+
+    cx.builder.switch_to_block(merge);
+    cx.builder.seal_block(merge);
+    let boxed = cx.builder.block_params(merge)[0];
+    define_value_boxed(cx.builder, cx.variables, dest, boxed)
 }
 
 pub(crate) fn lower_load_slot(

@@ -347,6 +347,22 @@ pub(crate) fn emit_is_exception(builder: &mut FunctionBuilder<'_>, input: ir::Va
     builder.ins().band(boxed, exception_tag)
 }
 
+/// CLIF 版 `value::is_function`：boxed handle 且 tag 为 `TAG_FUNCTION`。
+pub(crate) fn emit_is_function(builder: &mut FunctionBuilder<'_>, input: ir::Value) -> ir::Value {
+    let boxed = emit_is_boxed_handle(builder, input);
+    let tag = builder.ins().ushr_imm_u(input, 32);
+    let tag = builder.ins().band_imm_u(
+        tag,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_fn = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_FUNCTION).expect("function tag fits i64"),
+    );
+    builder.ins().band(boxed, is_fn)
+}
+
 pub(crate) fn return_if_exception(
     builder: &mut FunctionBuilder<'_>,
     result: ir::Value,
