@@ -2675,7 +2675,7 @@ module {
       %17 = load var $48.value
       %18 = load var $env
       %19 = const c522
-      %20 = get_prop %18, %19
+      %20 = load_env_slot %18, 0, %19
       branch %2, bb9, bb10
     bb9:
       %21 = call builtin.console.log(%16, %17, %20)
@@ -2686,7 +2686,7 @@ module {
     bb11:
       %26 = load var $env
       %27 = const c523
-      %28 = get_prop %26, %27
+      %28 = load_env_slot %26, 1, %27
       %29 = const c524
       %30 = get_prop %28, %29
       %31 = is_exception %30
@@ -2750,7 +2750,7 @@ module {
     bb11:
       %23 = load var $env
       %24 = const c537
-      %25 = get_prop %23, %24
+      %25 = load_env_slot %23, 0, %24
       %26 = const c538
       %27 = get_prop %25, %26
       %28 = is_exception %27
@@ -2813,7 +2813,7 @@ module {
     bb11:
       %23 = load var $env
       %24 = const c550
-      %25 = get_prop %23, %24
+      %25 = load_env_slot %23, 0, %24
       %26 = const c551
       %27 = get_prop %25, %26
       %28 = is_exception %27
@@ -2892,7 +2892,7 @@ module {
     bb11:
       %23 = load var $env
       %24 = const c562
-      %25 = get_prop %23, %24
+      %25 = load_env_slot %23, 0, %24
       %26 = const c563
       %27 = get_prop %25, %26
       %28 = is_exception %27
@@ -2971,7 +2971,7 @@ module {
     bb11:
       %23 = load var $env
       %24 = const c574
-      %25 = get_prop %23, %24
+      %25 = load_env_slot %23, 0, %24
       %26 = const c575
       %27 = get_prop %25, %26
       %28 = is_exception %27
@@ -3065,7 +3065,7 @@ module {
     bb11:
       %23 = load var $env
       %24 = const c586
-      %25 = get_prop %23, %24
+      %25 = load_env_slot %23, 0, %24
       %26 = const c587
       %27 = get_prop %25, %26
       %28 = is_exception %27
