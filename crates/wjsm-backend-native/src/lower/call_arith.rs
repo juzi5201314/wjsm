@@ -410,13 +410,13 @@ pub(crate) fn emit_i32_arithmetic(
         BinaryOp::Mul => cx.builder.ins().fmul(lhs, rhs),
         _ => unreachable!("guard restricts int32 arithmetic"),
     };
-    cx.builder.ins().jump(merge, &[wide]);
+    cx.builder.ins().jump(merge, &[ir::BlockArg::Value(wide)]);
 
     cx.builder.switch_to_block(cont);
     cx.builder.seal_block(cont);
     let widened = cx.builder.ins().sextend(types::I64, sum);
     let narrow = cx.builder.ins().fcvt_from_sint(types::F64, widened);
-    cx.builder.ins().jump(merge, &[narrow]);
+    cx.builder.ins().jump(merge, &[ir::BlockArg::Value(narrow)]);
 
     cx.builder.switch_to_block(merge);
     cx.builder.seal_block(merge);
