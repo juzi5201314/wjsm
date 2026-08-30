@@ -58,7 +58,7 @@ pub(crate) struct ModuleFacts {
 }
 
 impl ModuleFacts {
-    pub(crate) fn build(module: &Module) -> Self {
+    pub(crate) fn build(module: &mut Module) -> Self {
         let numbers = value_class::infer_program(module);
         let pure_callees = module
             .functions()
