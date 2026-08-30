@@ -36,11 +36,21 @@ impl Lowerer {
             },
             swc_ast::Stmt::Block(block_stmt) => self.lower_block_stmt(block_stmt, flow),
             swc_ast::Stmt::If(if_stmt) => self.lower_if(if_stmt, flow),
-            swc_ast::Stmt::While(while_stmt) => self.lower_while(while_stmt, flow),
-            swc_ast::Stmt::DoWhile(do_while_stmt) => self.lower_do_while(do_while_stmt, flow),
-            swc_ast::Stmt::For(for_stmt) => self.lower_for(for_stmt, flow),
-            swc_ast::Stmt::ForIn(for_in) => self.lower_for_in(for_in, flow),
-            swc_ast::Stmt::ForOf(for_of) => self.lower_for_of(for_of, flow),
+            swc_ast::Stmt::While(while_stmt) => {
+                self.with_loop_depth(|this| this.lower_while(while_stmt, flow))
+            }
+            swc_ast::Stmt::DoWhile(do_while_stmt) => {
+                self.with_loop_depth(|this| this.lower_do_while(do_while_stmt, flow))
+            }
+            swc_ast::Stmt::For(for_stmt) => {
+                self.with_loop_depth(|this| this.lower_for(for_stmt, flow))
+            }
+            swc_ast::Stmt::ForIn(for_in) => {
+                self.with_loop_depth(|this| this.lower_for_in(for_in, flow))
+            }
+            swc_ast::Stmt::ForOf(for_of) => {
+                self.with_loop_depth(|this| this.lower_for_of(for_of, flow))
+            }
             swc_ast::Stmt::Break(break_stmt) => self.lower_break(break_stmt, flow),
             swc_ast::Stmt::Continue(continue_stmt) => self.lower_continue(continue_stmt, flow),
             swc_ast::Stmt::Return(return_stmt) => self.lower_return(return_stmt, flow),
@@ -52,6 +62,19 @@ impl Lowerer {
             swc_ast::Stmt::Debugger(_) => self.lower_debugger(flow),
             swc_ast::Stmt::With(with_stmt) => self.lower_with(with_stmt, flow),
         }
+    }
+
+    /// 循环语句（条件 / 更新 / 右值 / 体）全程抬升 `loop_depth`。
+    /// `iteration_env_stack` 与 `label_stack` 的 Loop 帧都不能单独覆盖
+    /// 「循环头未捕获」或「while 条件在压 Loop 标签之前求值」的情况。
+    fn with_loop_depth(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<StmtFlow, LoweringError>,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.loop_depth += 1;
+        let result = f(self);
+        self.loop_depth -= 1;
+        result
     }
 
     /// 在语句入口发射 `debug_check line=N col=M`；无源码上下文时跳过。

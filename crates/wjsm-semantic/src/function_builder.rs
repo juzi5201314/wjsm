@@ -31,6 +31,10 @@ impl FunctionBuilder {
         self.has_eval
     }
 
+    pub(crate) fn name(&self) -> &str {
+        &self._name
+    }
+
     /// 记录 callee 变量（scope-qualified IR name）→ FunctionId（Layer 3）。
     pub(crate) fn record_known_callee(
         &mut self,

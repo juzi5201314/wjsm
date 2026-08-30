@@ -40,7 +40,9 @@ pub(crate) fn is_fast_body_eligible(function: &Function) -> bool {
     if js_param_count(function) > MAX_FAST_JS_PARAMS {
         return false;
     }
-    function.direct_callable() || !function.captured_names().is_empty()
+    function.direct_callable()
+        || !function.captured_names().is_empty()
+        || function.home_object.is_some()
 }
 
 pub(crate) fn is_fast_call_eligible(function: &Function) -> bool {
@@ -215,10 +217,20 @@ mod tests {
 
     #[test]
     fn eligibility_requires_direct_callable_and_arity() {
-        assert!(is_fast_call_eligible(&function_with_js_params(4, true, "ok")));
-        assert!(!is_fast_call_eligible(&function_with_js_params(5, true, "wide")));
-        assert!(!is_fast_call_eligible(&function_with_js_params(1, false, "indirect")));
-        assert!(!is_fast_call_eligible(&function_with_js_params(1, true, "work$async")));
+        assert!(is_fast_call_eligible(&function_with_js_params(
+            4, true, "ok"
+        )));
+        assert!(!is_fast_call_eligible(&function_with_js_params(
+            5, true, "wide"
+        )));
+        assert!(!is_fast_call_eligible(&function_with_js_params(
+            1, false, "indirect"
+        )));
+        assert!(!is_fast_call_eligible(&function_with_js_params(
+            1,
+            true,
+            "work$async"
+        )));
     }
 
     #[test]

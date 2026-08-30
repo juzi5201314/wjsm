@@ -169,10 +169,17 @@ pub(crate) struct Lowerer {
     /// 降级（此时记录已存在）才折叠——函数值只能在其 create_closure（声明语句
     /// 处）之后被调用，故读取必在初始化之后，无 TDZ 风险。
     pub(crate) module_const_literals: std::collections::HashMap<String, wjsm_ir::Constant>,
+    /// 顶层一次性求值的类：方法体内读类名可折叠为构造器 `FunctionRef`，
+    /// 避免捕获 classEnv。循环 / 函数内 / class decorator / 私有成员不得入栈。
+    pub(crate) once_eval_class_ctors: Vec<(CapturedBinding, wjsm_ir::FunctionId)>,
     /// 每层函数的共享 env 对象（ValueId + 已注册捕获变量集合 + 最后写入的 block + 是否 dominate 全部后续 block）。
     pub(crate) shared_env_stack: Vec<Option<SharedEnvFrame>>,
     /// 当前正在 lowering 的按迭代词法环境；嵌套循环按原型链连接。
     pub(crate) iteration_env_stack: Vec<IterationEnvFrame>,
+    /// 正在降级的循环语句嵌套深度（while / do-while / for / for-in / for-of）。
+    /// 覆盖条件、更新、右值与循环体；`iteration_env_stack` 只在有按迭代捕获时
+    /// 才压帧，不能单独作为「是否在循环内」的信号。
+    pub(crate) loop_depth: usize,
     // ── 模块系统相关 ────────────────────────────────────────────────────────
     /// 当前正在编译的模块 ID（用于多模块编译）
     pub(crate) current_module_id: Option<wjsm_ir::ModuleId>,

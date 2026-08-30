@@ -100,6 +100,7 @@ impl Lowerer {
             function_ctor_super_proto_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             iteration_env_stack: Vec::new(),
+            loop_depth: 0,
             current_module_id: None,
             import_bindings: std::collections::HashMap::new(),
             export_map: std::collections::HashMap::new(),
@@ -168,6 +169,7 @@ impl Lowerer {
             map_bindings: std::collections::HashSet::new(),
             set_bindings: std::collections::HashSet::new(),
             module_const_literals: std::collections::HashMap::new(),
+            once_eval_class_ctors: Vec::new(),
             eval_continue_block: None,
             new_expr_continue_block: None,
             await_continue_block: None,
@@ -936,6 +938,13 @@ impl Lowerer {
         block: BasicBlockId,
         binding: &CapturedBinding,
     ) -> Result<ValueId, LoweringError> {
+        if let Some(function_id) = self.once_eval_class_ctor_for(binding) {
+            let constant = self.module.add_constant(Constant::FunctionRef(function_id));
+            let dest = self.alloc_value();
+            self.current_function
+                .append_instruction(block, Instruction::Const { dest, constant });
+            return Ok(dest);
+        }
         if self.binding_belongs_to_current_function(binding) {
             let shared_env = self.alloc_value();
             self.current_function.append_instruction(

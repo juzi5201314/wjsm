@@ -408,6 +408,20 @@ impl Lowerer {
             let _ = self.scopes.set_initialised(sid, class_name, false);
         }
 
+        let class_self_binding = class_scope_id.map(|sid| CapturedBinding::new(class_name, sid));
+        let has_private_member = class.body.iter().any(|member| {
+            matches!(
+                member,
+                swc_ast::ClassMember::PrivateMethod(_) | swc_ast::ClassMember::PrivateProp(_)
+            )
+        });
+        let once_eval_class = self.class_eval_is_once(class_self_binding.as_ref())
+            && class.decorators.is_empty()
+            && !has_private_member;
+        if once_eval_class && let Some(binding) = class_self_binding {
+            self.push_once_eval_class_ctor(binding, ctor_function_id);
+        }
+
         // ── 物化构造器 + 创建原型 ──
         let block = self.materialize_private_member_values(block, &mut private_members)?;
 
@@ -650,6 +664,9 @@ impl Lowerer {
         }
 
         self.pop_class_private_name_scope();
+        if once_eval_class && class_scope_id.is_some() {
+            self.pop_once_eval_class_ctor();
+        }
         Ok((block, ctor_dest, direct_constructor))
     }
 

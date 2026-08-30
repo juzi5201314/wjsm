@@ -310,4 +310,45 @@ impl Lowerer {
         self.expr_merge_block = Some(after);
         Ok(if update.prefix { new_val } else { num_val })
     }
+
+    /// 顶层 `$module_main` 且类只求值一次：不在任何循环内，除本类 classEnv
+    /// 外没有其它按迭代 env。循环内每次求值新建构造器，不能折成共享 FunctionRef。
+    pub(crate) fn class_eval_is_once(&self, class_self: Option<&CapturedBinding>) -> bool {
+        if self.current_function.name() != MODULE_ENTRY_IR_NAME {
+            return false;
+        }
+        // `iteration_env_stack` 在循环头绑定未被捕获时为空；while 条件在
+        // `label_stack` 压 Loop 之前求值。loop_depth 覆盖整条循环语句。
+        if self.loop_depth != 0
+            || self
+                .label_stack
+                .iter()
+                .any(|ctx| ctx.kind == LabelKind::Loop)
+        {
+            return false;
+        }
+        self.iteration_env_stack
+            .iter()
+            .all(|frame| class_self.is_some_and(|binding| frame.bindings.contains(binding)))
+    }
+
+    pub(crate) fn push_once_eval_class_ctor(&mut self, binding: CapturedBinding, ctor: FunctionId) {
+        self.once_eval_class_ctors.push((binding, ctor));
+    }
+
+    pub(crate) fn pop_once_eval_class_ctor(&mut self) {
+        self.once_eval_class_ctors.pop();
+    }
+
+    pub(crate) fn once_eval_class_ctor_for(&self, binding: &CapturedBinding) -> Option<FunctionId> {
+        // 仅方法/构造器/静态块体：计算键箭头在类求值期调用，必须保留 TDZ。
+        if !self.is_method {
+            return None;
+        }
+        self.once_eval_class_ctors
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == binding)
+            .map(|(_, function_id)| *function_id)
+    }
 }
