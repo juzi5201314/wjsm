@@ -6,7 +6,10 @@
 //! 1. 把 GetProp 读取结果的使用处替换为 SetProp 写入的值；
 //! 2. 删除 NewObject、SetProp、SetProto、CallBuiltin(IsJsObject) 指令。
 //!
-//! 保守策略：任何非上述模式的使用（Call、Return、StoreVar、Phi、LoadVar 等）→ 逃逸。
+//! 保守策略：任何非上述模式的使用（Call、Return 等）→ 逃逸。
+//! `StoreVar`/`LoadVar` 在支配范围内可转发进 family；与 `exception_value`
+//! 混合的 Phi 不污染对象身份（成功路径由 `exception_phi_identity` 换成
+//! `NewObject` 后再分析）。
 
 use super::cfg_fold::terminator_successors;
 use crate::ir_walk::{collect_uses, instr_uses, instruction_dest, terminator_uses};
@@ -45,6 +48,22 @@ fn is_new_object_value(function: &wjsm_ir::Function, value: ValueId) -> bool {
     function.blocks().iter().any(|block| {
         block.instructions().iter().any(|instruction| {
             matches!(instruction, Instruction::NewObject { dest, .. } if *dest == value)
+        })
+    })
+}
+
+/// `exception_value(...)` 的 dest 只出现在 throw 菱形，不是对象身份。
+fn value_is_exception_payload(function: &wjsm_ir::Function, value: ValueId) -> bool {
+    function.blocks().iter().any(|block| {
+        block.instructions().iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::ExceptionValue,
+                    ..
+                } if *dest == value
+            )
         })
     })
 }
@@ -138,19 +157,30 @@ fn collect_object_family(
                     Instruction::Phi { dest, sources }
                         if sources.iter().any(|source| family.contains(&source.value)) =>
                     {
-                        if sources.is_empty()
-                            || sources.iter().any(|source| {
-                                !family.contains(&source.value)
-                                    && !is_new_object_value(function, source.value)
-                            })
-                        {
+                        if sources.is_empty() {
                             return None;
                         }
+                        let mut mixed_exception = false;
                         for source in sources {
-                            family.insert(source.value);
+                            if family.contains(&source.value)
+                                || is_new_object_value(function, source.value)
+                            {
+                                family.insert(source.value);
+                                continue;
+                            }
+                            if value_is_exception_payload(function, source.value) {
+                                mixed_exception = true;
+                                continue;
+                            }
+                            return None;
                         }
+                        if !mixed_exception {
+                            family.insert(*dest);
+                            delete_targets.push((block.id(), index));
+                        }
+                    }
+                    Instruction::SetProp { dest, object, .. } if family.contains(object) => {
                         family.insert(*dest);
-                        delete_targets.push((block.id(), index));
                     }
                     Instruction::CreateDataProperty { dest, object, .. }
                         if family.contains(object) =>
@@ -297,6 +327,14 @@ fn analyze_candidate(
                     }
                     delete_targets.push((block.id(), index));
                 }
+                Instruction::IsException { value, .. } if family.contains(value) => {
+                    // 异常协议：不泄露对象身份。
+                }
+                Instruction::CallBuiltin {
+                    builtin: Builtin::ExceptionValue,
+                    args,
+                    ..
+                } if args.iter().any(|value| family.contains(value)) => {}
                 Instruction::CallBuiltin {
                     dest,
                     builtin,
@@ -308,8 +346,10 @@ fn analyze_candidate(
                         used_in_terminator(function, value)
                             || !collect_uses(function, value).is_empty()
                     });
-                    if args.len() != 1 || result_has_use {
+                    if args.len() != 1 {
                         escapes = true;
+                    } else if result_has_use {
+                        // 类型测试不泄露对象；结果仍用于分支时保留指令。
                     } else {
                         delete_targets.push((block.id(), index));
                     }

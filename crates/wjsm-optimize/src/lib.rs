@@ -5,6 +5,7 @@ mod closure_direct_call;
 mod dce;
 mod escape_scalar;
 mod escape_scalar_record;
+mod exception_phi_identity;
 pub mod facts;
 mod gvn;
 mod inline_for_ea;
@@ -83,6 +84,8 @@ pub struct OptimizedUnit {
 pub fn optimize_sound(program: &mut Program) {
     inline_for_ea::run(program);
     cfg_fold::run(program);
+    exception_phi_identity::run(program);
+    cfg_fold::run(program);
     object_literal_read_fold::run(program);
     escape_scalar::run(program);
     wjsm_ir::typed_cfg::rewrite_program(program, &std::collections::HashMap::new());
@@ -99,6 +102,7 @@ pub fn optimize_speculative(program: &mut Program, facts: &SpeculativeFacts) -> 
     peel::peel_first_iteration(program, facts);
     speculative::rewrite_speculative(program, facts, &mut deopt_map, &mut slot_map);
     inline_for_ea::run(program);
+    exception_phi_identity::run(program);
     let class_seeds = wjsm_ir::value_class::FunctionSeeds {
         param_is_number: facts.param_tags.iter().map(|tag| *tag == 0x1f).collect(),
         extra_numbers: facts.extra_number_values.iter().copied().collect(),

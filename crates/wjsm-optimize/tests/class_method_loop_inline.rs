@@ -1,5 +1,5 @@
 //! 循环内 `p.scale()` 累加结果时，阶段 C 应发出 GuardSameFunction，
-//! 且 `new Point` 的构造器 Throw 菱形不得挡住阶段 A 内联。
+//! 且内联构造器的 `NewObject` 被标量替换（`scaled.x` / `scaled.y` 不再读堆）。
 
 use wjsm_ir::Instruction;
 use wjsm_parser::parse_module;
@@ -47,18 +47,18 @@ fn loop_method_and_constructor_inline() {
         .map(|instruction| format!("{instruction}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let has_set_prop = work.blocks().iter().any(|block| {
+    let has_new_object = work.blocks().iter().any(|block| {
         block
             .instructions()
             .iter()
-            .any(|instruction| matches!(instruction, Instruction::SetProp { .. }))
+            .any(|instruction| matches!(instruction, Instruction::NewObject { .. }))
     });
     assert!(
         has_guard,
         "work 应对 p.scale 发出 GuardSameFunction：{text}"
     );
     assert!(
-        has_set_prop,
-        "内联 scale 后应级联内联 Point.constructor 的 SetProp：{text}"
+        !has_new_object,
+        "内联构造器的 NewObject 应被标量替换，不应留在 work：{text}"
     );
 }
