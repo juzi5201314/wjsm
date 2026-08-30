@@ -513,21 +513,6 @@ fn load_own_data_slot(
         .load(types::I64, MemFlagsData::trusted(), value_addr, 0)
 }
 
-fn emit_is_function(builder: &mut FunctionBuilder<'_>, encoded: ir::Value) -> ir::Value {
-    let is_boxed = emit_is_boxed_handle(builder, encoded);
-    let tag = builder.ins().ushr_imm_u(encoded, 32);
-    let tag = builder.ins().band_imm_u(
-        tag,
-        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
-    );
-    let is_fn = builder.ins().icmp_imm_u(
-        ir::condcodes::IntCC::Equal,
-        tag,
-        i64::try_from(value::TAG_FUNCTION).expect("function tag fits i64"),
-    );
-    builder.ins().band(is_boxed, is_fn)
-}
-
 /// ACCESSOR 命中：hypot getter 走 CLIF 双槽直读 + typed thunk，其余 invoke。
 fn lower_accessor_invoke_or_hypot(
     cx: &mut LoweringCx<'_, '_>,

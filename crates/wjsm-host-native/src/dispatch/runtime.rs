@@ -25,6 +25,7 @@ pub(super) fn dispatch_runtime(
     args: &[i64],
     feedback_slot: Option<ValidatedFeedbackSlot>,
 ) -> i64 {
+    state.publish_function_ref_index(ctx);
     match operation {
         NativeRuntimeOp::CooperativePoll => {
             // 生成代码在每个回边饱和减 `stack_budget_bytes`，耗尽后才进入本分支；
@@ -151,6 +152,7 @@ pub(super) fn dispatch_runtime(
             u32::try_from(*function_index)
                 .ok()
                 .and_then(|function_index| state.materialize_function(function_index))
+                .inspect(|_| state.publish_function_ref_index(ctx))
                 .unwrap_or_else(|| fail_dispatch(ctx))
         }
         NativeRuntimeOp::StringConcat => {
@@ -488,9 +490,15 @@ pub(super) fn dispatch_runtime(
             store_env_slot(ctx, state, *env, *slot, *stored, *key, strict)
                 .unwrap_or_else(|()| fail_dispatch(ctx))
         }
-        NativeRuntimeOp::GetSuperBase => super_base(state).unwrap_or_else(value::encode_undefined),
+        NativeRuntimeOp::GetSuperBase => {
+            let result = super_base(state).unwrap_or_else(value::encode_undefined);
+            state.publish_function_ref_index(ctx);
+            result
+        }
         NativeRuntimeOp::GetSuperConstructor => {
-            super_constructor(state).unwrap_or_else(value::encode_undefined)
+            let result = super_constructor(state).unwrap_or_else(value::encode_undefined);
+            state.publish_function_ref_index(ctx);
+            result
         }
         NativeRuntimeOp::GetElem => {
             let [object, index] = args else {

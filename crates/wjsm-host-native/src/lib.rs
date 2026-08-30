@@ -1105,6 +1105,8 @@ struct NativeAgentState {
     object_template_meta: Vec<u32>,
     /// 当前 image 的闭包 env 布局烘焙元数据（见 `NativeProgramState::env_layout_meta`）。
     env_layout_meta: Vec<u32>,
+    /// 与 `functions` 平行：`TAG_FUNCTION` 句柄下标 → 当前 image IR 下标。
+    function_ref_index: Vec<u32>,
     function_slots: Vec<Vec<usize>>,
     function_needs_prototype: Vec<bool>,
     /// 当前 image 的类构造器显示名（见 `NativeProgramState::function_class_ctor_names`）。
@@ -1402,6 +1404,7 @@ impl NativeAgentState {
             string_constants: Vec::new(),
             object_template_meta: Vec::new(),
             env_layout_meta: Vec::new(),
+            function_ref_index: Vec::new(),
             function_slots: Vec::new(),
             function_needs_prototype: Vec::new(),
             function_class_ctor_names: Vec::new(),
@@ -2141,7 +2144,32 @@ impl NativeAgentState {
         // 必须与 handle_table_base 同步刷新，属性快链才能把 entry 里的逻辑地址
         // 换算成真实映射地址。
         ctx.heap_object_delta = self.gc.heap().object_address_delta();
+        self.rebuild_function_ref_index();
+        self.publish_function_ref_index(ctx);
         Some(())
+    }
+
+    /// 按当前 image 重算 `TAG_FUNCTION` 句柄 → IR 下标表。
+    fn rebuild_function_ref_index(&mut self) {
+        self.function_ref_index.clear();
+        self.function_ref_index
+            .extend(self.functions.iter().map(|function| {
+                if function.image_id == self.current_image_id {
+                    function.function_index
+                } else {
+                    u32::MAX
+                }
+            }));
+    }
+
+    /// 把句柄下标表挂到 vmctx，供 GuardSameFunction 的 CLIF 快路径直读。
+    pub(crate) fn publish_function_ref_index(&self, ctx: &mut NativeVmContext) {
+        ctx.function_ref_index_base = if self.function_ref_index.is_empty() {
+            std::ptr::null()
+        } else {
+            self.function_ref_index.as_ptr()
+        };
+        ctx.function_ref_index_count = u32::try_from(self.function_ref_index.len()).unwrap_or(0);
     }
 
     fn materialize_constant(
@@ -2241,6 +2269,12 @@ impl NativeAgentState {
             source_span,
         };
         self.functions.push(function);
+        let ir_index = if image_id == self.current_image_id {
+            function_index
+        } else {
+            u32::MAX
+        };
+        self.function_ref_index.push(ir_index);
         self.function_ids.insert(key, function_id);
         Some(value::encode_function_idx(function_id))
     }

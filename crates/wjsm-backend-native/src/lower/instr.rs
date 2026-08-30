@@ -757,16 +757,7 @@ pub(crate) fn lower_instruction(
             dest,
             callee,
             function,
-        } => {
-            let callee = use_value_boxed(cx.builder, cx.variables, *callee)?;
-            let function = cx.builder.ins().iconst(types::I64, i64::from(function.0));
-            let result = cx.call(
-                NativeRuntimeOp::GuardSameFunction.id(),
-                &[callee, function],
-                None,
-            )?;
-            define_value_boxed(cx.builder, cx.variables, *dest, result)
-        }
+        } => lower_guard_call_target(cx, *dest, *callee, *function),
         Instruction::CollectRestArgs { dest, skip } => {
             let skip = cx.builder.ins().iconst(types::I64, i64::from(*skip));
             let result = cx.call(NativeRuntimeOp::CollectRestArguments.id(), &[skip], None)?;
