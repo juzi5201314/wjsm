@@ -218,7 +218,7 @@ pub(crate) fn lower_function(
         let mut resume_pads = HashMap::new();
         for block in ir_function.blocks() {
             for (instruction_index, instruction) in block.instructions().iter().enumerate() {
-                if is_resume_target(instruction) {
+                if is_resume_target(instruction, f64_values) {
                     let pad = cx.builder.create_block();
                     resume_pads.insert((block.id(), instruction_index as u32), pad);
                 }

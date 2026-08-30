@@ -195,7 +195,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;opt={opt_level};probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -390,6 +390,11 @@ mod capability_tests {
         if supported {
             let compiler = NativeCompiler::new().expect("declared native host must initialize");
             assert!(compiler.settings_key().contains("arch=x86_64"));
+            assert!(
+                compiler.settings_key().contains("resume=skip-typed-f64"),
+                "typed f64 跳过 resume pad 必须进 cache 键:\n{}",
+                compiler.settings_key()
+            );
         } else {
             assert!(matches!(
                 NativeCompiler::new(),
@@ -1116,6 +1121,22 @@ mod tests {
         );
     }
 
+    /// 已证明 f64 的算术不再按指令切开 resume pad：`fadd` 必须与回边
+    /// cooperative poll 同块。逐指令 pad 会在 fadd 后立刻 `jump`，把 poll 拆走。
+    #[test]
+    fn typed_f64_loop_arith_shares_block_with_backedge() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Number(1.0)))
+            .expect("numeric loop diagnostics should compile");
+        let body = clif_section(&diagnostics.clif, ";; function 0: loop_sum");
+        let block = clif_block_containing(body, "fadd").expect("loop_sum 应发出 fadd");
+        assert!(
+            block.contains("brif"),
+            "fadd 应与回边 poll 同块，而不是被 resume pad 切开:\n{block}"
+        );
+    }
+
     /// 同一帧局部混入非 number 写入时，加法必须走动态二元 dispatcher；
     /// 入口 `undefined` 初值与 `null` 都不是合法的 double 位模式。
     /// resume 分发仍可能为其它已证明 number 的 SSA 发出 f64 块参数。
@@ -1428,6 +1449,19 @@ mod tests {
             Some(rel) => &rest[..skip + rel],
             None => rest,
         }
+    }
+
+    /// 截出包含 `needle` 的 CLIF 基本块（从 `blockN:` 到下一个 `block`）。
+    fn clif_block_containing<'a>(clif: &'a str, needle: &str) -> Option<&'a str> {
+        let at = clif.find(needle)?;
+        let prefix = &clif[..at];
+        let start = prefix.rfind("\nblock").map(|idx| idx + 1).unwrap_or(0);
+        let rest = &clif[at..];
+        let end = rest
+            .find("\nblock")
+            .map(|rel| at + rel)
+            .unwrap_or(clif.len());
+        Some(&clif[start..end])
     }
 
     fn direct_call_artifact(js_params: usize, call_args: usize, callee: &str) -> PortableArtifact {
