@@ -140,12 +140,14 @@ pub(crate) fn lower_terminator(
             cx.builder.ins().return_(&[result]);
         }
         Terminator::Jump { target } => {
+            define_phi_edge(cx.builder, cx.variables, phi_edges, predecessor, *target)?;
             if poll_edges.contains(&(predecessor, *target)) {
                 cx.flush()?;
-                lower_cooperative_poll(cx)?;
+                // 快路径 brif 直接回循环头，避免 extra block 把 f64 归纳变量溢到栈上。
+                lower_cooperative_poll_jump(cx, blocks[target])?;
+            } else {
+                cx.builder.ins().jump(blocks[target], &[]);
             }
-            define_phi_edge(cx.builder, cx.variables, phi_edges, predecessor, *target)?;
-            cx.builder.ins().jump(blocks[target], &[]);
         }
         Terminator::Branch {
             condition,
@@ -397,6 +399,25 @@ fn commit_poll_budget(cx: &mut LoweringCx<'_, '_>, remaining: ir::Value) -> Resu
         vmctx_offset(offset_of!(NativeVmContext, stack_budget_bytes))?,
     );
     Ok(())
+}
+
+/// Jump 回边：在当前块（与循环体 `fadd` 同块）扣减预算并 `brif` 到目标。
+/// 慢路径才分裂出去，热回边不再经过 continue 块。
+fn lower_cooperative_poll_jump(cx: &mut LoweringCx<'_, '_>, dest: ir::Block) -> Result<()> {
+    let budget = current_poll_budget(cx)?;
+    let step_i64 =
+        i64::try_from(COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES).expect("loop poll step fits i64");
+    let exhausted = cx.builder.ins().icmp_imm_s(
+        ir::condcodes::IntCC::UnsignedLessThanOrEqual,
+        budget,
+        step_i64,
+    );
+    let step = cx.builder.ins().iconst(types::I64, step_i64);
+    let remaining = cx.builder.ins().isub(budget, step);
+    commit_poll_budget(cx, remaining)?;
+    let slow_block = cx.builder.create_block();
+    cx.builder.ins().brif(exhausted, slow_block, &[], dest, &[]);
+    emit_poll_slow_path(cx, slow_block, dest)
 }
 
 pub(crate) fn lower_cooperative_poll(cx: &mut LoweringCx<'_, '_>) -> Result<()> {

@@ -1018,6 +1018,10 @@ mod tests {
             "寄存器预算快路径不得 store stack_budget_bytes:\n{fast}"
         );
         assert!(
+            fast.contains("fadd") || fast.contains("brif"),
+            "Jump 回边 poll 应留在循环体块内，而不是单独 continue 块:\n{fast}"
+        );
+        assert!(
             body.contains("store"),
             "函数出口仍须把预算写回 vmctx:\n{body}"
         );
