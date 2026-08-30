@@ -52,6 +52,10 @@ pub const NATIVE_ALLOCATION_FAST_HOST: u32 = 1 << 2;
 /// 外部事件轮询）。步长越小轮询越频繁；取 64KiB 使 8MiB 初始预算在无外部事件的
 /// 紧循环中约每 128 次回边轮询一次。
 pub const COOPERATIVE_POLL_STEP_BYTES: usize = 64 * 1024;
+/// 循环回边专用步长：比分配路径的 [`COOPERATIVE_POLL_STEP_BYTES`] 小得多，避免
+/// 无分配紧循环（算术、迭代器）每 ~128 次回边就进一次 dispatcher，同时仍能在
+/// 数百万次迭代量级上触发协作点。8MiB 预算下约每 8192 次回边轮询一次。
+pub const COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES: usize = 1024;
 /// 宿主 `CooperativePoll` 处理结束后重置到的预算值（见
 /// [`crate::NativeVmContext::stack_budget_bytes`]）。
 pub const COOPERATIVE_POLL_BUDGET: usize = 8 * 1024 * 1024;

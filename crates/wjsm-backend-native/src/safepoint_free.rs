@@ -117,6 +117,8 @@ fn has_non_boolean_branch_condition(function: &wjsm_ir::Function, constants: &[C
 }
 
 /// 与 `lower_function_parameters` 一致：非 frame local 的参数会经宿主 `StoreVar` 落槽。
+/// 仅当该参数在本函数体内确有 LoadVar/StoreVar 时才需要宿主槽；未使用的 `$env`/`$this`
+/// 形参不应把整函数挡在 safepoint-free 之外（典型：顶层 `function work()`）。
 fn parameters_need_host_store(
     function: &wjsm_ir::Function,
     frame_locals: &BTreeSet<&str>,
@@ -152,7 +154,19 @@ fn parameters_need_host_store(
         if frame_locals.contains(storage_name) {
             continue;
         }
-        if variable_slots.contains_key(storage_name) {
+        if !variable_slots.contains_key(storage_name) {
+            continue;
+        }
+        let touched = function.blocks().iter().any(|block| {
+            block.instructions().iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                        if name == storage_name
+                )
+            })
+        });
+        if touched {
             return true;
         }
     }
@@ -361,6 +375,52 @@ mod tests {
 
         let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
         assert_eq!(free, HashSet::from([FunctionId(1)]));
+    }
+
+    #[test]
+    fn unused_module_env_params_skip_host_store() {
+        let mut program = Program::new();
+        let zero = program.add_constant(Constant::Number(0.0));
+        let mut function = Function::new("work", BasicBlockId(0));
+        function.set_params(vec!["$1.$env".into(), "$1.$this".into()]);
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::Const {
+            dest: ValueId(0),
+            constant: zero,
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(0)),
+        });
+        function.push_block(block);
+        program.push_function(function);
+        let frame_locals = program.frame_local_variable_names_by_function();
+        let slots = test_variable_slots(&program);
+        assert!(
+            !parameters_need_host_store(&program.functions()[0], &frame_locals[0], &slots),
+            "unused $1.$env/$1.$this must not force host stores"
+        );
+    }
+
+    #[test]
+    fn touched_env_param_disqualifies_safepoint_free() {
+        let mut program = Program::new();
+        let _zero = program.add_constant(Constant::Number(0.0));
+        let mut function = Function::new("uses_env", BasicBlockId(0));
+        function.set_direct_callable(true);
+        function.set_params(vec!["$1.$env".into(), "$1.$this".into()]);
+        let mut block = BasicBlock::new(BasicBlockId(0));
+        block.push_instruction(Instruction::LoadVar {
+            dest: ValueId(0),
+            name: "$env".into(),
+        });
+        block.set_terminator(Terminator::Return {
+            value: Some(ValueId(0)),
+        });
+        function.push_block(block);
+        program.push_function(function);
+
+        let free = infer_safepoint_free_functions(&program, &test_variable_slots(&program));
+        assert!(free.is_empty());
     }
 
     #[test]

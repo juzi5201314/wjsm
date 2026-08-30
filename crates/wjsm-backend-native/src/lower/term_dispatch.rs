@@ -380,7 +380,8 @@ pub(crate) fn lower_cooperative_poll(cx: &mut LoweringCx<'_, '_>) -> Result<()> 
         .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), budget_addr, 0);
-    let step_i64 = i64::try_from(COOPERATIVE_POLL_STEP_BYTES).expect("poll step fits i64");
+    let step_i64 =
+        i64::try_from(COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES).expect("loop poll step fits i64");
     // 预算已 ≤ 步长（含耗尽的 0）→ 慢路径：进 dispatcher 轮询并重置预算。
     let exhausted = cx.builder.ins().icmp_imm_s(
         ir::condcodes::IntCC::UnsignedLessThanOrEqual,
