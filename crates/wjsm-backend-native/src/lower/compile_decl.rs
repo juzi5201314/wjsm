@@ -544,6 +544,11 @@ pub(crate) fn declare_math_thunks(
             }
         }
     }
+    // hypot getter 的 CallBuiltin 目标未经 f64 证明，但 ACCESSOR IC 快路径仍要
+    // 引用 typed `Math.hypot` thunk；有合格 getter 时强制声明。
+    if !wjsm_optimize::collect_hypot_getters(program).is_empty() {
+        used.insert(wjsm_ir::Builtin::MathHypot);
+    }
     let mut used: Vec<_> = used.into_iter().collect();
     used.sort_by_key(|builtin| builtin.wire_id());
     let unary_signature = math_thunk_signature(module, NativeSignature::F64Unary);

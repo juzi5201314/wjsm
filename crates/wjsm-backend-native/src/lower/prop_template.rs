@@ -47,7 +47,7 @@ pub(crate) struct GuardedPropAccess {
 /// 用户代码），再走与普通 `GetProp` 完全一致的 IC / 宿主路径。
 pub(crate) fn lower_get_prop_guarded(
     cx: &mut LoweringCx<'_, '_>,
-    tables: &InstructionTables<'_>,
+    tables: &mut InstructionTables<'_>,
     access: GuardedPropAccess,
     roots: &[ValueId],
 ) -> Result<()> {
@@ -99,6 +99,7 @@ pub(crate) fn lower_get_prop_guarded(
     if let Some(slot) = tables.ic_slots.get(&dest).copied() {
         lower_get_prop_ic_non_nullish(
             cx,
+            tables,
             tables.barrier_thunks,
             prop_access(tables, dest, object, key, slot),
             roots,
@@ -385,7 +386,7 @@ pub(crate) fn emit_template_own_store(
 
 pub(crate) fn lower_get_prop_with_template_or_ic(
     cx: &mut LoweringCx<'_, '_>,
-    tables: &InstructionTables<'_>,
+    tables: &mut InstructionTables<'_>,
     barrier_thunks: &BarrierThunks,
     dest: ValueId,
     object: ValueId,
@@ -420,6 +421,7 @@ pub(crate) fn lower_get_prop_with_template_or_ic(
     if let Some(slot) = tables.ic_slots.get(&dest).copied() {
         lower_get_prop_ic(
             cx,
+            tables,
             barrier_thunks,
             prop_access(tables, dest, object, key, slot),
             roots,

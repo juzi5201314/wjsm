@@ -2,22 +2,24 @@
 
 #![allow(unused_imports)]
 use super::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cranelift_codegen::ir::{self, InstBuilder, MemFlagsData, types};
+use cranelift_frontend::FunctionBuilder;
 use std::mem::offset_of;
-use wjsm_ir::{ValueId, constants, value};
+use wjsm_ir::{Builtin, Constant, ValueId, constants, value};
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext};
 
 /// 常量字符串键的 GetProp 快路径入口：创建 merge 块后交给共享的非 nullish
 /// IC 核心。
 pub(crate) fn lower_get_prop_ic(
     cx: &mut LoweringCx<'_, '_>,
+    tables: &mut InstructionTables<'_>,
     barrier_thunks: &BarrierThunks,
     access: PropAccess,
     roots: &[ValueId],
 ) -> Result<()> {
     let merge_block = cx.builder.create_block();
-    lower_get_prop_ic_non_nullish(cx, barrier_thunks, access, roots, merge_block)?;
+    lower_get_prop_ic_non_nullish(cx, tables, barrier_thunks, access, roots, merge_block)?;
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
     Ok(())
@@ -26,12 +28,14 @@ pub(crate) fn lower_get_prop_ic(
 /// GetProp IC 的共享核心。命中路径有三条：
 /// - OWN_DATA：接收者 shape 命中后单 load 值槽；
 /// - PROTO_DATA：接收者 shape + proto 世代命中后，从 holder 值槽 load；
-/// - ACCESSOR：接收者 shape + proto 世代命中后 load getter，并直接
-///   `invoke_callable(getter, receiver)`（不查属性表）。
+/// - ACCESSOR：接收者 shape + proto 世代命中后 load getter；若 IC 槽记录了
+///   hypot 双槽下标且 getter 仍是编译期识别的 `TAG_FUNCTION`，则直读接收者
+///   槽并调用 typed `Math.hypot` thunk，否则 `invoke_callable`。
 ///
 /// 其余情况 miss 到 `GetPropIc` 走完整宿主 [[Get]] 并回填。
 pub(crate) fn lower_get_prop_ic_non_nullish(
     cx: &mut LoweringCx<'_, '_>,
+    tables: &mut InstructionTables<'_>,
     barrier_thunks: &BarrierThunks,
     access: PropAccess,
     roots: &[ValueId],
@@ -442,8 +446,9 @@ pub(crate) fn lower_get_prop_ic_non_nullish(
     define_value_boxed(cx.builder, cx.variables, dest, proto_value)?;
     cx.builder.ins().jump(merge_block, &[]);
 
-    // ACCESSOR 命中：load getter 后直接走宿主 invoke_callable。getter 是刚从
-    // 堆里读出的临时句柄，必须作为临时 root 发布后再发起可能触发 GC 的调用。
+    // ACCESSOR 命中：load getter 后优先走 hypot 快路径（CLIF 比较 function_id +
+    // 双槽直读 + typed thunk），否则宿主 invoke_callable。getter 是刚从堆里
+    // 读出的临时句柄，invoke 路径必须作为临时 root 发布后再发起可能触发 GC 的调用。
     cx.builder.switch_to_block(accessor_hit_block);
     cx.builder.seal_block(accessor_hit_block);
     let getter_shift = cx.builder.ins().ishl_imm_u(ic_val_idx, 3);
@@ -456,10 +461,18 @@ pub(crate) fn lower_get_prop_ic_non_nullish(
         .builder
         .ins()
         .load(types::I64, MemFlagsData::trusted(), getter_addr, 0);
-    cx.publish_roots(roots, &[getter])?;
-    let result = cx.call(NativeRuntimeOp::GetPropAccessor.id(), &[getter, obj], None)?;
-    define_value_boxed(cx.builder, cx.variables, dest, result)?;
-    cx.builder.ins().jump(merge_block, &[]);
+    lower_accessor_invoke_or_hypot(
+        cx,
+        tables,
+        dest,
+        obj,
+        getter,
+        addr,
+        ic_ptr,
+        key,
+        roots,
+        merge_block,
+    )?;
 
     // miss：宿主完整 [[Get]] + IC 回填；`ic_ptr` 作为回填目标传入。
     cx.builder.switch_to_block(miss_block);
@@ -472,5 +485,146 @@ pub(crate) fn lower_get_prop_ic_non_nullish(
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 
+    Ok(())
+}
+
+fn hypot_fast_path_for_key(tables: &InstructionTables<'_>, key: ValueId) -> bool {
+    let Some(constant_id) = tables.constant_defs.get(&key) else {
+        return false;
+    };
+    matches!(
+        tables.constants.get(constant_id.0 as usize),
+        Some(Constant::String(name)) if tables.hypot_property_names.contains(name)
+    )
+}
+
+fn load_own_data_slot(
+    builder: &mut FunctionBuilder<'_>,
+    addr: ir::Value,
+    index: ir::Value,
+) -> ir::Value {
+    let shift = builder.ins().ishl_imm_u(index, 3);
+    let offset = builder
+        .ins()
+        .iadd_imm_s(shift, i64::from(constants::HEAP_OBJECT_HEADER_SIZE));
+    let value_addr = builder.ins().iadd(addr, offset);
+    builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), value_addr, 0)
+}
+
+fn emit_is_function(builder: &mut FunctionBuilder<'_>, encoded: ir::Value) -> ir::Value {
+    let is_boxed = emit_is_boxed_handle(builder, encoded);
+    let tag = builder.ins().ushr_imm_u(encoded, 32);
+    let tag = builder.ins().band_imm_u(
+        tag,
+        i64::try_from(value::TAG_MASK).expect("tag mask fits i64"),
+    );
+    let is_fn = builder.ins().icmp_imm_u(
+        ir::condcodes::IntCC::Equal,
+        tag,
+        i64::try_from(value::TAG_FUNCTION).expect("function tag fits i64"),
+    );
+    builder.ins().band(is_boxed, is_fn)
+}
+
+/// ACCESSOR 命中：hypot getter 走 CLIF 双槽直读 + typed thunk，其余 invoke。
+fn lower_accessor_invoke_or_hypot(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &mut InstructionTables<'_>,
+    dest: ValueId,
+    obj: ir::Value,
+    getter: ir::Value,
+    addr: ir::Value,
+    ic_ptr: ir::Value,
+    key: ValueId,
+    roots: &[ValueId],
+    merge_block: ir::Block,
+) -> Result<()> {
+    if !hypot_fast_path_for_key(tables, key) {
+        cx.publish_roots(roots, &[getter])?;
+        let result = cx.call(NativeRuntimeOp::GetPropAccessor.id(), &[getter, obj], None)?;
+        define_value_boxed(cx.builder, cx.variables, dest, result)?;
+        cx.builder.ins().jump(merge_block, &[]);
+        return Ok(());
+    }
+
+    let hypot_block = cx.builder.create_block();
+    let hypot_num_block = cx.builder.create_block();
+    let invoke_block = cx.builder.create_block();
+
+    let packed = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        ic_ptr,
+        i32::try_from(constants::IC_SLOT_RESERVED1_OFFSET).expect("reserved1 offset fits i32"),
+    );
+    let packed64 = cx.builder.ins().uextend(types::I64, packed);
+    let expected_fn = cx.builder.ins().load(
+        types::I32,
+        MemFlagsData::trusted(),
+        ic_ptr,
+        i32::try_from(constants::IC_SLOT_RESERVED2_OFFSET).expect("reserved2 offset fits i32"),
+    );
+    let expected_fn = cx.builder.ins().uextend(types::I64, expected_fn);
+    let packed_ok = cx
+        .builder
+        .ins()
+        .icmp_imm_u(ir::condcodes::IntCC::NotEqual, packed64, 0);
+    let getter_plain = emit_strip_gc_color(cx.builder, getter);
+    let is_fn = emit_is_function(cx.builder, getter_plain);
+    let fn_idx = cx
+        .builder
+        .ins()
+        .band_imm_u(getter_plain, i64::from(u32::MAX));
+    let fn_match = cx
+        .builder
+        .ins()
+        .icmp(ir::condcodes::IntCC::Equal, fn_idx, expected_fn);
+    let hypot_ok = cx.builder.ins().band(packed_ok, is_fn);
+    let hypot_ok = cx.builder.ins().band(hypot_ok, fn_match);
+    cx.builder
+        .ins()
+        .brif(hypot_ok, hypot_block, &[], invoke_block, &[]);
+
+    cx.builder.switch_to_block(hypot_block);
+    cx.builder.seal_block(hypot_block);
+    let lhs_idx = cx.builder.ins().ushr_imm_u(packed64, 16);
+    let rhs_idx = cx.builder.ins().band_imm_u(packed64, i64::from(u16::MAX));
+    let lhs = load_own_data_slot(cx.builder, addr, lhs_idx);
+    let rhs = load_own_data_slot(cx.builder, addr, rhs_idx);
+    let lhs_num = emit_is_number(cx.builder, lhs);
+    let rhs_num = emit_is_number(cx.builder, rhs);
+    let both_num = cx.builder.ins().band(lhs_num, rhs_num);
+    cx.builder
+        .ins()
+        .brif(both_num, hypot_num_block, &[], invoke_block, &[]);
+
+    cx.builder.switch_to_block(hypot_num_block);
+    cx.builder.seal_block(hypot_num_block);
+    let thunk = import_math_thunk(
+        cx.builder,
+        tables.math_thunks,
+        tables.imported_math_thunks,
+        Builtin::MathHypot,
+    )?;
+    let lhs_f64 = unbox_f64(cx.builder, lhs);
+    let rhs_f64 = unbox_f64(cx.builder, rhs);
+    let call = cx.builder.ins().call(thunk, &[lhs_f64, rhs_f64]);
+    let native = *cx
+        .builder
+        .inst_results(call)
+        .first()
+        .context("Math.hypot thunk 未返回结果")?;
+    let boxed = box_f64_result(cx.builder, native);
+    define_value_boxed(cx.builder, cx.variables, dest, boxed)?;
+    cx.builder.ins().jump(merge_block, &[]);
+
+    cx.builder.switch_to_block(invoke_block);
+    cx.builder.seal_block(invoke_block);
+    cx.publish_roots(roots, &[getter])?;
+    let result = cx.call(NativeRuntimeOp::GetPropAccessor.id(), &[getter, obj], None)?;
+    define_value_boxed(cx.builder, cx.variables, dest, result)?;
+    cx.builder.ins().jump(merge_block, &[]);
     Ok(())
 }

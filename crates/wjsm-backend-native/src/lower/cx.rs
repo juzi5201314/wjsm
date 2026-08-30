@@ -724,6 +724,8 @@ pub(crate) struct InstructionTables<'a> {
     pub(crate) function_decls: &'a [DeclaredFunction],
     pub(crate) imported_function_decls: &'a mut HashMap<FunctionId, ir::FuncRef>,
     pub(crate) direct_callable_functions: &'a HashSet<FunctionId>,
+    /// 程序内 hypot getter 的属性名（如 `"norm"`）；空集则 ACCESSOR IC 不发 hypot 快路径。
+    pub(crate) hypot_property_names: &'a HashSet<String>,
 }
 
 /// 调用类指令的操作数。

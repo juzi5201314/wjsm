@@ -243,6 +243,11 @@ fn static_member_pristine(
     false
 }
 
+/// `Math.hypot` 是否仍为规范内建（供 ACCESSOR hypot 快路径回填判定）。
+pub(super) fn math_hypot_is_pristine(state: &mut NativeAgentState) -> bool {
+    static_member_pristine(state, Builtin::MathHypot, "Math", "hypot")
+}
+
 /// %String.prototype% 方法（`"x".slice(...)`）：receiver 必须是字符串基元
 /// （含 SSO 内联），且原型对象上该方法槽仍为规范内建（原型未物化时不可能
 /// 被改动）。原型物化时全部方法名已驻留，名字缺失说明状态不一致，保守

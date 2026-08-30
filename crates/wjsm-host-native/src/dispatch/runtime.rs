@@ -469,8 +469,7 @@ pub(super) fn dispatch_runtime(
             if value::is_exception(*key) {
                 return *key;
             }
-            load_env_slot(ctx, state, *env, *slot, *key)
-                .unwrap_or_else(|()| fail_dispatch(ctx))
+            load_env_slot(ctx, state, *env, *slot, *key).unwrap_or_else(|()| fail_dispatch(ctx))
         }
         NativeRuntimeOp::StoreEnvSlot | NativeRuntimeOp::StoreEnvSlotStrict => {
             let [env, slot, stored, key] = args else {
@@ -977,6 +976,7 @@ fn set_property_completion(
     key: i64,
     stored: i64,
 ) -> property_write::SetResult {
+    invalidate_hypot_accessor_if_key(state, key);
     if value::is_proxy(object) {
         return super::proxy::set(ctx, state, object, key, stored, object);
     }
@@ -1471,6 +1471,100 @@ unsafe fn write_ic_slot(
         std::ptr::write(slot.add(5), expected_proto);
         std::ptr::write(slot.add(6), 0);
         std::ptr::write(slot.add(7), 0);
+    }
+}
+
+/// ACCESSOR hypot 快路径：把接收者双槽下标与 getter 的运行时 function_id 写入
+/// reserved 字。packed 为 0 表示未启用（CLIF 回落到 invoke）。
+fn maybe_fill_hypot_accessor_slots(
+    state: &mut NativeAgentState,
+    receiver_handle: u32,
+    getter: i64,
+    ic_slot_ptr: *mut u32,
+) {
+    if !value::is_function(getter) {
+        return;
+    }
+    let Some(function) = state.callable_function(getter) else {
+        return;
+    };
+    let keys = state
+        .program_snapshots
+        .get(&function.image_id)
+        .and_then(|program| {
+            wjsm_optimize::hypot_getter_slots_by_function(program)
+                .get(&function.function_index)
+                .cloned()
+        });
+    let Some((lhs_key, rhs_key)) = keys else {
+        return;
+    };
+    if !super::intrinsics::math_hypot_is_pristine(state) {
+        return;
+    }
+    let Some(lhs_name) = state.intern_property_string(RuntimeString::from(lhs_key)) else {
+        return;
+    };
+    let Some(rhs_name) = state.intern_property_string(RuntimeString::from(rhs_key)) else {
+        return;
+    };
+    let Ok(Some((_, lhs_idx))) = state
+        .gc
+        .heap()
+        .own_data_property_index(receiver_handle, lhs_name)
+    else {
+        return;
+    };
+    let Ok(Some((_, rhs_idx))) = state
+        .gc
+        .heap()
+        .own_data_property_index(receiver_handle, rhs_name)
+    else {
+        return;
+    };
+    if lhs_idx == rhs_idx || lhs_idx > u32::from(u16::MAX) || rhs_idx > u32::from(u16::MAX) {
+        return;
+    }
+    let packed = (lhs_idx << 16) | rhs_idx;
+    let function_id = value::decode_function_idx(getter);
+    // SAFETY: 与 write_ic_slot 相同的槽指针契约；ACCESSOR kind 已写入，trio
+    // marker 不会占用 reserved。
+    unsafe {
+        std::ptr::write(ic_slot_ptr.add(6), packed);
+        std::ptr::write(ic_slot_ptr.add(7), function_id);
+    }
+}
+
+fn hypot_intrinsic_key_mutated(state: &NativeAgentState, key: i64) -> bool {
+    state.text_matches(key, "hypot") || state.text_matches(key, "Math")
+}
+
+/// `Math` / `Math.hypot` 被改写时清掉 ACCESSOR hypot 槽，迫使下一次命中走
+/// invoke（其中 IntrinsicPristine 会看到用户覆盖）。
+pub(super) fn invalidate_hypot_accessor_if_key(state: &mut NativeAgentState, key: i64) {
+    if hypot_intrinsic_key_mutated(state, key) {
+        clear_hypot_accessor_slots(state);
+    }
+}
+
+fn clear_hypot_accessor_slots(state: &mut NativeAgentState) {
+    for image in state.images.values().chain(state.retained_images.values()) {
+        let words = image.ic_slot_word_count();
+        let ptr = image.ic_slots().cast_mut();
+        if ptr.is_null() || words < 8 {
+            continue;
+        }
+        let slots = words / 8;
+        for index in 0..slots {
+            // SAFETY: IC 区由本 owner 线程经 vmctx 原地回填，字数由 image 持有。
+            unsafe {
+                let slot = ptr.add(index * 8);
+                if std::ptr::read(slot.add(2)) == constants::IC_KIND_ACCESSOR {
+                    std::ptr::write(slot.add(6), 0);
+                    std::ptr::write(slot.add(7), 0);
+                }
+            }
+        }
     }
 }
 
@@ -2194,6 +2288,7 @@ fn backfill_get_prop_ic(
                             expected_proto,
                         )
                     };
+                    maybe_fill_hypot_accessor_slots(state, handle, getter, ic_slot_ptr);
                 } else {
                     unsafe { write_ic_slot_megamorphic(ic_slot_ptr) };
                 }
@@ -2701,6 +2796,7 @@ pub(super) fn delete_property_operator(
         Ok(key) => key,
         Err(exception) => return exception,
     };
+    invalidate_hypot_accessor_if_key(state, key);
     if value::is_proxy(object) {
         return super::proxy::delete_for_operator(ctx, state, object, key, strict);
     }
@@ -4640,7 +4736,8 @@ fn load_env_slot(
         let (expected_shape, slot_count) = env_layout_meta_for_function(state, function_index);
         if expected_shape != 0 && slot < slot_count {
             if let Some(handle) = object_handle(env) {
-                if matches!(state.gc.heap().shape_id(handle), Ok(shape) if shape == expected_shape) {
+                if matches!(state.gc.heap().shape_id(handle), Ok(shape) if shape == expected_shape)
+                {
                     if let Some(name_id) = property_key(state, key) {
                         if let Ok(Some((_, index))) =
                             state.gc.heap().own_data_property_index(handle, name_id)
@@ -4676,7 +4773,8 @@ fn store_env_slot(
         let (expected_shape, slot_count) = env_layout_meta_for_function(state, function_index);
         if expected_shape != 0 && slot < slot_count {
             if let Some(handle) = object_handle(env) {
-                if matches!(state.gc.heap().shape_id(handle), Ok(shape) if shape == expected_shape) {
+                if matches!(state.gc.heap().shape_id(handle), Ok(shape) if shape == expected_shape)
+                {
                     if let Some(name_id) = property_key(state, key) {
                         if let Ok(Some((_, index))) =
                             state.gc.heap().own_data_property_index(handle, name_id)

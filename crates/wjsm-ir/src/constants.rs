@@ -219,8 +219,10 @@ pub const HEAP_OBJECT_VALUE_SLOT_SIZE: u32 = 8;
 //                       kind=OwnDataTrio 时为 `value` 的值槽下标
 // +20 u32 expected_proto kind=ProtoData/Accessor 时 receiver 的直接原型句柄；
 //                       kind=OwnDataTrio 时为 `length` 的值槽下标
-// +24 u32 trio_site      OwnDataTrio 规划槽在预填失败时写 1，供 miss 回填识别
-// +28 reserved           保留清零
+// +24 u32 reserved1      OwnDataTrio 规划槽在预填失败时写 trio_site marker；
+//                       ACCESSOR hypot 快路径写 packed 槽下标 `(lhs<<16)|rhs`，
+//                       0 表示未启用（两键下标必不同，故 packed 非 0）
+// +28 u32 reserved2      ACCESSOR hypot 期望的运行时 function_id；其余 kind 清零
 //
 // 空槽判定用 `kind == 0`（而非 shape_id == 0）——`SHAPE_ID_EMPTY` 是合法 shape。
 // IC 区由 data segment 的零填充自动初始化为 Empty，无需运行时初始化。
@@ -252,6 +254,8 @@ pub const IC_KIND_PROTO_DATA: u32 = 2;
 pub const IC_KIND_MEGAMORPHIC: u32 = 3;
 /// accessor 属性：getter 在 `holder_handle` 的值槽 `value_index` 里；
 /// shape + 直接原型 + 世代命中后直接 `invoke_callable(getter, receiver)`。
+/// hypot getter 另在 reserved1/reserved2 记录双槽下标与 function_id，生成代码
+/// 用 CLIF 比较后直读接收者槽并调用 typed `Math.hypot` thunk。
 pub const IC_KIND_ACCESSOR: u32 = 4;
 /// 单态模板对象的 `name`/`value`/`length` 共用一槽：`+4/+16/+20` 分别是三键值槽下标。
 pub const IC_KIND_OWN_DATA_TRIO: u32 = 5;
