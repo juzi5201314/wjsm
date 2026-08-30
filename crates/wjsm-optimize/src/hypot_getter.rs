@@ -106,6 +106,7 @@ fn body_is_hypot_only(function: &Function) -> bool {
                         | Builtin::IntrinsicPristine
                         | Builtin::IntrinsicResolve
                         | Builtin::ToBoolean
+                        | Builtin::ExceptionValue
                 ),
                 _ => false,
             };
@@ -118,6 +119,7 @@ fn body_is_hypot_only(function: &Function) -> bool {
             Terminator::Return { .. }
                 | Terminator::Branch { .. }
                 | Terminator::Jump { .. }
+                | Terminator::Throw { .. }
                 | Terminator::Unreachable
         ) {
             return false;
