@@ -133,6 +133,7 @@ fn natural_loops(function: &Function, cfg: &ControlFlowGraph) -> Vec<NaturalLoop
 pub(crate) struct LoopView<'a> {
     pub(crate) function: &'a Function,
     pub(crate) func_idx: usize,
+    pub(crate) header: BasicBlockId,
     pub(crate) body: &'a HashSet<BasicBlockId>,
     /// header 的支配者集合（LoadVar 的 store 站点支配性检查用）。
     header_dominators: &'a HashSet<BasicBlockId>,
@@ -161,6 +162,7 @@ fn plan_one_loop(module: &Module, func_idx: usize, facts: &ModuleFacts) -> Optio
         let view = build_loop_view(
             module,
             func_idx,
+            natural.header,
             &natural.body,
             header_dominators,
             &defs,
@@ -203,6 +205,7 @@ fn build_defs(function: &Function) -> HashMap<ValueId, (BasicBlockId, usize)> {
 fn build_loop_view<'a>(
     module: &'a Module,
     func_idx: usize,
+    header: BasicBlockId,
     body: &'a HashSet<BasicBlockId>,
     header_dominators: &'a HashSet<BasicBlockId>,
     defs: &'a HashMap<ValueId, (BasicBlockId, usize)>,
@@ -234,6 +237,7 @@ fn build_loop_view<'a>(
     LoopView {
         function,
         func_idx,
+        header,
         body,
         header_dominators,
         defs,

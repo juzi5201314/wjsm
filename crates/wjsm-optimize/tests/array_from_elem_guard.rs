@@ -154,11 +154,30 @@ fn array_from_hypot_getter_loop_emits_elem_guard() {
     );
 }
 
+fn dump_function(program: &wjsm_ir::Program, name: &str) -> String {
+    let Some(function) = program
+        .functions()
+        .iter()
+        .find(|function| function.name() == name)
+    else {
+        return format!("missing function {name}");
+    };
+    let mut lines = Vec::new();
+    for block in function.blocks() {
+        lines.push(format!("bb{}:", block.id().0));
+        for instruction in block.instructions() {
+            lines.push(format!("  {instruction}"));
+        }
+        lines.push(format!("  {}", block.terminator()));
+    }
+    lines.join("\n")
+}
+
 #[test]
 fn object_props_work_loop_emits_elem_guard() {
     let module = parse_module(SOURCE_HYPOT_WORK).expect("解析");
     let program = lower_module(module, false).expect("lowering");
-    let text = dump_instructions(&program);
+    let text = dump_function(&program, "work");
     assert!(
         program_has_elem_guard(&program),
         "object-props 形态 work 循环应发出 GuardElementsKind：{text}"

@@ -32,7 +32,7 @@ pub use facts::{
     INLINE_MAX_NET_GROWTH, POLY_MAX, PropFact, SpeculativeFacts,
 };
 pub use hypot_getter::{
-    HypotGetter, collect_hypot_getters, hypot_getter_slots_by_function,
+    HypotGetter, collect_guarded_methods, collect_hypot_getters, hypot_getter_slots_by_function,
     hypot_own_slots_for_property, hypot_own_slots_for_template_key,
 };
 pub use inline_for_ea::{find_exception_path, max_value_id_in_function, undefined_const_id};

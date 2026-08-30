@@ -238,6 +238,44 @@ pub fn hypot_own_slots_for_template_key(
     Some((lhs.to_owned(), rhs.to_owned()))
 }
 
+/// 阶段 C `GuardSameFunction` 对应的原型方法：`(属性名, 期望函数下标)`。
+/// elem-guard pre-header 用它核对 `p.scale` 仍是数据属性且身份未变。
+pub fn collect_guarded_methods(program: &Program) -> Vec<(String, u32)> {
+    if program.functions().iter().any(Function::has_eval) {
+        return Vec::new();
+    }
+    let constants = program.constants();
+    let mut methods = Vec::new();
+    for function in program.functions() {
+        let defs = defs_in_function(function);
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let Instruction::GuardSameFunction {
+                    callee,
+                    function: target,
+                    ..
+                } = instruction
+                else {
+                    continue;
+                };
+                let Some(def) = defs.get(callee) else {
+                    continue;
+                };
+                let Instruction::GetProp { key, .. } = def else {
+                    continue;
+                };
+                let Some(property) = const_string(function, constants, *key) else {
+                    continue;
+                };
+                methods.push((property.to_owned(), target.0));
+            }
+        }
+    }
+    methods.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+    methods.dedup();
+    methods
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

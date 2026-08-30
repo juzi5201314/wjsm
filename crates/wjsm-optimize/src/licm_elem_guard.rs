@@ -30,9 +30,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use wjsm_ir::{
-    BasicBlockId, Builtin, Constant, ConstantId, Function, Instruction, Module, UnaryOp, ValueId,
+    BasicBlockId, Builtin, Constant, ConstantId, Function, Instruction, Module, Terminator,
+    UnaryOp, ValueId,
 };
 
+use super::cfg_fold::terminator_successors;
 use super::escape_scalar_record::template_key_names;
 use super::hypot_getter::{collect_hypot_getters, hypot_own_slots_for_property};
 use super::licm::LoopView;
@@ -145,11 +147,14 @@ fn push_element(constants: &[Constant], state: &mut ArrayState, template: Option
 
 // ── 循环级候选识别与安全性 ───────────────────────────────────────────────
 
-/// elem 候选：`GetElem` 的 dest → 守卫信息。
+/// elem 候选：`GetElem` 的 dest（及循环内 LoadVar 别名）→ 守卫信息。
+#[derive(Clone, Copy)]
 struct ElemCandidate {
     array: ValueId,
     template: ConstantId,
     site: (BasicBlockId, usize),
+    /// 原始 `GetElem` dest；别名与源头共享，便于按数组分组时只插一次站点。
+    origin: ValueId,
 }
 
 /// 为一个循环规划全部 elem-guard；候选存在但白名单不过时返回空。
@@ -161,7 +166,8 @@ pub(crate) fn plan_elem_guards(
     if view.has_suspend {
         return Vec::new();
     }
-    let elems = collect_elem_candidates(module, view, facts);
+    let mut elems = collect_elem_candidates(module, view, facts);
+    alias_elem_load_vars(view, &mut elems);
     if elems.is_empty() {
         return Vec::new();
     }
@@ -170,16 +176,29 @@ pub(crate) fn plan_elem_guards(
         return Vec::new();
     }
     // 只保留有 GetProp 支撑的 GetElem：守卫收益来自属性读取快路径。
-    let used: HashSet<ValueId> = props.iter().map(|(elem, _)| *elem).collect();
+    let used: HashSet<ValueId> = props
+        .iter()
+        .filter_map(|(dest, _)| elems.get(dest).map(|candidate| candidate.origin))
+        .collect();
     let elem_sites: HashSet<(BasicBlockId, usize)> = elems
         .iter()
-        .filter(|(dest, _)| used.contains(dest))
+        .filter(|(dest, candidate)| **dest == candidate.origin && used.contains(dest))
         .map(|(_, candidate)| candidate.site)
         .collect();
     let prop_sites: HashSet<(BasicBlockId, usize)> = props.iter().map(|(_, site)| *site).collect();
+    let method_sites = method_load_sites(view, &elems);
     let prop_dests = prop_dest_set(view, &prop_sites);
     let prim = primitive_values(module, view, facts, &prop_dests);
-    if !body_safe_with_guard(view, facts, &prim, &elem_sites, &prop_sites) {
+    let safe_blocks = guard_true_body_blocks(view);
+    if !body_safe_with_guard(
+        view,
+        facts,
+        &prim,
+        &elem_sites,
+        &prop_sites,
+        &method_sites,
+        &safe_blocks,
+    ) {
         return Vec::new();
     }
     group_guards(&elems, &props, &used)
@@ -222,6 +241,7 @@ fn collect_elem_candidates(
                     array: *object,
                     template,
                     site: (block.id(), index),
+                    origin: *dest,
                 },
             );
         }
@@ -271,6 +291,149 @@ fn env_is_loop_invariant(view: &LoopView<'_>, env: ValueId) -> bool {
         Some(Instruction::LoadVar { name, .. })
             if name == "$env" || name.ends_with(".$env")
     )
+}
+
+/// `const p = POINTS[i]`：循环内 LoadVar 的绑定若全部 StoreVar 写入值都是
+/// 同一源头的 elem dest（或已解析别名），则 LoadVar dest 也视为该元素。
+fn alias_elem_load_vars(view: &LoopView<'_>, elems: &mut HashMap<ValueId, ElemCandidate>) {
+    let mut stores: HashMap<String, Vec<ValueId>> = HashMap::new();
+    for block in view.function.blocks() {
+        for instruction in block.instructions() {
+            if let Instruction::StoreVar { name, value } = instruction {
+                stores.entry(name.clone()).or_default().push(*value);
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for block in view.function.blocks() {
+            if !view.body.contains(&block.id()) {
+                continue;
+            }
+            for instruction in block.instructions() {
+                changed |= try_alias_load_var(elems, &stores, instruction);
+            }
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
+fn try_alias_load_var(
+    elems: &mut HashMap<ValueId, ElemCandidate>,
+    stores: &HashMap<String, Vec<ValueId>>,
+    instruction: &Instruction,
+) -> bool {
+    let Instruction::LoadVar { dest, name } = instruction else {
+        return false;
+    };
+    if elems.contains_key(dest) {
+        return false;
+    }
+    let Some(values) = stores.get(name) else {
+        return false;
+    };
+    if values.is_empty() || !values.iter().all(|value| elems.contains_key(value)) {
+        return false;
+    }
+    let origin = elems[&values[0]].origin;
+    if !values.iter().all(|value| elems[value].origin == origin) {
+        return false;
+    }
+    let source = elems[&values[0]].clone();
+    elems.insert(*dest, source);
+    true
+}
+
+/// 阶段 C 方法加载：`GetProp` dest 被同循环 `GuardSameFunction` 消费。
+/// 不闩锁（不是模板自有键），只从白名单豁免——pre-header 会核对原型身份。
+fn method_load_sites(
+    view: &LoopView<'_>,
+    elems: &HashMap<ValueId, ElemCandidate>,
+) -> HashSet<(BasicBlockId, usize)> {
+    let callees: HashSet<ValueId> = view
+        .function
+        .blocks()
+        .iter()
+        .filter(|block| view.body.contains(&block.id()))
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::GuardSameFunction { callee, .. } => Some(*callee),
+            _ => None,
+        })
+        .collect();
+    let mut sites = HashSet::new();
+    for block in view.function.blocks() {
+        if !view.body.contains(&block.id()) {
+            continue;
+        }
+        for (index, instruction) in block.instructions().iter().enumerate() {
+            let Instruction::GetProp {
+                dest,
+                object,
+                latch,
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            if latch.is_some() || !callees.contains(dest) || !elems.contains_key(object) {
+                continue;
+            }
+            sites.insert((block.id(), index));
+        }
+    }
+    sites
+}
+
+/// 守卫为真时可达的循环体：不走 `GuardSameFunction` 的 false 边。
+/// 阶段 C 失败路径含 Call / 未内联 GetProp，不能出现在守卫为真的前缀里。
+fn guard_true_body_blocks(view: &LoopView<'_>) -> HashSet<BasicBlockId> {
+    let mut skip: HashSet<(u32, u32)> = HashSet::new();
+    for block in view.function.blocks() {
+        if !view.body.contains(&block.id()) {
+            continue;
+        }
+        let Some(dest) =
+            block
+                .instructions()
+                .iter()
+                .rev()
+                .find_map(|instruction| match instruction {
+                    Instruction::GuardSameFunction { dest, .. } => Some(*dest),
+                    _ => None,
+                })
+        else {
+            continue;
+        };
+        if let Terminator::Branch {
+            condition,
+            false_block,
+            ..
+        } = block.terminator()
+            && *condition == dest
+        {
+            skip.insert((block.id().0, false_block.0));
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut stack = vec![view.header];
+    while let Some(block_id) = stack.pop() {
+        if !view.body.contains(&block_id) || !seen.insert(block_id) {
+            continue;
+        }
+        let Some(block) = view.function.block_by_id(block_id) else {
+            continue;
+        };
+        for successor in terminator_successors(block.terminator()) {
+            if skip.contains(&(block_id.0, successor.0)) {
+                continue;
+            }
+            stack.push(successor);
+        }
+    }
+    seen
 }
 
 /// 候选 `GetProp`：receiver 是候选 elem 的 dest，键是该模板的自有键，
@@ -487,6 +650,7 @@ fn builtin_result_primitive(builtin: Builtin) -> bool {
             | Builtin::ConsoleError
             | Builtin::ConsoleTrace
             | Builtin::MathHypot
+            | Builtin::ExceptionValue
     )
 }
 
@@ -579,6 +743,8 @@ fn body_safe_with_guard(
     prim: &HashSet<ValueId>,
     elem_sites: &HashSet<(BasicBlockId, usize)>,
     prop_sites: &HashSet<(BasicBlockId, usize)>,
+    method_sites: &HashSet<(BasicBlockId, usize)>,
+    safe_blocks: &HashSet<BasicBlockId>,
 ) -> bool {
     let numbers = facts.numbers.get(&(view.func_idx as u32));
     let number_proved =
@@ -590,12 +756,13 @@ fn body_safe_with_guard(
             .any(|record| record.family[view.func_idx].contains(value))
     };
     for block in view.function.blocks() {
-        if !view.body.contains(&block.id()) {
+        if !view.body.contains(&block.id()) || !safe_blocks.contains(&block.id()) {
             continue;
         }
         for (index, instruction) in block.instructions().iter().enumerate() {
             if elem_sites.contains(&(block.id(), index))
                 || prop_sites.contains(&(block.id(), index))
+                || method_sites.contains(&(block.id(), index))
             {
                 continue;
             }
@@ -638,7 +805,8 @@ fn body_safe_with_guard(
                     | Builtin::ConsoleError
                     | Builtin::ConsoleTrace
                     | Builtin::IsJsObject
-                    | Builtin::ToBoolean => true,
+                    | Builtin::ToBoolean
+                    | Builtin::ExceptionValue => true,
                     Builtin::AbstractCompare => args.iter().all(|arg| prim.contains(arg)),
                     Builtin::MathHypot => args.iter().all(|arg| prim.contains(arg)),
                     _ => false,
