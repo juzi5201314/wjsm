@@ -607,9 +607,9 @@ fn static_inline_round(module: &mut Module) -> bool {
                 }
                 let mut construct_object_returns = HashSet::new();
                 if is_construct {
-                    // 仅内联无异常终止器、且每个返回值都能由 IR 定义证明为
-                    // `$this`/原语或对象。对象返回值必须在合流处保留为 `new`
-                    // 的结果；无法分类时继续走通用构造器路径。
+                    // 每个返回值须能由 IR 定义证明为 `$this`/原语或对象。
+                    // `Throw` 是 SetProp 等站点的语句级异常菱形，ConstructCall
+                    // 本身把异常编码进 dest；内联时改写成跳回 B_post，不因此拒绝。
                     let returns_classified =
                         callee_func
                             .blocks()
@@ -630,7 +630,7 @@ fn static_inline_round(module: &mut Module) -> bool {
                                         None => false,
                                     }
                                 }
-                                Terminator::Throw { .. } => false,
+                                Terminator::Throw { .. } => true,
                                 _ => true,
                             });
                     if !returns_classified {
@@ -806,13 +806,9 @@ fn inline_static_candidate(
     // Throw（callee 的语句级异常传播）改写为「存异常到调用点的 catch 变量 +
     // 跳转 catch 处理块」——否则 throw 编译为 CreateException+Return 直接从
     // 调用者函数返回，绕过语句级 is_exception 分叉（try/catch 失效）。
-    let exception_path = if !candidate.is_construct {
-        candidate.dest.and_then(|d| {
-            find_exception_path(&module.functions()[func_idx], block_idx, instr_idx, d)
-        })
-    } else {
-        None
-    };
+    let exception_path = candidate
+        .dest
+        .and_then(|d| find_exception_path(&module.functions()[func_idx], block_idx, instr_idx, d));
     let mut return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     let mut construct_return_records: Vec<(BasicBlockId, ValueId)> = Vec::new();
     for (original, clone) in callee_func.blocks().iter().zip(cloned_blocks.iter_mut()) {
@@ -843,8 +839,13 @@ fn inline_static_candidate(
                     clone.set_terminator(Terminator::Jump {
                         target: *catch_target,
                     });
+                } else if candidate.is_construct {
+                    // ConstructCall 把异常编码进 dest；内联后跳回 B_post，
+                    // 调用点的 is_exception 菱形保持原语义。
+                    construct_return_records.push((clone.id(), value));
+                    clone.set_terminator(Terminator::Jump { target: b_post_id });
                 }
-                // 无异常路径（防御）：保留 throw（原语义，异常逃逸给调用者）。
+                // 无异常路径的普通 Call：保留 throw。
             }
             _ => {}
         }
@@ -1014,6 +1015,28 @@ fn is_backedge_target(function: &wjsm_ir::Function, t: BasicBlockId) -> bool {
         .any(|b| b.id().0 > t.0 && terminator_successors(b.terminator()).contains(&t))
 }
 
+/// 从调用块沿后继前进、不穿越回边能到达的块（本轮迭代的正向锥）。
+fn forward_cone(function: &wjsm_ir::Function, call_block: BasicBlockId) -> HashSet<BasicBlockId> {
+    let mut seen: HashSet<BasicBlockId> = HashSet::new();
+    let mut stack = vec![call_block];
+    while let Some(bid) = stack.pop() {
+        if !seen.insert(bid) {
+            continue;
+        }
+        let Some(block) = function.block_by_id(bid) else {
+            continue;
+        };
+        for succ in terminator_successors(block.terminator()) {
+            // 回边：目标是循环头且源块下标更大。不沿回边走出本轮。
+            if succ.0 < bid.0 && is_backedge_target(function, succ) {
+                continue;
+            }
+            stack.push(succ);
+        }
+    }
+    seen
+}
+
 /// 阶段 C 的单轮候选。
 #[derive(Debug, Clone)]
 struct SpeculativeCandidate {
@@ -1040,7 +1063,10 @@ fn compute_region(
     dest: ValueId,
 ) -> Option<(HashSet<ValueId>, Vec<BasicBlockId>)> {
     // ── 闭包 T：初始 {R}，指令 use 含 T 值 → dest 入 T；
-    //    StoreVar(V) 的 value ∈ T → 函数内所有 LoadVar(V) dest 入 T。 ──
+    //    StoreVar(V) 的 value ∈ T → 正向锥内 LoadVar(V) dest 入 T。
+    //    不把回边之后的累加器 LoadVar（下一轮 `total += …`、函数 return）
+    //    算进 T，否则循环累加调用结果会让出口检查失败、错过方法内联。 ──
+    let cone = forward_cone(function, call_block);
     let mut closure: HashSet<ValueId> = HashSet::from([dest]);
     let mut changed = true;
     while changed {
@@ -1062,6 +1088,9 @@ fn compute_region(
                     && closure.contains(value)
                 {
                     for block2 in function.blocks() {
+                        if !cone.contains(&block2.id()) {
+                            continue;
+                        }
                         for ins2 in block2.instructions() {
                             if let Instruction::LoadVar { dest: d, name: n } = ins2
                                 && n == name
@@ -2234,6 +2263,230 @@ mod tests {
         assert!(
             has_binary_add,
             "cascaded stage A must inline the helper into a binary add"
+        );
+    }
+
+    /// 循环内 `total += obj.calc()`：累加器跨回边，不得挡住阶段 C。
+    #[test]
+    fn test_speculative_inline_loop_accumulator() {
+        let mut module = Module::new();
+        let c_1 = module.add_constant(Constant::Number(1.0));
+        let c_true = module.add_constant(Constant::Bool(true));
+
+        let mut target_func = Function::new("Point.calc", BasicBlockId(0));
+        target_func.set_params(vec!["$env".to_string(), "$this".to_string()]);
+        target_func.set_direct_callable(true);
+        let mut t_bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_one = ValueId(0);
+        t_bb0.push_instruction(Instruction::Const {
+            dest: v_one,
+            constant: c_1,
+        });
+        t_bb0.set_terminator(Terminator::Return { value: Some(v_one) });
+        target_func.push_block(t_bb0);
+        module.push_function(target_func);
+
+        let c_name = module.add_constant(Constant::String("calc".to_string()));
+        let mut caller = Function::new("$main", BasicBlockId(0));
+        caller.set_params(vec!["$env".to_string(), "$this".to_string()]);
+
+        let mut bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_zero = ValueId(0);
+        let v_obj = ValueId(1);
+        bb0.push_instruction(Instruction::Const {
+            dest: v_zero,
+            constant: c_1,
+        });
+        bb0.push_instruction(Instruction::StoreVar {
+            name: "total".to_string(),
+            value: v_zero,
+        });
+        bb0.push_instruction(Instruction::NewObject {
+            dest: v_obj,
+            capacity: 4,
+        });
+        bb0.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        caller.push_block(bb0);
+
+        let mut bb1 = BasicBlock::new(BasicBlockId(1));
+        let v_cond = ValueId(2);
+        bb1.push_instruction(Instruction::Const {
+            dest: v_cond,
+            constant: c_true,
+        });
+        bb1.set_terminator(Terminator::Branch {
+            condition: v_cond,
+            true_block: BasicBlockId(2),
+            false_block: BasicBlockId(3),
+        });
+        caller.push_block(bb1);
+
+        let mut bb2 = BasicBlock::new(BasicBlockId(2));
+        let v_key = ValueId(3);
+        let v_callee = ValueId(4);
+        let v_res = ValueId(5);
+        let v_old = ValueId(6);
+        let v_sum = ValueId(7);
+        bb2.push_instruction(Instruction::Const {
+            dest: v_key,
+            constant: c_name,
+        });
+        bb2.push_instruction(Instruction::GetProp {
+            dest: v_callee,
+            object: v_obj,
+            key: v_key,
+            latch: None,
+            latch_template: None,
+        });
+        bb2.push_instruction(Instruction::Call {
+            dest: Some(v_res),
+            callee: v_callee,
+            this_val: v_obj,
+            args: vec![],
+            callsite: None,
+        });
+        bb2.push_instruction(Instruction::LoadVar {
+            dest: v_old,
+            name: "total".to_string(),
+        });
+        bb2.push_instruction(Instruction::Binary {
+            dest: v_sum,
+            op: BinaryOp::Add,
+            lhs: v_old,
+            rhs: v_res,
+        });
+        bb2.push_instruction(Instruction::StoreVar {
+            name: "total".to_string(),
+            value: v_sum,
+        });
+        bb2.set_terminator(Terminator::Jump {
+            target: BasicBlockId(1),
+        });
+        caller.push_block(bb2);
+
+        let mut bb3 = BasicBlock::new(BasicBlockId(3));
+        let v_ret = ValueId(8);
+        bb3.push_instruction(Instruction::LoadVar {
+            dest: v_ret,
+            name: "total".to_string(),
+        });
+        bb3.set_terminator(Terminator::Return { value: Some(v_ret) });
+        caller.push_block(bb3);
+        module.push_function(caller);
+
+        run(&mut module);
+        assert_has_guard(&module.functions()[1], FunctionId(0));
+    }
+
+    /// 类构造器的 SetProp 异常菱形含 Throw，不得挡住 `new` 静态内联。
+    #[test]
+    fn test_static_inline_constructor_with_throw() {
+        let mut module = Module::new();
+        let c_key = module.add_constant(Constant::String("x".to_string()));
+        let c_ctor = module.add_constant(Constant::FunctionRef(FunctionId(0)));
+
+        let mut ctor = Function::new("Point.constructor", BasicBlockId(0));
+        ctor.set_params(vec![
+            "$env".to_string(),
+            "$this".to_string(),
+            "x".to_string(),
+        ]);
+        ctor.set_direct_callable(true);
+        ctor.set_class_ctor_name("Point");
+        let mut c_bb0 = BasicBlock::new(BasicBlockId(0));
+        let v_this = ValueId(0);
+        let v_key = ValueId(1);
+        let v_x = ValueId(2);
+        let v_set = ValueId(3);
+        let v_exc = ValueId(4);
+        c_bb0.push_instruction(Instruction::LoadVar {
+            dest: v_this,
+            name: "$this".to_string(),
+        });
+        c_bb0.push_instruction(Instruction::Const {
+            dest: v_key,
+            constant: c_key,
+        });
+        c_bb0.push_instruction(Instruction::LoadVar {
+            dest: v_x,
+            name: "x".to_string(),
+        });
+        c_bb0.push_instruction(Instruction::SetProp {
+            dest: v_set,
+            object: v_this,
+            key: v_key,
+            value: v_x,
+            strict: true,
+        });
+        c_bb0.push_instruction(Instruction::IsException {
+            dest: v_exc,
+            value: v_set,
+        });
+        c_bb0.set_terminator(Terminator::Branch {
+            condition: v_exc,
+            true_block: BasicBlockId(2),
+            false_block: BasicBlockId(1),
+        });
+        ctor.push_block(c_bb0);
+        let mut c_bb1 = BasicBlock::new(BasicBlockId(1));
+        c_bb1.set_terminator(Terminator::Return { value: None });
+        ctor.push_block(c_bb1);
+        let mut c_bb2 = BasicBlock::new(BasicBlockId(2));
+        c_bb2.set_terminator(Terminator::Throw { value: v_set });
+        ctor.push_block(c_bb2);
+        module.push_function(ctor);
+
+        let mut caller = Function::new("$main", BasicBlockId(0));
+        caller.set_params(vec!["$env".to_string(), "$this".to_string()]);
+        let mut bb = BasicBlock::new(BasicBlockId(0));
+        let v_fn = ValueId(0);
+        let v_obj = ValueId(1);
+        let v_arg = ValueId(2);
+        let v_res = ValueId(3);
+        bb.push_instruction(Instruction::Const {
+            dest: v_fn,
+            constant: c_ctor,
+        });
+        bb.push_instruction(Instruction::NewObject {
+            dest: v_obj,
+            capacity: 4,
+        });
+        bb.push_instruction(Instruction::Const {
+            dest: v_arg,
+            constant: c_key,
+        });
+        bb.push_instruction(Instruction::ConstructCall {
+            dest: Some(v_res),
+            callee: v_fn,
+            this_val: v_obj,
+            args: vec![v_arg],
+            callsite: None,
+        });
+        bb.set_terminator(Terminator::Return { value: Some(v_res) });
+        caller.push_block(bb);
+        module.push_function(caller);
+
+        run(&mut module);
+        let caller = &module.functions()[1];
+        let has_set_prop = caller.blocks().iter().any(|b| {
+            b.instructions()
+                .iter()
+                .any(|ins| matches!(ins, Instruction::SetProp { .. }))
+        });
+        let still_constructs = caller.blocks().iter().any(|b| {
+            b.instructions()
+                .iter()
+                .any(|ins| matches!(ins, Instruction::ConstructCall { .. }))
+        });
+        assert!(
+            has_set_prop,
+            "constructor SetProp must be inlined into caller"
+        );
+        assert!(
+            !still_constructs,
+            "ConstructCall must be replaced by inlined constructor body"
         );
     }
 }
