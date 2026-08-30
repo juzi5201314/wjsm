@@ -1053,6 +1053,8 @@ struct NativeProgramState {
     string_constants: Vec<i64>,
     /// 对象模板 install 期烘焙元数据（每条 `OBJECT_TEMPLATE_META_WORDS` 个 u32）。
     object_template_meta: Vec<u32>,
+    /// 闭包 `$env` 布局 install 期烘焙元数据（每函数 `ENV_LAYOUT_META_WORDS` 个 u32）。
+    env_layout_meta: Vec<u32>,
     function_slots: Vec<Vec<usize>>,
     function_lengths: Vec<u32>,
     function_names: Vec<String>,
@@ -1100,6 +1102,8 @@ struct NativeAgentState {
     string_constants: Vec<i64>,
     /// 当前 image 的对象模板烘焙元数据（见 `NativeProgramState::object_template_meta`）。
     object_template_meta: Vec<u32>,
+    /// 当前 image 的闭包 env 布局烘焙元数据（见 `NativeProgramState::env_layout_meta`）。
+    env_layout_meta: Vec<u32>,
     function_slots: Vec<Vec<usize>>,
     function_needs_prototype: Vec<bool>,
     /// 当前 image 的类构造器显示名（见 `NativeProgramState::function_class_ctor_names`）。
@@ -1396,6 +1400,7 @@ impl NativeAgentState {
             materialized_constants: Vec::new(),
             string_constants: Vec::new(),
             object_template_meta: Vec::new(),
+            env_layout_meta: Vec::new(),
             function_slots: Vec::new(),
             function_needs_prototype: Vec::new(),
             function_class_ctor_names: Vec::new(),
@@ -1576,6 +1581,7 @@ impl NativeAgentState {
             // install_program 随后按烘焙元数据填充字符串槽位。
             string_constants: Vec::new(),
             object_template_meta: Vec::new(),
+            env_layout_meta: Vec::new(),
             function_slots: function_slots_for_program(
                 program,
                 variable_slots,
@@ -1918,6 +1924,7 @@ impl NativeAgentState {
             materialized_constants: std::mem::take(&mut self.materialized_constants),
             string_constants: std::mem::take(&mut self.string_constants),
             object_template_meta: std::mem::take(&mut self.object_template_meta),
+            env_layout_meta: std::mem::take(&mut self.env_layout_meta),
             function_slots: std::mem::take(&mut self.function_slots),
             function_needs_prototype: std::mem::take(&mut self.function_needs_prototype),
             function_class_ctor_names: std::mem::take(&mut self.function_class_ctor_names),
@@ -1931,6 +1938,7 @@ impl NativeAgentState {
         self.materialized_constants = state.materialized_constants;
         self.string_constants = state.string_constants;
         self.object_template_meta = state.object_template_meta;
+        self.env_layout_meta = state.env_layout_meta;
         self.function_slots = state.function_slots;
         self.function_lengths = state.function_lengths;
         self.function_names = state.function_names;
@@ -1998,6 +2006,11 @@ impl NativeAgentState {
             program.constants(),
             &string_constants,
         );
+        let env_layout_meta = wjsm_backend_native::bake_env_layout_meta_table(
+            self.gc.heap().shapes(),
+            program,
+            &string_constants,
+        );
         let ic_hints = wjsm_backend_native::ic_template_hints(program);
         if let Some(image) = Arc::get_mut(&mut image) {
             image.prefill_template_ic_slots(&ic_hints, &object_template_meta);
@@ -2011,6 +2024,7 @@ impl NativeAgentState {
         let mut state = Self::program_state(program, variable_slots, shared_module_slots);
         state.string_constants = string_constants;
         state.object_template_meta = object_template_meta;
+        state.env_layout_meta = env_layout_meta;
         self.programs.insert(image_id, state);
         if let Some(source_file) = program.source_file() {
             self.image_source_files

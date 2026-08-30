@@ -27,6 +27,7 @@ wjsm-artifact-format = { path = "../wjsm-artifact-format" }
 wjsm-ir = { path = "../wjsm-ir" }
 wjsm-optimize = { path = "../wjsm-optimize" }
 wjsm-native-abi = { path = "../wjsm-native-abi" }
+wjsm-gc = { path = "../wjsm-gc" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

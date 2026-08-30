@@ -85,10 +85,42 @@ impl Lowerer {
             owner_env
         };
         let key_val = self.append_env_key_const(current_block, binding);
+        let use_env_slots = self.env_slot_for_binding(binding).is_some();
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
                 let mut store_block = self.resolve_store_block(current_block);
+                if use_env_slots {
+                    if tdz_check {
+                        let loaded = if let Some(loaded) =
+                            self.append_load_env_slot(store_block, binding)
+                        {
+                            loaded
+                        } else {
+                            let loaded = self.alloc_value();
+                            self.current_function.append_instruction(
+                                store_block,
+                                Instruction::GetProp {
+                                    dest: loaded,
+                                    object: env_val,
+                                    key: key_val,
+                                    latch: None,
+                                    latch_template: None,
+                                },
+                            );
+                            loaded
+                        };
+                        let (_, continue_block) =
+                            self.emit_tdz_check(store_block, loaded, &binding.name)?;
+                        store_block = continue_block;
+                    }
+                    if let Some(result) =
+                        self.append_store_env_slot(store_block, binding, rhs, self.strict_mode)
+                    {
+                        self.expr_merge_block = Some(store_block);
+                        return Ok(result);
+                    }
+                }
                 if tdz_check {
                     let loaded = self.alloc_value();
                     self.current_function.append_instruction(
@@ -133,17 +165,37 @@ impl Lowerer {
                     self.error(assign.span, "unsupported compound assignment operator")
                 })?;
                 // 从 env 对象读取当前值
-                let mut loaded = self.alloc_value();
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::GetProp {
-                        dest: loaded,
-                        object: env_val,
-                        key: key_val,
-                        latch: None,
-                        latch_template: None,
-                    },
-                );
+                let mut loaded = if use_env_slots {
+                    if let Some(loaded) = self.append_load_env_slot(current_block, binding) {
+                        loaded
+                    } else {
+                        let loaded = self.alloc_value();
+                        self.current_function.append_instruction(
+                            current_block,
+                            Instruction::GetProp {
+                                dest: loaded,
+                                object: env_val,
+                                key: key_val,
+                                latch: None,
+                                latch_template: None,
+                            },
+                        );
+                        loaded
+                    }
+                } else {
+                    let loaded = self.alloc_value();
+                    self.current_function.append_instruction(
+                        current_block,
+                        Instruction::GetProp {
+                            dest: loaded,
+                            object: env_val,
+                            key: key_val,
+                            latch: None,
+                            latch_template: None,
+                        },
+                    );
+                    loaded
+                };
                 if tdz_check {
                     let (checked, continue_block) =
                         self.emit_tdz_check(current_block, loaded, &binding.name)?;
@@ -163,7 +215,20 @@ impl Lowerer {
                     },
                 );
                 let key_val2 = self.append_env_key_const(rhs_block, binding);
-                let result = self.emit_set_prop(rhs_block, env_val, key_val2, dest);
+                let result = if use_env_slots {
+                    if let Some(result) = self.append_store_env_slot(
+                        rhs_block,
+                        binding,
+                        dest,
+                        self.strict_mode,
+                    ) {
+                        result
+                    } else {
+                        self.emit_set_prop(rhs_block, env_val, key_val2, dest)
+                    }
+                } else {
+                    self.emit_set_prop(rhs_block, env_val, key_val2, dest)
+                };
                 self.expr_merge_block = Some(rhs_block);
                 Ok(result)
             }

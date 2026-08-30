@@ -27,7 +27,8 @@ const MAGIC: &[u8; 8] = b"WJSMART\0";
 // v15：Guard/LoadSlot/StoreSlot/Deopt 与反馈 80B 槽。
 // v16：删除 ElemShapeGuard/GetPropGuarded/GetElemGuarded；GetProp/GetElem 闩锁
 //      与 GuardElementsKind 模板并进通用指令。
-const FORMAT_VERSION: u16 = 16;
+// v17：Function 新增 env_layout_keys；新增 LoadEnvSlot/StoreEnvSlot（显式 env 操作数）。
+const FORMAT_VERSION: u16 = 17;
 const HEADER_LEN: usize = 92;
 const DIRECTORY_ENTRY_LEN: usize = 52;
 const CONTENT_HASH_OFFSET: usize = 60;

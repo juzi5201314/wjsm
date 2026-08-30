@@ -392,7 +392,7 @@ impl Lowerer {
         }
         ir_function.set_params(param_ir_names);
         let ctor_captured = self.captured_names_stack.last().unwrap().clone();
-        ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
+        self.finalize_function_captures(&mut ir_function, &ctor_captured);
         for blk in blocks {
             ir_function.push_block(blk);
         }
@@ -1071,7 +1071,7 @@ impl Lowerer {
         }
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
-        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        self.finalize_function_captures(&mut ir_function, &captured);
         ir_function.home_object = Some(home_object);
         for block in blocks {
             ir_function.push_block(block);

@@ -1210,7 +1210,7 @@ impl Lowerer {
         let mut ir_function = Function::new(&fn_name, BasicBlockId(0));
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
-        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        self.finalize_function_captures(&mut ir_function, &captured);
         for b in blocks {
             ir_function.push_block(b);
         }

@@ -94,12 +94,15 @@ impl Lowerer {
         }
         ir_function.set_params(param_ir_names);
         // 设置捕获变量列表（逃逸分析结果）；剔除函数声明自引用。
-        let self_binding = self.fn_decl_self_binding_stack.last().and_then(|slot| slot.clone());
+        let self_binding = self
+            .fn_decl_self_binding_stack
+            .last()
+            .and_then(|slot| slot.clone());
         let captured = Self::filter_fn_decl_self_captures(
             self.captured_names_stack.last().unwrap(),
             self_binding.as_ref(),
         );
-        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        self.finalize_function_captures(&mut ir_function, &captured);
         for (ir_name, fn_id) in known_callees {
             ir_function.record_known_callee(ir_name, fn_id);
         }

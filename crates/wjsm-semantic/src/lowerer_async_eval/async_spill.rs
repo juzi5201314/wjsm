@@ -255,6 +255,25 @@ fn replace_value_in_instruction(instruction: &mut Instruction, from: ValueId, to
         | NewPromise { .. }
         | CollectRestArgs { .. }
         | DebugCheck { .. } => {}
+        LoadEnvSlot { dest, env, key, .. } => {
+            replace(dest);
+            replace(env);
+            replace(key);
+        }
+        StoreEnvSlot {
+            dest,
+            env,
+            value,
+            key,
+            ..
+        } => {
+            if let Some(dest) = dest {
+                replace(dest);
+            }
+            replace(env);
+            replace(value);
+            replace(key);
+        }
         StoreSlot { object, value, .. } => {
             replace(object);
             replace(value);

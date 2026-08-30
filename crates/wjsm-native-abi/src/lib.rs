@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 23;
+pub const NATIVE_ABI_VERSION: u32 = 24;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -505,6 +505,12 @@ pub enum NativeRuntimeOp {
     TypedArrayGetElem = 0x1_0519,
     /// overlay TypedArray 元素写：`[object, index, value]`，非视图返回 uninitialized。
     TypedArraySetElem = 0x1_051a,
+    /// 闭包 `$env` 槽读取：`[env, slot, key]`；shape 命中直读槽，否则 [[Get]]。
+    LoadEnvSlot = 0x1_051b,
+    /// 闭包 `$env` 槽写入：`[env, slot, value, key]`；shape 命中直写槽，否则 [[Set]]。
+    StoreEnvSlot = 0x1_051c,
+    /// 严格模式闭包 `$env` 槽写入：参数同 [`Self::StoreEnvSlot`]。
+    StoreEnvSlotStrict = 0x1_051d,
 }
 
 impl NativeRuntimeOp {
@@ -562,6 +568,9 @@ impl NativeRuntimeOp {
             0x1_0518 => Some(Self::DeletePropStrict),
             0x1_0519 => Some(Self::TypedArrayGetElem),
             0x1_051a => Some(Self::TypedArraySetElem),
+            0x1_051b => Some(Self::LoadEnvSlot),
+            0x1_051c => Some(Self::StoreEnvSlot),
+            0x1_051d => Some(Self::StoreEnvSlotStrict),
             0x1_0505 => Some(Self::SetProto),
             0x1_0506 => Some(Self::NewArray),
             0x1_0507 => Some(Self::GetElem),
