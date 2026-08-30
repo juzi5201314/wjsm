@@ -596,6 +596,8 @@ pub(crate) struct FunctionCompileInput<'a, 's> {
     pub direct_callable_functions: &'a HashSet<FunctionId>,
     pub safepoint_free: bool,
     pub collect_diagnostics: bool,
+    /// 程序级 hypot getter 属性名；空集则 ACCESSOR IC 不发 hypot 快路径。
+    pub hypot_property_names: &'a HashSet<String>,
 }
 
 /// 指令级 lowering 的共享可变上下文。

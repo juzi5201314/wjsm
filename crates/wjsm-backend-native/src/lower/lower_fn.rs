@@ -185,10 +185,7 @@ pub(crate) fn lower_function(
             };
             hoisted_constants.insert(*constant_id, result);
         }
-        let hypot_property_names = wjsm_optimize::collect_hypot_getters(program)
-            .into_iter()
-            .map(|getter| getter.property)
-            .collect::<HashSet<_>>();
+        let hypot_property_names = input.hypot_property_names;
         let mut imported_function_decls: HashMap<FunctionId, ir::FuncRef> = HashMap::new();
         let mut tables = InstructionTables {
             program,

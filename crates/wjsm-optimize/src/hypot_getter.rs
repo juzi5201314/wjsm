@@ -54,12 +54,12 @@ fn const_string<'a>(
     None
 }
 
-fn defs_in_function(function: &Function) -> HashMap<ValueId, Instruction> {
+fn defs_in_function(function: &Function) -> HashMap<ValueId, &Instruction> {
     let mut defs = HashMap::new();
     for block in function.blocks() {
         for instruction in block.instructions() {
             if let Some(dest) = instruction_dest(instruction) {
-                defs.insert(dest, instruction.clone());
+                defs.insert(dest, instruction);
             }
         }
     }
@@ -69,7 +69,7 @@ fn defs_in_function(function: &Function) -> HashMap<ValueId, Instruction> {
 fn this_own_key(
     function: &Function,
     constants: &[Constant],
-    defs: &HashMap<ValueId, Instruction>,
+    defs: &HashMap<ValueId, &Instruction>,
     value: ValueId,
 ) -> Option<String> {
     let Instruction::GetProp { object, key, .. } = defs.get(&value)? else {

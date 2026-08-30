@@ -152,6 +152,10 @@ pub(crate) fn compile_specialized(
     let string_builder_finish = declare_string_builder_finish_thunk(&mut module)?;
     let (zgc_load_barrier, zgc_store_barrier) = declare_barrier_thunks(&mut module)?;
     let math_thunks = declare_math_thunks(&mut module, &derived, &seeded)?;
+    let hypot_property_names: HashSet<String> = wjsm_optimize::collect_hypot_getters(&derived)
+        .into_iter()
+        .map(|getter| getter.property)
+        .collect();
 
     let boxed_frame_locals =
         boxed_frame_local_names(ir_function, &frame_locals, &seeded, target_index);
@@ -224,6 +228,7 @@ pub(crate) fn compile_specialized(
         direct_callable_functions: &HashSet::new(),
         safepoint_free,
         collect_diagnostics,
+        hypot_property_names: &hypot_property_names,
     })?;
     let wrapper = compile_wrapper(
         &isa,
