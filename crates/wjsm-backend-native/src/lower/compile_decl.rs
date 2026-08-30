@@ -81,7 +81,10 @@ pub(crate) fn compile_program_inner(
                     u32::try_from(index).expect("function index fits u32"),
                 ))
                 .expect("analysis covers every function");
-            RootPlan::build(function, f64_values)
+            RootPlan::build(
+                function,
+                &non_heap_ssa_values(function, program.constants(), f64_values),
+            )
         })
         .collect();
     let root_capacities: Vec<_> = program

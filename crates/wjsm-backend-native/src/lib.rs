@@ -195,7 +195,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;opt={opt_level};probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -391,8 +391,8 @@ mod capability_tests {
             let compiler = NativeCompiler::new().expect("declared native host must initialize");
             assert!(compiler.settings_key().contains("arch=x86_64"));
             assert!(
-                compiler.settings_key().contains("resume=skip-typed-f64"),
-                "typed f64 跳过 resume pad 必须进 cache 键:\n{}",
+                compiler.settings_key().contains("roots=skip-bool-imm"),
+                "布尔立即数不当 GC 根必须进 cache 键:\n{}",
                 compiler.settings_key()
             );
         } else {
@@ -969,6 +969,25 @@ mod tests {
         assert!(
             !diagnostics.clif.contains("atomic_rmw"),
             "safepoint-free main should not link/unlink root frames:\n{}",
+            diagnostics.clif
+        );
+    }
+
+    /// Compare dest 是 tagged bool 立即数，不是堆句柄：数值循环不得因此挂 root frame。
+    #[test]
+    fn safepoint_free_numeric_loop_omits_root_frame_link() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Number(1.0)))
+            .expect("numeric loop diagnostics should compile");
+        assert!(
+            !diagnostics.clif.contains("root_frame_head"),
+            "f64 循环的 Compare 布尔不应挂 root frame:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            !diagnostics.clif.contains("atomic_rmw"),
+            "f64 循环不应在回边发布根:\n{}",
             diagnostics.clif
         );
     }

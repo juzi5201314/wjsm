@@ -25,7 +25,7 @@ use crate::lower::{
     allocate_feedback_slots, allocate_ic_slots, boxed_frame_local_names, compile_one_function,
     declare_barrier_thunks, declare_host_dispatcher, declare_math_thunks, declare_root_bitmaps,
     declare_string_add_thunk, declare_string_builder_finish_thunk, emit_feedback_tag_code,
-    gimli_endian, libcall_name, root_frame_capacity, slow_entry_signature,
+    gimli_endian, libcall_name, non_heap_ssa_values, root_frame_capacity, slow_entry_signature,
 };
 use crate::root_plan::RootPlan;
 use crate::safepoint_free::infer_safepoint_free_functions;
@@ -160,7 +160,10 @@ pub(crate) fn compile_specialized(
     let boxed_frame_locals =
         boxed_frame_local_names(ir_function, &frame_locals, &seeded, target_index);
     let int32_values = classes.int32s;
-    let root_plan = RootPlan::build(ir_function, &seeded_values);
+    let root_plan = RootPlan::build(
+        ir_function,
+        &non_heap_ssa_values(ir_function, derived.constants(), &seeded_values),
+    );
     let root_capacity = root_frame_capacity(ir_function, &root_plan, boxed_frame_locals.len());
     let safepoint_free =
         infer_safepoint_free_functions(&derived, variable_slots).contains(&FunctionId(
