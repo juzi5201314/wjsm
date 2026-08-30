@@ -52,11 +52,16 @@ pub(crate) fn allocate_feedback_slots(program: &Program) -> FeedbackSitePlan {
     }
 }
 
-/// 判定一条指令是否是「可观察动态语义」的反馈槽候选。
+/// 判定一条指令是否需要独立的 generic resume pad。
 ///
-/// 只看指令形态、不看 `infer_f64_values` 的结论：静态证明会随特化种子变化，
-/// 若槽编号依赖分析结果，base 与 overlay 的编号就会错位。
-pub(crate) fn is_resume_target(instruction: &Instruction) -> bool {
+/// 槽编号仍只看 [`instruction_owns_feedback_slot`]（base / overlay 对齐）。
+/// pad 则可以看 `f64_values`：已证明 f64 的 LoadVar/StoreVar/算术/关系比较
+/// 在 CLIF 里不会 deopt，切开独立块只会逼 Cranelift 在每条指令边界 spill xmm。
+/// overlay 精确 deopt 仍落在 Guard / GetProp / 动态 Binary / GetElem 等锚点。
+pub(crate) fn is_resume_target(instruction: &Instruction, f64_values: &HashSet<ValueId>) -> bool {
+    if proven_f64_op_cannot_deopt(instruction, f64_values) {
+        return false;
+    }
     instruction_owns_feedback_slot(instruction)
         || matches!(
             instruction,
@@ -67,6 +72,28 @@ pub(crate) fn is_resume_target(instruction: &Instruction) -> bool {
                 | Instruction::LoadSlot { .. }
                 | Instruction::StoreSlot { .. }
         )
+}
+
+/// 静态已证明的 f64 热路径：lowering 只发原生浮点算子，没有 deopt 边。
+fn proven_f64_op_cannot_deopt(instruction: &Instruction, f64_values: &HashSet<ValueId>) -> bool {
+    match instruction {
+        Instruction::LoadVar { dest, .. } => f64_values.contains(dest),
+        Instruction::StoreVar { value, .. } => f64_values.contains(value),
+        Instruction::Binary { dest, op, .. } => {
+            f64_values.contains(dest)
+                && matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                )
+        }
+        Instruction::Unary { dest, op, .. } => {
+            f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos)
+        }
+        Instruction::Compare { op, lhs, rhs, .. } => {
+            op.is_relational() && f64_values.contains(lhs) && f64_values.contains(rhs)
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn instruction_owns_feedback_slot(instruction: &Instruction) -> bool {
@@ -168,4 +195,91 @@ pub(crate) fn callsites_by_feedback_slot(program: &Program) -> HashMap<u32, Box<
         }
     }
     callsites
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wjsm_ir::{CompareOp, Instruction, UnaryOp, ValueId};
+
+    fn f64_set(ids: &[u32]) -> HashSet<ValueId> {
+        ids.iter().copied().map(ValueId).collect()
+    }
+
+    #[test]
+    fn proven_f64_arith_and_locals_skip_resume_pad() {
+        let f64s = f64_set(&[0, 1, 2]);
+        assert!(!is_resume_target(
+            &Instruction::Binary {
+                dest: ValueId(0),
+                op: BinaryOp::Add,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            },
+            &f64s
+        ));
+        assert!(!is_resume_target(
+            &Instruction::LoadVar {
+                dest: ValueId(0),
+                name: "$1.i".into(),
+            },
+            &f64s
+        ));
+        assert!(!is_resume_target(
+            &Instruction::StoreVar {
+                name: "$1.s".into(),
+                value: ValueId(0),
+            },
+            &f64s
+        ));
+        assert!(!is_resume_target(
+            &Instruction::Compare {
+                dest: ValueId(0),
+                op: CompareOp::Lt,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            },
+            &f64s
+        ));
+        assert!(!is_resume_target(
+            &Instruction::Unary {
+                dest: ValueId(0),
+                op: UnaryOp::Neg,
+                value: ValueId(1),
+            },
+            &f64s
+        ));
+    }
+
+    #[test]
+    fn dynamic_ops_and_guards_keep_resume_pad() {
+        let empty = HashSet::new();
+        let f64s = f64_set(&[0]);
+        assert!(is_resume_target(
+            &Instruction::Binary {
+                dest: ValueId(0),
+                op: BinaryOp::Add,
+                lhs: ValueId(1),
+                rhs: ValueId(2),
+            },
+            &empty
+        ));
+        assert!(is_resume_target(
+            &Instruction::GuardTag {
+                dest: ValueId(0),
+                value: ValueId(1),
+                tag: 1,
+            },
+            &f64s
+        ));
+        assert!(is_resume_target(
+            &Instruction::GetElem {
+                dest: ValueId(0),
+                object: ValueId(1),
+                index: ValueId(2),
+                latch: None,
+            },
+            &f64s
+        ));
+    }
 }
