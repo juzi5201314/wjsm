@@ -611,14 +611,19 @@ impl Lowerer {
         if binding_env_scope != owner_env_scope {
             return false;
         }
-        // 父函数在闭包创建点存在活动的按迭代 env 帧（循环体按迭代绑定 /
-        // 具名函数表达式 funcEnv）时，本闭包的 `$env` 可能是插在稳定共享
-        // env 之前的迭代 env：直接写 `$env` 会在其上创建遮蔽自有属性，
-        // 内层读到新值而外层仍读稳定 env 旧值。此时回退动态链查找定位 owner。
-        !self
-            .iteration_env_stack
-            .iter()
-            .any(|frame| frame.function_scope_id == owner_env_scope)
+        // 父函数在闭包创建点存在活动的按迭代 env 帧（循环头按迭代绑定 /
+        // 循环体词法捕获）时，本闭包的 `$env` 可能是插在稳定共享 env
+        // 之前的迭代 env：直接写 `$env` 会在其上创建遮蔽自有属性，内层读到
+        // 新值而外层仍读稳定 env 旧值。此时回退动态链查找定位 owner。
+        //
+        // 具名函数表达式 / 类名的 funcEnv 帧（`body_scope_watermark == None` 且
+        // 不持有当前 binding）只服务自身名字绑定；`create_closure` 仍走
+        // `ensure_shared_env`，运行时 `$env` 与 owner 一致。Lowering 内层函数体时
+        // 外层 funcEnv 帧仍在栈上，若整帧匹配会误杀深度 0 快路径。
+        !self.iteration_env_stack.iter().any(|frame| {
+            frame.function_scope_id == owner_env_scope
+                && (frame.body_scope_watermark.is_some() || frame.owns_binding(binding))
+        })
     }
 
     /// 沿作用域树向上找最近的 Function/Module 作用域（env 的持有者）。

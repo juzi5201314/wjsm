@@ -12,10 +12,11 @@ use wjsm_ir::{
 };
 use wjsm_native_abi::{NativeRuntimeOp, NativeVmContext};
 
-pub(crate) fn lower_fast_direct_call_instruction(
+fn lower_native_direct_call(
     cx: &mut LoweringCx<'_, '_>,
     target: ir::FuncRef,
     destination: Option<ValueId>,
+    env_value: ir::Value,
     this_value: ValueId,
     args: &[ValueId],
     roots: &[ValueId],
@@ -26,13 +27,9 @@ pub(crate) fn lower_fast_direct_call_instruction(
         .builder
         .ins()
         .iconst(types::I64, value::encode_undefined());
-    let undefined_env = cx
-        .builder
-        .ins()
-        .iconst(types::I64, value::encode_undefined());
     let mut call_args = Vec::with_capacity(3 + arity);
     call_args.push(cx.ctx);
-    call_args.push(undefined_env);
+    call_args.push(env_value);
     call_args.push(this_value);
     for index in 0..arity {
         if let Some(argument) = args.get(index) {
@@ -68,15 +65,71 @@ pub(crate) fn lower_fast_direct_call_instruction(
     Ok(())
 }
 
-pub(crate) fn lower_direct_call_instruction(
+pub(crate) fn lower_closure_direct_call_instruction(
+    cx: &mut LoweringCx<'_, '_>,
+    target: ir::FuncRef,
+    destination: Option<ValueId>,
+    env_value: ValueId,
+    this_value: ValueId,
+    args: &[ValueId],
+    roots: &[ValueId],
+    arity: usize,
+) -> Result<()> {
+    let env_value = use_value_boxed(cx.builder, cx.variables, env_value)?;
+    lower_native_direct_call(
+        cx,
+        target,
+        destination,
+        env_value,
+        this_value,
+        args,
+        roots,
+        arity,
+    )
+}
+
+pub(crate) fn lower_fast_direct_call_instruction(
     cx: &mut LoweringCx<'_, '_>,
     target: ir::FuncRef,
     destination: Option<ValueId>,
     this_value: ValueId,
     args: &[ValueId],
     roots: &[ValueId],
+    arity: usize,
+) -> Result<()> {
+    let undefined_env = cx
+        .builder
+        .ins()
+        .iconst(types::I64, value::encode_undefined());
+    lower_native_direct_call(
+        cx,
+        target,
+        destination,
+        undefined_env,
+        this_value,
+        args,
+        roots,
+        arity,
+    )
+}
+
+pub(crate) fn lower_direct_call_instruction(
+    cx: &mut LoweringCx<'_, '_>,
+    target: ir::FuncRef,
+    destination: Option<ValueId>,
+    env_value: Option<ValueId>,
+    this_value: ValueId,
+    args: &[ValueId],
+    roots: &[ValueId],
 ) -> Result<()> {
     let this_value = use_value_boxed(cx.builder, cx.variables, this_value)?;
+    let env_value = match env_value {
+        Some(env) => use_value_boxed(cx.builder, cx.variables, env)?,
+        None => cx
+            .builder
+            .ins()
+            .iconst(types::I64, value::encode_undefined()),
+    };
     let active_len_offset = i32::try_from(offset_of!(NativeVmContext, call_arena_active_len))
         .context("call arena active length offset exceeds i32")?;
     let active_len = cx.builder.ins().load(
@@ -124,16 +177,12 @@ pub(crate) fn lower_direct_call_instruction(
         .ins()
         .store(MemFlagsData::trusted(), new_depth, cx.ctx, depth_offset);
 
-    let undefined_env = cx
-        .builder
-        .ins()
-        .iconst(types::I64, value::encode_undefined());
     let args_len_val = cx.builder.ins().iconst(types::I32, i64::from(args_len));
 
     cx.flush()?;
     let call = cx.builder.ins().call(
         target,
-        &[cx.ctx, undefined_env, this_value, active_len, args_len_val],
+        &[cx.ctx, env_value, this_value, active_len, args_len_val],
     );
     let result = cx.builder.inst_results(call)[0];
 
