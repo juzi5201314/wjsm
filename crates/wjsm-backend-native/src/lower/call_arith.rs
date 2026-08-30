@@ -394,17 +394,33 @@ pub(crate) fn emit_i32_arithmetic(
         .icmp_imm_s(ir::condcodes::IntCC::NotEqual, overflow_i64, 0);
     let not_ok = cx.builder.ins().bnot(both);
     let fail = cx.builder.ins().bor(fail_ov, not_ok);
-    // JS 数是 IEEE 754：i32 溢出不是类型 miss，直接回退同一对操作数的 f64 运算，
-    // 避免为每条 Add/Sub/Mul 保留 resume pad（deopt 会把热循环切成逐指令块）。
+    // JS 数是 IEEE 754：i32 溢出不是类型 miss。慢路径回退同一对操作数的 f64
+    // 运算，热路径仍只做 i32 加/减/乘 + fcvt，避免每条迭代都算一遍 fadd。
+    let fail_block = cx.builder.create_block();
+    let cont = cx.builder.create_block();
+    let merge = cx.builder.create_block();
+    cx.builder.append_block_param(merge, types::F64);
+    cx.builder.ins().brif(fail, fail_block, &[], cont, &[]);
+
+    cx.builder.switch_to_block(fail_block);
+    cx.builder.seal_block(fail_block);
     let wide = match op {
         BinaryOp::Add => cx.builder.ins().fadd(lhs, rhs),
         BinaryOp::Sub => cx.builder.ins().fsub(lhs, rhs),
         BinaryOp::Mul => cx.builder.ins().fmul(lhs, rhs),
         _ => unreachable!("guard restricts int32 arithmetic"),
     };
+    cx.builder.ins().jump(merge, &[wide]);
+
+    cx.builder.switch_to_block(cont);
+    cx.builder.seal_block(cont);
     let widened = cx.builder.ins().sextend(types::I64, sum);
     let narrow = cx.builder.ins().fcvt_from_sint(types::F64, widened);
-    Ok(cx.builder.ins().select(fail, wide, narrow))
+    cx.builder.ins().jump(merge, &[narrow]);
+
+    cx.builder.switch_to_block(merge);
+    cx.builder.seal_block(merge);
+    Ok(cx.builder.block_params(merge)[0])
 }
 
 pub(crate) fn emit_osr_poll(
