@@ -271,22 +271,6 @@ pub(crate) fn boxed_frame_local_names<'a>(
         .collect()
 }
 
-pub(crate) fn box_f64_arithmetic(
-    builder: &mut FunctionBuilder<'_>,
-    op: BinaryOp,
-    result: ir::Value,
-) -> ir::Value {
-    match op {
-        // 有限数 +/- 不会产生 NaN；跳过 canonicalize，避免每次 add 的 unordered 比较。
-        BinaryOp::Add | BinaryOp::Sub => {
-            builder
-                .ins()
-                .bitcast(types::I64, ir::MemFlagsData::new(), result)
-        }
-        _ => box_f64_result(builder, result),
-    }
-}
-
 pub(crate) fn emit_number_or_proven_f64(
     builder: &mut FunctionBuilder<'_>,
     encoded: ir::Value,

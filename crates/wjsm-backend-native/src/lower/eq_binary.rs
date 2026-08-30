@@ -372,7 +372,7 @@ pub(crate) fn lower_dynamic_binary(
         BinaryOp::Div => cx.builder.ins().fdiv(lhs_f64, rhs_f64),
         _ => unreachable!("guard restricts guarded binary operations"),
     };
-    let result = box_f64_arithmetic(cx.builder, op, result);
+    let result = box_f64_result(cx.builder, result);
     define_value_boxed(cx.builder, cx.variables, dest, result)?;
     cx.builder.ins().jump(merge_block, &[]);
 

@@ -116,7 +116,7 @@ pub(crate) fn lower_instruction(
             if cx.variables.is_typed_value(*dest) {
                 return define_value_f64(cx.builder, cx.variables, *dest, result);
             }
-            let result = box_f64_arithmetic(cx.builder, *op, result);
+            let result = box_f64_result(cx.builder, result);
             define_value_boxed(cx.builder, cx.variables, *dest, result)
         }
         Instruction::Binary { dest, op, lhs, rhs } => {

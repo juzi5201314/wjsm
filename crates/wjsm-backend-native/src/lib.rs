@@ -161,7 +161,11 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
                 "false"
             },
         )?;
-        set_flag(&mut flag_builder, "enable_nan_canonicalization", "true")?;
+        // typed f64 热路径把原始机器浮点常驻寄存器，只在 boxed 边界
+        // （`box_f64_result` / `use_value_boxed`）规范化 NaN，避免与 BOX_BASE
+        // 撞车。Cranelift 全局规范化会在每个 fadd/fmul 后插入
+        // vcmpunordpd+vpblendvb，把纯数值循环拉慢一个数量级。
+        set_flag(&mut flag_builder, "enable_nan_canonicalization", "false")?;
         set_flag(&mut flag_builder, "use_colocated_libcalls", "false")?;
         set_flag(&mut flag_builder, "probestack_strategy", "inline")?;
         set_flag(&mut flag_builder, "probestack_size_log2", "12")?;
@@ -191,7 +195,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=canonical;opt={opt_level};probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -1085,6 +1089,30 @@ mod tests {
             1,
             "只有 return 这一个逃逸点需要规范化 NaN:\n{}",
             diagnostics.clif
+        );
+    }
+
+    /// Cranelift 不得在 typed f64 循环体里逐条规范化 NaN：那会在每个
+    /// fadd/fmul 后插入 vcmpunordpd+vpblendvb。NaN-Box 只在 boxed 逃逸点处理。
+    #[test]
+    fn typed_f64_loop_machine_code_skips_nan_canonicalize() {
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Number(1.0)))
+            .expect("numeric loop diagnostics should compile");
+        let body = clif_section(&diagnostics.disassembly, ";; function 0: loop_sum");
+        assert!(
+            !body.is_empty(),
+            "应能截出 loop_sum 反汇编:\n{}",
+            diagnostics.disassembly
+        );
+        assert!(
+            !body.contains("vcmpunordpd") && !body.contains("vpblendvb"),
+            "typed f64 循环体不应被 Cranelift 逐条规范化 NaN:\n{body}"
+        );
+        assert!(
+            body.contains("addsd") || body.contains("vaddsd"),
+            "循环自增应保留原生 addsd:\n{body}"
         );
     }
 
