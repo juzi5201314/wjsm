@@ -5,8 +5,8 @@ use super::*;
 use anyhow::{Context, Result, bail};
 use cranelift_codegen::ir::{self, InstBuilder, types};
 use cranelift_frontend::FunctionBuilder;
-use wjsm_ir::{Instruction, ValueId, constants, value};
 use wjsm_ir::FunctionId;
+use wjsm_ir::{Instruction, ValueId, constants, value};
 use wjsm_native_abi::NativeRuntimeOp;
 
 pub(crate) fn lower_function(
@@ -371,15 +371,7 @@ pub(crate) fn lower_function_parameters(
         &[]
     };
     cx.publish_roots(&[], entry_roots)?;
-    let uses_canonical_this = function.blocks().iter().any(|block| {
-        block.instructions().iter().any(|instruction| {
-            matches!(
-                instruction,
-                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
-                    if name == "$this"
-            )
-        })
-    });
+    let uses_canonical_this = function_uses_local_var(function, "$this");
     let mut param_values = Vec::with_capacity(function.params().len());
     for (index, _) in function.params().iter().enumerate() {
         let value = match index {
@@ -425,6 +417,11 @@ pub(crate) fn lower_function_parameters(
         let Some(slot) = variable_slots.get(storage_name).copied() else {
             continue;
         };
+        // 与 safepoint-free 判定一致：体内未读写的形参不发 StoreVar，否则
+        // 无 root frame 的函数会在入口就要求宿主参数区。
+        if !function_uses_local_var(function, storage_name) {
+            continue;
+        }
         cx.publish_roots(&[], &[value])?;
         let slot = cx.builder.ins().iconst(types::I64, i64::from(slot));
         let _ = cx.call(NativeRuntimeOp::StoreVar.id(), &[slot, value], None)?;
