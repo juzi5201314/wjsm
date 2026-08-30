@@ -114,8 +114,10 @@ fn non_exception_identity(
     }
     let instruction = defs.get(&value)?;
     let result = match instruction {
-        Instruction::Const { .. }
-        | Instruction::NewObject { .. }
+        // Const 不能当成功路径身份：`x || 1000` 的默认常量与 GetProp 成功值
+        // 不是同一 SSA，retarget 后会出现「bb9 定义的 %const 在 bb10 成功边
+        // 上被使用」的支配错误。
+        Instruction::NewObject { .. }
         | Instruction::InitObjectLiteral { .. }
         | Instruction::Compare { .. }
         | Instruction::NewArray { .. } => Some(value),
