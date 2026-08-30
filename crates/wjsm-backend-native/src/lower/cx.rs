@@ -704,6 +704,7 @@ impl LoweringCx<'_, '_> {
 pub(crate) struct InstructionTables<'a> {
     pub(crate) program: &'a Program,
     pub(crate) ir_function: &'a wjsm_ir::Function,
+    pub(crate) has_env_layout: bool,
     pub(crate) constants: &'a [Constant],
     pub(crate) function_index: u32,
     pub(crate) barrier_thunks: &'a BarrierThunks,

@@ -189,6 +189,7 @@ pub(crate) fn lower_function(
         let mut tables = InstructionTables {
             program,
             ir_function,
+            has_env_layout: !ir_function.env_layout_keys().is_empty(),
             constants,
             function_index,
             barrier_thunks: &barrier_thunks,

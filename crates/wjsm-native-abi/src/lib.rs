@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 pub use wjsm_host::CallArgs;
 use wjsm_ir::{Builtin, Instruction, Program};
 
-pub const NATIVE_ABI_VERSION: u32 = 24;
+pub const NATIVE_ABI_VERSION: u32 = 25;
 pub const CALL_GATE_VERSION: u32 = 1;
 pub const ROOT_FRAME_VERSION: u32 = 2;
 pub const SOURCE_FRAME_VERSION: u32 = 1;
@@ -143,6 +143,9 @@ pub struct NativeVmContext {
     /// 当前 image 的对象模板 install 期元数据（`OBJECT_TEMPLATE_META_WORDS` u32/条）。
     pub object_template_meta_base: *const u32,
     pub object_template_meta_count: u32,
+    /// 当前 image 的闭包 `$env` 布局 install 期元数据（`ENV_LAYOUT_META_WORDS` u32/函数）。
+    pub env_layout_meta_base: *const u32,
+    pub env_layout_meta_count: u32,
     /// 1 + 要恢复的 IR `block_id`；0 表示正常入口。
     pub resume_block_plus_one: u32,
     pub resume_function_id: u32,
@@ -204,6 +207,8 @@ impl Default for NativeVmContext {
             array_prototype_handle: 0,
             object_template_meta_base: std::ptr::null(),
             object_template_meta_count: 0,
+            env_layout_meta_base: std::ptr::null(),
+            env_layout_meta_count: 0,
             resume_block_plus_one: 0,
             resume_function_id: 0,
             resume_live_count: 0,
@@ -894,6 +899,8 @@ pub fn native_abi_hash() -> [u8; 32] {
             offset_of!(NativeVmContext, array_prototype_handle),
             offset_of!(NativeVmContext, object_template_meta_base),
             offset_of!(NativeVmContext, object_template_meta_count),
+            offset_of!(NativeVmContext, env_layout_meta_base),
+            offset_of!(NativeVmContext, env_layout_meta_count),
             offset_of!(NativeVmContext, resume_block_plus_one),
             offset_of!(NativeVmContext, resume_live_slots),
             offset_of!(NativeVmContext, resume_instruction_index),

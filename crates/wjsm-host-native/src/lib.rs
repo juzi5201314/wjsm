@@ -2116,6 +2116,18 @@ impl NativeAgentState {
                 .unwrap_or(0),
         )
         .unwrap_or(0);
+        ctx.env_layout_meta_base = if self.env_layout_meta.is_empty() {
+            std::ptr::null()
+        } else {
+            self.env_layout_meta.as_ptr()
+        };
+        ctx.env_layout_meta_count = u32::try_from(
+            self.env_layout_meta
+                .len()
+                .checked_div(wjsm_backend_native::ENV_LAYOUT_META_WORDS)
+                .unwrap_or(0),
+        )
+        .unwrap_or(0);
         ctx.feedback_slots_base = image.feedback_slots();
         self.current_feedback_region = (
             image.feedback_slots().addr(),

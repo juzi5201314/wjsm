@@ -45,7 +45,7 @@ pub(crate) fn lower_guard_tag(
     define_boxed_bool(cx, dest, ok)
 }
 
-fn resolve_object_addr(
+pub(crate) fn resolve_object_addr(
     cx: &mut LoweringCx<'_, '_>,
     object: ir::Value,
 ) -> Result<(ir::Value, ir::Value)> {
