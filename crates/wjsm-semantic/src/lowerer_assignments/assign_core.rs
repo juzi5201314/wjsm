@@ -224,6 +224,20 @@ impl Lowerer {
         if self.iteration_env_for_binding(&binding).is_some() {
             return Ok(self.load_iteration_binding(block, &binding));
         }
+        // 函数声明自引用：绑定在外层作用域，但语义上等价于读已初始化的声明槽，
+        // 不走闭包 env（否则阻断 direct_call 且每次自调多两次 host 往返）。
+        if self.is_fn_decl_self_binding(&binding) && !self.is_shared_binding(&binding) {
+            let ir_name = format!("${scope_id}.{name}");
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest,
+                    name: ir_name,
+                },
+            );
+            return Ok(dest);
+        }
         if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
             return self.load_captured_binding(block, &binding);
         }
