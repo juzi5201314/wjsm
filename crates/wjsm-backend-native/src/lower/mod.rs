@@ -36,7 +36,7 @@ use crate::root_plan::RootPlan;
 use crate::safepoint_free::{function_uses_local_var, infer_safepoint_free_functions};
 use crate::template_meta::{
     TemplateOriginMap, TrioField, build_template_origin_maps, plan_ic_slots,
-    template_property_index_for_key, trio_field_for_access,
+    template_property_index_by_key_text, template_property_index_for_key, trio_field_for_access,
 };
 use crate::unwind::{UnwindPolicy, UnwindRecord, validate_unwind_info, write_object_unwind};
 use crate::value_repr::{

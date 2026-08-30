@@ -18,7 +18,8 @@
 //!    builtin.array.push(InitObjectLiteral)` 构造的字面量数组，或
 //!    `Array.from` + 统一类构造器（自有数据键序一致）。绑定被改写过的数组
 //!    在运行期由守卫重验兜底，这里只需要一个可信的模板来源。
-//! 2. 候选 `GetProp` 的 receiver 是候选 `GetElem` 的 dest，键是模板自有键。
+//! 2. 候选 `GetProp` 的 receiver 是候选 `GetElem` 的 dest，键是模板自有键，
+//!    或编译期识别的 hypot getter 属性（操作数键落在模板自有键上）。
 //! 3. 循环体全部指令通过「守卫为真期间不执行用户代码」白名单：协变运算
 //!    （Binary / 关系比较 / 字符串拼接 / abstract_compare）的操作数必须落在
 //!    「守卫为真时必为原始值」集合内——数字值类证明、原始常量、Guarded 读取
@@ -33,6 +34,7 @@ use wjsm_ir::{
 };
 
 use super::escape_scalar_record::template_key_names;
+use super::hypot_getter::{collect_hypot_getters, hypot_own_slots_for_property};
 use super::licm::LoopView;
 use super::licm_apply::ElemGuard;
 use super::licm_facts::{ModuleFacts, is_protocol_or_env_name};
@@ -271,12 +273,14 @@ fn env_is_loop_invariant(view: &LoopView<'_>, env: ValueId) -> bool {
     )
 }
 
-/// 候选 `GetProp`：receiver 是候选 elem 的 dest，键是该模板的自有键。
+/// 候选 `GetProp`：receiver 是候选 elem 的 dest，键是该模板的自有键，
+/// 或 hypot getter 属性（双操作数键均在模板上）。
 fn collect_prop_candidates(
     module: &Module,
     view: &LoopView<'_>,
     elems: &HashMap<ValueId, ElemCandidate>,
 ) -> Vec<(ValueId, (BasicBlockId, usize))> {
+    let hypot_getters = collect_hypot_getters(module);
     let mut props = Vec::new();
     for block in view.function.blocks() {
         if !view.body.contains(&block.id()) {
@@ -298,9 +302,12 @@ fn collect_prop_candidates(
             let Some(key_text) = view.strings.get(key) else {
                 continue;
             };
-            let owns_key = template_key_names(module.constants(), candidate.template)
-                .is_some_and(|keys| keys.iter().any(|name| name == key_text));
-            if owns_key {
+            let Some(keys) = template_key_names(module.constants(), candidate.template) else {
+                continue;
+            };
+            let owns_key = keys.iter().any(|name| name == key_text);
+            let hypot_key = hypot_own_slots_for_property(&hypot_getters, key_text, &keys).is_some();
+            if owns_key || hypot_key {
                 props.push((*object, (block.id(), index)));
             }
         }

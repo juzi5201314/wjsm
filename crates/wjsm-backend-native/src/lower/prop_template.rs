@@ -42,9 +42,10 @@ pub(crate) struct GuardedPropAccess {
 }
 
 /// 守卫属性读：守卫为真时 receiver 已被 pre-header 的 `GuardElementsKind` 证明
-/// 持有模板烘焙 shape，跳过逐迭代 tag/shape/proto 检查，解句柄后按模板槽
-/// 偏移单指令直读；其余情况先把守卫值置 false（单向闩锁，宿主回退可能执行
-/// 用户代码），再走与普通 `GetProp` 完全一致的 IC / 宿主路径。
+/// 持有模板烘焙 shape，跳过逐迭代 tag/shape/proto 检查。自有键按模板槽
+/// 偏移单指令直读；hypot getter 属性则直读双操作数槽并调用 typed thunk。
+/// 其余情况先把守卫值置 false（单向闩锁），再走与普通 `GetProp` 完全一致
+/// 的 IC / 宿主路径。
 pub(crate) fn lower_get_prop_guarded(
     cx: &mut LoweringCx<'_, '_>,
     tables: &mut InstructionTables<'_>,
@@ -58,10 +59,10 @@ pub(crate) fn lower_get_prop_guarded(
         guard,
         template,
     } = access;
-    let prop_index =
+    let hypot_slots = hypot_guarded_slot_offsets(tables, template, key);
+    let own_offset =
         template_property_index_for_key(tables.constants, tables.constant_defs, template, key)
-            .context("get_prop_guarded key must be a template own key")?;
-    let offset = template_value_slot_offset(prop_index)?;
+            .and_then(|index| template_value_slot_offset(index).ok());
 
     let fast_block = cx.builder.create_block();
     let slow_block = cx.builder.create_block();
@@ -78,15 +79,25 @@ pub(crate) fn lower_get_prop_guarded(
 
     cx.builder.switch_to_block(fast_block);
     cx.builder.seal_block(fast_block);
-    emit_guarded_slot_read(
-        cx,
-        tables.barrier_thunks,
-        dest,
-        object,
-        offset,
-        merge_block,
-        slow_block,
-    )?;
+    match (hypot_slots, own_offset) {
+        (Some((lhs, rhs)), _) => {
+            emit_guarded_hypot_read(cx, tables, dest, object, lhs, rhs, merge_block, slow_block)?;
+        }
+        (None, Some(offset)) => {
+            emit_guarded_slot_read(
+                cx,
+                tables.barrier_thunks,
+                dest,
+                object,
+                offset,
+                merge_block,
+                slow_block,
+            )?;
+        }
+        (None, None) => {
+            bail!("get_prop_guarded key must be a template own key or hypot getter");
+        }
+    }
 
     // 慢路径入口：先熄灭守卫再走通用路径（IC / 宿主可能执行用户代码）。
     cx.builder.switch_to_block(slow_block);
@@ -115,6 +126,25 @@ pub(crate) fn lower_get_prop_guarded(
     Ok(())
 }
 
+fn hypot_guarded_slot_offsets(
+    tables: &InstructionTables<'_>,
+    template: ConstantId,
+    key: ValueId,
+) -> Option<(i32, i32)> {
+    let constant_id = tables.constant_defs.get(&key)?;
+    let Constant::String(property) = tables.constants.get(constant_id.0 as usize)? else {
+        return None;
+    };
+    let (lhs_key, rhs_key) =
+        wjsm_optimize::hypot_own_slots_for_template_key(tables.program, template, property)?;
+    let lhs = template_property_index_by_key_text(tables.constants, template, &lhs_key)?;
+    let rhs = template_property_index_by_key_text(tables.constants, template, &rhs_key)?;
+    Some((
+        template_value_slot_offset(lhs).ok()?,
+        template_value_slot_offset(rhs).ok()?,
+    ))
+}
+
 /// 守卫为真时的模板槽直读：不做 tag/shape 检查（pre-header 已一次性证明
 /// receiver 是烘焙 shape 的普通对象），只保留句柄稳定态 / access epoch
 /// 协议——GC 可能在循环回边 safepoint 重定位对象，句柄解析不是循环不变量。
@@ -129,6 +159,77 @@ pub(crate) fn emit_guarded_slot_read(
     merge_block: ir::Block,
     slow_block: ir::Block,
 ) -> Result<()> {
+    let (logical_addr, heap_delta) =
+        emit_guarded_object_hit(cx, barrier_thunks, object, slow_block)?;
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    let loaded = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, offset);
+    define_value_boxed(cx.builder, cx.variables, dest, loaded)?;
+    cx.builder.ins().jump(merge_block, &[]);
+    Ok(())
+}
+
+/// 闩锁 hypot getter：双槽直读 + typed thunk；非数字回退慢路径原 GetProp。
+fn emit_guarded_hypot_read(
+    cx: &mut LoweringCx<'_, '_>,
+    tables: &mut InstructionTables<'_>,
+    dest: ValueId,
+    object: ValueId,
+    lhs_offset: i32,
+    rhs_offset: i32,
+    merge_block: ir::Block,
+    slow_block: ir::Block,
+) -> Result<()> {
+    let (logical_addr, heap_delta) =
+        emit_guarded_object_hit(cx, tables.barrier_thunks, object, slow_block)?;
+    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
+    let lhs = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, lhs_offset);
+    let rhs = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), addr, rhs_offset);
+    let hypot_num_block = cx.builder.create_block();
+    let lhs_num = emit_is_number(cx.builder, lhs);
+    let rhs_num = emit_is_number(cx.builder, rhs);
+    let both_num = cx.builder.ins().band(lhs_num, rhs_num);
+    cx.builder
+        .ins()
+        .brif(both_num, hypot_num_block, &[], slow_block, &[]);
+
+    cx.builder.switch_to_block(hypot_num_block);
+    cx.builder.seal_block(hypot_num_block);
+    let thunk = import_math_thunk(
+        cx.builder,
+        tables.math_thunks,
+        tables.imported_math_thunks,
+        Builtin::MathHypot,
+    )?;
+    let lhs_f64 = unbox_f64(cx.builder, lhs);
+    let rhs_f64 = unbox_f64(cx.builder, rhs);
+    let call = cx.builder.ins().call(thunk, &[lhs_f64, rhs_f64]);
+    let native = *cx
+        .builder
+        .inst_results(call)
+        .first()
+        .context("Math.hypot thunk 未返回结果")?;
+    let boxed = box_f64_result(cx.builder, native);
+    define_value_boxed(cx.builder, cx.variables, dest, boxed)?;
+    cx.builder.ins().jump(merge_block, &[]);
+    Ok(())
+}
+
+/// 解析闩锁接收者句柄到逻辑地址；失败跳 `slow_block`。返回时当前块为 hit。
+fn emit_guarded_object_hit(
+    cx: &mut LoweringCx<'_, '_>,
+    barrier_thunks: &BarrierThunks,
+    object: ValueId,
+    slow_block: ir::Block,
+) -> Result<(ir::Value, ir::Value)> {
     let pointer_type = cx.builder.func.dfg.value_type(cx.ctx);
     let obj = use_value_boxed(cx.builder, cx.variables, object)?;
     let ht_base = cx.ht_base;
@@ -233,15 +334,7 @@ pub(crate) fn emit_guarded_slot_read(
 
     cx.builder.switch_to_block(hit_block);
     cx.builder.seal_block(hit_block);
-    let logical_addr = cx.builder.block_params(hit_block)[0];
-    let addr = cx.builder.ins().iadd(logical_addr, heap_delta);
-    let loaded = cx
-        .builder
-        .ins()
-        .load(types::I64, MemFlagsData::trusted(), addr, offset);
-    define_value_boxed(cx.builder, cx.variables, dest, loaded)?;
-    cx.builder.ins().jump(merge_block, &[]);
-    Ok(())
+    Ok((cx.builder.block_params(hit_block)[0], heap_delta))
 }
 
 /// 模板对象自有数据属性写：shape 命中后 `store [obj+imm]`，失配回落 fallback。
