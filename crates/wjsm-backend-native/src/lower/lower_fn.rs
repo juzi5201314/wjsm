@@ -235,16 +235,22 @@ pub(crate) fn lower_function(
             }
         }
         let entry_body = cx.builder.create_block();
-        emit_resume_dispatch(
-            &mut cx,
-            program,
-            ir_function,
-            function_index,
-            &blocks,
-            &resume_pads,
-            &headers,
-            entry_body,
-        )?;
+        if safepoint_free && resume_pads.is_empty() {
+            // 无 resume pad、也不走 OSR：跳过 resume 分发，少一批循环头前驱，
+            // 避免 Cranelift 在回边把 f64 归纳变量溢到栈上。
+            cx.builder.ins().jump(entry_body, &[]);
+        } else {
+            emit_resume_dispatch(
+                &mut cx,
+                program,
+                ir_function,
+                function_index,
+                &blocks,
+                &resume_pads,
+                &headers,
+                entry_body,
+            )?;
+        }
         blocks.insert(ir_function.entry(), entry_body);
 
         for block in ir_function.blocks() {

@@ -195,7 +195,7 @@ static CACHED_COMPILER: LazyLock<Result<NativeCompiler, NativeCompileError>> = L
             }
         };
         let settings_key = format!(
-            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;poll=reg-spfree;opt={opt_level};probestack=inline:4096",
+            "target={};arch={target_arch};os={target_os};cranelift={};pic={};unwind=1;unwind-object={};nan=boxed-escape;resume=skip-typed-f64;roots=skip-bool-imm;poll=reg-spfree;spfree-entry=direct;opt={opt_level};probestack=inline:4096",
             isa.triple(),
             CRANELIFT_VERSION,
             1,
@@ -398,6 +398,11 @@ mod capability_tests {
             assert!(
                 compiler.settings_key().contains("poll=reg-spfree"),
                 "safepoint-free 寄存器预算必须进 cache 键:\n{}",
+                compiler.settings_key()
+            );
+            assert!(
+                compiler.settings_key().contains("spfree-entry=direct"),
+                "safepoint-free 跳过 resume 分发必须进 cache 键:\n{}",
                 compiler.settings_key()
             );
         } else {
