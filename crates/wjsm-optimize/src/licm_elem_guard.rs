@@ -12,12 +12,12 @@
 //!
 //! 静态前提（任一不成立则整个循环放弃，一条也不替换）：
 //!
-//! 1. 候选 `GetElem` 的 receiver 定义在循环体外（往轮 licm 已把可外提的
-//!    LoadVar 搬进 pre-header），且是「单赋值数组绑定」的 LoadVar：该绑定
-//!    全模块只有一次 StoreVar，写入同函数内 `NewArray +
-//!    builtin.array.push(InitObjectLiteral)` 构造的字面量数组，全部元素模板
-//!    键序一致（烘焙 shape 因此相同）。绑定被改写过的数组在运行期由守卫
-//!    重验兜底，这里只需要一个可信的模板来源。
+//!     1. 候选 `GetElem` 的 receiver 定义在循环体外（往轮 licm 已把可外提的
+//!    LoadVar 搬进 pre-header），且是「单赋值数组绑定」的 LoadVar 或
+//!    LoadEnvSlot：该绑定全模块只有一次 StoreVar，写入同函数内 `NewArray +
+//!    builtin.array.push(InitObjectLiteral)` 构造的字面量数组，或
+//!    `Array.from` + 统一类构造器（自有数据键序一致）。绑定被改写过的数组
+//!    在运行期由守卫重验兜底，这里只需要一个可信的模板来源。
 //! 2. 候选 `GetProp` 的 receiver 是候选 `GetElem` 的 dest，键是模板自有键。
 //! 3. 循环体全部指令通过「守卫为真期间不执行用户代码」白名单：协变运算
 //!    （Binary / 关系比较 / 字符串拼接 / abstract_compare）的操作数必须落在
@@ -49,16 +49,17 @@ enum ArrayState {
     Poisoned,
 }
 
-/// 收集「全模块恰好一次 StoreVar、写入值是同函数内统一模板对象字面量数组」
-/// 的绑定 → 元素模板。模板只是守卫的静态候选：绑定或数组内容后续被改写时，
-/// 运行期 `GuardElementsKind`（带模板）校验失败、退回通用路径，正确性不受影响。
-pub(crate) fn stable_elem_array_bindings(module: &Module) -> HashMap<String, ConstantId> {
-    let mut store_sites: HashMap<&str, u32> = HashMap::new();
+/// 收集「全模块恰好一次 StoreVar、写入值是同函数内统一模板对象字面量数组
+/// 或 `Array.from` + 统一类构造器」的绑定 → 元素模板。模板只是守卫的静态
+/// 候选：绑定或数组内容后续被改写时，运行期 `GuardElementsKind`（带模板）
+/// 校验失败、退回通用路径，正确性不受影响。
+pub(crate) fn stable_elem_array_bindings(module: &mut Module) -> HashMap<String, ConstantId> {
+    let mut store_sites: HashMap<String, u32> = HashMap::new();
     for function in module.functions() {
         for block in function.blocks() {
             for instruction in block.instructions() {
                 if let Instruction::StoreVar { name, .. } = instruction {
-                    *store_sites.entry(name.as_str()).or_insert(0) += 1;
+                    *store_sites.entry(name.clone()).or_insert(0) += 1;
                 }
             }
         }
@@ -67,13 +68,14 @@ pub(crate) fn stable_elem_array_bindings(module: &Module) -> HashMap<String, Con
     for function in module.functions() {
         collect_function_array_bindings(module, function, &store_sites, &mut bindings);
     }
+    super::licm_array_from::add_array_from_bindings(module, &store_sites, &mut bindings);
     bindings
 }
 
 fn collect_function_array_bindings(
     module: &Module,
     function: &Function,
-    store_sites: &HashMap<&str, u32>,
+    store_sites: &HashMap<String, u32>,
     bindings: &mut HashMap<String, ConstantId>,
 ) {
     let constants = module.constants();
@@ -108,7 +110,7 @@ fn collect_function_array_bindings(
                 }
                 Instruction::StoreVar { name, value } => {
                     if let Some(ArrayState::Uniform(template, _)) = arrays.get(value)
-                        && store_sites.get(name.as_str()).copied() == Some(1)
+                        && store_sites.get(name).copied() == Some(1)
                     {
                         bindings.insert(name.clone(), *template);
                     }
@@ -225,25 +227,48 @@ fn collect_elem_candidates(
     candidates
 }
 
-/// `value` 是否是定义在循环体外、单赋值数组绑定的 LoadVar；是则给出元素模板。
+/// `value` 是否是单赋值数组绑定：循环外 LoadVar，或循环内对捕获槽的
+/// `LoadEnvSlot`（`$env` 形参循环不变，键是绑定名）。
 fn stable_array_template(
     view: &LoopView<'_>,
     facts: &ModuleFacts,
     value: ValueId,
 ) -> Option<ConstantId> {
     let (block, index) = view.defs.get(&value).copied()?;
-    if view.body.contains(&block) {
-        return None;
-    }
-    let Instruction::LoadVar { name, .. } = view
+    let instruction = view
         .function
         .block_by_id(block)?
         .instructions()
-        .get(index)?
-    else {
-        return None;
+        .get(index)?;
+    match instruction {
+        Instruction::LoadVar { name, .. } if !view.body.contains(&block) => {
+            facts.elem_array_templates.get(name).copied()
+        }
+        Instruction::LoadEnvSlot { env, key, .. } => {
+            if !env_is_loop_invariant(view, *env) {
+                return None;
+            }
+            let name = view.strings.get(key)?;
+            facts.elem_array_templates.get(name).copied()
+        }
+        _ => None,
+    }
+}
+
+fn env_is_loop_invariant(view: &LoopView<'_>, env: ValueId) -> bool {
+    let Some((block, index)) = view.defs.get(&env).copied() else {
+        return false;
     };
-    facts.elem_array_templates.get(name).copied()
+    if !view.body.contains(&block) {
+        return true;
+    }
+    matches!(
+        view.function
+            .block_by_id(block)
+            .and_then(|block| block.instructions().get(index)),
+        Some(Instruction::LoadVar { name, .. })
+            if name == "$env" || name.ends_with(".$env")
+    )
 }
 
 /// 候选 `GetProp`：receiver 是候选 elem 的 dest，键是该模板的自有键。
@@ -454,6 +479,7 @@ fn builtin_result_primitive(builtin: Builtin) -> bool {
             | Builtin::ConsoleWarn
             | Builtin::ConsoleError
             | Builtin::ConsoleTrace
+            | Builtin::MathHypot
     )
 }
 
@@ -472,12 +498,20 @@ fn stable_array_length_read(
     let Some((block, index)) = view.defs.get(&object).copied() else {
         return false;
     };
-    let Some(Instruction::LoadVar { name, .. }) = view
+    let Some(instruction) = view
         .function
         .block_by_id(block)
         .and_then(|block| block.instructions().get(index))
     else {
         return false;
+    };
+    let name = match instruction {
+        Instruction::LoadVar { name, .. } => name.as_str(),
+        Instruction::LoadEnvSlot { key, .. } => match view.strings.get(key) {
+            Some(name) => name.as_str(),
+            None => return false,
+        },
+        _ => return false,
     };
     facts.elem_array_templates.contains_key(name)
 }
@@ -562,6 +596,7 @@ fn body_safe_with_guard(
                 Instruction::Const { .. }
                 | Instruction::Phi { .. }
                 | Instruction::LoadVar { .. }
+                | Instruction::LoadEnvSlot { .. }
                 | Instruction::StoreVar { .. }
                 | Instruction::IsException { .. }
                 | Instruction::GuardSameFunction { .. }
@@ -598,6 +633,7 @@ fn body_safe_with_guard(
                     | Builtin::IsJsObject
                     | Builtin::ToBoolean => true,
                     Builtin::AbstractCompare => args.iter().all(|arg| prim.contains(arg)),
+                    Builtin::MathHypot => args.iter().all(|arg| prim.contains(arg)),
                     _ => false,
                 },
                 _ => false,

@@ -13,6 +13,7 @@ mod inline_for_ea;
 pub mod ir_walk;
 mod licm;
 mod licm_apply;
+mod licm_array_from;
 mod licm_elem_guard;
 mod licm_facts;
 mod liveness;
