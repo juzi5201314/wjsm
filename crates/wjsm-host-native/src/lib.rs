@@ -4279,20 +4279,10 @@ impl NativeAgentState {
     }
 
     fn install_osr_entry(&self, image_id: u64, function: u32, overlay: &CompiledImage) {
-        let Some(wrapper) = overlay.entries().first() else {
-            return;
-        };
-        let osr = wrapper.osr_entry.load(std::sync::atomic::Ordering::Acquire);
-        if osr == 0 {
-            return;
-        }
-        if let Some(base) = self.images.get(&image_id)
-            && let Some(entry) = base.entries().get(function as usize)
-        {
-            entry
-                .osr_entry
-                .store(osr, std::sync::atomic::Ordering::Release);
-        }
+        // osr_entry 指向整函数 specialized body。generic 循环头 OSR 转入该入口
+        // 尚未安全（与 resume 槽/投机 SSA 交织会在分配热路径 SIGSEGV），因此
+        // 暂不发布；特化仍可通过 select_specialized_entry 的 wrapper 路径生效。
+        let _ = (image_id, function, overlay);
     }
 
     fn select_specialized_entry(

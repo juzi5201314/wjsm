@@ -28,7 +28,7 @@ sequenceDiagram
 
 ## Safepoint
 
-safepoint 是 native mutator 可以安全暂停的点。后端在分配 fast path 和循环回边插入检查：回边从 `NativeVmContext::stack_budget_bytes` 扣除 `COOPERATIVE_POLL_STEP_BYTES`，耗尽后调用 `NativeRuntimeOp::CooperativePoll`（重置预算，并做 inspector / GC / 外部事件轮询）。
+safepoint 是 native mutator 可以安全暂停的点。后端在分配 fast path 和循环回边插入检查：回边从 `NativeVmContext::stack_budget_bytes` 扣除 [`COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES`](../../../crates/wjsm-native-abi/src/lib.rs)（1024 字节，约每 8192 次回边轮询一次），分配路径仍用 [`COOPERATIVE_POLL_STEP_BYTES`](../../../crates/wjsm-native-abi/src/lib.rs)（64KiB）；预算耗尽后调用 `NativeRuntimeOp::CooperativePoll`（重置预算，并做 inspector / GC / 外部事件轮询）。
 
 暂停时 generated code 发布 `NativeRootFrame`（`slots` + bitmap）。collector 只读 bitmap 置位的槽。
 

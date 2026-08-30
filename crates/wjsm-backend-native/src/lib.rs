@@ -1032,6 +1032,28 @@ mod tests {
         );
     }
 
+    /// 循环回边 cooperative poll 使用较小步长，避免无分配紧循环频繁进 dispatcher。
+    #[test]
+    fn loop_backedge_cooperative_poll_uses_small_step() {
+        use wjsm_native_abi::COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES;
+        let compiler = NativeCompiler::new().expect("host ISA should be supported");
+        let diagnostics = compiler
+            .diagnostics(&numeric_loop_artifact(Constant::Number(1.0)))
+            .expect("numeric loop diagnostics should compile");
+        let step =
+            i64::try_from(COOPERATIVE_POLL_LOOP_BACKEDGE_STEP_BYTES).expect("loop poll step");
+        assert!(
+            diagnostics.clif.contains(&format!("iconst.i64 {step}")),
+            "loop back-edge poll should deduct {step} bytes:\n{}",
+            diagnostics.clif
+        );
+        assert!(
+            !diagnostics.clif.contains("iconst.i64 0x0001_0000"),
+            "loop back-edge should not use allocation poll step:\n{}",
+            diagnostics.clif
+        );
+    }
+
     /// 循环携带的归纳变量整轮迭代常驻浮点寄存器：循环头的块参数是 `f64`，
     /// 回边上没有打标/拆包，只有 `return` 这一个逃逸点转换一次。
     #[test]

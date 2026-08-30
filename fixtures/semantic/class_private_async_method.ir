@@ -2308,11 +2308,11 @@ module {
       throw %7
     bb8:
       %17 = load var $29.$this
-      %18 = create_data_property %17, %11, %94
+      %18 = create_data_property %17, %11, %95
       %19 = is_exception %18
       branch %19, bb11, bb10
     bb9:
-      %16 = call builtin.exception_value(%94)
+      %16 = call builtin.exception_value(%95)
       throw %16
     bb10:
       %21 = load var $29.$this
@@ -2375,26 +2375,26 @@ module {
       %20 = call builtin.exception_value(%18)
       throw %20
     bb12:
-      %15 = is_exception %94
+      %15 = is_exception %95
       branch %15, bb9, bb8
     bb13:
-      %68 = const c383
-      %69 = const c384
-      %70 = call builtin.create_closure(%68, %69)
-      %71 = new_object(capacity=4)
-      %72 = const c385
-      %73 = set_prop %71, %72, %70, strict
-      %74 = const c386
-      %75 = const c388
-      %76 = set_prop %71, %74, %75, strict
-      store var $31.Probe, %70
-      %77 = const c389
-      %78 = set_prop %70, %77, %71, strict
-      store var $30.Probe, %70
-      %79 = load var $30.Probe
-      %80 = new_object(capacity=4)
-      %81 = call builtin.get_prototype_from_constructor(%79)
-      set_proto %80, %81
+      %69 = const c383
+      %70 = const c384
+      %71 = call builtin.create_closure(%69, %70)
+      %72 = new_object(capacity=4)
+      %73 = const c385
+      %74 = set_prop %72, %73, %71, strict
+      %75 = const c386
+      %76 = const c388
+      %77 = set_prop %72, %75, %76, strict
+      store var $31.Probe, %71
+      %78 = const c389
+      %79 = set_prop %71, %78, %72, strict
+      store var $30.Probe, %71
+      %80 = load var $30.Probe
+      %81 = new_object(capacity=4)
+      %82 = call builtin.get_prototype_from_constructor(%80)
+      set_proto %81, %82
       jump bb22
     bb14:
       jump bb15
@@ -2405,20 +2405,20 @@ module {
     bb17:
       jump bb18
     bb18:
-      %90 = const c390
-      %91 = get_prop %80, %90
-      %92 = is_exception %91
-      branch %92, bb20, bb19
+      %91 = const c390
+      %92 = get_prop %81, %91
+      %93 = is_exception %92
+      branch %93, bb20, bb19
     bb19:
-      %94 = call %91, this=%80, callsite="(intermediate value).tag"
+      %95 = call %92, this=%81, callsite="(intermediate value).tag"
       store var $30.Probe, %67
       store var $31.Probe, %67
       jump bb12
     bb20:
-      %93 = call builtin.exception_value(%91)
+      %94 = call builtin.exception_value(%92)
       store var $30.Probe, %67
       store var $31.Probe, %67
-      throw %93
+      throw %94
     bb21:
       jump bb14
     bb22:

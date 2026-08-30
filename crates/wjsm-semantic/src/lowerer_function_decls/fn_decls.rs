@@ -17,6 +17,7 @@ impl Lowerer {
         }
         let name = fn_decl.ident.sym.to_string();
         self.push_function_context(&name, BasicBlockId(0));
+        self.register_fn_decl_self_binding(&name, fn_decl.span())?;
         self.apply_function_strictness(fn_decl.function.body.as_ref());
 
         // 声明 $env（闭包环境对象），非闭包时传入 undefined
@@ -92,8 +93,15 @@ impl Lowerer {
             ir_function.set_source_text(text);
         }
         ir_function.set_params(param_ir_names);
-        // 设置捕获变量列表（逃逸分析结果）
-        let captured = self.captured_names_stack.last().unwrap().clone();
+        // 设置捕获变量列表（逃逸分析结果）；剔除函数声明自引用。
+        let self_binding = self
+            .fn_decl_self_binding_stack
+            .last()
+            .and_then(|slot| slot.clone());
+        let captured = Self::filter_fn_decl_self_captures(
+            self.captured_names_stack.last().unwrap(),
+            self_binding.as_ref(),
+        );
         self.finalize_function_captures(&mut ir_function, &captured);
         for (ir_name, fn_id) in known_callees {
             ir_function.record_known_callee(ir_name, fn_id);
