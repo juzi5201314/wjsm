@@ -2,6 +2,7 @@
 //! 且内联构造器的 `NewObject` 被标量替换（`scaled.x` / `scaled.y` 不再读堆）。
 
 use wjsm_ir::Instruction;
+use wjsm_optimize::terminator_uses;
 use wjsm_parser::parse_module;
 use wjsm_semantic::lower_module;
 
@@ -40,6 +41,25 @@ fn loop_method_and_constructor_inline() {
             .iter()
             .any(|instruction| matches!(instruction, Instruction::GuardSameFunction { .. }))
     });
+    let new_object_dests: Vec<_> = work
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            Instruction::NewObject { dest, .. } => Some(*dest),
+            _ => None,
+        })
+        .collect();
+    let terminator_hits: Vec<String> = work
+        .blocks()
+        .iter()
+        .filter(|block| {
+            terminator_uses(block.terminator())
+                .iter()
+                .any(|value| new_object_dests.contains(value))
+        })
+        .map(|block| format!("{}: {}", block.id(), block.terminator()))
+        .collect();
     let text: String = work
         .blocks()
         .iter()
@@ -47,18 +67,12 @@ fn loop_method_and_constructor_inline() {
         .map(|instruction| format!("{instruction}"))
         .collect::<Vec<_>>()
         .join("\n");
-    let has_new_object = work.blocks().iter().any(|block| {
-        block
-            .instructions()
-            .iter()
-            .any(|instruction| matches!(instruction, Instruction::NewObject { .. }))
-    });
     assert!(
         has_guard,
         "work 应对 p.scale 发出 GuardSameFunction：{text}"
     );
     assert!(
-        !has_new_object,
-        "内联构造器的 NewObject 应被标量替换，不应留在 work：{text}"
+        new_object_dests.is_empty(),
+        "内联构造器的 NewObject 应被标量替换，不应留在 work（terminator 使用={terminator_hits:?}）：\n{text}"
     );
 }

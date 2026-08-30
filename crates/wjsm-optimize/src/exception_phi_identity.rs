@@ -20,6 +20,7 @@ use crate::ir_walk::instruction_dest;
 struct Collapse {
     phi: ValueId,
     object: ValueId,
+    phi_block: BasicBlockId,
     success: BasicBlockId,
 }
 
@@ -41,8 +42,11 @@ pub(crate) fn fold_function(function: &mut Function) -> bool {
     }
     let dom = Dominators::compute(function);
     let mut changed = false;
-    for collapse in collapses {
-        if apply_collapse(function, &dom, &collapse) {
+    for collapse in &collapses {
+        if apply_collapse(function, &dom, collapse) {
+            changed = true;
+        }
+        if retarget_object_predecessors(function, &defs, collapse) {
             changed = true;
         }
     }
@@ -91,6 +95,7 @@ fn collect_collapses(function: &Function, defs: &HashMap<ValueId, Instruction>) 
             out.push(Collapse {
                 phi: *value,
                 object,
+                phi_block: block.id(),
                 success: *false_block,
             });
         }
@@ -166,6 +171,80 @@ fn apply_collapse(function: &mut Function, dom: &Dominators, collapse: &Collapse
         if crate::ir_walk::terminator_uses(block.terminator()).contains(&collapse.phi) {
             replace_value_id_in_terminator(block.terminator_mut(), collapse.phi, collapse.object);
             changed = true;
+        }
+    }
+    changed
+}
+
+fn phi_block_is_protocol_only(function: &Function, block_id: BasicBlockId) -> bool {
+    let Some(block) = function.block_by_id(block_id) else {
+        return false;
+    };
+    block.instructions().iter().all(|instruction| {
+        matches!(
+            instruction,
+            Instruction::Phi { .. } | Instruction::IsException { .. } | Instruction::Const { .. }
+        )
+    })
+}
+
+fn retarget_object_predecessors(
+    function: &mut Function,
+    defs: &HashMap<ValueId, Instruction>,
+    collapse: &Collapse,
+) -> bool {
+    if !phi_block_is_protocol_only(function, collapse.phi_block) {
+        return false;
+    }
+    let Some(Instruction::Phi { sources, .. }) = defs.get(&collapse.phi) else {
+        return false;
+    };
+    let mut retarget = Vec::new();
+    for source in sources {
+        let Some(identity) = non_exception_identity(defs, source.value, &mut HashSet::new()) else {
+            continue;
+        };
+        if identity == collapse.object {
+            retarget.push(source.predecessor);
+        }
+    }
+    if retarget.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    for predecessor in &retarget {
+        let Some(block) = function.block_by_id_mut(*predecessor) else {
+            continue;
+        };
+        match block.terminator_mut() {
+            Terminator::Jump { target } if *target == collapse.phi_block => {
+                *target = collapse.success;
+                changed = true;
+            }
+            Terminator::Branch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                if *true_block == collapse.phi_block {
+                    *true_block = collapse.success;
+                    changed = true;
+                }
+                if *false_block == collapse.phi_block {
+                    *false_block = collapse.success;
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    if changed && let Some(block) = function.block_by_id_mut(collapse.phi_block) {
+        for instruction in block.instructions_mut() {
+            if let Instruction::Phi { dest, sources } = instruction
+                && *dest == collapse.phi
+            {
+                sources.retain(|source| !retarget.contains(&source.predecessor));
+            }
         }
     }
     changed

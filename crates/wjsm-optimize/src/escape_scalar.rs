@@ -255,6 +255,11 @@ fn analyze_candidate(
                     }
                     delete_targets.push((block.id(), index));
                 }
+                Instruction::Phi { sources, .. }
+                    if sources.iter().any(|source| family.contains(&source.value)) =>
+                {
+                    // 异常混合 Phi 仍把 NewObject 当源；对象未从成功路径逃逸。
+                }
                 Instruction::CreateDataProperty {
                     object, key, value, ..
                 } if family.contains(object) => {
@@ -438,11 +443,138 @@ pub(super) fn next_value_id(function: &wjsm_ir::Function) -> u32 {
     next
 }
 
+fn unique_dominating_write_replacements(
+    function: &wjsm_ir::Function,
+    analysis: &CandidateAnalysis,
+) -> Option<HashMap<ValueId, ValueId>> {
+    let mut replacements = HashMap::new();
+    for read in &analysis.reads {
+        let writes: Vec<&PropertyWrite> = analysis
+            .writes
+            .iter()
+            .filter(|write| write.key == read.key)
+            .collect();
+        if writes.len() != 1 {
+            return None;
+        }
+        let write = writes[0];
+        if write.block == read.block {
+            if write.index >= read.index {
+                return None;
+            }
+        } else if !dominates_along_success_edges(function, write.block, read.block) {
+            return None;
+        }
+        replacements.insert(read.dest, write.value);
+    }
+    Some(replacements)
+}
+
+/// `is_exception` 的 true 边与 `Throw` 在运行时不会到达成功路径上的 GetProp。
+/// 用去掉这些边的 CFG 判断支配，避免异常菱形合流把 SetProp 判成不支配读取。
+fn dominates_along_success_edges(
+    function: &wjsm_ir::Function,
+    writer: BasicBlockId,
+    reader: BasicBlockId,
+) -> bool {
+    if writer == reader {
+        return true;
+    }
+    if !reachable_along_success_edges(function, writer, reader) {
+        return false;
+    }
+    !reachable_avoiding_along_success_edges(function, function.entry(), reader, writer)
+}
+
+fn success_successors(function: &wjsm_ir::Function, block_id: BasicBlockId) -> Vec<BasicBlockId> {
+    let Some(block) = function.block_by_id(block_id) else {
+        return Vec::new();
+    };
+    match block.terminator() {
+        Terminator::Jump { target } => vec![*target],
+        Terminator::Branch {
+            condition,
+            true_block,
+            false_block,
+        } => {
+            let is_exception = block.instructions().iter().any(|instruction| {
+                matches!(instruction, Instruction::IsException { dest, .. } if dest == condition)
+            });
+            if is_exception {
+                vec![*false_block]
+            } else {
+                vec![*true_block, *false_block]
+            }
+        }
+        Terminator::Switch {
+            cases,
+            default_block,
+            ..
+        } => {
+            let mut succs: Vec<BasicBlockId> = cases.iter().map(|case| case.target).collect();
+            succs.push(*default_block);
+            succs
+        }
+        Terminator::Return { .. }
+        | Terminator::Throw { .. }
+        | Terminator::Unreachable
+        | Terminator::Deopt { .. } => Vec::new(),
+    }
+}
+
+fn reachable_along_success_edges(
+    function: &wjsm_ir::Function,
+    start: BasicBlockId,
+    goal: BasicBlockId,
+) -> bool {
+    let mut seen = HashSet::from([start]);
+    let mut stack = vec![start];
+    while let Some(block) = stack.pop() {
+        if block == goal {
+            return true;
+        }
+        for succ in success_successors(function, block) {
+            if seen.insert(succ) {
+                stack.push(succ);
+            }
+        }
+    }
+    false
+}
+
+fn reachable_avoiding_along_success_edges(
+    function: &wjsm_ir::Function,
+    start: BasicBlockId,
+    goal: BasicBlockId,
+    avoided: BasicBlockId,
+) -> bool {
+    if start == avoided {
+        return false;
+    }
+    let mut seen = HashSet::from([start]);
+    let mut stack = vec![start];
+    while let Some(block) = stack.pop() {
+        if block == goal {
+            return true;
+        }
+        for succ in success_successors(function, block) {
+            if succ == avoided || !seen.insert(succ) {
+                continue;
+            }
+            stack.push(succ);
+        }
+    }
+    false
+}
+
 pub(super) fn resolve_property_replacements(
     function: &wjsm_ir::Function,
     analysis: &CandidateAnalysis,
     next_value: &mut u32,
 ) -> Option<(HashMap<ValueId, ValueId>, Vec<PropertyPhi>)> {
+    if let Some(replacements) = unique_dominating_write_replacements(function, analysis) {
+        return Some((replacements, Vec::new()));
+    }
     let predecessors = function_predecessors(function);
     let mut replacements = HashMap::new();
     let mut phis = Vec::new();
