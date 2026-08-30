@@ -7,7 +7,7 @@ use wjsm_native_abi::NativeHostSymbol;
 
 use crate::call_graph::{collect_direct_calls, direct_call_targets};
 use crate::f64_analysis::infer_f64_values;
-use crate::lower::infer_boolean_values;
+use crate::lower::{infer_boolean_values, non_heap_ssa_values};
 use crate::root_plan::RootPlan;
 pub(crate) fn infer_safepoint_free_functions(
     program: &Program,
@@ -41,7 +41,10 @@ pub(crate) fn infer_safepoint_free_functions(
                 return false;
             }
             let call_only_refs = call_only_function_ref_values(function, constants);
-            let root_plan = RootPlan::build(function, f64_values);
+            let root_plan = RootPlan::build(
+                function,
+                &non_heap_ssa_values(function, constants, f64_values),
+            );
             if root_plan.max_roots_excluding(&call_only_refs) != 0 {
                 return false;
             }

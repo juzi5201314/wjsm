@@ -143,6 +143,21 @@ pub(crate) fn infer_boolean_values(
     }
 }
 
+/// GC 不必扫描的 SSA：已证明 f64（常驻 xmm）与标记立即数布尔（不是堆句柄）。
+///
+/// Compare/守卫的 dest 是 tagged bool，live 跨过 Branch/回边时若仍记进 root
+/// frame，纯数值循环也会 `atomic_rmw` 发布根。立即数不是堆指针，排除后
+/// 这类函数可以走 safepoint-free。
+pub(crate) fn non_heap_ssa_values(
+    function: &wjsm_ir::Function,
+    constants: &[Constant],
+    f64_values: &HashSet<ValueId>,
+) -> HashSet<ValueId> {
+    let mut values = f64_values.clone();
+    values.extend(infer_boolean_values(function, constants));
+    values
+}
+
 pub(crate) fn collect_value_ids(function: &wjsm_ir::Function) -> HashSet<ValueId> {
     let mut ids = HashSet::new();
     for block in function.blocks() {
