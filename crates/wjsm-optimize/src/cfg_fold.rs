@@ -336,6 +336,9 @@ fn run_inner(module: &mut Module, fold_proven_numbers: bool) {
             }
             any_change |= branch_folded;
 
+            // ── 空跳转穿线：for 条件/自增之间的纯跳板块 ──
+            any_change |= crate::jump_thread::run_function(function);
+
             // ── 规则 4：死块中和 ──
             let mut reachable = vec![false; function.blocks().len()];
             let mut stack = vec![function.entry()];

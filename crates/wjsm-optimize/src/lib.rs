@@ -11,6 +11,7 @@ mod gvn;
 mod hypot_getter;
 mod inline_for_ea;
 pub mod ir_walk;
+mod jump_thread;
 mod licm;
 mod licm_apply;
 mod licm_elem_guard;
