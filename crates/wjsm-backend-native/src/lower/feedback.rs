@@ -1,9 +1,9 @@
 //! 反馈槽与 resume 目标判定：编号必须与 generic / overlay 一致。
 
 #![allow(unused_imports)]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use wjsm_ir::{BasicBlockId, Instruction, Program};
+use wjsm_ir::{BasicBlockId, BinaryOp, CompareOp, Instruction, Program, UnaryOp, ValueId};
 
 /// 每函数的反馈槽 plan：`(block, instruction) → 全局槽下标`。
 ///
@@ -90,6 +90,47 @@ pub(crate) fn instruction_owns_feedback_slot(instruction: &Instruction) -> bool 
             | Instruction::LoadVar { .. }
             | Instruction::StoreVar { .. }
     )
+}
+
+/// 本条指令的 lowering 是否会读/写反馈槽指针。
+///
+/// 槽**编号**仍按 [`instruction_owns_feedback_slot`] 分配（base / overlay 对齐），
+/// 但静态已证明的 f64 算术/比较、帧局部 LoadVar/StoreVar、以及 GetElem/SetElem
+/// 的 lowering 从不写槽。为它们计算 `feedback_slots_base + slot×80` 会在每个
+/// 热循环块留下一条死 load；Cranelift 目前不会消掉它。
+pub(crate) fn lowering_uses_feedback_ptr(
+    instruction: &Instruction,
+    f64_values: &HashSet<ValueId>,
+) -> bool {
+    if !instruction_owns_feedback_slot(instruction) {
+        return false;
+    }
+    match instruction {
+        Instruction::LoadVar { .. }
+        | Instruction::StoreVar { .. }
+        | Instruction::GetElem { .. }
+        | Instruction::SetElem { .. } => false,
+        Instruction::Binary { dest, op, .. }
+            if f64_values.contains(dest)
+                && matches!(
+                    op,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                ) =>
+        {
+            false
+        }
+        Instruction::Unary { dest, op, .. }
+            if f64_values.contains(dest) && matches!(op, UnaryOp::Neg | UnaryOp::Pos) =>
+        {
+            false
+        }
+        Instruction::Compare { op, lhs, rhs, .. }
+            if op.is_relational() && f64_values.contains(lhs) && f64_values.contains(rhs) =>
+        {
+            false
+        }
+        _ => true,
+    }
 }
 
 /// Program 的反馈槽总数；cache 命中时与条目内记录的计数校验。

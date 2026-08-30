@@ -294,10 +294,14 @@ pub(crate) fn lower_function(
                 let feedback_key = overlay_slot
                     .map(|site| (site.generic_block, site.generic_instruction as usize))
                     .unwrap_or((block.id(), instruction_index));
-                let feedback_ptr = feedback_slots
-                    .get(&feedback_key)
-                    .map(|slot| emit_feedback_slot_ptr(cx.builder, ctx, *slot))
-                    .transpose()?;
+                let feedback_ptr = if lowering_uses_feedback_ptr(instruction, f64_values) {
+                    feedback_slots
+                        .get(&feedback_key)
+                        .map(|slot| emit_feedback_slot_ptr(cx.builder, ctx, *slot))
+                        .transpose()?
+                } else {
+                    None
+                };
                 cx.feedback_ptr = feedback_ptr;
                 lower_instruction(&mut cx, &mut tables, instruction, roots, feedback_ptr)?;
             }
